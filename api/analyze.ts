@@ -181,7 +181,7 @@ JSON:`.trim()
 
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
 
-      await supabase.from('ai_logs').insert({
+      const { error: logError } = await supabase.from('ai_logs').insert({
         type: 'candidate',
         model: AI_MODEL,
         from_address: from,
@@ -192,6 +192,7 @@ JSON:`.trim()
         duration_ms: durationMs,
         linked_id: data.id,
       })
+      if (logError) console.error('[ai_logs INSERT error]', logError)
 
       return res.status(200).json({ ok: true, type: 'candidate', id: data.id, name: data.name })
     }
@@ -246,7 +247,7 @@ JSON:`.trim()
 
       if (error) throw new Error(`案件保存エラー: ${error.message}`)
 
-      await supabase.from('ai_logs').insert({
+      const { error: logError } = await supabase.from('ai_logs').insert({
         type: 'project',
         model: AI_MODEL,
         from_address: from,
@@ -257,6 +258,7 @@ JSON:`.trim()
         duration_ms: durationMs,
         linked_id: data.id,
       })
+      if (logError) console.error('[ai_logs INSERT error]', logError)
 
       return res.status(200).json({ ok: true, type: 'project', id: data.id, title: data.title })
     }
