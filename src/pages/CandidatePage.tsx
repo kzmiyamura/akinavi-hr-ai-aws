@@ -14,7 +14,6 @@ interface SkillsByCategory {
 
 interface RawProfile {
   skillsByCategory?: SkillsByCategory
-  skillsWithYears?: { skill: string; years: number }[]
   roles?: string[]
   industries?: string[]
 }
@@ -141,8 +140,7 @@ export function CandidatePage({ nickname }: Props) {
                   </p>
                   {(() => {
                     const raw = getRaw(c)
-                    const { skillsByCategory: sbc, skillsWithYears, roles, industries } = raw
-                    const yearsMap = new Map((skillsWithYears ?? []).map(({ skill, years }) => [skill, years]))
+                    const { skillsByCategory: sbc, roles, industries } = raw
 
                     return (
                       <div className="space-y-1 mt-1.5">
@@ -173,14 +171,9 @@ export function CandidatePage({ nickname }: Props) {
                             return (
                               <div key={key} className="flex flex-wrap gap-1 items-center">
                                 <span className="text-xs text-gray-400 w-10 shrink-0">{label}</span>
-                                {shown.map((s) => {
-                                  const yr = yearsMap.get(s)
-                                  return (
-                                    <span key={s} className={`text-xs rounded px-1.5 py-0.5 ${badge}`}>
-                                      {s}{yr ? <span className="opacity-60 ml-0.5">{yr}y</span> : null}
-                                    </span>
-                                  )
-                                })}
+                                {shown.map((s) => (
+                                  <span key={s} className={`text-xs rounded px-1.5 py-0.5 ${badge}`}>{s}</span>
+                                ))}
                                 {key === 'others' && items.length > 5 && (
                                   <span className="text-xs text-gray-400">+{items.length - 5}</span>
                                 )}
