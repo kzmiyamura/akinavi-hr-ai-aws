@@ -7,7 +7,7 @@
 ## 2. 技術スタック
 - **Frontend**: React 18 (Vite), TypeScript, Tailwind CSS, TanStack Query
 - **Backend/DB**: Supabase (PostgreSQL, Edge Functions, Realtime)
-- **AI**: OpenAI API (gpt-4o / gpt-4o-mini)
+- **AI**: Google Gemini 1.5 Flash（メイン・無料枠）/ OpenAI GPT-4o（切替可）
 - **Email**: Resend (Inbound Webhook)
 - **Testing**: Vitest, React Testing Library, MSW (Mock Service Worker)
 - **Deployment**: Vercel (Frontend), Supabase (Backend)
@@ -75,6 +75,12 @@
 - 柔軟性確保のため `jsonb` を積極的に活用し、`candidates`, `projects`, `submissions`, `app_config` テーブルを構築。
 
 ## 6. 追加要件（Phase 1 DB設計に反映）
+
+### AI プロバイダー抽象化
+- **メイン**: Google Gemini 1.5 Flash（無料枠）
+- **切替**: `.env` の `AI_PROVIDER=gemini` / `AI_PROVIDER=openai` で切り替え可能
+- AI解析部分は `AIProvider` インターフェースで抽象化し、`GeminiProvider` / `OpenAIProvider` を実装する
+- 環境変数: `GEMINI_API_KEY` / `OPENAI_API_KEY`
 
 ### 認証なし・ニックネーム制
 - ログイン機能は持たない。
