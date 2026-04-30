@@ -81,8 +81,10 @@
 ### メール自動受信の方針
 - **採用**: Gmail（専用アカウント）+ Google Apps Script（完全無料）
 - **不採用**: Resend Inbound（独自ドメインが必要でコストがかかるため）
-- フロー: メール受信 → Apps Script が検知 → Supabase Edge Function を呼び出し → Gemini AI 解析 → DB 保存
-- 環境変数: `SUPABASE_EDGE_FUNCTION_URL`（Apps Script に設定）
+- フロー: メール受信 → Power Automate が検知 → Supabase Edge Function を呼び出し → Gemini AI 解析 → DB 保存
+- 人材用メール: `akinavi.hr.ai.voice.human@outlook.jp`
+- 案件用メール: `akinavi.hr.ai.voice.project@outlook.jp`
+- Edge Function の `type` パラメータで人材／案件を振り分け（`type=candidate` / `type=project`）
 
 ### AI プロバイダー抽象化
 - **メイン**: Google Gemini 1.5 Flash（無料枠）
