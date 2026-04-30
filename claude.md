@@ -8,7 +8,7 @@
 - **Frontend**: React 18 (Vite), TypeScript, Tailwind CSS, TanStack Query
 - **Backend/DB**: Supabase (PostgreSQL, Edge Functions, Realtime)
 - **AI**: Google Gemini 1.5 Flash（メイン・無料枠）/ OpenAI GPT-4o（切替可）
-- **Email**: Resend (Inbound Webhook)
+- **Email**: Gmail（専用アカウント）+ Google Apps Script（Inbound Webhook）
 - **Testing**: Vitest, React Testing Library, MSW (Mock Service Worker)
 - **Deployment**: Vercel (Frontend), Supabase (Backend)
 
@@ -51,8 +51,10 @@
 5. **[Claude] 作業**: 完了後、**commit & push**。
 
 ### 【Phase 4】自動化・デプロイ・クリーンアップ
-1. **[Claude] 作業**: Resend Inbound Webhookと連携した自動解析フローの実装。
-2. **[Claude] 依頼**: 人間に「ResendのDNS設定（MXレコード）とWebhook URL登録」を依頼。
+1. **[Claude] 作業**: Gmail + Google Apps Script と連携した自動解析フローの実装。
+   - Resend は独自ドメインが必要なため不採用（コスト面）。
+   - 専用 Gmail アカウントへの受信をトリガーに Apps Script → Supabase Edge Function を呼び出す。
+2. **[Claude] 依頼**: 人間に「専用 Gmail アカウントの作成」と「Apps Script のデプロイ・権限付与」を依頼。
 3. **[Claude] 作業**: 本番環境稼働前のテストデータ破棄（クリーンアップスクリプト実行）。
 4. **[Claude] 作業**: 全体の疎通確認後、**commit & push**。
 
@@ -75,6 +77,12 @@
 - 柔軟性確保のため `jsonb` を積極的に活用し、`candidates`, `projects`, `submissions`, `app_config` テーブルを構築。
 
 ## 6. 追加要件（Phase 1 DB設計に反映）
+
+### メール自動受信の方針
+- **採用**: Gmail（専用アカウント）+ Google Apps Script（完全無料）
+- **不採用**: Resend Inbound（独自ドメインが必要でコストがかかるため）
+- フロー: メール受信 → Apps Script が検知 → Supabase Edge Function を呼び出し → Gemini AI 解析 → DB 保存
+- 環境変数: `SUPABASE_EDGE_FUNCTION_URL`（Apps Script に設定）
 
 ### AI プロバイダー抽象化
 - **メイン**: Google Gemini 1.5 Flash（無料枠）
