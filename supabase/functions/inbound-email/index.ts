@@ -264,8 +264,13 @@ Deno.serve(async (req: Request) => {
 
 【その他のルール】
 - 電話番号も明記されているものだけ。なければ null。
-- skillsは重複なしで返してください。表記が異なっても同じ技術（例: JavaScript と Javascript）は1つにまとめ、より一般的な表記に統一してください。
-- experienceYearsは職歴の最初の年から現在までの年数を計算してください。明記されていても計算できる場合は計算値を優先してください。
+- skillsはIT系に限らず、職種問わず本文・添付に明記されたスキル・ツール・知見を全て抽出してください。
+  例: ITエンジニア系（PHP, Java, MySQL等）はもちろん、
+  デザイン系（Illustrator, Photoshop, Figma, After Effects等）、
+  ビジネス系（Excel, PowerPoint, Salesforce等）、
+  知見・専門性（グラフィックデザイン, WEBデザイン, 動画編集, ECサイト運営等）も含めてください。
+- skillsは重複なしで返してください。表記が異なっても同じ技術は1つにまとめ、より一般的な表記に統一してください。
+- experienceYearsは職歴の最初の年から現在までの年数を計算してください。備考欄に「デザイン歴20年」等の明記があればその値を優先してください。
 - summaryは具体的な社名・プロジェクト名・実績・受賞歴を必ず含めてください。
 
 件名: ${subject}
@@ -278,19 +283,21 @@ Deno.serve(async (req: Request) => {
 - PostageSQL / Postgre → PostgreSQL
 - Salesforce / saleforce → Salesforce
 - Powerpoint → PowerPoint
+- After effect / AfterEffects → After Effects
+- Premiere / PremierePro → Premiere Pro
 
 抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
 - name: string（フルネーム。ファイル名・文字化け文字列は使わない。不明なら "不明"）
 - email: string | null（候補者本人のみ。なければ null）
 - phone: string | null（明記されたもののみ。なければ null）
-- skills: string[]（明記されているもののみ。重複なし。正規化済み。なければ[]）
+- skills: string[]（職種問わず明記されているもののみ。重複なし。正規化済み。なければ[]）
 - skillsByCategory: object（skillsを以下の4カテゴリに分類。該当なしは[]。各カテゴリ内は経験年数が長い・主要なものを先頭に）
-  - languages: string[]（PHP, Java, JavaScript, Perl, SQL, HTML/CSS, VBA 等）
-  - frameworks: string[]（React, Laravel, SpringBoot 等のFW・ライブラリ。なければ[]）
-  - os: string[]（Linux, Windows, MacOS, Unix 等）
-  - others: string[]（Excel, Git, JIRA, Salesforce, Apache, MySQL 等のツール・DB・環境）
-- roles: string[]（担当役割。例: ["PM", "ITコンサル", "上流工程", "開発エンジニア"]。明記されているもののみ）
-- industries: string[]（業界経験。例: ["通信", "金融", "官公庁", "医療"]。職歴から読み取れるもの）
+  - languages: string[]（プログラミング言語・クエリ言語。例: PHP, Java, JavaScript, SQL, HTML/CSS 等）
+  - frameworks: string[]（FW・ライブラリ。例: React, Laravel, SpringBoot 等。なければ[]）
+  - os: string[]（OS。例: Linux, Windows, MacOS, Unix 等）
+  - others: string[]（ツール・デザインソフト・DB・クラウド・知見・その他全て。例: Illustrator, Photoshop, Figma, After Effects, Premiere Pro, Excel, Git, MySQL, グラフィックデザイン, 動画編集 等）
+- roles: string[]（担当役割・職種。例: ["PM", "グラフィックデザイナー", "クリエイティブディレクター", "ITコンサル"]。明記されているもののみ）
+- industries: string[]（業界経験。例: ["通信", "金融", "広告", "EC"]。職歴・本文から読み取れるもの）
 - experienceYears: number | null（計算または明記された値。なければ null）
 - summary: string（職務経歴の概要300字以内。社名・実績・受賞歴を含めること）
 
