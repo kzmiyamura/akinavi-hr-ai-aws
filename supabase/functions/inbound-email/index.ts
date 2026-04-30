@@ -1,7 +1,8 @@
-// Supabase Edge Function: Power Automate (Outlook) → AI解析 → DB保存
-// type=candidate → candidates テーブルに upsert
-// type=project   → projects テーブルに insert
-// Runtime: Deno
+// Supabase Edge Function: Make.com (Outlook) → AI解析 → DB保存
+// Runtime: Deno / タイムアウト: 最大150秒（Vercel Hobbyの10秒制限を回避）
+// POST body (form-urlencoded):
+//   type, from, subject, body
+//   attachment[data], attachment[mimeType], attachment[name]
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
@@ -11,24 +12,46 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+interface Attachment {
+  data: string
+  mimeType: string
+  name?: string
+}
+
+const SUPPORTED_MIME = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']
+
 function getEnv(key: string): string {
   const val = Deno.env.get(key)
   if (!val) throw new Error(`環境変数 ${key} が設定されていません`)
   return val
 }
 
-async function generateJSON(prompt: string): Promise<unknown> {
+/** Microsoft Graph API の from フィールド（JSON文字列の場合も）からメールアドレスを取り出す */
+function parseFrom(from: string): string {
+  try {
+    const obj = JSON.parse(from)
+    return obj?.emailAddress?.address ?? from
+  } catch {
+    return from
+  }
+}
+
+async function generateJSON(prompt: string, attachments: Attachment[]): Promise<unknown> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
-  const result = await model.generateContent(prompt)
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' })
+
+  const parts: object[] = []
+  for (const att of attachments) {
+    if (att.data && SUPPORTED_MIME.includes(att.mimeType)) {
+      parts.push({ inlineData: { data: att.data, mimeType: att.mimeType } })
+    }
+  }
+  parts.push({ text: prompt })
+
+  const result = await model.generateContent(parts)
   const raw = result.response.text()
   const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
   return JSON.parse(cleaned)
-}
-
-function extractEmail(from: string): string | null {
-  const match = from.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/)
-  return match ? match[0] : null
 }
 
 Deno.serve(async (req: Request) => {
@@ -37,57 +60,116 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const payload = await req.json()
+    // form-urlencoded と JSON 両対応
+    const contentType = req.headers.get('content-type') ?? ''
+    let raw: Record<string, string> = {}
 
-    // Power Automate から受け取るフィールド
-    const type: string = payload.type ?? 'candidate'   // 'candidate' | 'project'
-    const from: string = payload.from ?? ''
-    const subject: string = payload.subject ?? ''
-    const body: string = payload.body ?? ''
+    if (contentType.includes('application/x-www-form-urlencoded')) {
+      const text = await req.text()
+      const params = new URLSearchParams(text)
+      for (const [k, v] of params.entries()) raw[k] = v
+    } else {
+      raw = await req.json()
+    }
 
-    if (!body.trim()) {
-      return new Response(JSON.stringify({ error: 'メール本文が空です' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    const type: string = raw.type ?? 'candidate'
+    const from: string = parseFrom(raw.from ?? '')
+    const subject: string = raw.subject ?? ''
+    const body: string = raw.body ?? ''
+
+    // 添付ファイルの解決（attachment[data] 形式 → Attachment オブジェクト）
+    let attachments: Attachment[] = []
+    if (raw['attachment[data]']) {
+      attachments = [{
+        data: raw['attachment[data]'],
+        mimeType: raw['attachment[mimeType]'] ?? '',
+        name: raw['attachment[name]'] ?? undefined,
+      }]
+    } else if (raw.attachmentsJson) {
+      try {
+        const parsed = JSON.parse(raw.attachmentsJson)
+        if (Array.isArray(parsed)) attachments = parsed
+      } catch { /* ignore */ }
+    }
+
+    console.log('[受信データ]', {
+      type, from, subject,
+      bodyLength: body.length,
+      attachments: attachments.map(a => ({ name: a.name, mimeType: a.mimeType, dataLength: a.data?.length ?? 0 })),
+    })
+
+    const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
+    console.log('[添付フィルター結果]', {
+      total: attachments.length,
+      supported: supportedAttachments.length,
+      filtered: attachments.filter(a => !SUPPORTED_MIME.includes(a.mimeType)).map(a => a.mimeType),
+    })
+
+    if (!body.trim() && attachments.length === 0) {
+      return new Response(JSON.stringify({ error: 'メール本文と添付ファイルが両方空です' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
-    // ── 人材メール ────────────────────────────────────────────
-    if (type === 'candidate') {
-      const analyzed = await generateJSON(`
-以下のメール本文から人材情報を抽出し、JSON形式のみで返してください。
+    const attachmentNote = supportedAttachments.length > 0
+      ? `\n※添付ファイル（${supportedAttachments.map(a => a.name ?? a.mimeType).join('、')}）も含めて解析してください。`
+      : ''
 
-差出人: ${from}
+    // ── 人材メール ────────────────────────────────────────────
+    if (type === 'candidate' || type === 'human') {
+      const analyzed = await generateJSON(`
+これは営業担当者が転送・送付した人材紹介メールです。${attachmentNote}
+差出人（${from}）は営業担当者であり、候補者本人ではありません。
+
+【重要ルール】
+- 本文または添付ファイルに明示的に書かれている情報だけを抽出してください。
+- 書かれていない情報は絶対に推測・補完・でっち上げをしないでください。
+- 氏名が明記されていない場合は "不明" にしてください。
+- 地名・駅名・会社名を氏名と混同しないでください。
+- PDFは複数ページ・複数書類が含まれる場合があります。全ページを確認し、フルネームが明記されているページの情報を優先してください。
+- イニシャル（例: O.H.）は氏名ではありません。同じPDF内にフルネームが書かれているページがあればそちらを使ってください。
+- メールアドレスは「xxx@xxx.xxx」の形式で本文に明記されているものだけ入れてください。なければ必ず null。架空のアドレスを作らないでください。
+- 電話番号も明記されているものだけ。なければ null。
+
 件名: ${subject}
 
-抽出項目:
+抽出項目（JSON形式のみで返してください）:
 - name: string（氏名。不明なら "不明"）
-- email: string | null
-- phone: string | null
-- skills: string[]（スキル・資格・言語等。空なら[]）
-- experienceYears: number | null
-- summary: string（200字以内）
+- email: string | null（明記されたメールアドレスのみ。なければ null）
+- phone: string | null（明記された電話番号のみ。なければ null）
+- skills: string[]（明記されているもののみ。なければ[]）
+- experienceYears: number | null（明記されていなければ null）
+- summary: string（概要200字以内）
 
 本文:
 ${body.slice(0, 3000)}
 
-JSON:`.trim()) as {
+JSON:`.trim(), attachments) as {
         name: string; email: string | null; phone: string | null
         skills: string[]; experienceYears: number | null; summary: string
       }
 
-      const email = analyzed.email || extractEmail(from)
+      console.log('[AI解析結果 candidate]', JSON.stringify(analyzed, null, 2))
+
+      const email = analyzed.email ?? null
       const dbPayload = {
         name: analyzed.name ?? '不明',
         email,
         phone: analyzed.phone ?? null,
         skills: analyzed.skills ?? [],
         experience_years: analyzed.experienceYears ?? null,
-        raw_profile: { text: body.slice(0, 5000), summary: analyzed.summary ?? '', from, subject },
+        raw_profile: {
+          text: body.slice(0, 5000),
+          summary: analyzed.summary ?? '',
+          from, subject,
+          attachmentCount: attachments.length,
+          attachmentNames: attachments.map(a => a.name ?? a.mimeType),
+          aiAnalysis: analyzed,
+        },
         duplicate_flag: false,
-        created_by: 'outlook-inbound',
+        created_by: 'make-inbound',
       }
 
       const { data, error } = email
@@ -104,7 +186,9 @@ JSON:`.trim()) as {
     // ── 案件メール ────────────────────────────────────────────
     if (type === 'project') {
       const analyzed = await generateJSON(`
-以下のメール本文から案件情報を抽出し、JSON形式のみで返してください。
+以下のメール本文から案件情報を抽出し、JSON形式のみで返してください。${attachmentNote}
+
+【重要ルール】書かれていない情報は推測せず null または空にしてください。
 
 差出人: ${from}
 件名: ${subject}
@@ -120,10 +204,12 @@ JSON:`.trim()) as {
 本文:
 ${body.slice(0, 3000)}
 
-JSON:`.trim()) as {
+JSON:`.trim(), attachments) as {
         title: string; client: string | null; description: string
         requiredSkills: string[]; budgetMin: number | null; budgetMax: number | null
       }
+
+      console.log('[AI解析結果 project]', JSON.stringify(analyzed, null, 2))
 
       const { data, error } = await supabase.from('projects').insert({
         title: analyzed.title ?? '案件',
@@ -132,8 +218,14 @@ JSON:`.trim()) as {
         required_skills: analyzed.requiredSkills ?? [],
         budget_min: analyzed.budgetMin ?? null,
         budget_max: analyzed.budgetMax ?? null,
-        raw_data: { text: body.slice(0, 5000), from, subject },
-        created_by: 'outlook-inbound',
+        raw_data: {
+          text: body.slice(0, 5000),
+          from, subject,
+          attachmentCount: attachments.length,
+          attachmentNames: attachments.map(a => a.name ?? a.mimeType),
+          aiAnalysis: analyzed,
+        },
+        created_by: 'make-inbound',
       }).select().single()
 
       if (error) throw new Error(`案件保存エラー: ${error.message}`)
