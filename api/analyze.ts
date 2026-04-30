@@ -1,16 +1,22 @@
 // Vercel Serverless Function: Make.com → AI解析 → Supabase保存
 // POST /api/analyze
-// Body: { type, from, subject, body, attachment?: { data, mimeType, name } }
+// Body (form-urlencoded):
+//   type, from, subject, body
+//   attachmentsJson: JSON文字列 [{data, mimeType, name?}, ...]  ← 複数添付対応
+//   attachment[data], attachment[mimeType], attachment[name]    ← 旧形式（後方互換）
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { createClient } from '@supabase/supabase-js'
 
 interface Attachment {
-  data: string      // Base64 文字列
-  mimeType: string  // 例: "application/pdf", "application/vnd.ms-excel"
+  data: string
+  mimeType: string
   name?: string
 }
+
+// Gemini が inlineData で受け付ける MIME タイプ
+const SUPPORTED_MIME = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
 function getEnv(key: string): string {
   const val = process.env[key]
@@ -18,22 +24,17 @@ function getEnv(key: string): string {
   return val
 }
 
-/** テキスト + 添付ファイル（任意）を Gemini で解析して JSON を返す */
-async function generateJSON(prompt: string, attachment?: Attachment): Promise<unknown> {
+/** テキスト + 複数添付ファイル（任意）を Gemini で解析して JSON を返す */
+async function generateJSON(prompt: string, attachments: Attachment[]): Promise<unknown> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
   const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' })
 
   const parts: object[] = []
 
-  // Gemini が inlineData で受け付ける MIME タイプのみ添付（PDF・画像のみ対応）
-  const SUPPORTED_MIME = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']
-  if (attachment?.data && attachment?.mimeType && SUPPORTED_MIME.includes(attachment.mimeType)) {
-    parts.push({
-      inlineData: {
-        data: attachment.data,
-        mimeType: attachment.mimeType,
-      },
-    })
+  for (const att of attachments) {
+    if (att.data && SUPPORTED_MIME.includes(att.mimeType)) {
+      parts.push({ inlineData: { data: att.data, mimeType: att.mimeType } })
+    }
   }
 
   parts.push({ text: prompt })
@@ -44,11 +45,6 @@ async function generateJSON(prompt: string, attachment?: Attachment): Promise<un
   return JSON.parse(cleaned)
 }
 
-function extractEmail(from: string): string | null {
-  const match = from.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/)
-  return match ? match[0] : null
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Headers', 'content-type')
@@ -57,37 +53,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   try {
-    // application/x-www-form-urlencoded と application/json の両方に対応
     const raw = req.body ?? {}
-    // form-urlencoded の場合、attachment[data] のようなキーがフラットに来るので再構築
-    const attachmentFromForm: Attachment | undefined =
-      raw['attachment[data]']
-        ? {
-            data: String(raw['attachment[data]']),
-            mimeType: String(raw['attachment[mimeType]'] ?? ''),
-            name: raw['attachment[name]'] ? String(raw['attachment[name]']) : undefined,
-          }
-        : undefined
 
     const type: string = String(raw.type ?? 'candidate')
     const from: string = String(raw.from ?? '')
     const subject: string = String(raw.subject ?? '')
     const body: string = String(raw.body ?? '')
-    const attachment: Attachment | undefined = attachmentFromForm ?? raw.attachment
 
-    // 本文も添付もない場合はエラー
-    if (!String(body).trim() && !attachment?.data) {
+    // 複数添付（attachmentsJson）→ 旧形式（attachment[data]）→ raw.attachment の順で解決
+    let attachments: Attachment[] = []
+
+    if (raw.attachmentsJson) {
+      try {
+        const parsed = JSON.parse(String(raw.attachmentsJson))
+        if (Array.isArray(parsed)) attachments = parsed
+      } catch { /* パース失敗時は空配列のまま */ }
+    }
+
+    if (attachments.length === 0 && raw['attachment[data]']) {
+      attachments = [{
+        data: String(raw['attachment[data]']),
+        mimeType: String(raw['attachment[mimeType]'] ?? ''),
+        name: raw['attachment[name]'] ? String(raw['attachment[name]']) : undefined,
+      }]
+    }
+
+    if (attachments.length === 0 && raw.attachment?.data) {
+      attachments = [raw.attachment as Attachment]
+    }
+
+    if (!String(body).trim() && attachments.length === 0) {
       return res.status(400).json({ error: 'メール本文と添付ファイルが両方空です' })
     }
 
-    const supabase = createClient(
-      getEnv('SUPABASE_URL'),
-      getEnv('SUPABASE_SERVICE_ROLE_KEY'),
-    )
+    const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
-    const hasAttachment = !!attachment?.data
-    const attachmentNote = hasAttachment
-      ? `\n※添付ファイル（${attachment.name ?? attachment.mimeType}）も含めて解析してください。`
+    const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
+    const attachmentNote = supportedAttachments.length > 0
+      ? `\n※添付ファイル（${supportedAttachments.map(a => a.name ?? a.mimeType).join('、')}）も含めて解析してください。`
       : ''
 
     // ── 人材メール解析 ────────────────────────────────────────
@@ -101,6 +104,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 - 書かれていない情報は絶対に推測・補完・でっち上げをしないでください。
 - 氏名が明記されていない場合は "不明" にしてください。苗字だけ・名前だけの場合もそのまま入れてください。
 - 地名・駅名・会社名を氏名と混同しないでください。
+- イニシャル（例: O.H.）は氏名ではありません。複数の添付がある場合はフルネームが書かれた書類を優先してください。
 - メールアドレスは「xxx@xxx.xxx」の形式で本文に明記されているものだけ入れてください。書かれていなければ必ず null にしてください。架空のアドレスを作らないでください。
 - 電話番号も明記されているものだけ。なければ null。
 
@@ -117,7 +121,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 本文:
 ${String(body).slice(0, 3000)}
 
-JSON:`.trim(), attachment) as {
+JSON:`.trim(), attachments) as {
         name: string; email: string | null; phone: string | null
         skills: string[]; experienceYears: number | null; summary: string
       }
@@ -133,8 +137,8 @@ JSON:`.trim(), attachment) as {
           text: String(body).slice(0, 5000),
           summary: analyzed.summary ?? '',
           from, subject,
-          hasAttachment,
-          attachmentName: attachment?.name ?? null,
+          attachmentCount: attachments.length,
+          attachmentNames: attachments.map(a => a.name ?? a.mimeType),
         },
         duplicate_flag: false,
         created_by: 'make-inbound',
@@ -153,6 +157,8 @@ JSON:`.trim(), attachment) as {
       const analyzed = await generateJSON(`
 以下のメール本文から案件情報を抽出し、JSON形式のみで返してください。${attachmentNote}
 
+【重要ルール】書かれていない情報は推測せず null または空にしてください。
+
 差出人: ${from}
 件名: ${subject}
 
@@ -167,7 +173,7 @@ JSON:`.trim(), attachment) as {
 本文:
 ${String(body).slice(0, 3000)}
 
-JSON:`.trim(), attachment) as {
+JSON:`.trim(), attachments) as {
         title: string; client: string | null; description: string
         requiredSkills: string[]; budgetMin: number | null; budgetMax: number | null
       }
@@ -182,8 +188,8 @@ JSON:`.trim(), attachment) as {
         raw_data: {
           text: String(body).slice(0, 5000),
           from, subject,
-          hasAttachment,
-          attachmentName: attachment?.name ?? null,
+          attachmentCount: attachments.length,
+          attachmentNames: attachments.map(a => a.name ?? a.mimeType),
         },
         created_by: 'make-inbound',
       }).select().single()
