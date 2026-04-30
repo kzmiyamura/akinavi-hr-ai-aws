@@ -269,8 +269,12 @@ Deno.serve(async (req: Request) => {
   デザイン系（Illustrator, Photoshop, Figma, After Effects等）、
   ビジネス系（Excel, PowerPoint, Salesforce等）、
   知見・専門性（グラフィックデザイン, WEBデザイン, 動画編集, ECサイト運営等）も含めてください。
+- 本文中で「/」「・」「,」「、」で区切られたスキルは必ず個別に分割して抽出してください。
+  例:「Illustrator / Photoshop / Figma」→ ["Illustrator", "Photoshop", "Figma"]
+  例:「グラフィックデザイン / WEBデザイン / 動画編集」→ ["グラフィックデザイン", "WEBデザイン", "動画編集"]
 - skillsは重複なしで返してください。表記が異なっても同じ技術は1つにまとめ、より一般的な表記に統一してください。
-- experienceYearsは職歴の最初の年から現在までの年数を計算してください。備考欄に「デザイン歴20年」等の明記があればその値を優先してください。
+- experienceYearsは職歴の最初の年から現在までの年数を計算してください。
+  備考欄や本文に「デザイン歴20年」「経験年数○年」等の明記があればその値を優先してください。
 - summaryは具体的な社名・プロジェクト名・実績・受賞歴を必ず含めてください。
 
 件名: ${subject}
