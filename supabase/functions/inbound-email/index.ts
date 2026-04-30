@@ -36,9 +36,14 @@ function parseFrom(from: string): string {
   }
 }
 
-async function generateJSON(prompt: string, attachments: Attachment[]): Promise<unknown> {
+const AI_MODEL = 'gemini-2.5-flash-lite'
+
+async function generateJSON(
+  prompt: string,
+  attachments: Attachment[],
+): Promise<{ result: unknown; durationMs: number }> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' })
+  const model = genAI.getGenerativeModel({ model: AI_MODEL })
 
   const parts: object[] = []
   for (const att of attachments) {
@@ -48,10 +53,13 @@ async function generateJSON(prompt: string, attachments: Attachment[]): Promise<
   }
   parts.push({ text: prompt })
 
-  const result = await model.generateContent(parts)
-  const raw = result.response.text()
+  const start = Date.now()
+  const res = await model.generateContent(parts)
+  const durationMs = Date.now() - start
+
+  const raw = res.response.text()
   const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-  return JSON.parse(cleaned)
+  return { result: JSON.parse(cleaned), durationMs }
 }
 
 Deno.serve(async (req: Request) => {
@@ -119,7 +127,7 @@ Deno.serve(async (req: Request) => {
 
     // ── 人材メール ────────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
-      const analyzed = await generateJSON(`
+      const prompt = `
 これは営業担当者が転送・送付した人材紹介メールです。${attachmentNote}
 差出人（${from}）は営業担当者であり、候補者本人ではありません。
 
@@ -146,7 +154,10 @@ Deno.serve(async (req: Request) => {
 本文:
 ${body.slice(0, 3000)}
 
-JSON:`.trim(), attachments) as {
+JSON:`.trim()
+
+      const { result, durationMs } = await generateJSON(prompt, attachments)
+      const analyzed = result as {
         name: string; email: string | null; phone: string | null
         skills: string[]; experienceYears: number | null; summary: string
       }
@@ -177,6 +188,19 @@ JSON:`.trim(), attachments) as {
         : await supabase.from('candidates').insert(dbPayload).select().single()
 
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
+
+      await supabase.from('ai_logs').insert({
+        type: 'candidate',
+        model: AI_MODEL,
+        from_address: from,
+        subject,
+        ai_result: analyzed,
+        prompt_length: prompt.length,
+        status: 'success',
+        duration_ms: durationMs,
+        linked_id: data.id,
+      })
+
       console.log(`[inbound] 人材登録完了: ${data.name}`)
       return new Response(JSON.stringify({ ok: true, type: 'candidate', id: data.id, name: data.name }), {
         status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -185,7 +209,7 @@ JSON:`.trim(), attachments) as {
 
     // ── 案件メール ────────────────────────────────────────────
     if (type === 'project') {
-      const analyzed = await generateJSON(`
+      const prompt = `
 以下のメール本文から案件情報を抽出し、JSON形式のみで返してください。${attachmentNote}
 
 【重要ルール】書かれていない情報は推測せず null または空にしてください。
@@ -204,7 +228,10 @@ JSON:`.trim(), attachments) as {
 本文:
 ${body.slice(0, 3000)}
 
-JSON:`.trim(), attachments) as {
+JSON:`.trim()
+
+      const { result, durationMs } = await generateJSON(prompt, attachments)
+      const analyzed = result as {
         title: string; client: string | null; description: string
         requiredSkills: string[]; budgetMin: number | null; budgetMax: number | null
       }
@@ -229,6 +256,19 @@ JSON:`.trim(), attachments) as {
       }).select().single()
 
       if (error) throw new Error(`案件保存エラー: ${error.message}`)
+
+      await supabase.from('ai_logs').insert({
+        type: 'project',
+        model: AI_MODEL,
+        from_address: from,
+        subject,
+        ai_result: analyzed,
+        prompt_length: prompt.length,
+        status: 'success',
+        duration_ms: durationMs,
+        linked_id: data.id,
+      })
+
       console.log(`[inbound] 案件登録完了: ${data.title}`)
       return new Response(JSON.stringify({ ok: true, type: 'project', id: data.id, title: data.title }), {
         status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -242,6 +282,18 @@ JSON:`.trim(), attachments) as {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error('[inbound-email] エラー:', message)
+
+    try {
+      const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
+      await supabase.from('ai_logs').insert({
+        type: 'unknown',
+        model: AI_MODEL,
+        ai_result: {},
+        status: 'error',
+        error_message: message,
+      })
+    } catch { /* ログ保存失敗は握りつぶす */ }
+
     return new Response(JSON.stringify({ ok: false, error: message }), {
       status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })

@@ -120,7 +120,38 @@ CREATE TRIGGER submissions_updated_at
 
 
 -- ────────────────────────────────────────────────────────────
--- 4. app_config（アプリ全体設定）
+-- 4. ai_logs（AI解析ログ）
+-- ────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS ai_logs (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- 解析コンテキスト
+  type             text        NOT NULL,                -- 'candidate' | 'project'
+  model            text        NOT NULL,                -- 使用したモデル名
+  from_address     text,                                -- 送信元メールアドレス
+  subject          text,                                -- メール件名
+
+  -- AI 入出力
+  ai_result        jsonb       NOT NULL DEFAULT '{}',   -- AI が返した JSON
+  prompt_length    integer,                             -- プロンプトの文字数
+
+  -- 結果
+  status           text        NOT NULL DEFAULT 'success'
+                   CHECK (status IN ('success','error')),
+  error_message    text,                                -- エラー時のメッセージ
+  duration_ms      integer,                             -- AI呼び出し所要時間(ms)
+  linked_id        uuid,                                -- 登録された candidate/project の ID
+
+  created_at       timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ai_logs_type_idx      ON ai_logs (type);
+CREATE INDEX IF NOT EXISTS ai_logs_created_at_idx ON ai_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS ai_logs_linked_id_idx  ON ai_logs (linked_id);
+
+
+-- ────────────────────────────────────────────────────────────
+-- 5. app_config（アプリ全体設定）
 -- ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS app_config (
   key              text PRIMARY KEY,
@@ -147,6 +178,9 @@ CREATE POLICY "anon_all_candidates"  ON candidates  FOR ALL    TO anon USING (tr
 CREATE POLICY "anon_all_projects"    ON projects    FOR ALL    TO anon USING (true) WITH CHECK (true);
 CREATE POLICY "anon_all_submissions" ON submissions FOR ALL    TO anon USING (true) WITH CHECK (true);
 CREATE POLICY "anon_read_app_config" ON app_config  FOR SELECT TO anon USING (true);
+
+ALTER TABLE ai_logs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "anon_all_ai_logs" ON ai_logs FOR ALL TO anon USING (true) WITH CHECK (true);
 
 -- ============================================================
 -- 完了
