@@ -36,14 +36,15 @@ function parseFrom(from: string): string {
   }
 }
 
-const AI_MODEL = 'gemini-2.5-flash'
+const AI_MODEL = 'gemini-2.5-flash-lite'
 
 async function generateJSON(
   prompt: string,
   attachments: Attachment[],
+  maxRetries = 2,
 ): Promise<{ result: unknown; durationMs: number }> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
-  const model = genAI.getGenerativeModel({ model: AI_MODEL })
+  const model = genAI.getGenerativeModel({ model: AI_MODEL, generationConfig: { temperature: 0 } })
 
   const parts: object[] = []
   for (const att of attachments) {
@@ -54,12 +55,32 @@ async function generateJSON(
   parts.push({ text: prompt })
 
   const start = Date.now()
-  const res = await model.generateContent(parts)
-  const durationMs = Date.now() - start
+  let lastError: unknown
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await model.generateContent(parts)
+      const durationMs = Date.now() - start
+      const raw = res.response.text()
+      const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+      const result = JSON.parse(cleaned)
 
-  const raw = res.response.text()
-  const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-  return { result: JSON.parse(cleaned), durationMs }
+      // スキルと概要が両方空の場合はリトライ
+      const isEmpty = Array.isArray((result as any).skills) && (result as any).skills.length === 0
+        && !(result as any).summary
+      if (isEmpty && attempt < maxRetries) {
+        console.warn(`[generateJSON] attempt ${attempt}: skills/summary が空のためリトライ`)
+        continue
+      }
+
+      return { result, durationMs }
+    } catch (e) {
+      lastError = e
+      if (attempt < maxRetries) {
+        console.warn(`[generateJSON] attempt ${attempt}: エラーのためリトライ`, e)
+      }
+    }
+  }
+  throw lastError
 }
 
 Deno.serve(async (req: Request) => {
