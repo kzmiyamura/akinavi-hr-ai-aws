@@ -319,11 +319,18 @@ Deno.serve(async (req: Request) => {
 - email: string | null（候補者本人のみ。なければ null）
 - phone: string | null（明記されたもののみ。なければ null）
 - skills: string[]（職種問わず明記されているもののみ。重複なし。正規化済み。なければ[]）
-- skillsByCategory: object（skillsを以下の4カテゴリに分類。該当なしは[]。各カテゴリ内は経験年数が長い・主要なものを先頭に）
-  - languages: string[]（プログラミング言語・クエリ言語。例: PHP, Java, JavaScript, SQL, HTML/CSS 等）
-  - frameworks: string[]（FW・ライブラリ。例: React, Laravel, SpringBoot 等。なければ[]）
-  - os: string[]（OS。例: Linux, Windows, MacOS, Unix 等）
-  - others: string[]（ツール・デザインソフト・DB・クラウド・知見・その他全て。例: Illustrator, Photoshop, Figma, After Effects, Premiere Pro, Excel, Git, MySQL, グラフィックデザイン, 動画編集 等）
+- skillsByCategory: object（skillsを以下の11カテゴリに分類。該当なしは[]。各カテゴリ内は経験年数が長い・主要なものを先頭に）
+  - languages: string[]（PHP, Java, JavaScript, Python, SQL, TypeScript, Ruby, Go 等のプログラミング言語・クエリ言語）
+  - frameworks: string[]（React, Laravel, SpringBoot, Vue.js, Django 等のFW・ライブラリ。なければ[]）
+  - os: string[]（Linux, Windows, MacOS, Unix 等のOS）
+  - databases: string[]（MySQL, PostgreSQL, Oracle, MongoDB, Redis, SQLServer 等のRDB・NoSQL・KVS）
+  - dwh: string[]（Snowflake, BigQuery, Redshift, Databricks, Tableau, Looker 等のDWH・BIツール）
+  - cloud: string[]（AWS, Azure, GCP, Docker, Kubernetes, Terraform 等のクラウド・インフラ・コンテナ）
+  - design: string[]（Illustrator, Photoshop, Figma, After Effects, Premiere Pro, XD, グラフィックデザイン, 動画編集 等のデザイン・クリエイティブ系）
+  - marketing: string[]（SEO, Google Analytics, SNS運営, デジタルマーケティング, SEM 等）
+  - management: string[]（PM, PMO, アジャイル, スクラム, 要件定義, RFP 等のマネジメント系）
+  - business: string[]（Excel, PowerPoint, Word, Salesforce, JIRA, Slack, Notion 等のビジネスツール）
+  - others: string[]（上記に当てはまらないもの全て）
 - roles: string[]（担当役割・職種。例: ["PM", "グラフィックデザイナー", "クリエイティブディレクター", "ITコンサル"]。明記されているもののみ）
 - industries: string[]（業界経験。例: ["通信", "金融", "広告", "EC"]。職歴・本文から読み取れるもの）
 - experienceYears: number | null（計算または明記された値。なければ null）
@@ -338,7 +345,12 @@ JSON:`.trim()
       const analyzed = result as {
         name: string; email: string | null; phone: string | null
         skills: string[]
-        skillsByCategory: { languages: string[]; frameworks: string[]; os: string[]; others: string[] }
+        skillsByCategory: {
+          languages: string[]; frameworks: string[]; os: string[]
+          databases: string[]; dwh: string[]; cloud: string[]
+          design: string[]; marketing: string[]; management: string[]
+          business: string[]; others: string[]
+        }
         roles: string[]
         industries: string[]
         experienceYears: number | null; summary: string
@@ -366,7 +378,10 @@ JSON:`.trim()
         raw_profile: {
           text: body.slice(0, 5000),
           summary: analyzed.summary ?? '',
-          skillsByCategory: analyzed.skillsByCategory ?? { languages: [], frameworks: [], os: [], others: [] },
+          skillsByCategory: analyzed.skillsByCategory ?? {
+            languages: [], frameworks: [], os: [], databases: [], dwh: [],
+            cloud: [], design: [], marketing: [], management: [], business: [], others: [],
+          },
           roles: analyzed.roles ?? [],
           industries: analyzed.industries ?? [],
           from, subject,
@@ -384,6 +399,23 @@ JSON:`.trim()
         : await supabase.from('candidates').insert(dbPayload).select().single()
 
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
+
+      // candidate_skills に一括INSERT
+      const validCategories = ['languages', 'frameworks', 'os', 'databases', 'dwh', 'cloud', 'design', 'marketing', 'management', 'business', 'others']
+      const skillsPayload: { candidate_id: string; category: string; skill: string }[] = []
+      const categoryMap = analyzed.skillsByCategory ?? {}
+      for (const category of validCategories) {
+        const skillList: string[] = (categoryMap as Record<string, string[]>)[category] ?? []
+        for (const skill of skillList) {
+          if (skill && skill.trim()) skillsPayload.push({ candidate_id: data.id, category, skill: skill.trim() })
+        }
+      }
+      if (skillsPayload.length > 0) {
+        await supabase.from('candidate_skills').delete().eq('candidate_id', data.id)
+        const { error: skillsError } = await supabase.from('candidate_skills').insert(skillsPayload)
+        if (skillsError) console.error('[candidate_skills INSERT error]', skillsError)
+        else console.log(`[inbound] スキル登録完了: ${skillsPayload.length}件`)
+      }
 
       const { error: logError } = await supabase.from('ai_logs').insert({
         type: 'candidate',
