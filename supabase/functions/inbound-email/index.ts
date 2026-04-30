@@ -179,16 +179,30 @@ Deno.serve(async (req: Request) => {
 
 件名: ${subject}
 
+【スキル正規化ルール】
+以下の表記に統一してください：
+JavaScript（JavascriptやJSは全てJavaScriptに）、TypeScript、PHP、Python、Ruby、Java、Go、
+MySQL（MysqlやMYSQLも）、PostgreSQL（PostageSQL等も）、SQLServer、Oracle、
+Linux、Windows、MacOS、Unix、
+React、Vue.js、Angular、Laravel、SpringBoot、Django、
+Git、Docker、Kubernetes、AWS、Azure、GCP、
+Excel、PowerPoint、Word、Salesforce、JIRA
+
 抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
 - name: string（フルネーム。ファイル名・文字化け文字列は使わない。不明なら "不明"）
 - email: string | null（候補者本人のみ。なければ null）
 - phone: string | null（明記されたもののみ。なければ null）
-- skills: string[]（明記されているもののみ。重複なし。なければ[]）
-- skillsByCategory: object（skillsを以下の4カテゴリに分類。該当なしは[]。各カテゴリ内は経験年数が長い・主要なものを先頭に並べること）
-  - languages: string[]（PHP, Java, JavaScript, Perl, SQL, HTML/CSS, VBA 等のプログラミング言語・クエリ言語）
-  - frameworks: string[]（React, Laravel, Spring 等のFW・ライブラリ。該当なければ[]）
-  - os: string[]（Linux, Windows, MacOS, Unix, NTOS/PTOS 等のOS）
-  - others: string[]（Excel, Git, JIRA, Salesforce, Apache, MySQL 等のツール・DB・環境・その他）
+- skills: string[]（明記されているもののみ。重複なし。正規化済み。なければ[]）
+- skillsByCategory: object（skillsを以下の4カテゴリに分類。該当なしは[]。各カテゴリ内は経験年数が長い・主要なものを先頭に）
+  - languages: string[]（PHP, Java, JavaScript, Perl, SQL, HTML/CSS, VBA 等）
+  - frameworks: string[]（React, Laravel, SpringBoot 等のFW・ライブラリ。なければ[]）
+  - os: string[]（Linux, Windows, MacOS, Unix 等）
+  - others: string[]（Excel, Git, JIRA, Salesforce, Apache, MySQL 等のツール・DB・環境）
+- skillsWithYears: array（スキルごとの経験年数。職歴から計算できるもののみ）
+  - skill: string（正規化済みスキル名）
+  - years: number（経験年数。小数点以下は切り捨て）
+- roles: string[]（担当役割。例: ["PM", "ITコンサル", "上流工程", "開発エンジニア"]。明記されているもののみ）
+- industries: string[]（業界経験。例: ["通信", "金融", "官公庁", "医療"]。職歴から読み取れるもの）
 - experienceYears: number | null（計算または明記された値。なければ null）
 - summary: string（職務経歴の概要300字以内。社名・実績・受賞歴を含めること）
 
@@ -202,6 +216,9 @@ JSON:`.trim()
         name: string; email: string | null; phone: string | null
         skills: string[]
         skillsByCategory: { languages: string[]; frameworks: string[]; os: string[]; others: string[] }
+        skillsWithYears: { skill: string; years: number }[]
+        roles: string[]
+        industries: string[]
         experienceYears: number | null; summary: string
       }
 
@@ -228,6 +245,9 @@ JSON:`.trim()
           text: body.slice(0, 5000),
           summary: analyzed.summary ?? '',
           skillsByCategory: analyzed.skillsByCategory ?? { languages: [], frameworks: [], os: [], others: [] },
+          skillsWithYears: analyzed.skillsWithYears ?? [],
+          roles: analyzed.roles ?? [],
+          industries: analyzed.industries ?? [],
           from, subject,
           attachmentCount: attachments.length,
           attachmentNames: attachments.map(a => a.name ?? a.mimeType),
