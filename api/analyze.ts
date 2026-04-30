@@ -46,7 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     )
 
     // ── 人材メール解析 ────────────────────────────────────────
-    if (type === 'candidate') {
+    if (type === 'candidate' || type === 'human') {
       const analyzed = await generateJSON(`
 以下のメール本文から人材情報を抽出し、JSON形式のみで返してください。
 
