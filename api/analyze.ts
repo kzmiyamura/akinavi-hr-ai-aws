@@ -56,13 +56,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   try {
-    const {
-      type = 'candidate',
-      from = '',
-      subject = '',
-      body = '',
-      attachment,
-    } = req.body ?? {}
+    // application/x-www-form-urlencoded と application/json の両方に対応
+    const raw = req.body ?? {}
+    // form-urlencoded の場合、attachment[data] のようなキーがフラットに来るので再構築
+    const attachmentFromForm: Attachment | undefined =
+      raw['attachment[data]']
+        ? {
+            data: String(raw['attachment[data]']),
+            mimeType: String(raw['attachment[mimeType]'] ?? ''),
+            name: raw['attachment[name]'] ? String(raw['attachment[name]']) : undefined,
+          }
+        : undefined
+
+    const type: string = String(raw.type ?? 'candidate')
+    const from: string = String(raw.from ?? '')
+    const subject: string = String(raw.subject ?? '')
+    const body: string = String(raw.body ?? '')
+    const attachment: Attachment | undefined = attachmentFromForm ?? raw.attachment
 
     // 本文も添付もない場合はエラー
     if (!String(body).trim() && !attachment?.data) {
