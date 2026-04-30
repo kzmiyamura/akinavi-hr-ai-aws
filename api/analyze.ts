@@ -1,10 +1,16 @@
 // Vercel Serverless Function: Make.com → AI解析 → Supabase保存
 // POST /api/analyze
-// Body: { type: 'candidate' | 'project', from, subject, body }
+// Body: { type, from, subject, body, attachment?: { data, mimeType, name } }
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { createClient } from '@supabase/supabase-js'
+
+interface Attachment {
+  data: string      // Base64 文字列
+  mimeType: string  // 例: "application/pdf", "application/vnd.ms-excel"
+  name?: string
+}
 
 function getEnv(key: string): string {
   const val = process.env[key]
@@ -12,10 +18,26 @@ function getEnv(key: string): string {
   return val
 }
 
-async function generateJSON(prompt: string): Promise<unknown> {
+/** テキスト + 添付ファイル（任意）を Gemini で解析して JSON を返す */
+async function generateJSON(prompt: string, attachment?: Attachment): Promise<unknown> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
   const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
-  const result = await model.generateContent(prompt)
+
+  const parts: object[] = []
+
+  // 添付ファイルがあれば先に渡す（Gemini はファイルを読んでからプロンプトを処理）
+  if (attachment?.data && attachment?.mimeType) {
+    parts.push({
+      inlineData: {
+        data: attachment.data,
+        mimeType: attachment.mimeType,
+      },
+    })
+  }
+
+  parts.push({ text: prompt })
+
+  const result = await model.generateContent(parts)
   const raw = result.response.text()
   const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
   return JSON.parse(cleaned)
@@ -34,10 +56,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   try {
-    const { type = 'candidate', from = '', subject = '', body = '' } = req.body ?? {}
+    const {
+      type = 'candidate',
+      from = '',
+      subject = '',
+      body = '',
+      attachment,
+    } = req.body ?? {}
 
-    if (!String(body).trim()) {
-      return res.status(400).json({ error: 'メール本文が空です' })
+    // 本文も添付もない場合はエラー
+    if (!String(body).trim() && !attachment?.data) {
+      return res.status(400).json({ error: 'メール本文と添付ファイルが両方空です' })
     }
 
     const supabase = createClient(
@@ -45,10 +74,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       getEnv('SUPABASE_SERVICE_ROLE_KEY'),
     )
 
+    const hasAttachment = !!attachment?.data
+    const attachmentNote = hasAttachment
+      ? `\n※添付ファイル（${attachment.name ?? attachment.mimeType}）も含めて解析してください。`
+      : ''
+
     // ── 人材メール解析 ────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
       const analyzed = await generateJSON(`
-以下のメール本文から人材情報を抽出し、JSON形式のみで返してください。
+以下のメール本文から人材情報を抽出し、JSON形式のみで返してください。${attachmentNote}
 
 差出人: ${from}
 件名: ${subject}
@@ -64,7 +98,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 本文:
 ${String(body).slice(0, 3000)}
 
-JSON:`.trim()) as {
+JSON:`.trim(), attachment) as {
         name: string; email: string | null; phone: string | null
         skills: string[]; experienceYears: number | null; summary: string
       }
@@ -80,6 +114,8 @@ JSON:`.trim()) as {
           text: String(body).slice(0, 5000),
           summary: analyzed.summary ?? '',
           from, subject,
+          hasAttachment,
+          attachmentName: attachment?.name ?? null,
         },
         duplicate_flag: false,
         created_by: 'make-inbound',
@@ -96,7 +132,7 @@ JSON:`.trim()) as {
     // ── 案件メール解析 ────────────────────────────────────────
     if (type === 'project') {
       const analyzed = await generateJSON(`
-以下のメール本文から案件情報を抽出し、JSON形式のみで返してください。
+以下のメール本文から案件情報を抽出し、JSON形式のみで返してください。${attachmentNote}
 
 差出人: ${from}
 件名: ${subject}
@@ -112,7 +148,7 @@ JSON:`.trim()) as {
 本文:
 ${String(body).slice(0, 3000)}
 
-JSON:`.trim()) as {
+JSON:`.trim(), attachment) as {
         title: string; client: string | null; description: string
         requiredSkills: string[]; budgetMin: number | null; budgetMax: number | null
       }
@@ -124,7 +160,12 @@ JSON:`.trim()) as {
         required_skills: analyzed.requiredSkills ?? [],
         budget_min: analyzed.budgetMin ?? null,
         budget_max: analyzed.budgetMax ?? null,
-        raw_data: { text: String(body).slice(0, 5000), from, subject },
+        raw_data: {
+          text: String(body).slice(0, 5000),
+          from, subject,
+          hasAttachment,
+          attachmentName: attachment?.name ?? null,
+        },
         created_by: 'make-inbound',
       }).select().single()
 
