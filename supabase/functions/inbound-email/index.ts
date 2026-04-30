@@ -19,7 +19,7 @@ function getEnv(key: string): string {
 
 async function generateJSON(prompt: string): Promise<unknown> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-8b' })
+  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
   const result = await model.generateContent(prompt)
   const raw = result.response.text()
   const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
