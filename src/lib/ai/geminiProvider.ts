@@ -9,7 +9,7 @@ import type {
   MatchResponse,
 } from './types'
 
-const MODEL = 'gemini-2.0-flash'
+const MODEL = 'gemini-2.0-flash-lite'
 
 function getClient(): GoogleGenerativeAI {
   const key = import.meta.env.VITE_GEMINI_API_KEY as string
