@@ -155,24 +155,37 @@ Deno.serve(async (req: Request) => {
 【重要ルール】
 - 本文または添付ファイルに明示的に書かれている情報だけを抽出してください。
 - 書かれていない情報は絶対に推測・補完・でっち上げをしないでください。
-- 氏名はPDFや本文の「テキスト内容」から読み取ってください。添付ファイルのファイル名（例: OH_一之江.pdf）は氏名ではありません。絶対にファイル名を氏名として使わないでください。
-- 氏名が本文・添付テキストに明記されていない場合のみ "不明" にしてください。
-- イニシャル（例: O.H.）は氏名ではありません。同じPDF内にフルネームが書かれているページがあればそちらを使ってください。
+
+【氏名の抽出ルール】
+- 氏名はPDFや本文の「テキスト内容」から読み取ってください。
+- 添付ファイルのファイル名（例: OH_一之江.pdf）は氏名ではありません。絶対に使わないでください。
+- 文字化けしている文字列（例：㻻㻴、㼃indows、㻼㻴㻼 等）は正しく読み取れていません。これらを氏名として使わないでください。
+- PDFは複数ページある場合があります。必ず全ページを確認してください。
+- 学歴/職歴ページ（最終ページ付近）に「フリガナ」「氏名」が明記されている場合、そのページの情報を最優先で使用してください。
+- イニシャル（例: O.H.）は氏名ではありません。同じPDF内にフルネームがあればそちらを使ってください。
 - 地名・駅名・会社名を氏名と混同しないでください。
-- PDFは複数ページある場合があります。全ページを確認し、フルネームが明記されているページの情報を優先してください。
-- emailは候補者本人のアドレスのみです。差出人（${from}）は営業担当者のため、このアドレスは絶対に入れないでください。PDFや本文に候補者のメールアドレスが書かれていなければ必ず null にしてください。
+- 氏名が本文・添付テキストに明記されていない場合のみ "不明" にしてください。
+
+【メールアドレスの抽出ルール】
+- emailは候補者本人のアドレスのみです。
+- 差出人（${from}）は営業担当者のため、このアドレスは絶対に入れないでください。
+- PDFや本文に候補者のメールアドレスが書かれていなければ必ず null にしてください。
+
+【その他のルール】
 - 電話番号も明記されているものだけ。なければ null。
-- skillsは重複なしで返してください。表記が異なっても同じ技術（例: JavaScript と Javascript）は1つにまとめてください。
+- skillsは重複なしで返してください。表記が異なっても同じ技術（例: JavaScript と Javascript）は1つにまとめ、より一般的な表記に統一してください。
+- experienceYearsは職歴の最初の年から現在までの年数を計算してください。明記されていても計算できる場合は計算値を優先してください。
+- summaryは具体的な社名・プロジェクト名・実績・受賞歴を必ず含めてください。
 
 件名: ${subject}
 
-抽出項目（JSON形式のみで返してください）:
-- name: string（PDFや本文テキストに明記された氏名。ファイル名は使わない。不明なら "不明"）
-- email: string | null（候補者本人のメールアドレスのみ。差出人アドレスは入れない。なければ null）
-- phone: string | null（明記された電話番号のみ。なければ null）
+抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
+- name: string（フルネーム。ファイル名・文字化け文字列は使わない。不明なら "不明"）
+- email: string | null（候補者本人のみ。なければ null）
+- phone: string | null（明記されたもののみ。なければ null）
 - skills: string[]（明記されているもののみ。重複なし。なければ[]）
-- experienceYears: number | null（明記されていなければ null）
-- summary: string（職務経歴の概要300字以内。具体的な社名・プロジェクト・実績・受賞歴があれば必ず含めること）
+- experienceYears: number | null（計算または明記された値。なければ null）
+- summary: string（職務経歴の概要300字以内。社名・実績・受賞歴を含めること）
 
 本文:
 ${body.slice(0, 3000)}
@@ -187,12 +200,12 @@ JSON:`.trim()
 
       console.log('[AI解析結果 candidate]', JSON.stringify(analyzed, null, 2))
 
-      // B: スキル重複除去（大文字小文字を無視して正規化）
+      // スキル重複除去（大文字小文字を無視して正規化）
       const skills = Array.from(
         new Map((analyzed.skills ?? []).map((s: string) => [s.toLowerCase(), s])).values()
       )
 
-      // A: 送信者メールアドレスが混入していたら除去
+      // 送信者メールアドレスが混入していたら除去
       const senderEmails = from.split(/[,;]/).map((s: string) => s.trim().toLowerCase())
       const email = analyzed.email && !senderEmails.includes(analyzed.email.toLowerCase())
         ? analyzed.email
@@ -251,11 +264,11 @@ JSON:`.trim()
 差出人: ${from}
 件名: ${subject}
 
-抽出項目:
+抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
 - title: string（案件名。不明なら "案件"）
-- client: string | null
-- description: string
-- requiredSkills: string[]（空なら[]）
+- client: string | null（クライアント名。不明なら null）
+- description: string（案件概要）
+- requiredSkills: string[]（必須スキル。なければ[]）
 - budgetMin: number | null（月額・万円。不明ならnull）
 - budgetMax: number | null（月額・万円。不明ならnull）
 
