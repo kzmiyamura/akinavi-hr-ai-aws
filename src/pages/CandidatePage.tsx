@@ -5,6 +5,27 @@ import { ai } from '../lib/ai'
 import { upsertCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import type { Candidate } from '../lib/db/candidates'
 
+interface SkillsByCategory {
+  languages: string[]
+  frameworks: string[]
+  os: string[]
+  others: string[]
+}
+
+function getSkillsByCategory(c: Candidate): SkillsByCategory | null {
+  const raw = c.raw_profile as Record<string, unknown>
+  const sbc = raw?.skillsByCategory
+  if (!sbc || typeof sbc !== 'object') return null
+  return sbc as SkillsByCategory
+}
+
+const CATEGORY_STYLE: Record<keyof SkillsByCategory, { label: string; badge: string }> = {
+  languages: { label: '言語', badge: 'bg-blue-50 text-blue-700' },
+  frameworks: { label: 'FW',   badge: 'bg-green-50 text-green-700' },
+  os:         { label: 'OS',   badge: 'bg-amber-50 text-amber-700' },
+  others:     { label: 'その他', badge: 'bg-gray-100 text-gray-600' },
+}
+
 interface Props { nickname: string }
 
 export function CandidatePage({ nickname }: Props) {
@@ -114,14 +135,43 @@ export function CandidatePage({ nickname }: Props) {
                   <p className="text-xs text-gray-400 mt-0.5">
                     {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年
                   </p>
-                  <div className="flex flex-wrap gap-1 mt-1.5">
-                    {(c.skills as string[]).slice(0, 6).map((s) => (
-                      <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
-                    ))}
-                    {(c.skills as string[]).length > 6 && (
-                      <span className="text-xs text-gray-400">+{(c.skills as string[]).length - 6}</span>
-                    )}
-                  </div>
+                  {(() => {
+                    const sbc = getSkillsByCategory(c)
+                    if (sbc) {
+                      return (
+                        <div className="space-y-1 mt-1.5">
+                          {(Object.keys(CATEGORY_STYLE) as (keyof SkillsByCategory)[]).map((key) => {
+                            const items = sbc[key]
+                            if (!items || items.length === 0) return null
+                            const { label, badge } = CATEGORY_STYLE[key]
+                            const shown = key === 'others' ? items.slice(0, 5) : items
+                            return (
+                              <div key={key} className="flex flex-wrap gap-1 items-center">
+                                <span className="text-xs text-gray-400 w-10 shrink-0">{label}</span>
+                                {shown.map((s) => (
+                                  <span key={s} className={`text-xs rounded px-1.5 py-0.5 ${badge}`}>{s}</span>
+                                ))}
+                                {key === 'others' && items.length > 5 && (
+                                  <span className="text-xs text-gray-400">+{items.length - 5}</span>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )
+                    }
+                    // 旧レコード用フォールバック
+                    return (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {(c.skills as string[]).slice(0, 6).map((s) => (
+                          <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
+                        ))}
+                        {(c.skills as string[]).length > 6 && (
+                          <span className="text-xs text-gray-400">+{(c.skills as string[]).length - 6}</span>
+                        )}
+                      </div>
+                    )
+                  })()}
                 </div>
                 <div className="flex items-center gap-3 ml-4 shrink-0">
                   <span className="text-xs text-gray-300">{c.created_by}</span>
