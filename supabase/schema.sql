@@ -134,6 +134,20 @@ INSERT INTO app_config (key, value) VALUES
   ('ai',       '{"model": "gpt-4o-mini", "max_tokens": 1000}')
 ON CONFLICT (key) DO NOTHING;
 
+-- ────────────────────────────────────────────────────────────
+-- 5. RLS ポリシー（ログインなし・ニックネーム制のため anon に全操作を許可）
+-- ────────────────────────────────────────────────────────────
+
+ALTER TABLE candidates  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE projects    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE submissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_config  ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "anon_all_candidates"  ON candidates  FOR ALL    TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "anon_all_projects"    ON projects    FOR ALL    TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "anon_all_submissions" ON submissions FOR ALL    TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "anon_read_app_config" ON app_config  FOR SELECT TO anon USING (true);
+
 -- ============================================================
 -- 完了
 -- ============================================================
