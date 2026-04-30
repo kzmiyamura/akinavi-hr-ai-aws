@@ -78,6 +78,16 @@ export async function fetchCandidates(): Promise<Candidate[]> {
   return (data ?? []) as Candidate[]
 }
 
+/** 候補者を削除する */
+export async function deleteCandidate(id: string): Promise<void> {
+  const { error } = await supabase
+    .from('candidates')
+    .delete()
+    .eq('id', id)
+
+  if (error) throw new Error(`候補者の削除に失敗しました: ${error.message}`)
+}
+
 /** duplicate_flag=true の候補者のみ取得 */
 export async function fetchDuplicateCandidates(): Promise<Candidate[]> {
   const { data, error } = await supabase

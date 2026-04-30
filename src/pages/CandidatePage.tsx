@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2 } from 'lucide-react'
 import { ai } from '../lib/ai'
-import { upsertCandidate, fetchCandidates } from '../lib/db/candidates'
+import { upsertCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import type { Candidate } from '../lib/db/candidates'
 
 interface Props { nickname: string }
@@ -10,7 +10,26 @@ interface Props { nickname: string }
 export function CandidatePage({ nickname }: Props) {
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const queryClient = useQueryClient()
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteCandidate,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      setDeletingId(null)
+    },
+    onError: (e) => {
+      setMessage({ type: 'error', text: String(e) })
+      setDeletingId(null)
+    },
+  })
+
+  function handleDelete(c: Candidate) {
+    if (!window.confirm(`「${c.name}」を削除しますか？この操作は元に戻せません。`)) return
+    setDeletingId(c.id)
+    deleteMutation.mutate(c.id)
+  }
 
   const { data: candidates = [], isLoading } = useQuery({
     queryKey: ['candidates'],
@@ -104,7 +123,19 @@ export function CandidatePage({ nickname }: Props) {
                     )}
                   </div>
                 </div>
-                <span className="text-xs text-gray-300 whitespace-nowrap ml-4">{c.created_by}</span>
+                <div className="flex items-center gap-3 ml-4 shrink-0">
+                  <span className="text-xs text-gray-300">{c.created_by}</span>
+                  <button
+                    onClick={() => handleDelete(c)}
+                    disabled={deletingId === c.id}
+                    className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-50"
+                    title="削除"
+                  >
+                    {deletingId === c.id
+                      ? <Loader2 size={15} className="animate-spin" />
+                      : <Trash2 size={15} />}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
