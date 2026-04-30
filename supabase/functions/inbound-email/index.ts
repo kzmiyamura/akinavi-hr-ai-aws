@@ -83,6 +83,81 @@ async function generateJSON(
   throw lastError
 }
 
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+  return btoa(binary)
+}
+
+/** 本文中の Google Drive / Sheets / Docs リンクを検出してコンテンツを取得 */
+async function fetchGoogleLinks(body: string): Promise<{
+  textContents: { label: string; content: string }[]
+  pdfAttachments: Attachment[]
+}> {
+  const textContents: { label: string; content: string }[] = []
+  const pdfAttachments: Attachment[] = []
+
+  // Google Sheets → CSV
+  const sheetsMatches = [...body.matchAll(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)[^\s]*/g)]
+  for (const match of sheetsMatches) {
+    const id = match[1]
+    const gidMatch = match[0].match(/gid=(\d+)/)
+    const gid = gidMatch ? gidMatch[1] : '0'
+    const exportUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`
+    try {
+      const res = await fetch(exportUrl)
+      if (res.ok) {
+        textContents.push({ label: `Googleスプレッドシート(${id})`, content: await res.text() })
+        console.log(`[DriveLink] Sheets取得成功: ${id}`)
+      } else {
+        console.warn(`[DriveLink] Sheets取得失敗(${res.status}): ${id}`)
+      }
+    } catch (e) { console.warn(`[DriveLink] Sheets fetch error: ${id}`, e) }
+  }
+
+  // Google Docs → plain text
+  const docsMatches = [...body.matchAll(/https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]+)/g)]
+  for (const match of docsMatches) {
+    const id = match[1]
+    const exportUrl = `https://docs.google.com/document/d/${id}/export?format=txt`
+    try {
+      const res = await fetch(exportUrl)
+      if (res.ok) {
+        textContents.push({ label: `Googleドキュメント(${id})`, content: await res.text() })
+        console.log(`[DriveLink] Docs取得成功: ${id}`)
+      } else {
+        console.warn(`[DriveLink] Docs取得失敗(${res.status}): ${id}`)
+      }
+    } catch (e) { console.warn(`[DriveLink] Docs fetch error: ${id}`, e) }
+  }
+
+  // Google Drive ファイル → PDF or テキスト
+  const driveMatches = [...body.matchAll(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)([a-zA-Z0-9_-]+)/g)]
+  for (const match of driveMatches) {
+    const id = match[1]
+    const downloadUrl = `https://drive.google.com/uc?export=download&id=${id}`
+    try {
+      const res = await fetch(downloadUrl)
+      if (res.ok) {
+        const ct = res.headers.get('content-type') ?? ''
+        if (ct.includes('pdf')) {
+          const b64 = arrayBufferToBase64(await res.arrayBuffer())
+          pdfAttachments.push({ data: b64, mimeType: 'application/pdf', name: `drive_${id}.pdf` })
+          console.log(`[DriveLink] Drive PDF取得成功: ${id}`)
+        } else if (ct.includes('text') || ct.includes('csv')) {
+          textContents.push({ label: `Driveファイル(${id})`, content: await res.text() })
+          console.log(`[DriveLink] Drive text取得成功: ${id}`)
+        }
+      } else {
+        console.warn(`[DriveLink] Drive取得失敗(${res.status}): ${id}`)
+      }
+    } catch (e) { console.warn(`[DriveLink] Drive fetch error: ${id}`, e) }
+  }
+
+  return { textContents, pdfAttachments }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -142,8 +217,24 @@ Deno.serve(async (req: Request) => {
 
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
-    const attachmentNote = supportedAttachments.length > 0
-      ? `\n※添付ファイル（${supportedAttachments.map(a => a.name ?? a.mimeType).join('、')}）も含めて解析してください。`
+    // Google Drive / Sheets / Docs リンクの取得
+    const { textContents: driveTexts, pdfAttachments: drivePdfs } = await fetchGoogleLinks(body)
+    const allAttachments = [...supportedAttachments, ...drivePdfs]
+
+    if (driveTexts.length > 0 || drivePdfs.length > 0) {
+      console.log('[DriveLink] 取得結果', {
+        texts: driveTexts.map(t => ({ label: t.label, length: t.content.length })),
+        pdfs: drivePdfs.map(p => p.name),
+      })
+    }
+
+    // Drive から取得したテキストをプロンプトに追記するための文字列
+    const driveTextSection = driveTexts.length > 0
+      ? '\n\n' + driveTexts.map(t => `--- ${t.label} ---\n${t.content.slice(0, 3000)}`).join('\n\n')
+      : ''
+
+    const attachmentNote = allAttachments.length > 0
+      ? `\n※添付ファイル（${allAttachments.map(a => a.name ?? a.mimeType).join('、')}）も含めて解析してください。`
       : ''
 
     // ── 人材メール ────────────────────────────────────────────
@@ -204,11 +295,11 @@ Deno.serve(async (req: Request) => {
 - summary: string（職務経歴の概要300字以内。社名・実績・受賞歴を含めること）
 
 本文:
-${body.slice(0, 3000)}
+${body.slice(0, 3000)}${driveTextSection}
 
 JSON:`.trim()
 
-      const { result, durationMs } = await generateJSON(prompt, attachments)
+      const { result, durationMs } = await generateJSON(prompt, allAttachments)
       const analyzed = result as {
         name: string; email: string | null; phone: string | null
         skills: string[]
@@ -244,8 +335,9 @@ JSON:`.trim()
           roles: analyzed.roles ?? [],
           industries: analyzed.industries ?? [],
           from, subject,
-          attachmentCount: attachments.length,
-          attachmentNames: attachments.map(a => a.name ?? a.mimeType),
+          attachmentCount: allAttachments.length,
+          attachmentNames: allAttachments.map(a => a.name ?? a.mimeType),
+          driveLinks: driveTexts.map(t => t.label),
           aiAnalysis: analyzed,
         },
         duplicate_flag: false,
