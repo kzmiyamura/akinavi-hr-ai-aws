@@ -184,7 +184,7 @@ Deno.serve(async (req: Request) => {
 - email: string | null（候補者本人のみ。なければ null）
 - phone: string | null（明記されたもののみ。なければ null）
 - skills: string[]（明記されているもののみ。重複なし。なければ[]）
-- skillsByCategory: object（skillsを以下の4カテゴリに分類。該当なしは[]）
+- skillsByCategory: object（skillsを以下の4カテゴリに分類。該当なしは[]。各カテゴリ内は経験年数が長い・主要なものを先頭に並べること）
   - languages: string[]（PHP, Java, JavaScript, Perl, SQL, HTML/CSS, VBA 等のプログラミング言語・クエリ言語）
   - frameworks: string[]（React, Laravel, Spring 等のFW・ライブラリ。該当なければ[]）
   - os: string[]（Linux, Windows, MacOS, Unix, NTOS/PTOS 等のOS）
