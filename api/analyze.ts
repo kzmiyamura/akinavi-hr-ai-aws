@@ -25,8 +25,9 @@ async function generateJSON(prompt: string, attachment?: Attachment): Promise<un
 
   const parts: object[] = []
 
-  // 添付ファイルがあれば先に渡す（Gemini はファイルを読んでからプロンプトを処理）
-  if (attachment?.data && attachment?.mimeType) {
+  // Gemini が inlineData で受け付ける MIME タイプのみ添付（PDF・画像のみ対応）
+  const SUPPORTED_MIME = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']
+  if (attachment?.data && attachment?.mimeType && SUPPORTED_MIME.includes(attachment.mimeType)) {
     parts.push({
       inlineData: {
         data: attachment.data,
