@@ -38,7 +38,7 @@ function parseFrom(from: string): string {
 
 async function generateJSON(prompt: string, attachments: Attachment[]): Promise<unknown> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' })
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' })
 
   const parts: object[] = []
   for (const att of attachments) {
