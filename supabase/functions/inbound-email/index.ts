@@ -180,13 +180,13 @@ Deno.serve(async (req: Request) => {
 件名: ${subject}
 
 【スキル正規化ルール】
-以下の表記に統一してください：
-JavaScript（JavascriptやJSは全てJavaScriptに）、TypeScript、PHP、Python、Ruby、Java、Go、
-MySQL（MysqlやMYSQLも）、PostgreSQL（PostageSQL等も）、SQLServer、Oracle、
-Linux、Windows、MacOS、Unix、
-React、Vue.js、Angular、Laravel、SpringBoot、Django、
-Git、Docker、Kubernetes、AWS、Azure、GCP、
-Excel、PowerPoint、Word、Salesforce、JIRA
+※このリストは「表記ゆれを統一するための参考」です。リストにあるスキルを新たに追加してはいけません。
+本文・添付に明記されているスキルのみ抽出し、以下の表記に統一してください：
+- Javascript / JS → JavaScript
+- Mysql / MYSQL → MySQL
+- PostageSQL / Postgre → PostgreSQL
+- Salesforce / saleforce → Salesforce
+- Powerpoint → PowerPoint
 
 抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
 - name: string（フルネーム。ファイル名・文字化け文字列は使わない。不明なら "不明"）
