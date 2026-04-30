@@ -10,12 +10,14 @@
 ```mermaid
 flowchart TD
     A[営業担当者\nブラウザ] -->|テキスト貼り付け| B[React フロントエンド\nVercel]
-    B -->|AI解析リクエスト| C[Gemini 1.5 Flash\nGoogle AI]
+    B -->|AI解析リクエスト| C[Gemini 2.5 Flash\nGoogle AI]
     C -->|解析結果| B
     B -->|upsert / fetch| D[(Supabase\nPostgreSQL)]
-    E[外部メール] -->|受信| F[Resend Inbound]
-    F -->|Webhook| G[Edge Function\nSupabase]
-    G -->|AI解析| C
+    E[外部メール\nOutlook] -->|受信| F[Make.com]
+    F -->|Webhook POST| G[Edge Function\nSupabase]
+    G -->|Drive/Sheets URL検出→fetch| H[Google Drive\n共有リンク]
+    G -->|AI解析| I[Gemini 2.5 Flash Lite]
+    I -->|解析結果| G
     G -->|upsert| D
 ```
 
@@ -25,13 +27,23 @@ flowchart TD
 
 | レイヤー | 技術 |
 |---|---|
-| フロントエンド | React 18, Vite, TypeScript, Tailwind CSS v4 |
+| フロントエンド | React 18, Vite, TypeScript, Tailwind CSS |
 | 状態管理 | TanStack Query v5 |
 | DB / バックエンド | Supabase (PostgreSQL, Edge Functions) |
-| AI | Google Gemini 1.5 Flash（`VITE_AI_PROVIDER=openai` で GPT-4o に切替可） |
-| メール自動受信 | Resend Inbound Webhook |
+| AI（Edge Function） | Google Gemini 2.5 Flash Lite（`gemini-2.5-flash-lite`） |
+| AI（Vercel API） | Google Gemini 2.5 Flash（`gemini-2.5-flash`） |
+| メール自動受信 | Outlook 専用アカウント + Make.com Webhook |
 | デプロイ | Vercel（フロント）/ Supabase（バックエンド） |
 | テスト | Vitest, React Testing Library, MSW |
+
+---
+
+## メール受信アドレス
+
+| 種別 | アドレス |
+|---|---|
+| 人材登録用 | `akinavi.hr.ai.voice.human@outlook.jp` |
+| 案件登録用 | `akinavi.hr.ai.voice.project@outlook.jp` |
 
 ---
 
@@ -70,12 +82,17 @@ VITE_SUPABASE_URL=https://argizomylbolpqxgmvim.supabase.co
 VITE_SUPABASE_ANON_KEY=（Supabase ダッシュボード → Settings → API から取得）
 VITE_GEMINI_API_KEY=（Google AI Studio から取得）
 VITE_AI_PROVIDER=gemini
-RESEND_API_KEY=（Resend ダッシュボード → API Keys から取得）
 ```
 
 ### 4. Supabase DB を初期化
 
-Supabase ダッシュボード → SQL Editor で `supabase/schema.sql` を実行する。
+Supabase ダッシュボード → SQL Editor で以下を実行：
+
+```
+supabase/schema.sql
+```
+
+既存DBへの追加は `supabase/migrations/` 以下のファイルを順に実行。
 
 ### 5. 開発サーバーを起動
 
@@ -91,7 +108,14 @@ npm run dev
 
 ### Vercel（フロントエンド）
 
-1. Vercel ダッシュボード → プロジェクト → Settings → Environment Variables に `.env.local` の内容を追加
+1. Vercel ダッシュボード → Settings → Environment Variables に以下を設定:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+   - `VITE_GEMINI_API_KEY`
+   - `VITE_AI_PROVIDER=gemini`
+   - `GEMINI_API_KEY`（Vercel API用）
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
 2. GitHub の `main` ブランチへの push で自動デプロイ
 
 ### Supabase Edge Function（メール自動受信）
@@ -99,26 +123,102 @@ npm run dev
 ```bash
 # Secrets 登録
 supabase secrets set GEMINI_API_KEY=xxx --project-ref argizomylbolpqxgmvim
+supabase secrets set SUPABASE_URL=https://argizomylbolpqxgmvim.supabase.co --project-ref argizomylbolpqxgmvim
+supabase secrets set SUPABASE_SERVICE_ROLE_KEY=xxx --project-ref argizomylbolpqxgmvim
 
 # デプロイ
 supabase functions deploy inbound-email --project-ref argizomylbolpqxgmvim
 ```
 
-Webhook URL:
+Webhook URL（Make.com の送信先に設定）:
 ```
 https://argizomylbolpqxgmvim.supabase.co/functions/v1/inbound-email
 ```
+
+Make.com の POST パラメータ:
+
+| パラメータ | 内容 |
+|---|---|
+| `type` | `candidate`（人材）または `project`（案件） |
+| `from` | 差出人メールアドレス |
+| `subject` | 件名 |
+| `body` | 本文（HTML可・自動でプレーンテキスト化） |
+| `attachment[data]` | 添付ファイルのBase64（PDF/PNG/JPEG等） |
+| `attachment[mimeType]` | 添付ファイルのMIMEタイプ |
+| `attachment[name]` | 添付ファイル名 |
+
+---
+
+## AI 解析フロー
+
+```
+メール受信（Make.com）
+  ↓
+本文の HTML タグを自動除去（プレーンテキスト化）
+  ↓
+本文中の Google Drive / Sheets / Docs URL を検出・自動取得
+  ├─ Sheets → CSV export（認証不要・公開共有リンク前提）
+  ├─ Docs   → plain text export
+  └─ Drive  → PDF download → base64化してGeminiに渡す
+  ↓
+Gemini AI 解析（PDF添付 + テキスト、temperature=0）
+  ↓（空結果の場合は最大2回リトライ）
+抽出結果を DB に保存
+  ├─ candidates / projects テーブル（upsert）
+  ├─ candidate_skills テーブル（11カテゴリ別、再INSERT）
+  └─ ai_logs テーブル（実行ログ・所要時間・エラー）
+```
+
+---
+
+## DB 設計
+
+### テーブル一覧
+
+| テーブル | 用途 |
+|---|---|
+| `candidates` | 人材マスタ |
+| `projects` | 案件マスタ |
+| `submissions` | マッチング提案履歴 |
+| `candidate_skills` | スキルの11カテゴリ別管理（検索最適化） |
+| `ai_logs` | AI解析実行ログ |
+| `app_config` | アプリ全体設定 |
+
+### candidate_skills のカテゴリ定義
+
+| カテゴリ | 例 |
+|---|---|
+| `languages` | PHP, Java, JavaScript, Python, SQL, TypeScript |
+| `frameworks` | React, Laravel, SpringBoot, Vue.js, Django |
+| `os` | Linux, Windows, MacOS, Unix |
+| `databases` | MySQL, PostgreSQL, Oracle, MongoDB, Redis |
+| `dwh` | Snowflake, BigQuery, Tableau, Looker |
+| `cloud` | AWS, Azure, GCP, Docker, Kubernetes |
+| `design` | Illustrator, Photoshop, Figma, After Effects |
+| `marketing` | SEO, Google Analytics, SNS運営 |
+| `management` | PM, PMO, アジャイル, スクラム, 要件定義 |
+| `business` | Excel, PowerPoint, Salesforce, JIRA |
+| `others` | 上記以外 |
+
+### candidates テーブルの主要カラム
+
+| カラム | 説明 |
+|---|---|
+| `email` | UNIQUE インデックス。同じメールなら自動で上書き更新 |
+| `skills` | フラットなスキル配列（jsonb） |
+| `raw_profile` | AI解析生データ・skillsByCategory・roles・industries等を格納 |
+| `duplicate_flag` | AI が「名前・スキルが類似」と判断した場合に `true` |
+| `merged_into` | 名寄せ済みの場合、統合先の `candidate_id` をセット（論理削除） |
+| `created_by` | 登録者のニックネーム、または `make-inbound`（自動登録） |
 
 ---
 
 ## AI プロバイダーの切り替え
 
-`.env.local` と Vercel 環境変数を変更するだけで切り替え可能。
-
-| プロバイダー | 設定値 | 必要なキー |
+| プロバイダー | 設定値 | モデル |
 |---|---|---|
-| Gemini 1.5 Flash（デフォルト） | `VITE_AI_PROVIDER=gemini` | `VITE_GEMINI_API_KEY` |
-| OpenAI GPT-4o | `VITE_AI_PROVIDER=openai` | `OPENAI_API_KEY` |
+| Gemini（デフォルト） | `VITE_AI_PROVIDER=gemini` | `gemini-1.5-flash-8b` |
+| OpenAI | `VITE_AI_PROVIDER=openai` | （要実装） |
 
 OpenAI に切り替える場合は `src/lib/ai/openaiProvider.ts` に実装を追加する。
 
@@ -134,60 +234,38 @@ npm run test:run
 npm run test
 ```
 
-### テスト結果（2026-04-30 時点）
-
-| フェーズ | 件数 |
-|---|---|
-| Phase 2 AI Wrapper | 9件 ✅ |
-| Phase 2 DB ロジック | 8件 ✅ |
-| Phase 3 結合テスト | 10件 ✅ |
-| Phase 4 メール解析 | 19件 ✅ |
-| **合計** | **46件 全パス** |
-
-詳細は `docs/test-reports/` を参照。
-
 ---
 
 ## ディレクトリ構成
 
 ```
 akinavi-hr-ai/
+├── api/
+│   └── analyze.ts            # Vercel Serverless Function（Make.com Webhook受信）
 ├── src/
 │   ├── lib/
-│   │   ├── ai/              # AI プロバイダー抽象化
-│   │   │   ├── types.ts     # 共通インターフェース
+│   │   ├── ai/               # AI プロバイダー抽象化
+│   │   │   ├── types.ts
 │   │   │   ├── geminiProvider.ts
-│   │   │   ├── openaiProvider.ts  # 切替用スタブ
-│   │   │   └── index.ts     # ファクトリ（環境変数で切替）
-│   │   ├── db/              # DB 操作
+│   │   │   ├── openaiProvider.ts
+│   │   │   └── index.ts
+│   │   ├── db/               # DB 操作
 │   │   │   ├── candidates.ts
 │   │   │   ├── projects.ts
 │   │   │   └── submissions.ts
-│   │   ├── inbound/         # メール解析ロジック
-│   │   └── supabase.ts      # Supabase クライアント
-│   ├── components/          # 共通 UI
-│   ├── pages/               # 各画面
-│   └── hooks/               # カスタムフック
+│   │   ├── inbound/          # メール解析ロジック
+│   │   └── supabase.ts
+│   ├── pages/                # 各画面
+│   └── components/           # 共通 UI
 ├── supabase/
-│   ├── schema.sql           # DB テーブル定義 + RLS ポリシー
+│   ├── schema.sql             # DB テーブル定義 + RLS ポリシー
+│   ├── migrations/            # 追加マイグレーション SQL
 │   └── functions/
-│       └── inbound-email/   # Resend Webhook Edge Function
+│       └── inbound-email/     # Make.com Webhook Edge Function
+│           └── index.ts
 └── docs/
-    └── test-reports/        # テスト項目書 兼 結果報告書
+    └── test-reports/
 ```
-
----
-
-## DB 設計のポイント
-
-### candidates テーブル（人材マスタ）
-
-| カラム | 説明 |
-|---|---|
-| `email` | UNIQUE インデックス。同じメールなら自動で上書き更新 |
-| `duplicate_flag` | AI が「名前・スキルが類似」と判断した場合に `true` |
-| `merged_into` | 名寄せ済みの場合、統合先の `candidate_id` をセット（論理削除） |
-| `created_by` | 登録者のニックネーム、または `resend-inbound`（自動登録） |
 
 ---
 
