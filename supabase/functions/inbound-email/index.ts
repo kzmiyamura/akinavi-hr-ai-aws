@@ -158,6 +158,35 @@ async function fetchGoogleLinks(body: string): Promise<{
   return { textContents, pdfAttachments }
 }
 
+/** HTMLタグを除去してプレーンテキストに変換 */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '
+')
+    .replace(/<\/p>/gi, '
+')
+    .replace(/<\/div>/gi, '
+')
+    .replace(/<\/li>/gi, '
+')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/
+/g, '
+')
+    .replace(/
+{3,}/g, '
+
+')
+    .trim()
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -179,7 +208,11 @@ Deno.serve(async (req: Request) => {
     const type: string = raw.type ?? 'candidate'
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
-    const body: string = raw.body ?? ''
+    const rawBody: string = raw.body ?? ''
+    // HTMLタグが含まれている場合は除去してプレーンテキスト化
+    const body: string = rawBody.includes('<html') || rawBody.includes('<div') || rawBody.includes('<p ')
+      ? stripHtml(rawBody)
+      : rawBody
 
     // 添付ファイルの解決（attachment[data] 形式 → Attachment オブジェクト）
     let attachments: Attachment[] = []
