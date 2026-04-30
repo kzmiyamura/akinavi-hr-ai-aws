@@ -36,7 +36,7 @@ function parseFrom(from: string): string {
   }
 }
 
-const AI_MODEL = 'gemini-2.5-flash'
+const AI_MODEL = 'gemini-2.5-flash-lite'
 
 async function generateJSON(
   prompt: string,
@@ -198,9 +198,6 @@ Deno.serve(async (req: Request) => {
   - frameworks: string[]（React, Laravel, SpringBoot 等のFW・ライブラリ。なければ[]）
   - os: string[]（Linux, Windows, MacOS, Unix 等）
   - others: string[]（Excel, Git, JIRA, Salesforce, Apache, MySQL 等のツール・DB・環境）
-- skillsWithYears: array（スキルごとの経験年数。職歴から計算できるもののみ）
-  - skill: string（正規化済みスキル名）
-  - years: number（経験年数。小数点以下は切り捨て）
 - roles: string[]（担当役割。例: ["PM", "ITコンサル", "上流工程", "開発エンジニア"]。明記されているもののみ）
 - industries: string[]（業界経験。例: ["通信", "金融", "官公庁", "医療"]。職歴から読み取れるもの）
 - experienceYears: number | null（計算または明記された値。なければ null）
@@ -216,7 +213,6 @@ JSON:`.trim()
         name: string; email: string | null; phone: string | null
         skills: string[]
         skillsByCategory: { languages: string[]; frameworks: string[]; os: string[]; others: string[] }
-        skillsWithYears: { skill: string; years: number }[]
         roles: string[]
         industries: string[]
         experienceYears: number | null; summary: string
@@ -245,7 +241,6 @@ JSON:`.trim()
           text: body.slice(0, 5000),
           summary: analyzed.summary ?? '',
           skillsByCategory: analyzed.skillsByCategory ?? { languages: [], frameworks: [], os: [], others: [] },
-          skillsWithYears: analyzed.skillsWithYears ?? [],
           roles: analyzed.roles ?? [],
           industries: analyzed.industries ?? [],
           from, subject,
