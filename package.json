@@ -13,6 +13,7 @@
     "test:run": "vitest run"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.105.1",
     "@tanstack/react-query": "^5.100.6",
     "autoprefixer": "^10.5.0",
