@@ -130,16 +130,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 - 地名・駅名・会社名を氏名と混同しないでください。
 - PDFは複数ページ・複数書類が含まれる場合があります。全ページを確認し、フルネームが明記されているページの情報を優先してください。
 - イニシャル（例: O.H.）は氏名ではありません。同じPDF内にフルネームが書かれているページがあればそちらを使ってください。
-- メールアドレスは「xxx@xxx.xxx」の形式で本文に明記されているものだけ入れてください。書かれていなければ必ず null にしてください。架空のアドレスを作らないでください。
+- メールアドレスは「xxx@xxx.xxx」の形式で本文・添付に明記されているものだけ入れてください。書かれていなければ必ず null にしてください。架空のアドレスを作らないでください。
+- 差出人（${from}）のメールアドレスは候補者のものではありません。emailフィールドに絶対に入れないでください。
 - 電話番号も明記されているものだけ。なければ null。
+- skillsは重複なしで返してください。表記が異なっても同じ技術（例: JavaScript と Javascript）は1つにまとめてください。
 
 件名: ${subject}
 
 抽出項目（JSON形式のみで返してください）:
 - name: string（氏名。本文・添付に明記されているもの。不明なら "不明"）
-- email: string | null（本文・添付に明記されたメールアドレスのみ。なければ null）
+- email: string | null（本文・添付に明記された候補者本人のメールアドレスのみ。なければ null）
 - phone: string | null（本文・添付に明記された電話番号のみ。なければ null）
-- skills: string[]（スキル・資格・言語・経験技術。明記されているもののみ。なければ[]）
+- skills: string[]（スキル・資格・言語・経験技術。明記されているもののみ。重複なし。なければ[]）
 - experienceYears: number | null（経験年数。明記されていなければ null）
 - summary: string（本文・添付の内容をもとにした概要。200字以内）
 
@@ -156,12 +158,22 @@ JSON:`.trim()
 
       console.log('[AI解析結果 candidate]', JSON.stringify(analyzed, null, 2))
 
-      const email = analyzed.email ?? null
+      // B: スキル重複除去（大文字小文字を無視して正規化）
+      const skills = Array.from(
+        new Map((analyzed.skills ?? []).map(s => [s.toLowerCase(), s])).values()
+      )
+
+      // A: 送信者メールアドレスが混入していたら除去
+      const senderEmails = from.split(/[,;]/).map(s => s.trim().toLowerCase())
+      const email = analyzed.email && !senderEmails.includes(analyzed.email.toLowerCase())
+        ? analyzed.email
+        : null
+
       const dbPayload = {
         name: analyzed.name ?? '不明',
         email,
         phone: analyzed.phone ?? null,
-        skills: analyzed.skills ?? [],
+        skills,
         experience_years: analyzed.experienceYears ?? null,
         raw_profile: {
           text: String(body).slice(0, 5000),
