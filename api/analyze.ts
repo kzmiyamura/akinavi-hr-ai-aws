@@ -93,18 +93,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ── 人材メール解析 ────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
       const analyzed = await generateJSON(`
-以下のメール本文から人材情報を抽出し、JSON形式のみで返してください。${attachmentNote}
+これは営業担当者が転送・送付した人材紹介メールです。${attachmentNote}
+差出人（${from}）は営業担当者であり、候補者本人ではありません。
 
-差出人: ${from}
+メール本文または添付ファイルに記載されている【候補者】の情報を抽出し、JSON形式のみで返してください。
+差出人のメールアドレスは候補者のものではないため、email フィールドには使用しないでください。
+
 件名: ${subject}
 
 抽出項目:
-- name: string（氏名。不明なら "不明"）
-- email: string | null
-- phone: string | null
-- skills: string[]（スキル・資格・言語等。空なら[]）
-- experienceYears: number | null
-- summary: string（200字以内）
+- name: string（候補者の氏名。本文・添付から読み取る。不明なら "不明"）
+- email: string | null（候補者本人のメールアドレス。本文・添付に記載がなければ null）
+- phone: string | null（候補者の電話番号。なければ null）
+- skills: string[]（スキル・資格・言語・経験技術等。空なら[]）
+- experienceYears: number | null（経験年数。不明なら null）
+- summary: string（候補者のプロフィール概要を200字以内で）
 
 本文:
 ${String(body).slice(0, 3000)}
@@ -114,7 +117,7 @@ JSON:`.trim(), attachment) as {
         skills: string[]; experienceYears: number | null; summary: string
       }
 
-      const email = analyzed.email || extractEmail(String(from))
+      const email = analyzed.email ?? null
       const dbPayload = {
         name: analyzed.name ?? '不明',
         email,
