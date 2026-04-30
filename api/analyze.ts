@@ -127,6 +127,8 @@ JSON:`.trim(), attachments) as {
         skills: string[]; experienceYears: number | null; summary: string
       }
 
+      console.log('[AI解析結果 candidate]', JSON.stringify(analyzed, null, 2))
+
       const email = analyzed.email ?? null
       const dbPayload = {
         name: analyzed.name ?? '不明',
@@ -140,6 +142,7 @@ JSON:`.trim(), attachments) as {
           from, subject,
           attachmentCount: attachments.length,
           attachmentNames: attachments.map(a => a.name ?? a.mimeType),
+          aiAnalysis: analyzed,
         },
         duplicate_flag: false,
         created_by: 'make-inbound',
@@ -179,6 +182,8 @@ JSON:`.trim(), attachments) as {
         requiredSkills: string[]; budgetMin: number | null; budgetMax: number | null
       }
 
+      console.log('[AI解析結果 project]', JSON.stringify(analyzed, null, 2))
+
       const { data, error } = await supabase.from('projects').insert({
         title: analyzed.title ?? '案件',
         client: analyzed.client ?? null,
@@ -191,6 +196,7 @@ JSON:`.trim(), attachments) as {
           from, subject,
           attachmentCount: attachments.length,
           attachmentNames: attachments.map(a => a.name ?? a.mimeType),
+          aiAnalysis: analyzed,
         },
         created_by: 'make-inbound',
       }).select().single()
