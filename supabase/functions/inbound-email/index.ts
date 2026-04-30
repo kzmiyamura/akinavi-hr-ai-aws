@@ -184,6 +184,11 @@ Deno.serve(async (req: Request) => {
 - email: string | null（候補者本人のみ。なければ null）
 - phone: string | null（明記されたもののみ。なければ null）
 - skills: string[]（明記されているもののみ。重複なし。なければ[]）
+- skillsByCategory: object（skillsを以下の4カテゴリに分類。該当なしは[]）
+  - languages: string[]（PHP, Java, JavaScript, Perl, SQL, HTML/CSS, VBA 等のプログラミング言語・クエリ言語）
+  - frameworks: string[]（React, Laravel, Spring 等のFW・ライブラリ。該当なければ[]）
+  - os: string[]（Linux, Windows, MacOS, Unix, NTOS/PTOS 等のOS）
+  - others: string[]（Excel, Git, JIRA, Salesforce, Apache, MySQL 等のツール・DB・環境・その他）
 - experienceYears: number | null（計算または明記された値。なければ null）
 - summary: string（職務経歴の概要300字以内。社名・実績・受賞歴を含めること）
 
@@ -195,7 +200,9 @@ JSON:`.trim()
       const { result, durationMs } = await generateJSON(prompt, attachments)
       const analyzed = result as {
         name: string; email: string | null; phone: string | null
-        skills: string[]; experienceYears: number | null; summary: string
+        skills: string[]
+        skillsByCategory: { languages: string[]; frameworks: string[]; os: string[]; others: string[] }
+        experienceYears: number | null; summary: string
       }
 
       console.log('[AI解析結果 candidate]', JSON.stringify(analyzed, null, 2))
@@ -220,6 +227,7 @@ JSON:`.trim()
         raw_profile: {
           text: body.slice(0, 5000),
           summary: analyzed.summary ?? '',
+          skillsByCategory: analyzed.skillsByCategory ?? { languages: [], frameworks: [], os: [], others: [] },
           from, subject,
           attachmentCount: attachments.length,
           attachmentNames: attachments.map(a => a.name ?? a.mimeType),
