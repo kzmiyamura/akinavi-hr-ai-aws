@@ -28,10 +28,11 @@ export function Layout({ currentPage, onNavigate, nickname, onClearNickname, chi
           <span>利用者: <strong className="text-gray-700">{nickname}</strong></span>
           <button
             onClick={onClearNickname}
-            className="flex items-center gap-1 text-gray-400 hover:text-red-500 transition-colors"
-            title="ニックネームをリセット"
+            className="flex items-center gap-1 text-xs text-gray-400 hover:text-blue-500 transition-colors"
+            title="名前を変更する"
           >
-            <LogOut size={14} />
+            <LogOut size={13} />
+            名前変更
           </button>
         </div>
       </header>

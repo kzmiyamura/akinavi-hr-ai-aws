@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { UserCircle } from 'lucide-react'
 
 interface Props {
   onSave: (nickname: string) => void
@@ -25,19 +26,23 @@ export function NicknameModal({ onSave }: Props) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm mx-4">
-        <h1 className="text-2xl font-bold text-gray-800 mb-1">AkiNavi HR-AI</h1>
-        <p className="text-sm text-gray-500 mb-6">
-          はじめに、あなたのニックネームを設定してください。
-          <br />
-          登録データの作成者として記録されます。
-        </p>
+        <div className="flex flex-col items-center mb-6">
+          <UserCircle size={48} className="text-blue-500 mb-3" />
+          <h1 className="text-xl font-bold text-gray-800">あなたの名前を入力してください</h1>
+          <p className="text-sm text-gray-500 mt-2 text-center">
+            登録データに「誰が追加したか」を残すために使います。
+          </p>
+          <p className="text-xs text-gray-400 mt-1 text-center">
+            このブラウザに保存されるため、次回から不要です。
+          </p>
+        </div>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <input
               type="text"
               value={value}
               onChange={(e) => { setValue(e.target.value); setError('') }}
-              placeholder="例: 田中 / tanaka"
+              placeholder="例: 田中 / Tanaka"
               className="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               autoFocus
             />
@@ -47,7 +52,7 @@ export function NicknameModal({ onSave }: Props) {
             type="submit"
             className="w-full bg-blue-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-blue-700 transition-colors"
           >
-            はじめる
+            使いはじめる
           </button>
         </form>
       </div>
