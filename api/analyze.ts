@@ -82,6 +82,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       attachments = [raw.attachment as Attachment]
     }
 
+    // 受信した添付情報をログ出力（データ本体は長いので除く）
+    console.log('[受信データ]', {
+      type, from, subject,
+      bodyLength: String(body).length,
+      attachments: attachments.map(a => ({
+        name: a.name,
+        mimeType: a.mimeType,
+        dataLength: a.data?.length ?? 0,
+      })),
+    })
+
     if (!String(body).trim() && attachments.length === 0) {
       return res.status(400).json({ error: 'メール本文と添付ファイルが両方空です' })
     }
@@ -89,6 +100,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
     const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
+    console.log('[添付フィルター結果]', {
+      total: attachments.length,
+      supported: supportedAttachments.length,
+      filtered: attachments.filter(a => !SUPPORTED_MIME.includes(a.mimeType)).map(a => a.mimeType),
+    })
     const attachmentNote = supportedAttachments.length > 0
       ? `\n※添付ファイル（${supportedAttachments.map(a => a.name ?? a.mimeType).join('、')}）も含めて解析してください。`
       : ''
