@@ -1,0 +1,75 @@
+# 単体テスト項目書 兼 結果報告書
+## Phase 4: Resend Inbound Webhook メール解析ロジック
+
+- **実施日**: 2026-04-30
+- **実施者**: Claude Code (claude-sonnet-4-6)
+- **テストフレームワーク**: Vitest v4.1.5
+- **対象ファイル**: `src/lib/inbound/parseEmailPayload.ts`
+- **備考**: Edge Function（Deno）と共有する純粋関数を切り出してテスト。メール受信〜DB保存のフローは Edge Function デプロイ済みで自動処理される。
+
+---
+
+## テスト結果サマリー
+
+| 項目 | 件数 |
+|---|---|
+| テストファイル | 1 |
+| テスト総数 | 19 |
+| **合格** | **19** |
+| 失敗 | 0 |
+| 累計テスト数（全フェーズ） | **46件 全パス** |
+
+---
+
+## テスト項目一覧
+
+### extractEmailBody（メール本文抽出）
+
+| # | テストケース | 確認内容 | 結果 |
+|---|---|---|---|
+| 1 | text フィールドがある場合、body として返す | from・subject・body が正しく抽出されること | ✅ PASS |
+| 2 | text がなく html がある場合、html を body として返す | html フォールバックが動作すること | ✅ PASS |
+| 3 | text も html もない場合、null を返す | 本文なし時に null を返すこと | ✅ PASS |
+| 4 | body が空文字だけの場合、null を返す | 空白のみの本文を null 扱いにすること | ✅ PASS |
+| 5 | text が html より優先される | text > html の優先順位が正しいこと | ✅ PASS |
+
+### parseAIResponse（AI レスポンス JSON パース）
+
+| # | テストケース | 確認内容 | 結果 |
+|---|---|---|---|
+| 6 | 正常な JSON 文字列をパースする | JSON が正しく構造体に変換されること | ✅ PASS |
+| 7 | コードブロック付きレスポンスをパースする | ` ```json ``` ` を除去してパースできること | ✅ PASS |
+| 8 | 前後の空白を無視してパースする | trim 処理が正しく動作すること | ✅ PASS |
+| 9 | 不正な JSON の場合は例外をスローする | パース失敗時に例外が発生すること | ✅ PASS |
+
+### extractEmailFromFrom（差出人からメールアドレス抽出）
+
+| # | テストケース | 確認内容 | 結果 |
+|---|---|---|---|
+| 10 | "名前 <email>" 形式からメールアドレスを抽出する | RFC 形式の差出人フィールドを正しくパースすること | ✅ PASS |
+| 11 | メールアドレスのみの場合もそのまま返す | シンプルな形式にも対応すること | ✅ PASS |
+| 12 | メールアドレスがない場合は null を返す | 抽出失敗時に null を返すこと | ✅ PASS |
+| 13 | サブドメイン付きメールアドレスを正しく抽出する | co.jp 等の複合ドメインに対応すること | ✅ PASS |
+
+### buildCandidatePayload（DB 保存用ペイロード構築）
+
+| # | テストケース | 確認内容 | 結果 |
+|---|---|---|---|
+| 14 | 正常なペイロードを構築する | 全フィールドが正しくマッピングされること | ✅ PASS |
+| 15 | AI が email を抽出できなかった場合、from フィールドから補完する | email フォールバックが動作すること（自動登録の堅牢性） | ✅ PASS |
+| 16 | raw_profile に from・subject・body が含まれる | 元データが raw_profile に保持されること | ✅ PASS |
+| 17 | body が 5000 文字を超える場合はトリムされる | 長文メールでも DB 制限内に収まること | ✅ PASS |
+| 18 | created_by を指定できる | 登録元の識別が可能なこと（'resend-inbound' 等） | ✅ PASS |
+| 19 | phone が null の場合も正しく扱う | null フィールドが安全に保存されること | ✅ PASS |
+
+---
+
+## 累計テスト結果（全フェーズ）
+
+| フェーズ | テストファイル | 件数 | 報告書 |
+|---|---|---|---|
+| Phase 2 AI Wrapper | `ai/__tests__/aiProvider.test.ts` | 9件 ✅ | `phase2-unit-test-report.md` |
+| Phase 2 DB ロジック | `db/__tests__/` | 8件 ✅ | `phase2-db-unit-test-report.md` |
+| Phase 3 結合テスト | `__tests__/integration/` | 10件 ✅ | `phase3-integration-test-report.md` |
+| Phase 4 メール解析 | `inbound/__tests__/` | 19件 ✅ | 本書 |
+| **合計** | **5ファイル** | **46件** | **全パス** |
