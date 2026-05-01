@@ -1,5 +1,7 @@
 import { supabase } from '../supabase'
 import type { MatchResponse } from '../ai/types'
+import { fetchProjectsByIds } from './projects'
+import type { Project } from './projects'
 
 export interface Submission {
   id: string
@@ -55,4 +57,35 @@ export async function fetchSubmissionsByProject(projectId: string): Promise<Subm
 
   if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Submission[]
+}
+
+/** 人材に対するマッチング履歴を取得（スコア降順） */
+export async function fetchSubmissionsByCandidate(candidateId: string): Promise<Submission[]> {
+  const { data, error } = await supabase
+    .from('submissions')
+    .select('*')
+    .eq('candidate_id', candidateId)
+    .order('match_score', { ascending: false })
+
+  if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
+  return (data ?? []) as Submission[]
+}
+
+export interface SubmissionWithProject {
+  submission: Submission
+  project: Project | null
+}
+
+/** 人材のマッチング一覧（案件マスタを結合。削除済み等は project が null） */
+export async function fetchSubmissionsByCandidateWithProjects(
+  candidateId: string,
+): Promise<SubmissionWithProject[]> {
+  const submissions = await fetchSubmissionsByCandidate(candidateId)
+  const ids = [...new Set(submissions.map((s) => s.project_id))]
+  const projects = await fetchProjectsByIds(ids)
+  const map = new Map(projects.map((p) => [p.id, p]))
+  return submissions.map((submission) => ({
+    submission,
+    project: map.get(submission.project_id) ?? null,
+  }))
 }

@@ -1,6 +1,30 @@
 import { supabase } from '../supabase'
 import type { AnalyzeProjectResponse } from '../ai/types'
 
+/** DBの案件1件を、マッチングAI入力形式に変換 */
+export function projectToMatchRequirements(project: Project): AnalyzeProjectResponse {
+  return {
+    title: project.title,
+    client: project.client,
+    description: project.description,
+    requiredSkills: project.required_skills as string[],
+    budgetMin: project.budget_min,
+    budgetMax: project.budget_max,
+    startDate: project.start_date,
+    endDate: project.end_date,
+    workLocation: project.work_location,
+    remotePolicy: project.remote_policy,
+    contractType: project.contract_type,
+    headcount: project.headcount,
+    workload: project.workload,
+    settlementMin: project.settlement_min,
+    settlementMax: project.settlement_max,
+    roleSummary: project.role_summary,
+    industry: project.industry,
+    niceToHaveSkills: (project.raw_data?.niceToHaveSkills as string[] | undefined) ?? [],
+  }
+}
+
 export interface Project {
   id: string
   title: string
@@ -117,6 +141,15 @@ export async function deleteProject(id: string): Promise<void> {
     .eq('id', id)
 
   if (error) throw new Error(`案件の削除に失敗しました: ${error.message}`)
+}
+
+/** ID一覧で案件を取得（マッチング履歴との突合用） */
+export async function fetchProjectsByIds(ids: string[]): Promise<Project[]> {
+  if (ids.length === 0) return []
+  const { data, error } = await supabase.from('projects').select('*').in('id', ids)
+
+  if (error) throw new Error(`案件の取得に失敗しました: ${error.message}`)
+  return (data ?? []) as Project[]
 }
 
 /** 全案件を取得（open のみ） */
