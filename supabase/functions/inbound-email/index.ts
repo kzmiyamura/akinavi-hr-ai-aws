@@ -344,6 +344,13 @@ Deno.serve(async (req: Request) => {
 - After effect / AfterEffects → After Effects
 - Premiere / PremierePro → Premiere Pro
 
+【地域・勤務地に関するルール】
+- nearestStation: 「基本情報」や「最寄駅」フィールドから記載された駅名を抽出。都道府県名も含めます。例: "北海道 麻生駅"。記載がなければ null。
+- prefecture: nearestStation から都道府県を抽出。例: "北海道"、"東京都"。記載がなければ null。
+- availableRegions: 過去の勤務地や職歴から、勤務実績のある都市/地域を抽出。例: ["北海道", "東京"]。複数都市での勤務経歴がなければ null。
+- currentWorkLocation: 最新の職歴（役割が「リーダー」や「現在」と明記されたもの）から勤務地を抽出。例: "東京"。記載なければ null。
+- remoteAvailable: 本文やサマリーに「リモート希望」「リモート勤務」「フリーランス」等の記載があれば true。明記がなければ false。
+
 抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
 - name: string（フルネーム。ファイル名・文字化け文字列は使わない。不明なら "不明"）
 - email: string | null（候補者本人のみ。なければ null）
@@ -365,6 +372,11 @@ Deno.serve(async (req: Request) => {
 - industries: string[]（業界経験。例: ["通信", "金融", "広告", "EC"]。職歴・本文から読み取れるもの）
 - experienceYears: number | null（計算または明記された値。なければ null）
 - summary: string（職務経歴の概要300字以内。社名・実績・受賞歴を含めること）
+- nearestStation: string | null（最寄駅。都道府県を含む形式。例: "北海道 麻生駅"。記載がなければ null）
+- prefecture: string | null（都道府県。例: "北海道"。記載がなければ null）
+- availableRegions: string[] | null（勤務可能な地域。過去の勤務地から推測。例: ["北海道", "東京"]。情報がなければ null）
+- currentWorkLocation: string | null（現在の勤務地。例: "東京"。記載がなければ null）
+- remoteAvailable: boolean（リモート勤務対応可否。「リモート希望」等の明記で true。記載なければ false）
 
 本文:
 ${body.slice(0, 3000)}${driveTextSection}
@@ -384,6 +396,11 @@ JSON:`.trim()
         roles: string[]
         industries: string[]
         experienceYears: number | null; summary: string
+        nearestStation: string | null
+        prefecture: string | null
+        availableRegions: string[] | null
+        currentWorkLocation: string | null
+        remoteAvailable: boolean
       }
 
       console.log('[AI解析結果 candidate]', JSON.stringify(analyzed, null, 2))
@@ -414,6 +431,11 @@ JSON:`.trim()
           },
           roles: analyzed.roles ?? [],
           industries: analyzed.industries ?? [],
+          nearestStation: analyzed.nearestStation ?? null,
+          prefecture: analyzed.prefecture ?? null,
+          availableRegions: analyzed.availableRegions ?? null,
+          currentWorkLocation: analyzed.currentWorkLocation ?? null,
+          remoteAvailable: analyzed.remoteAvailable ?? false,
           from, subject,
           attachmentCount: allAttachments.length,
           attachmentNames: allAttachments.map(a => a.name ?? a.mimeType),

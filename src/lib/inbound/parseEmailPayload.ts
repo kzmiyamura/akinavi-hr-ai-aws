@@ -20,6 +20,11 @@ export interface AnalyzedCandidate {
   skills: string[]
   experienceYears: number | null
   summary: string
+  nearestStation: string | null
+  prefecture: string | null
+  availableRegions: string[] | null
+  currentWorkLocation: string | null
+  remoteAvailable: boolean
 }
 
 /** Resend Webhook ペイロードからメール本文を抽出する */
@@ -79,6 +84,11 @@ export function buildCandidatePayload(
     raw_profile: {
       text: parsed.body.slice(0, 5000),
       summary: analyzed.summary ?? '',
+      nearestStation: analyzed.nearestStation ?? null,
+      prefecture: analyzed.prefecture ?? null,
+      availableRegions: analyzed.availableRegions ?? null,
+      currentWorkLocation: analyzed.currentWorkLocation ?? null,
+      remoteAvailable: analyzed.remoteAvailable ?? false,
       from: parsed.from,
       subject: parsed.subject,
     },

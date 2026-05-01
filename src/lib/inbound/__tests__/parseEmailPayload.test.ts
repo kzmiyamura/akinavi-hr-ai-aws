@@ -111,6 +111,11 @@ describe('buildCandidatePayload', () => {
     skills: ['Java', 'AWS'],
     experienceYears: 5,
     summary: 'バックエンドエンジニア',
+    nearestStation: '東京都 渋谷駅',
+    prefecture: '東京都',
+    availableRegions: ['東京都', '神奈川県'],
+    currentWorkLocation: '東京都',
+    remoteAvailable: true,
   }
   const parsed = {
     from: '山田 太郎 <yamada@example.com>',
@@ -185,5 +190,78 @@ describe('extractNameFromFilename', () => {
   it('文字数が2-4文字の日本語のみを有効とする', () => {
     expect(extractNameFromFilename('山.pdf')).toBeNull() // 1文字
     expect(extractNameFromFilename('山田太郎次郎.pdf')).toBeNull() // 5文字以上
+  })
+})
+
+// ─── ロケーション情報抽出テスト ──────────────────────────────────
+
+describe('buildCandidatePayload - ロケーション情報', () => {
+  const baseAnalyzed = {
+    name: 'MG',
+    email: null,
+    phone: null,
+    skills: ['Illustrator', 'Photoshop'],
+    experienceYears: 20,
+    summary: 'グラフィックデザイナー',
+  }
+  const parsed = {
+    from: 'sales@example.com',
+    subject: '人材紹介',
+    body: 'グラフィックデザイナーのMGです。リモート希望。',
+  }
+
+  it('最寄駅が raw_profile に含まれる', () => {
+    const analyzed = {
+      ...baseAnalyzed,
+      nearestStation: '北海道 麻生駅',
+      prefecture: '北海道',
+      availableRegions: ['北海道', '東京都'],
+      currentWorkLocation: '東京都',
+      remoteAvailable: true,
+    }
+    const payload = buildCandidatePayload(analyzed, parsed)
+    expect(payload.raw_profile.nearestStation).toBe('北海道 麻生駅')
+    expect(payload.raw_profile.prefecture).toBe('北海道')
+  })
+
+  it('就業可能地区が配列で保存される', () => {
+    const analyzed = {
+      ...baseAnalyzed,
+      nearestStation: '北海道 麻生駅',
+      prefecture: '北海道',
+      availableRegions: ['北海道', '東京都'],
+      currentWorkLocation: '東京都',
+      remoteAvailable: true,
+    }
+    const payload = buildCandidatePayload(analyzed, parsed)
+    expect(payload.raw_profile.availableRegions).toEqual(['北海道', '東京都'])
+  })
+
+  it('リモート勤務対応が保存される', () => {
+    const analyzed = {
+      ...baseAnalyzed,
+      nearestStation: null,
+      prefecture: null,
+      availableRegions: null,
+      currentWorkLocation: '東京都',
+      remoteAvailable: true,
+    }
+    const payload = buildCandidatePayload(analyzed, parsed)
+    expect(payload.raw_profile.remoteAvailable).toBe(true)
+  })
+
+  it('ロケーション情報がない場合は null/false が保存される', () => {
+    const analyzed = {
+      ...baseAnalyzed,
+      nearestStation: null,
+      prefecture: null,
+      availableRegions: null,
+      currentWorkLocation: null,
+      remoteAvailable: false,
+    }
+    const payload = buildCandidatePayload(analyzed, parsed)
+    expect(payload.raw_profile.nearestStation).toBeNull()
+    expect(payload.raw_profile.availableRegions).toBeNull()
+    expect(payload.raw_profile.remoteAvailable).toBe(false)
   })
 })
