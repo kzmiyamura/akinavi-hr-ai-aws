@@ -66,7 +66,7 @@ async function generateJSON(
   }
   parts.push({ text: prompt })
 
-  const GEMINI_TIMEOUT_MS = 90_000 // 1回あたり90秒でタイムアウト
+  const GEMINI_TIMEOUT_MS = 50_000 // 1回あたり50秒でタイムアウト（Supabase 60s制限の前に発火させる）
 
   const start = Date.now()
   let lastError: unknown
