@@ -12,6 +12,7 @@ export interface Candidate {
   duplicate_flag: boolean
   merged_into: string | null
   created_by: string
+  updated_by: string | null
   created_at: string
   updated_at: string
 }
@@ -76,6 +77,31 @@ export async function fetchCandidates(): Promise<Candidate[]> {
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
+}
+
+export interface UpdateCandidateInput {
+  id: string
+  name: string
+  email: string | null
+  phone: string | null
+  experience_years: number | null
+  duplicate_flag: boolean
+  updated_by: string
+  raw_profile: Record<string, unknown>
+}
+
+/** 候補者を手動更新する（IDで直接UPDATE） */
+export async function updateCandidate(input: UpdateCandidateInput): Promise<Candidate> {
+  const { id, ...rest } = input
+  const { data, error } = await supabase
+    .from('candidates')
+    .update({ ...rest, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single()
+
+  if (error) throw new Error(`候補者の更新に失敗しました: ${error.message}`)
+  return data as Candidate
 }
 
 /** 候補者を削除する */

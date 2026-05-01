@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X } from 'lucide-react'
 import { ai } from '../lib/ai'
-import { upsertCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
+import { upsertCandidate, updateCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import type { Candidate } from '../lib/db/candidates'
 
 interface SkillsByCategory {
@@ -33,6 +33,8 @@ interface RawProfile {
   remoteAvailable?: boolean
   from?: string | null
   subject?: string | null
+  summary?: string | null
+  text?: string | null
 }
 
 function getRaw(c: Candidate): RawProfile {
@@ -61,11 +63,286 @@ const CATEGORY_STYLE: Record<keyof SkillsByCategory, { label: string; badge: str
   others:          { label: 'その他',     badge: 'bg-gray-100 text-gray-600' },
 }
 
+const CATEGORY_KEYS = Object.keys(CATEGORY_STYLE) as (keyof SkillsByCategory)[]
+
 // カテゴリごとの折りたたみ閾値
 const COLLAPSED_PER_CATEGORY = 5
 // カード全体の折りたたみ表示を出す最低スキル合計数
 const EXPAND_THRESHOLD = 10
 
+// ---- 編集フォーム用の状態型 ----
+interface EditForm {
+  name: string
+  email: string
+  phone: string
+  experience_years: string
+  duplicate_flag: boolean
+  summary: string
+  roles: string          // 改行区切り
+  industries: string     // 改行区切り
+  prefecture: string
+  nearestStation: string
+  currentWorkLocation: string
+  availableRegions: string // 改行区切り
+  remoteAvailable: boolean
+  subject: string
+  from: string           // 読み取り専用
+  skills: Record<keyof SkillsByCategory, string> // カンマ区切り
+}
+
+function toEditForm(c: Candidate): EditForm {
+  const raw = getRaw(c)
+  const sbc = raw.skillsByCategory ?? ({} as SkillsByCategory)
+  const skills = {} as Record<keyof SkillsByCategory, string>
+  for (const key of CATEGORY_KEYS) {
+    skills[key] = (sbc[key] ?? []).join(', ')
+  }
+  return {
+    name: c.name ?? '',
+    email: c.email ?? '',
+    phone: c.phone ?? '',
+    experience_years: c.experience_years != null ? String(c.experience_years) : '',
+    duplicate_flag: c.duplicate_flag ?? false,
+    summary: raw.summary ?? '',
+    roles: (raw.roles ?? []).join('\n'),
+    industries: (raw.industries ?? []).join('\n'),
+    prefecture: raw.prefecture ?? '',
+    nearestStation: raw.nearestStation ?? '',
+    currentWorkLocation: raw.currentWorkLocation ?? '',
+    availableRegions: (raw.availableRegions ?? []).join('\n'),
+    remoteAvailable: raw.remoteAvailable ?? false,
+    subject: raw.subject ?? '',
+    from: raw.from ?? '',
+    skills,
+  }
+}
+
+function splitLines(s: string): string[] {
+  return s.split('\n').map(x => x.trim()).filter(Boolean)
+}
+function splitComma(s: string): string[] {
+  return s.split(',').map(x => x.trim()).filter(Boolean)
+}
+
+// ---- 編集モーダル ----
+interface EditModalProps {
+  candidate: Candidate
+  nickname: string
+  onClose: () => void
+  onSaved: () => void
+}
+
+function EditModal({ candidate, nickname, onClose, onSaved }: EditModalProps) {
+  const [form, setForm] = useState<EditForm>(() => toEditForm(candidate))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function setField<K extends keyof EditForm>(key: K, value: EditForm[K]) {
+    setForm(prev => ({ ...prev, [key]: value }))
+  }
+  function setSkill(key: keyof SkillsByCategory, value: string) {
+    setForm(prev => ({ ...prev, skills: { ...prev.skills, [key]: value } }))
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const raw = getRaw(candidate)
+      const skillsByCategory = {} as SkillsByCategory
+      for (const key of CATEGORY_KEYS) {
+        skillsByCategory[key] = splitComma(form.skills[key])
+      }
+      const allSkills = Object.values(skillsByCategory).flat()
+
+      await updateCandidate({
+        id: candidate.id,
+        name: form.name.trim() || candidate.name,
+        email: form.email.trim() || null,
+        phone: form.phone.trim() || null,
+        experience_years: form.experience_years !== '' ? Number(form.experience_years) : null,
+        duplicate_flag: form.duplicate_flag,
+        updated_by: nickname,
+        raw_profile: {
+          ...raw,
+          summary: form.summary,
+          roles: splitLines(form.roles),
+          industries: splitLines(form.industries),
+          prefecture: form.prefecture || null,
+          nearestStation: form.nearestStation || null,
+          currentWorkLocation: form.currentWorkLocation || null,
+          availableRegions: splitLines(form.availableRegions),
+          remoteAvailable: form.remoteAvailable,
+          subject: form.subject || null,
+          // from は書き換えない (raw.from をそのまま維持)
+          skillsByCategory,
+        },
+      })
+      // skills カラムも同期
+      await import('../lib/supabase').then(({ supabase }) =>
+        supabase.from('candidates').update({ skills: allSkills }).eq('id', candidate.id)
+      )
+      onSaved()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500'
+  const labelCls = 'text-xs font-medium text-gray-600'
+  const readonlyCls = 'w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-gray-50 text-gray-400 cursor-not-allowed'
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl">
+        {/* ヘッダー */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+          <h2 className="text-base font-semibold text-gray-800">人材情報の編集</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="px-6 py-5 space-y-5 max-h-[75vh] overflow-y-auto">
+
+          {/* 基本情報 */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">基本情報</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className={labelCls}>氏名 *</label>
+                <input className={inputCls} value={form.name} onChange={e => setField('name', e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <label className={labelCls}>経験年数</label>
+                <input className={inputCls} type="number" min={0} value={form.experience_years}
+                  onChange={e => setField('experience_years', e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <label className={labelCls}>メールアドレス</label>
+                <input className={inputCls} value={form.email} onChange={e => setField('email', e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <label className={labelCls}>電話番号</label>
+                <input className={inputCls} value={form.phone} onChange={e => setField('phone', e.target.value)} />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input id="dup_flag" type="checkbox" checked={form.duplicate_flag}
+                onChange={e => setField('duplicate_flag', e.target.checked)}
+                className="rounded border-gray-300 text-yellow-500 focus:ring-yellow-400" />
+              <label htmlFor="dup_flag" className="text-sm text-gray-600">重複の疑いフラグ</label>
+            </div>
+          </section>
+
+          {/* AI要約 */}
+          <section className="space-y-1">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">AI要約</h3>
+            <textarea className={inputCls} rows={3} value={form.summary}
+              onChange={e => setField('summary', e.target.value)} />
+          </section>
+
+          {/* 役割・業界 */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">役割・業界</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className={labelCls}>役割（1行1項目）</label>
+                <textarea className={inputCls} rows={3} value={form.roles}
+                  onChange={e => setField('roles', e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <label className={labelCls}>業界（1行1項目）</label>
+                <textarea className={inputCls} rows={3} value={form.industries}
+                  onChange={e => setField('industries', e.target.value)} />
+              </div>
+            </div>
+          </section>
+
+          {/* 勤務地 */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">勤務地情報</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className={labelCls}>都道府県</label>
+                <input className={inputCls} value={form.prefecture}
+                  onChange={e => setField('prefecture', e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <label className={labelCls}>最寄り駅</label>
+                <input className={inputCls} value={form.nearestStation}
+                  onChange={e => setField('nearestStation', e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <label className={labelCls}>現在の就業場所</label>
+                <input className={inputCls} value={form.currentWorkLocation}
+                  onChange={e => setField('currentWorkLocation', e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <label className={labelCls}>対応可能エリア（1行1項目）</label>
+                <textarea className={inputCls} rows={2} value={form.availableRegions}
+                  onChange={e => setField('availableRegions', e.target.value)} />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input id="remote" type="checkbox" checked={form.remoteAvailable}
+                onChange={e => setField('remoteAvailable', e.target.checked)}
+                className="rounded border-gray-300 text-blue-500 focus:ring-blue-400" />
+              <label htmlFor="remote" className="text-sm text-gray-600">リモート可</label>
+            </div>
+          </section>
+
+          {/* スキル */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">スキル（カンマ区切り）</h3>
+            <div className="grid grid-cols-2 gap-3">
+              {CATEGORY_KEYS.map(key => (
+                <div key={key} className="space-y-1">
+                  <label className={labelCls}>{CATEGORY_STYLE[key].label}</label>
+                  <textarea className={inputCls} rows={2} value={form.skills[key]}
+                    onChange={e => setSkill(key, e.target.value)} />
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* メール情報 */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">メール情報</h3>
+            <div className="space-y-1">
+              <label className={labelCls}>件名</label>
+              <input className={inputCls} value={form.subject}
+                onChange={e => setField('subject', e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <label className={labelCls}>転送元メールアドレス（変更不可）</label>
+              <input className={readonlyCls} value={form.from} readOnly />
+            </div>
+          </section>
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+        </div>
+
+        {/* フッター */}
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200">
+          <button onClick={onClose}
+            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors">
+            キャンセル
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            className="flex items-center gap-2 bg-blue-600 text-white rounded-lg px-5 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+            {saving ? <Loader2 size={15} className="animate-spin" /> : <Pencil size={15} />}
+            {saving ? '保存中...' : '保存'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---- メインページ ----
 interface Props { nickname: string }
 
 export function CandidatePage({ nickname }: Props) {
@@ -74,6 +351,7 @@ export function CandidatePage({ nickname }: Props) {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
+  const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null)
   const queryClient = useQueryClient()
 
   function toggleExpand(id: string) {
@@ -150,6 +428,19 @@ export function CandidatePage({ nickname }: Props) {
 
   return (
     <div className="space-y-6">
+      {/* 編集モーダル */}
+      {editingCandidate && (
+        <EditModal
+          candidate={editingCandidate}
+          nickname={nickname}
+          onClose={() => setEditingCandidate(null)}
+          onSaved={() => {
+            setEditingCandidate(null)
+            queryClient.invalidateQueries({ queryKey: ['candidates'] })
+          }}
+        />
+      )}
+
       {/* 入力フォーム */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
         <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
@@ -289,6 +580,14 @@ export function CandidatePage({ nickname }: Props) {
                         </div>
                       )}
 
+                      {/* 最終更新情報 */}
+                      {(c.updated_by || c.updated_at !== c.created_at) && (
+                        <div className="mt-0.5 text-xs text-gray-300">
+                          最終更新: {formatDate(c.updated_at)}
+                          {c.updated_by ? ` by ${c.updated_by}` : ''}
+                        </div>
+                      )}
+
                       {/* スキル・役割・業界 */}
                       <div className="space-y-1 mt-1.5">
                         {(roles ?? []).length > 0 && (
@@ -360,8 +659,15 @@ export function CandidatePage({ nickname }: Props) {
                       )}
                     </div>
 
-                    <div className="flex items-center gap-3 ml-4 shrink-0">
+                    <div className="flex items-center gap-2 ml-4 shrink-0">
                       <span className="text-xs text-gray-300">{c.created_by}</span>
+                      <button
+                        onClick={() => setEditingCandidate(c)}
+                        className="text-gray-300 hover:text-blue-500 transition-colors"
+                        title="編集"
+                      >
+                        <Pencil size={15} />
+                      </button>
                       <button
                         onClick={() => handleDelete(c)}
                         disabled={deletingId === c.id}
