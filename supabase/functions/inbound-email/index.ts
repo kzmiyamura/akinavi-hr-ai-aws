@@ -353,8 +353,8 @@ Deno.serve(async (req: Request) => {
 【地域・勤務地に関するルール】
 - nearestStation: 「基本情報」や「最寄駅」フィールドから記載された駅名を抽出。都道府県名も含めます。例: "北海道 麻生駅"。記載がなければ null。
 - prefecture: nearestStation から都道府県を抽出。例: "北海道"、"東京都"。記載がなければ null。
-- availableRegions: 就業可能な地域（都道府県単位）。居住地（prefecture）は必ず含めてください。例: ["北海道", "東京都"]。情報がなければ null。
-- currentWorkLocation: 現在の居住地または最新の職歴から、現在の拠点となる都道府県を抽出。例: "東京都"。記載なければ null。
+- availableRegions: 就業可能な地域（都道府県単位）。居住地（prefecture）がある場合は必ず含めてください。例: ["北海道", "東京都"]。
+- currentWorkLocation: 現在の拠点。prefecture または nearestStation が判明している場合は、その都道府県を必ず設定してください。例: "北海道"。
 - remoteAvailable: 本文やサマリーに「リモート希望」「リモート勤務」「フリーランス」等の記載があれば true。明記がなければ false。
 
 抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
@@ -380,8 +380,8 @@ Deno.serve(async (req: Request) => {
 - summary: string（職務経歴の概要300字以内。社名・実績・受賞歴を含めること）
 - nearestStation: string | null（最寄駅。都道府県を含む形式。例: "北海道 麻生駅"。記載がなければ null）
 - prefecture: string | null（都道府県。例: "北海道"。記載がなければ null）
-- availableRegions: string[] | null（就業可能な地域。居住地・都道府県をベースに抽出。例: ["北海道", "東京都"]。情報がなければ null）
-- currentWorkLocation: string | null（現在の拠点。都道府県単位。例: "東京都"。記載がなければ null）
+- availableRegions: string[] | null（就業可能な地域。例: ["北海道", "東京都"]。情報がなければ null）
+- currentWorkLocation: string | null（現在の拠点都道府県。例: "北海道"。情報がなければ null）
 - remoteAvailable: boolean（リモート勤務対応可否。「リモート希望」等の明記で true。記載なければ false）
 
 本文:
