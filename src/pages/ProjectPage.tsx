@@ -596,23 +596,23 @@ export function ProjectPage({ nickname, onOpenProjectDetail }: Props) {
                         }
                       : undefined
                   }
-                  className={`border border-gray-100 rounded-lg p-4 space-y-2 ${openDetail ? 'cursor-pointer hover:border-blue-200 hover:bg-blue-50/30 transition-colors' : ''}`}
+                  className={`border border-gray-100 rounded-lg p-3 sm:p-4 space-y-2 ${openDetail ? 'cursor-pointer hover:border-blue-200 hover:bg-blue-50/30 transition-colors' : ''}`}
                 >
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3 min-w-0">
                     <ProjectProfileFields
                       p={p}
                       isExpanded={isExpanded}
                       onToggleExpand={() => toggleExpand(p.id)}
                     />
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center justify-end gap-2 shrink-0">
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation()
                           setEditingProject(p)
                         }}
-                        className="p-1.5 rounded hover:bg-gray-50 text-gray-500 hover:text-blue-600"
+                        className="p-1.5 rounded hover:bg-gray-50 text-gray-400 hover:text-blue-600 transition-colors"
                         title="編集"
                       >
                         <Pencil size={15} />
@@ -624,7 +624,7 @@ export function ProjectPage({ nickname, onOpenProjectDetail }: Props) {
                           handleDelete(p)
                         }}
                         disabled={deletingId === p.id}
-                        className="p-1.5 rounded hover:bg-gray-50 text-gray-500 hover:text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="p-1.5 rounded hover:bg-gray-50 text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         title="削除"
                       >
                         <Trash2 size={15} />
