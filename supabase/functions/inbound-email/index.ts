@@ -76,7 +76,8 @@ const AI_MODEL = 'gemini-2.5-flash'
 async function generateJSON(
   prompt: string,
   attachments: Attachment[],
-  maxRetries = 1,
+  /** 1回目が空/失敗のとき追加で試す回数を含む総試行回数（例: 2 なら最大2回） */
+  maxRetries = 2,
 ): Promise<{ result: unknown; durationMs: number }> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
   const model = genAI.getGenerativeModel({ model: AI_MODEL, generationConfig: { temperature: 0 } })
@@ -146,7 +147,20 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 
 /** Base64データをUint8Arrayに変換 */
 function base64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64)
+  // data:...;base64, 形式や空白を許容
+  let s = base64.trim()
+  const dataUrlIdx = s.indexOf('base64,')
+  if (s.startsWith('data:') && dataUrlIdx >= 0) {
+    s = s.slice(dataUrlIdx + 'base64,'.length)
+  }
+  s = s.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/')
+  // padding
+  const pad = s.length % 4
+  if (pad === 2) s += '=='
+  else if (pad === 3) s += '='
+  else if (pad === 1) throw new Error('Invalid base64 length')
+
+  const binary = atob(s)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
   return bytes
@@ -166,12 +180,28 @@ function npmDefault<T extends Record<string, unknown>>(mod: T): T {
 async function extractWordText(base64: string): Promise<string> {
   try {
     const mammothMod = npmDefault(await import('npm:mammoth@1.8.0'))
-    const extractRawText = (mammothMod as { extractRawText?: (o: { arrayBuffer: ArrayBuffer }) => Promise<{ value?: string }> })
+    const extractRawText = (mammothMod as { extractRawText?: (o: Record<string, unknown>) => Promise<{ value?: string }> })
       .extractRawText
     if (!extractRawText) throw new Error('mammoth.extractRawText がありません')
-    const buffer = base64ToUint8Array(base64).buffer
-    const result = await extractRawText({ arrayBuffer: buffer })
-    return result.value ?? ''
+    const bytes = base64ToUint8Array(base64)
+    if (bytes.byteLength === 0) throw new Error('Word添付のBase64が空です')
+
+    // mammoth は実行環境により受け付けるキーが違うことがあるためフォールバックする
+    try {
+      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+      const r1 = await extractRawText({ arrayBuffer: ab })
+      return r1.value ?? ''
+    } catch (e1) {
+      console.warn('[Word] arrayBuffer 経路失敗、buffer 経路へフォールバック', e1)
+      // Node互換ランタイムでは Buffer が使えることが多い
+      const Buf = (globalThis as unknown as { Buffer?: { from: (u: Uint8Array) => unknown } }).Buffer
+      if (Buf) {
+        const r2 = await extractRawText({ buffer: Buf.from(bytes) as unknown })
+        return r2.value ?? ''
+      }
+      const r3 = await extractRawText({ buffer: bytes as unknown })
+      return r3.value ?? ''
+    }
   } catch (e) {
     console.warn('[Word] テキスト抽出失敗', e)
     return ''
