@@ -6,8 +6,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
-import mammoth from 'https://esm.sh/mammoth@1.8.0'
-import * as XLSX from 'https://esm.sh/xlsx@0.18.5'
+// mammoth / xlsx は添付ファイルが存在する場合のみ動的インポート（コールドスタート軽量化）
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -109,9 +108,10 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes
 }
 
-/** Word(.docx)をテキストに変換 */
+/** Word(.docx)をテキストに変換（動的インポート） */
 async function extractWordText(base64: string): Promise<string> {
   try {
+    const { default: mammoth } = await import('https://esm.sh/mammoth@1.8.0')
     const buffer = base64ToUint8Array(base64).buffer
     const result = await mammoth.extractRawText({ arrayBuffer: buffer })
     return result.value ?? ''
@@ -121,9 +121,10 @@ async function extractWordText(base64: string): Promise<string> {
   }
 }
 
-/** Excel(.xlsx/.xls)をCSVテキストに変換（最初の3シートまで） */
-function extractExcelText(base64: string): string {
+/** Excel(.xlsx/.xls)をCSVテキストに変換（動的インポート・最初の3シートまで） */
+async function extractExcelText(base64: string): Promise<string> {
   try {
+    const XLSX = await import('https://esm.sh/xlsx@0.18.5')
     const bytes = base64ToUint8Array(base64)
     const workbook = XLSX.read(bytes, { type: 'array' })
     const texts: string[] = []
@@ -302,7 +303,7 @@ Deno.serve(async (req: Request) => {
         }
       } else if (EXCEL_MIME.includes(att.mimeType)) {
         console.log(`[Office] Excel変換開始: ${att.name}`)
-        const text = extractExcelText(att.data)
+        const text = await extractExcelText(att.data)
         if (text.trim()) {
           officeTextContents.push({ label: `Excelファイル(${att.name ?? 'spreadsheet'})`, content: text })
           console.log(`[Office] Excel変換成功: ${text.length}文字`)
