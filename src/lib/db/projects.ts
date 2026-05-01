@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import type { AnalyzeProjectResponse } from '../ai/types'
+import { normalizeProjectIntegerColumns } from './projectIntegers'
 
 /** 案件リスト用 TanStack Query キー（同一キーで fetchAll / fetchOpen を混ぜるとキャッシュが食い違う） */
 export const projectsQueryKeys = {
@@ -74,6 +75,13 @@ export interface InsertProjectInput {
 export async function insertProject(input: InsertProjectInput): Promise<Project> {
   const { analyzed, rawText, createdBy } = input
 
+  const { headcount, settlement_min: settlementMin, settlement_max: settlementMax } =
+    normalizeProjectIntegerColumns({
+      headcount: analyzed.headcount ?? null,
+      settlement_min: analyzed.settlementMin ?? null,
+      settlement_max: analyzed.settlementMax ?? null,
+    })
+
   const { data, error } = await supabase
     .from('projects')
     .insert({
@@ -88,10 +96,10 @@ export async function insertProject(input: InsertProjectInput): Promise<Project>
       work_location: analyzed.workLocation ?? null,
       remote_policy: analyzed.remotePolicy ?? null,
       contract_type: analyzed.contractType ?? null,
-      headcount: analyzed.headcount ?? null,
+      headcount,
       workload: analyzed.workload ?? null,
-      settlement_min: analyzed.settlementMin ?? null,
-      settlement_max: analyzed.settlementMax ?? null,
+      settlement_min: settlementMin,
+      settlement_max: settlementMax,
       role_summary: analyzed.roleSummary ?? null,
       industry: analyzed.industry ?? null,
       raw_data: {
@@ -134,9 +142,21 @@ export interface UpdateProjectInput {
 /** 案件を手動更新する（IDで直接UPDATE） */
 export async function updateProject(input: UpdateProjectInput): Promise<Project> {
   const { id, ...rest } = input
+  const { headcount, settlement_min: settlementMin, settlement_max: settlementMax } =
+    normalizeProjectIntegerColumns({
+      headcount: rest.headcount,
+      settlement_min: rest.settlement_min,
+      settlement_max: rest.settlement_max,
+    })
   const { data, error } = await supabase
     .from('projects')
-    .update({ ...rest, updated_at: new Date().toISOString() })
+    .update({
+      ...rest,
+      headcount,
+      settlement_min: settlementMin,
+      settlement_max: settlementMax,
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', id)
     .select()
     .single()
