@@ -144,6 +144,17 @@ async function extractExcelText(base64: string): Promise<string> {
   }
 }
 
+/** 10秒タイムアウト付きfetch */
+async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** 本文中の Google Drive / Sheets / Docs リンクを検出してコンテンツを取得 */
 async function fetchGoogleLinks(body: string): Promise<{
   textContents: { label: string; content: string }[]
@@ -160,14 +171,13 @@ async function fetchGoogleLinks(body: string): Promise<{
     const gid = gidMatch ? gidMatch[1] : null
     const exportUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`
     try {
-      const res = await fetch(exportUrl)
+      const res = await fetchWithTimeout(exportUrl)
       if (res.ok) {
         textContents.push({ label: `Googleスプレッドシート(${id})`, content: await res.text() })
         console.log(`[DriveLink] Sheets取得成功: ${id}`)
       } else {
         console.warn(`[DriveLink] Sheetsエクスポート失敗(${res.status}): ${id} - 通常のDrive取得へフォールバックします`)
-        // エクスポートが失敗（400等）した場合、通常のDriveダウンロードを試みる
-        const driveRes = await fetch(`https://drive.google.com/uc?export=download&id=${id}`)
+        const driveRes = await fetchWithTimeout(`https://drive.google.com/uc?export=download&id=${id}`)
         if (driveRes.ok) {
           const text = await driveRes.text()
           textContents.push({ label: `Googleスプレッドシート(DL:${id})`, content: text })
@@ -182,7 +192,7 @@ async function fetchGoogleLinks(body: string): Promise<{
     const id = match[1]
     const exportUrl = `https://docs.google.com/document/d/${id}/export?format=txt`
     try {
-      const res = await fetch(exportUrl)
+      const res = await fetchWithTimeout(exportUrl)
       if (res.ok) {
         textContents.push({ label: `Googleドキュメント(${id})`, content: await res.text() })
         console.log(`[DriveLink] Docs取得成功: ${id}`)
@@ -198,7 +208,7 @@ async function fetchGoogleLinks(body: string): Promise<{
     const id = match[1]
     const downloadUrl = `https://drive.google.com/uc?export=download&id=${id}`
     try {
-      const res = await fetch(downloadUrl)
+      const res = await fetchWithTimeout(downloadUrl)
       if (res.ok) {
         const ct = res.headers.get('content-type') ?? ''
         if (ct.includes('pdf')) {
@@ -280,38 +290,43 @@ Deno.serve(async (req: Request) => {
       } catch { /* ignore */ }
     }
 
-    console.log('[受信データ]', {
+    const t0 = Date.now()
+    const elapsed = () => `${Date.now() - t0}ms`
+
+    console.log('[STEP1 受信データ]', {
       type, from, subject,
       bodyLength: body.length,
       attachments: attachments.map(a => ({ name: a.name, mimeType: a.mimeType, dataLength: a.data?.length ?? 0 })),
     })
 
     const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
-    console.log('[添付フィルター結果]', {
+    console.log('[STEP2 添付フィルター]', {
       total: attachments.length,
       supported: supportedAttachments.length,
       filtered: attachments.filter(a => !SUPPORTED_MIME.includes(a.mimeType)).map(a => a.mimeType),
+      elapsed: elapsed(),
     })
 
     // Word/Excelのテキスト抽出
     const officeTextContents: { label: string; content: string }[] = []
     for (const att of attachments) {
       if (WORD_MIME.includes(att.mimeType)) {
-        console.log(`[Office] Word変換開始: ${att.name}`)
+        console.log(`[STEP3 Office] Word変換開始: ${att.name} elapsed=${elapsed()}`)
         const text = await extractWordText(att.data)
         if (text.trim()) {
           officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
-          console.log(`[Office] Word変換成功: ${text.length}文字`)
+          console.log(`[STEP3 Office] Word変換成功: ${text.length}文字 elapsed=${elapsed()}`)
         }
       } else if (EXCEL_MIME.includes(att.mimeType)) {
-        console.log(`[Office] Excel変換開始: ${att.name}`)
+        console.log(`[STEP3 Office] Excel変換開始: ${att.name} elapsed=${elapsed()}`)
         const text = await extractExcelText(att.data)
         if (text.trim()) {
           officeTextContents.push({ label: `Excelファイル(${att.name ?? 'spreadsheet'})`, content: text })
-          console.log(`[Office] Excel変換成功: ${text.length}文字`)
+          console.log(`[STEP3 Office] Excel変換成功: ${text.length}文字 elapsed=${elapsed()}`)
         }
       }
     }
+    console.log(`[STEP3 Office完了] elapsed=${elapsed()}`)
 
     if (!body.trim() && attachments.length === 0) {
       return new Response(JSON.stringify({ error: 'メール本文と添付ファイルが両方空です' }), {
@@ -322,15 +337,14 @@ Deno.serve(async (req: Request) => {
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
     // Google Drive / Sheets / Docs リンクの取得
+    console.log(`[STEP4 DriveLink開始] elapsed=${elapsed()}`)
     const { textContents: driveTexts, pdfAttachments: drivePdfs } = await fetchGoogleLinks(body)
     const allAttachments = [...supportedAttachments, ...drivePdfs]
-
-    if (driveTexts.length > 0 || drivePdfs.length > 0) {
-      console.log('[DriveLink] 取得結果', {
-        texts: driveTexts.map(t => ({ label: t.label, length: t.content.length })),
-        pdfs: drivePdfs.map(p => p.name),
-      })
-    }
+    console.log('[STEP4 DriveLink完了]', {
+      texts: driveTexts.map(t => ({ label: t.label, length: t.content.length })),
+      pdfs: drivePdfs.map(p => p.name),
+      elapsed: elapsed(),
+    })
 
     // Drive取得テキスト + Officeテキストを統合してプロンプトに追記
     const allTextContents = [...driveTexts, ...officeTextContents]
@@ -472,7 +486,9 @@ ${body.slice(0, 3000)}${driveTextSection}
 
 JSON:`.trim()
 
+      console.log(`[STEP5 AI呼び出し開始] elapsed=${elapsed()}`)
       const { result, durationMs } = await generateJSON(prompt, allAttachments)
+      console.log(`[STEP5 AI呼び出し完了] durationMs=${durationMs} elapsed=${elapsed()}`)
       const analyzed = result as {
         name: string; email: string | null; phone: string | null
         skills: string[]
@@ -492,7 +508,7 @@ JSON:`.trim()
         remoteAvailable: boolean
       }
 
-      console.log('[AI解析結果 candidate]', JSON.stringify(analyzed, null, 2))
+      console.log(`[STEP6 AI解析結果 candidate] elapsed=${elapsed()}`, JSON.stringify(analyzed, null, 2))
 
       // スキル重複除去（trim + 大文字小文字を無視して正規化）
       const skills = Array.from(
@@ -545,11 +561,13 @@ JSON:`.trim()
         created_by: 'make-inbound',
       }
 
+      console.log(`[STEP7 DB保存開始] elapsed=${elapsed()}`)
       const { data, error } = email
         ? await supabase.from('candidates').upsert(dbPayload, { onConflict: 'email' }).select().single()
         : await supabase.from('candidates').insert(dbPayload).select().single()
 
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
+      console.log(`[STEP7 DB保存完了] elapsed=${elapsed()}`)
 
       // candidate_skills に一括INSERT
       const validCategories = [
