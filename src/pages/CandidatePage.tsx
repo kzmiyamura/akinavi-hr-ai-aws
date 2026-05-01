@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { upsertCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import type { Candidate } from '../lib/db/candidates'
@@ -31,10 +31,17 @@ interface RawProfile {
   availableRegions?: string[] | null
   currentWorkLocation?: string | null
   remoteAvailable?: boolean
+  from?: string | null
+  subject?: string | null
 }
 
 function getRaw(c: Candidate): RawProfile {
   return (c.raw_profile ?? {}) as RawProfile
+}
+
+function formatDate(iso: string) {
+  const d = new Date(iso)
+  return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
 const CATEGORY_STYLE: Record<keyof SkillsByCategory, { label: string; badge: string }> = {
@@ -213,7 +220,8 @@ export function CandidatePage({ nickname }: Props) {
               const raw = getRaw(c)
               const { skillsByCategory: sbc, roles, industries,
                 prefecture, nearestStation, availableRegions,
-                currentWorkLocation, remoteAvailable } = raw
+                currentWorkLocation, remoteAvailable,
+                from: mailFrom, subject: mailSubject } = raw
               const isExpanded = expandedIds.has(c.id)
 
               // 全スキル合計数を計算してトグル表示要否を判断
@@ -256,6 +264,26 @@ export function CandidatePage({ nickname }: Props) {
                           {remoteAvailable && (
                             <span className="flex items-center gap-1 text-xs bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">
                               <Wifi size={10} />リモート可
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* メール転送情報 */}
+                      {(mailFrom || mailSubject || c.created_at) && (
+                        <div className="mt-1.5 flex flex-wrap items-start gap-x-3 gap-y-0.5 border-t border-gray-50 pt-1.5">
+                          <span className="flex items-center gap-1 text-xs text-gray-400 shrink-0">
+                            <Mail size={10} />
+                            {c.created_at ? formatDate(c.created_at) : ''}
+                          </span>
+                          {mailFrom && (
+                            <span className="text-xs text-gray-400 truncate max-w-xs" title={mailFrom}>
+                              転送: {mailFrom}
+                            </span>
+                          )}
+                          {mailSubject && (
+                            <span className="text-xs text-gray-400 truncate max-w-xs" title={mailSubject}>
+                              件名: {mailSubject}
                             </span>
                           )}
                         </div>
