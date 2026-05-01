@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Star, AlertTriangle, Briefcase, User, RefreshCw } from 'lucide-react'
+import { Loader2, AlertTriangle, Briefcase, User, RefreshCw } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { fetchCandidates } from '../lib/db/candidates'
 import { fetchOpenProjects, projectToMatchRequirements, projectsQueryKeys } from '../lib/db/projects'
