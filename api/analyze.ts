@@ -24,6 +24,15 @@ function getEnv(key: string): string {
   return val
 }
 
+function parseIsoDateOnly(value: unknown): string | null {
+  if (value == null || typeof value !== 'string') return null
+  const s = value.trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
+  const t = Date.parse(`${s}T12:00:00`)
+  if (Number.isNaN(t)) return null
+  return s
+}
+
 const AI_MODEL = 'gemini-2.5-flash'
 
 /** テキスト + 複数添付ファイル（任意）を Gemini で解析して JSON を返す */
@@ -229,22 +238,31 @@ JSON:`.trim()
     }
 
     // ── 案件メール解析 ────────────────────────────────────────
+    // 本番は Supabase Edge `inbound-email` 推奨。ここは後方互換用。
     if (type === 'project') {
       const prompt = `
-以下のメール本文から案件情報を抽出し、JSON形式のみで返してください。${attachmentNote}
+これは営業担当者が転送・送付した業務委託・派遣・開発案件などの依頼メールです。${attachmentNote}
+差出人（${from}）は営業または元請け担当者であることがあります。本文・添付に書かれた内容だけを根拠に抽出してください。
 
-【重要ルール】書かれていない情報は推測せず null または空にしてください。
+【重要ルール】
+- 明示されている情報だけを抽出し、推測・でっち上げはしないでください。
+- requiredSkills には「必須」相当のみ。尚可・歓迎は niceToHaveSkills に。
+- スキル列の区切り（「/」「・」,「、」）は分割し、重複を除き表記を統一（例: Javascript→JavaScript）。
+- budgetMin / budgetMax は月額万円。曖昧なら null。
+- startDate / endDate は YYYY-MM-DD のみ。確定日がなければ null。
 
-差出人: ${from}
 件名: ${subject}
 
-抽出項目:
-- title: string（案件名。不明なら "案件"）
+抽出項目（JSON形式のみ）:
+- title: string（不明なら "案件"）
 - client: string | null
 - description: string
-- requiredSkills: string[]（空なら[]）
-- budgetMin: number | null（月額・万円。不明ならnull）
-- budgetMax: number | null（月額・万円。不明ならnull）
+- requiredSkills: string[]（必須。空なら[]）
+- niceToHaveSkills: string[]（尚可。空なら[]）
+- budgetMin: number | null
+- budgetMax: number | null
+- startDate: string | null
+- endDate: string | null
 
 本文:
 ${String(body).slice(0, 3000)}
@@ -253,9 +271,33 @@ JSON:`.trim()
 
       const { result, durationMs } = await generateJSON(prompt, attachments)
       const analyzed = result as {
-        title: string; client: string | null; description: string
-        requiredSkills: string[]; budgetMin: number | null; budgetMax: number | null
+        title: string
+        client: string | null
+        description: string
+        requiredSkills: string[]
+        niceToHaveSkills?: string[]
+        budgetMin: number | null
+        budgetMax: number | null
+        startDate?: string | null
+        endDate?: string | null
       }
+
+      const requiredSkills = Array.from(
+        new Map(
+          (analyzed.requiredSkills ?? [])
+            .map((s: string) => s.trim())
+            .filter((s: string) => s.length > 0)
+            .map((s: string) => [s.toLowerCase(), s]),
+        ).values(),
+      )
+      const niceToHaveSkills = Array.from(
+        new Map(
+          (analyzed.niceToHaveSkills ?? [])
+            .map((s: string) => s.trim())
+            .filter((s: string) => s.length > 0)
+            .map((s: string) => [s.toLowerCase(), s]),
+        ).values(),
+      )
 
       console.log('[AI解析結果 project]', JSON.stringify(analyzed, null, 2))
 
@@ -263,15 +305,19 @@ JSON:`.trim()
         title: analyzed.title ?? '案件',
         client: analyzed.client ?? null,
         description: analyzed.description ?? '',
-        required_skills: analyzed.requiredSkills ?? [],
+        required_skills: requiredSkills,
         budget_min: analyzed.budgetMin ?? null,
         budget_max: analyzed.budgetMax ?? null,
+        start_date: parseIsoDateOnly(analyzed.startDate),
+        end_date: parseIsoDateOnly(analyzed.endDate),
         raw_data: {
           text: String(body).slice(0, 5000),
-          from, subject,
+          from,
+          subject,
           attachmentCount: attachments.length,
-          attachmentNames: attachments.map(a => a.name ?? a.mimeType),
-          aiAnalysis: analyzed,
+          attachmentNames: attachments.map((a) => a.name ?? a.mimeType),
+          niceToHaveSkills,
+          aiAnalysis: { ...analyzed, requiredSkills, niceToHaveSkills },
         },
         created_by: 'make-inbound',
       }).select().single()

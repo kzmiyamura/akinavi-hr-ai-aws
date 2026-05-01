@@ -48,6 +48,16 @@ function parseFrom(from: string): string {
   }
 }
 
+/** AI が返した日付を projects.start_date / end_date に渡せる YYYY-MM-DD のみ採用 */
+function parseIsoDateOnly(value: unknown): string | null {
+  if (value == null || typeof value !== 'string') return null
+  const s = value.trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
+  const t = Date.parse(`${s}T12:00:00`)
+  if (Number.isNaN(t)) return null
+  return s
+}
+
 const AI_MODEL = 'gemini-2.5-flash'
 
 async function generateJSON(
@@ -621,47 +631,90 @@ JSON:`.trim()
     // ── 案件メール ────────────────────────────────────────────
     if (type === 'project') {
       const prompt = `
-以下のメール本文から案件情報を抽出し、JSON形式のみで返してください。${attachmentNote}
+これは営業担当者が転送・送付した業務委託・派遣・開発案件などの依頼メールです。${attachmentNote}
+差出人（${from}）は営業または元請け担当者であることがあります。本文・添付・以下の参考テキストに書かれた内容だけを根拠に抽出してください。
 
-【重要ルール】書かれていない情報は推測せず null または空にしてください。
+【重要ルール】
+- 明示されている情報だけを抽出し、推測・でっち上げはしないでください。
+- requiredSkills には「必須」「必須スキル」に相当するもののみ。尚可・歓迎・あれば尚可は niceToHaveSkills に入れてください。
+- スキル列の区切り（「/」「・」,「、」）は必ず分割し、重複は除き、一般的な表記に統一してください（例: Javascript→JavaScript, Mysql→MySQL）。
+- budgetMin / budgetMax は月額単価の万円（数値のみ）。「60万」「60万円」は 60。年収・日額と本文で明記されている場合のみそれに従い、曖昧なら null。
+- startDate / endDate は YYYY-MM-DD のみ。和暦や「4月上旬」だけでは null（西暦の確定日がある場合のみセット）。
 
-差出人: ${from}
 件名: ${subject}
 
-抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
-- title: string（案件名。不明なら "案件"）
-- client: string | null（クライアント名。不明なら null）
-- description: string（案件概要）
-- requiredSkills: string[]（必須スキル。なければ[]）
-- budgetMin: number | null（月額・万円。不明ならnull）
-- budgetMax: number | null（月額・万円。不明ならnull）
+抽出項目（JSON形式のみ。前後に余分なテキスト不要）:
+- title: string（案件名。件名・本文見出しを優先。不明なら "案件"）
+- client: string | null（エンド・クライアント名。不明なら null）
+- description: string（作業内容・背景・場所・勤務形態などの要約。なければ ""）
+- requiredSkills: string[]（必須スキル・ツール。なければ[]）
+- niceToHaveSkills: string[]（尚可・歓迎。なければ[]）
+- budgetMin: number | null（月額・万円）
+- budgetMax: number | null（月額・万円）
+- startDate: string | null（YYYY-MM-DD）
+- endDate: string | null（YYYY-MM-DD）
 
 本文:
-${body.slice(0, 3000)}
+${body.slice(0, 3000)}${driveTextSection}
 
 JSON:`.trim()
 
-      const { result, durationMs } = await generateJSON(prompt, attachments)
+      console.log(`[STEP5 AI呼び出し開始 project] elapsed=${elapsed()}`)
+      const { result, durationMs } = await generateJSON(prompt, allAttachments)
+      console.log(`[STEP5 AI呼び出し完了 project] durationMs=${durationMs} elapsed=${elapsed()}`)
+
       const analyzed = result as {
-        title: string; client: string | null; description: string
-        requiredSkills: string[]; budgetMin: number | null; budgetMax: number | null
+        title: string
+        client: string | null
+        description: string
+        requiredSkills: string[]
+        niceToHaveSkills?: string[]
+        budgetMin: number | null
+        budgetMax: number | null
+        startDate?: string | null
+        endDate?: string | null
       }
 
-      console.log('[AI解析結果 project]', JSON.stringify(analyzed, null, 2))
+      const requiredSkills = Array.from(
+        new Map(
+          (analyzed.requiredSkills ?? [])
+            .map((s: string) => s.trim())
+            .filter((s: string) => s.length > 0)
+            .map((s: string) => [s.toLowerCase(), s]),
+        ).values(),
+      )
+      const niceToHaveSkills = Array.from(
+        new Map(
+          (analyzed.niceToHaveSkills ?? [])
+            .map((s: string) => s.trim())
+            .filter((s: string) => s.length > 0)
+            .map((s: string) => [s.toLowerCase(), s]),
+        ).values(),
+      )
+
+      console.log('[STEP6 AI解析結果 project]', JSON.stringify(analyzed, null, 2))
 
       const { data, error } = await supabase.from('projects').insert({
         title: analyzed.title ?? '案件',
         client: analyzed.client ?? null,
         description: analyzed.description ?? '',
-        required_skills: analyzed.requiredSkills ?? [],
+        required_skills: requiredSkills,
         budget_min: analyzed.budgetMin ?? null,
         budget_max: analyzed.budgetMax ?? null,
+        start_date: parseIsoDateOnly(analyzed.startDate),
+        end_date: parseIsoDateOnly(analyzed.endDate),
         raw_data: {
           text: body.slice(0, 5000),
-          from, subject,
-          attachmentCount: attachments.length,
-          attachmentNames: attachments.map(a => a.name ?? a.mimeType),
-          aiAnalysis: analyzed,
+          from,
+          subject,
+          attachmentCount: allAttachments.length,
+          attachmentNames: [
+            ...allAttachments.map((a) => a.name ?? a.mimeType),
+            ...officeTextContents.map((t) => t.label),
+          ],
+          driveLinks: driveTexts.map((t) => t.label),
+          niceToHaveSkills,
+          aiAnalysis: { ...analyzed, requiredSkills, niceToHaveSkills },
         },
         created_by: 'make-inbound',
       }).select().single()

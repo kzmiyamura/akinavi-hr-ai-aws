@@ -58,13 +58,23 @@ JSON:`.trim()
 以下のテキストから案件情報を抽出し、JSON形式のみで返してください。
 コードブロックや説明文は不要です。
 
+【ルール】
+- 書かれていない情報は推測せず null または空配列にしてください。
+- requiredSkills は「必須・必須スキル」に該当するもののみ。尚可・歓迎は niceToHaveSkills に入れてください。
+- 「A / B / C」のスキル列は個別要素に分割してください。
+- budgetMin/budgetMax は月額の万円単位の数値のみ（「60万」→ 60）。レンジが1値だけなら min=max にしてよいです。
+- startDate / endDate は YYYY-MM-DD 形式のみ。本文に日付がなければ null。
+
 抽出項目:
-- title: string（案件名。不明なら "案件"）
-- client: string | null（クライアント名）
-- description: string（案件概要）
+- title: string（案件名。件名・本文から。不明なら "案件"）
+- client: string | null（クライアント名・エンド名。不明なら null）
+- description: string（案件概要・作業内容。箇条書き可）
 - requiredSkills: string[]（必須スキル・技術。空なら[]）
+- niceToHaveSkills: string[]（尚可・歓迎。なければ[]）
 - budgetMin: number | null（月額最低単価・万円。不明ならnull）
 - budgetMax: number | null（月額最高単価・万円。不明ならnull）
+- startDate: string | null（開始予定 YYYY-MM-DD）
+- endDate: string | null（終了予定 YYYY-MM-DD）
 
 テキスト:
 ${req.rawText}

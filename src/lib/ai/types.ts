@@ -28,8 +28,14 @@ export interface AnalyzeProjectResponse {
   client: string | null
   description: string
   requiredSkills: string[]
+  /** 尚可・歓迎スキル（あれば。DBカラムは raw_data にも残す） */
+  niceToHaveSkills?: string[]
   budgetMin: number | null
   budgetMax: number | null
+  /** 開始予定日 YYYY-MM-DD（不明なら null） */
+  startDate?: string | null
+  /** 終了予定日 YYYY-MM-DD（不明なら null） */
+  endDate?: string | null
 }
 
 /** マッチングスコアリングのリクエスト */

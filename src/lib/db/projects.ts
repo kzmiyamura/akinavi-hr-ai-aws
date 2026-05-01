@@ -37,7 +37,12 @@ export async function insertProject(input: InsertProjectInput): Promise<Project>
       required_skills: analyzed.requiredSkills,
       budget_min: analyzed.budgetMin,
       budget_max: analyzed.budgetMax,
-      raw_data: { text: rawText },
+      start_date: analyzed.startDate ?? null,
+      end_date: analyzed.endDate ?? null,
+      raw_data: {
+        text: rawText,
+        niceToHaveSkills: analyzed.niceToHaveSkills ?? [],
+      },
       created_by: createdBy,
     })
     .select()
