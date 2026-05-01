@@ -2,7 +2,14 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Briefcase, RefreshCw, Search, ChevronDown, ChevronUp, Pencil, Trash2, X, MapPin, Wifi, Mail } from 'lucide-react'
 import { ai } from '../lib/ai'
-import { insertProject, fetchAllProjects, updateProject, deleteProject } from '../lib/db/projects'
+import {
+  insertProject,
+  fetchAllProjects,
+  updateProject,
+  deleteProject,
+  projectsQueryKeys,
+  invalidateProjectLists,
+} from '../lib/db/projects'
 import type { Project } from '../lib/db/projects'
 
 interface Props { nickname: string }
@@ -276,14 +283,14 @@ export function ProjectPage({ nickname }: Props) {
   }
 
   const { data: projects = [], isLoading } = useQuery({
-    queryKey: ['projects'],
+    queryKey: projectsQueryKeys.all,
     queryFn: fetchAllProjects,
   })
 
   const deleteMutation = useMutation({
     mutationFn: deleteProject,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      invalidateProjectLists(queryClient)
       setDeletingId(null)
     },
     onError: (e) => {
@@ -304,7 +311,7 @@ export function ProjectPage({ nickname }: Props) {
       return insertProject({ analyzed, rawText, createdBy: nickname })
     },
     onSuccess: (project) => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      invalidateProjectLists(queryClient)
       setText('')
       setMessage({ type: 'success', text: `登録完了: ${project.title}` })
     },
@@ -355,7 +362,7 @@ export function ProjectPage({ nickname }: Props) {
           onClose={() => setEditingProject(null)}
           onSaved={() => {
             setEditingProject(null)
-            queryClient.invalidateQueries({ queryKey: ['projects'] })
+            invalidateProjectLists(queryClient)
           }}
         />
       )}

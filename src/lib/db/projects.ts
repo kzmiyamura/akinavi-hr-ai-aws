@@ -1,5 +1,17 @@
+import type { QueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import type { AnalyzeProjectResponse } from '../ai/types'
+
+/** 案件リスト用 TanStack Query キー（同一キーで fetchAll / fetchOpen を混ぜるとキャッシュが食い違う） */
+export const projectsQueryKeys = {
+  all: ['projects', 'all'] as const,
+  open: ['projects', 'open'] as const,
+}
+
+export function invalidateProjectLists(queryClient: QueryClient) {
+  queryClient.invalidateQueries({ queryKey: projectsQueryKeys.all })
+  queryClient.invalidateQueries({ queryKey: projectsQueryKeys.open })
+}
 
 /** DBの案件1件を、マッチングAI入力形式に変換 */
 export function projectToMatchRequirements(project: Project): AnalyzeProjectResponse {

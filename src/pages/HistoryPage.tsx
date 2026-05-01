@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { History, CheckCircle, XCircle, Send } from 'lucide-react'
-import { fetchAllProjects } from '../lib/db/projects'
+import { fetchAllProjects, projectsQueryKeys } from '../lib/db/projects'
 import { fetchCandidates } from '../lib/db/candidates'
 import { fetchSubmissionsByProject } from '../lib/db/submissions'
 import { supabase } from '../lib/supabase'
@@ -18,7 +18,7 @@ export function HistoryPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
   const queryClient = useQueryClient()
 
-  const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: fetchAllProjects })
+  const { data: projects = [] } = useQuery({ queryKey: projectsQueryKeys.all, queryFn: fetchAllProjects })
   const { data: candidates = [] } = useQuery({ queryKey: ['candidates'], queryFn: fetchCandidates })
   const { data: submissions = [], isLoading } = useQuery({
     queryKey: ['submissions', selectedProjectId],

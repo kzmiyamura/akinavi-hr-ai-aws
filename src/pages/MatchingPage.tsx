@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Star, AlertTriangle, Briefcase, User, RefreshCw } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { fetchCandidates } from '../lib/db/candidates'
-import { fetchOpenProjects, projectToMatchRequirements } from '../lib/db/projects'
+import { fetchOpenProjects, projectToMatchRequirements, projectsQueryKeys } from '../lib/db/projects'
 import {
   upsertSubmission,
   fetchSubmissionsByProject,
@@ -30,7 +30,7 @@ export function MatchingPage({ nickname }: Props) {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const queryClient = useQueryClient()
 
-  const { data: projects = [] } = useQuery({ queryKey: ['projects'], queryFn: fetchOpenProjects })
+  const { data: projects = [] } = useQuery({ queryKey: projectsQueryKeys.open, queryFn: fetchOpenProjects })
   const { data: candidates = [] } = useQuery({ queryKey: ['candidates'], queryFn: fetchCandidates })
   const { data: stats, isLoading: isLoadingStats } = useQuery({
     queryKey: ['submission-stats'],
