@@ -99,11 +99,11 @@ async function fetchGoogleLinks(body: string): Promise<{
   const pdfAttachments: Attachment[] = []
 
   // Google Sheets → CSV
-  const sheetsMatches = [...body.matchAll(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)[^\s]*/g)]
+  const sheetsMatches = [...body.matchAll(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]{25,})[^\s]*/g)]
   for (const match of sheetsMatches) {
     const id = match[1]
-    const gidMatch = match[0].match(/gid=(\d+)/)
-    const gid = gidMatch ? gidMatch[1] : '0'
+    const gidMatch = match[0].match(/[?&]gid=(\d+)/)
+    const gid = gidMatch ? gidMatch[1] : null
     const exportUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`
     try {
       const res = await fetch(exportUrl)
@@ -111,13 +111,19 @@ async function fetchGoogleLinks(body: string): Promise<{
         textContents.push({ label: `Googleスプレッドシート(${id})`, content: await res.text() })
         console.log(`[DriveLink] Sheets取得成功: ${id}`)
       } else {
-        console.warn(`[DriveLink] Sheets取得失敗(${res.status}): ${id}`)
+        console.warn(`[DriveLink] Sheetsエクスポート失敗(${res.status}): ${id} - 通常のDrive取得へフォールバックします`)
+        // エクスポートが失敗（400等）した場合、通常のDriveダウンロードを試みる
+        const driveRes = await fetch(`https://drive.google.com/uc?export=download&id=${id}`)
+        if (driveRes.ok) {
+          const text = await driveRes.text()
+          textContents.push({ label: `Googleスプレッドシート(DL:${id})`, content: text })
+        }
       }
     } catch (e) { console.warn(`[DriveLink] Sheets fetch error: ${id}`, e) }
   }
 
   // Google Docs → plain text
-  const docsMatches = [...body.matchAll(/https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]+)/g)]
+  const docsMatches = [...body.matchAll(/https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{25,})/g)]
   for (const match of docsMatches) {
     const id = match[1]
     const exportUrl = `https://docs.google.com/document/d/${id}/export?format=txt`
@@ -133,7 +139,7 @@ async function fetchGoogleLinks(body: string): Promise<{
   }
 
   // Google Drive ファイル → PDF or テキスト
-  const driveMatches = [...body.matchAll(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)([a-zA-Z0-9_-]+)/g)]
+  const driveMatches = [...body.matchAll(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)([a-zA-Z0-9_-]{25,})/g)]
   for (const match of driveMatches) {
     const id = match[1]
     const downloadUrl = `https://drive.google.com/uc?export=download&id=${id}`
