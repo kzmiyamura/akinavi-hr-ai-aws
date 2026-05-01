@@ -66,12 +66,19 @@ async function generateJSON(
   }
   parts.push({ text: prompt })
 
+  const GEMINI_TIMEOUT_MS = 90_000 // 1回あたり90秒でタイムアウト
+
   const start = Date.now()
   let lastError: unknown
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const res = await model.generateContent(parts)
+      console.log(`[generateJSON] attempt ${attempt} 開始`)
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Gemini APIタイムアウト (${GEMINI_TIMEOUT_MS}ms)`)), GEMINI_TIMEOUT_MS)
+      )
+      const res = await Promise.race([model.generateContent(parts), timeoutPromise])
       const durationMs = Date.now() - start
+      console.log(`[generateJSON] attempt ${attempt} 完了 durationMs=${durationMs}`)
       const raw = res.response.text()
       const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
       const result = JSON.parse(cleaned)
@@ -87,8 +94,9 @@ async function generateJSON(
       return { result, durationMs }
     } catch (e) {
       lastError = e
+      console.warn(`[generateJSON] attempt ${attempt} 失敗 elapsed=${Date.now() - start}ms`, String(e))
       if (attempt < maxRetries) {
-        console.warn(`[generateJSON] attempt ${attempt}: エラーのためリトライ`, e)
+        console.warn(`[generateJSON] attempt ${attempt}: リトライします`)
       }
     }
   }
