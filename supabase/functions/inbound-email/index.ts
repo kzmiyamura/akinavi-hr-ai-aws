@@ -6,7 +6,9 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
-// mammoth / xlsx は添付ファイルが存在する場合のみ動的インポート（コールドスタート軽量化）
+// mammoth / xlsx: URLを変数化してバンドラーの静的解析を回避（コールドスタート軽量化）
+const _MAMMOTH_URL = 'https://esm.sh/' + 'mammoth@1.8.0'
+const _XLSX_URL = 'https://esm.sh/' + 'xlsx@0.18.5'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -108,10 +110,10 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes
 }
 
-/** Word(.docx)をテキストに変換（動的インポート） */
+/** Word(.docx)をテキストに変換（バンドル回避の動的インポート） */
 async function extractWordText(base64: string): Promise<string> {
   try {
-    const { default: mammoth } = await import('https://esm.sh/mammoth@1.8.0')
+    const { default: mammoth } = await import(_MAMMOTH_URL)
     const buffer = base64ToUint8Array(base64).buffer
     const result = await mammoth.extractRawText({ arrayBuffer: buffer })
     return result.value ?? ''
@@ -121,10 +123,10 @@ async function extractWordText(base64: string): Promise<string> {
   }
 }
 
-/** Excel(.xlsx/.xls)をCSVテキストに変換（動的インポート・最初の3シートまで） */
+/** Excel(.xlsx/.xls)をCSVテキストに変換（バンドル回避の動的インポート・最初の3シートまで） */
 async function extractExcelText(base64: string): Promise<string> {
   try {
-    const XLSX = await import('https://esm.sh/xlsx@0.18.5')
+    const XLSX = await import(_XLSX_URL)
     const bytes = base64ToUint8Array(base64)
     const workbook = XLSX.read(bytes, { type: 'array' })
     const texts: string[] = []
