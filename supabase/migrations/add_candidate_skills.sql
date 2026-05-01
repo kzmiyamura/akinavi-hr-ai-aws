@@ -1,4 +1,4 @@
--- Migration: candidate_skillsテーブルの追加（11カテゴリ対応）
+-- Migration: candidate_skillsテーブルの追加（13カテゴリ対応）
 -- Supabase SQL Editorで実行してください
 
 CREATE TABLE IF NOT EXISTS candidate_skills (
@@ -16,10 +16,21 @@ CREATE INDEX IF NOT EXISTS idx_candidate_skills_skill        ON candidate_skills
 ALTER TABLE candidate_skills
   ADD CONSTRAINT check_category CHECK (
     category IN (
-      'languages', 'frameworks', 'os', 'databases', 'dwh',
-      'cloud', 'design', 'marketing', 'management', 'business', 'others'
+      'languages', 'frameworks', 'libraries', 'os',
+      'databases', 'clouds', 'infrastructures', 'tools',
+      'methodologies', 'certifications', 'design', 'marketing', 'others'
     )
   );
+
+-- 既存DBの制約を更新する場合は以下を実行:
+-- ALTER TABLE candidate_skills DROP CONSTRAINT check_category;
+-- ALTER TABLE candidate_skills ADD CONSTRAINT check_category CHECK (
+--   category IN (
+--     'languages', 'frameworks', 'libraries', 'os',
+--     'databases', 'clouds', 'infrastructures', 'tools',
+--     'methodologies', 'certifications', 'design', 'marketing', 'others'
+--   )
+-- );
 
 ALTER TABLE candidate_skills ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "anon_all_candidate_skills" ON candidate_skills FOR ALL TO anon USING (true) WITH CHECK (true);
