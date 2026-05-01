@@ -689,24 +689,24 @@ export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
                         }
                       : undefined
                   }
-                  className={`border border-gray-100 rounded-lg p-4 ${openDetail ? 'cursor-pointer hover:border-blue-200 hover:bg-blue-50/30 transition-colors' : ''}`}
+                  className={`border border-gray-100 rounded-lg p-3 sm:p-4 ${openDetail ? 'cursor-pointer hover:border-blue-200 hover:bg-blue-50/30 transition-colors' : ''}`}
                 >
-                  <div className="flex items-start justify-between">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3 min-w-0">
                     <CandidateProfileFields
                       c={c}
                       isExpanded={isExpanded}
                       onToggleExpand={() => toggleExpand(c.id)}
                     />
 
-                    <div className="flex items-center gap-2 ml-4 shrink-0">
-                      <span className="text-xs text-gray-300">{c.created_by}</span>
+                    <div className="flex items-center justify-end gap-2 sm:ml-4 shrink-0">
+                      <span className="text-[11px] text-gray-300 hidden sm:inline">{c.created_by}</span>
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation()
                           setEditingCandidate(c)
                         }}
-                        className="text-gray-300 hover:text-blue-500 transition-colors"
+                        className="p-1.5 rounded hover:bg-gray-50 text-gray-400 hover:text-blue-600 transition-colors"
                         title="編集"
                       >
                         <Pencil size={15} />
@@ -718,7 +718,7 @@ export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
                           handleDelete(c)
                         }}
                         disabled={deletingId === c.id}
-                        className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-50"
+                        className="p-1.5 rounded hover:bg-gray-50 text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50"
                         title="削除"
                       >
                         {deletingId === c.id
