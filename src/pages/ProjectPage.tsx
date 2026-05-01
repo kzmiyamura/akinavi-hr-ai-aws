@@ -99,6 +99,9 @@ export function ProjectPage({ nickname }: Props) {
                 </div>
                 <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500">
                   <span>{p.client ?? 'クライアント不明'}</span>
+                  {p.industry && <span>業界: {p.industry}</span>}
+                  {p.contract_type && <span>{p.contract_type}</span>}
+                  {p.headcount != null && <span>募集: {p.headcount}名</span>}
                   {p.budget_min != null && (
                     <span>予算: {p.budget_min}〜{p.budget_max ?? '?'}万</span>
                   )}
@@ -108,6 +111,15 @@ export function ProjectPage({ nickname }: Props) {
                   {p.end_date && (
                     <span>終了: {p.end_date}</span>
                   )}
+                  {p.work_location && <span>勤務地: {p.work_location}</span>}
+                  {p.remote_policy && <span>勤務形態: {p.remote_policy}</span>}
+                  {p.workload && <span>稼働: {p.workload}</span>}
+                  {(p.settlement_min != null || p.settlement_max != null) && (
+                    <span>
+                      精算: {p.settlement_min ?? '?'}〜{p.settlement_max ?? '?'}h
+                    </span>
+                  )}
+                  {p.role_summary && <span>役割: {p.role_summary}</span>}
                 </div>
                 {p.description && (
                   <p className="text-xs text-gray-500 leading-relaxed">{p.description}</p>

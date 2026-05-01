@@ -83,11 +83,17 @@ export function HistoryPage() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-semibold text-gray-800">{proj.title}</span>
                   {proj.client && <span className="text-xs text-gray-500">{proj.client}</span>}
+                  {proj.industry && <span className="text-xs text-gray-500">{proj.industry}</span>}
+                  {proj.contract_type && <span className="text-xs text-gray-500">{proj.contract_type}</span>}
+                  {proj.headcount != null && <span className="text-xs text-gray-500">募集{proj.headcount}名</span>}
                   {proj.budget_min != null && (
                     <span className="text-xs text-gray-500">予算: {proj.budget_min}〜{proj.budget_max ?? '?'}万</span>
                   )}
                   {proj.start_date && <span className="text-xs text-gray-400">開始: {proj.start_date}</span>}
                   {proj.end_date && <span className="text-xs text-gray-400">終了: {proj.end_date}</span>}
+                  {proj.work_location && <span className="text-xs text-gray-400">勤務: {proj.work_location}</span>}
+                  {proj.remote_policy && <span className="text-xs text-gray-400">{proj.remote_policy}</span>}
+                  {proj.role_summary && <span className="text-xs text-gray-400">{proj.role_summary}</span>}
                 </div>
                 {proj.description && (
                   <p className="text-xs text-gray-500 leading-relaxed">{proj.description}</p>

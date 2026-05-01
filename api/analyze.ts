@@ -33,6 +33,21 @@ function parseIsoDateOnly(value: unknown): string | null {
   return s
 }
 
+function parseOptionalInt(value: unknown, min: number, max: number): number | null {
+  if (value == null || value === '') return null
+  const n = typeof value === 'number' ? value : parseInt(String(value).trim(), 10)
+  if (!Number.isFinite(n)) return null
+  const x = Math.trunc(n)
+  if (x < min || x > max) return null
+  return x
+}
+
+function strOrNull(value: unknown): string | null {
+  if (value == null) return null
+  const s = String(value).trim()
+  return s.length > 0 ? s : null
+}
+
 const AI_MODEL = 'gemini-2.5-flash'
 
 /** テキスト + 複数添付ファイル（任意）を Gemini で解析して JSON を返す */
@@ -250,6 +265,7 @@ JSON:`.trim()
 - スキル列の区切り（「/」「・」,「、」）は分割し、重複を除き表記を統一（例: Javascript→JavaScript）。
 - budgetMin / budgetMax は月額万円。曖昧なら null。
 - startDate / endDate は YYYY-MM-DD のみ。確定日がなければ null。
+- headcount / settlementMin / settlementMax / workLocation 等は Edge `inbound-email` と同様のルール。
 
 件名: ${subject}
 
@@ -263,6 +279,15 @@ JSON:`.trim()
 - budgetMax: number | null
 - startDate: string | null
 - endDate: string | null
+- workLocation: string | null
+- remotePolicy: string | null
+- contractType: string | null
+- headcount: number | null
+- workload: string | null
+- settlementMin: number | null
+- settlementMax: number | null
+- roleSummary: string | null
+- industry: string | null
 
 本文:
 ${String(body).slice(0, 3000)}
@@ -280,6 +305,15 @@ JSON:`.trim()
         budgetMax: number | null
         startDate?: string | null
         endDate?: string | null
+        workLocation?: string | null
+        remotePolicy?: string | null
+        contractType?: string | null
+        headcount?: number | null
+        workload?: string | null
+        settlementMin?: number | null
+        settlementMax?: number | null
+        roleSummary?: string | null
+        industry?: string | null
       }
 
       const requiredSkills = Array.from(
@@ -301,6 +335,10 @@ JSON:`.trim()
 
       console.log('[AI解析結果 project]', JSON.stringify(analyzed, null, 2))
 
+      const headcount = parseOptionalInt(analyzed.headcount, 1, 500)
+      const settlementMin = parseOptionalInt(analyzed.settlementMin, 0, 744)
+      const settlementMax = parseOptionalInt(analyzed.settlementMax, 0, 744)
+
       const { data, error } = await supabase.from('projects').insert({
         title: analyzed.title ?? '案件',
         client: analyzed.client ?? null,
@@ -310,6 +348,15 @@ JSON:`.trim()
         budget_max: analyzed.budgetMax ?? null,
         start_date: parseIsoDateOnly(analyzed.startDate),
         end_date: parseIsoDateOnly(analyzed.endDate),
+        work_location: strOrNull(analyzed.workLocation),
+        remote_policy: strOrNull(analyzed.remotePolicy),
+        contract_type: strOrNull(analyzed.contractType),
+        headcount,
+        workload: strOrNull(analyzed.workload),
+        settlement_min: settlementMin,
+        settlement_max: settlementMax,
+        role_summary: strOrNull(analyzed.roleSummary),
+        industry: strOrNull(analyzed.industry),
         raw_data: {
           text: String(body).slice(0, 5000),
           from,

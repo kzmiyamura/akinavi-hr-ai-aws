@@ -7,6 +7,7 @@ import { fetchOpenProjects } from '../lib/db/projects'
 import { upsertSubmission, fetchSubmissionsByProject } from '../lib/db/submissions'
 import { supabase } from '../lib/supabase'
 import type { Candidate } from '../lib/db/candidates'
+import type { AnalyzeProjectResponse } from '../lib/ai/types'
 import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
 
@@ -44,13 +45,25 @@ export function MatchingPage({ nickname }: Props) {
       const project = (projects as Project[]).find((p) => p.id === selectedProjectId)
       if (!project) throw new Error('案件を選択してください')
 
-      const projectReq = {
+      const projectReq: AnalyzeProjectResponse = {
         title: project.title,
         client: project.client,
         description: project.description,
         requiredSkills: project.required_skills as string[],
         budgetMin: project.budget_min,
         budgetMax: project.budget_max,
+        startDate: project.start_date,
+        endDate: project.end_date,
+        workLocation: project.work_location,
+        remotePolicy: project.remote_policy,
+        contractType: project.contract_type,
+        headcount: project.headcount,
+        workload: project.workload,
+        settlementMin: project.settlement_min,
+        settlementMax: project.settlement_max,
+        roleSummary: project.role_summary,
+        industry: project.industry,
+        niceToHaveSkills: (project.raw_data?.niceToHaveSkills as string[] | undefined) ?? [],
       }
 
       for (const candidate of candidates as Candidate[]) {

@@ -36,6 +36,24 @@ export interface AnalyzeProjectResponse {
   startDate?: string | null
   /** 終了予定日 YYYY-MM-DD（不明なら null） */
   endDate?: string | null
+  /** 勤務地・オフィス・エリア（例: 田町、大阪） */
+  workLocation?: string | null
+  /** リモート・出社の要約（例: フルリモート可、週2出社、常駐） */
+  remotePolicy?: string | null
+  /** 契約形態（例: 業務委託、派遣、準委任） */
+  contractType?: string | null
+  /** 募集人数（不明なら null） */
+  headcount?: number | null
+  /** 稼働イメージ（例: 週5日、月20日） */
+  workload?: string | null
+  /** 精算下限（時間・1日あたり等、数値のみ。不明なら null） */
+  settlementMin?: number | null
+  /** 精算上限（時間） */
+  settlementMax?: number | null
+  /** 募集役割（例: PL、SE、インフラエンジニア） */
+  roleSummary?: string | null
+  /** 業界・ドメイン */
+  industry?: string | null
 }
 
 /** マッチングスコアリングのリクエスト */

@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS projects (
   budget_max       integer,
   start_date       date,
   end_date         date,
+
+  work_location    text,
+  remote_policy    text,
+  contract_type    text,
+  headcount        integer,
+  workload         text,
+  settlement_min   integer,
+  settlement_max   integer,
+  role_summary     text,
+  industry         text,
+
   raw_data         jsonb       NOT NULL DEFAULT '{}',
 
   status           text        NOT NULL DEFAULT 'open'

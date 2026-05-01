@@ -64,6 +64,9 @@ JSON:`.trim()
 - 「A / B / C」のスキル列は個別要素に分割してください。
 - budgetMin/budgetMax は月額の万円単位の数値のみ（「60万」→ 60）。レンジが1値だけなら min=max にしてよいです。
 - startDate / endDate は YYYY-MM-DD 形式のみ。本文に日付がなければ null。
+- headcount は募集人数の整数のみ。「2名」→ 2。複数レンジで不明なら null。
+- settlementMin / settlementMax は本文に明記された精算の下限・上限を時間で表せる数値のみ（例: 7, 8、月次精算 140-180 なら 140 と 180）。曖昧なら null。
+- workLocation / remotePolicy / contractType / workload / roleSummary / industry は本文の表現を短く要約。なければ null。
 
 抽出項目:
 - title: string（案件名。件名・本文から。不明なら "案件"）
@@ -75,6 +78,15 @@ JSON:`.trim()
 - budgetMax: number | null（月額最高単価・万円。不明ならnull）
 - startDate: string | null（開始予定 YYYY-MM-DD）
 - endDate: string | null（終了予定 YYYY-MM-DD）
+- workLocation: string | null（勤務地・オフィス・エリア）
+- remotePolicy: string | null（リモート可否・出社頻度の要約）
+- contractType: string | null（業務委託・派遣・準委任等）
+- headcount: number | null（募集人数）
+- workload: string | null（稼働日数・週稼働の目安）
+- settlementMin: number | null
+- settlementMax: number | null
+- roleSummary: string | null（PL/SE/PG 等の役割）
+- industry: string | null（業界）
 
 テキスト:
 ${req.rawText}
@@ -97,7 +109,7 @@ ${JSON.stringify(req.candidateProfile, null, 2)}
 ${JSON.stringify(req.projectRequirements, null, 2)}
 
 評価項目:
-- score: number（0〜100のマッチングスコア）
+- score: number（0〜100のマッチングスコア。スキル適合に加え、案件の勤務地・リモート方針・契約形態・役割・業界と人材の希望・経験の整合も加味すること）
 - summary: string（マッチング理由を200字以内で）
 - duplicateSuspected: boolean（人材の名前・スキルが既存候補と非常に似ている場合true）
 

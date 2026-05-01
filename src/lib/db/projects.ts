@@ -11,6 +11,15 @@ export interface Project {
   budget_max: number | null
   start_date: string | null
   end_date: string | null
+  work_location: string | null
+  remote_policy: string | null
+  contract_type: string | null
+  headcount: number | null
+  workload: string | null
+  settlement_min: number | null
+  settlement_max: number | null
+  role_summary: string | null
+  industry: string | null
   raw_data: Record<string, unknown>
   status: 'open' | 'filled' | 'closed'
   created_by: string
@@ -39,6 +48,15 @@ export async function insertProject(input: InsertProjectInput): Promise<Project>
       budget_max: analyzed.budgetMax,
       start_date: analyzed.startDate ?? null,
       end_date: analyzed.endDate ?? null,
+      work_location: analyzed.workLocation ?? null,
+      remote_policy: analyzed.remotePolicy ?? null,
+      contract_type: analyzed.contractType ?? null,
+      headcount: analyzed.headcount ?? null,
+      workload: analyzed.workload ?? null,
+      settlement_min: analyzed.settlementMin ?? null,
+      settlement_max: analyzed.settlementMax ?? null,
+      role_summary: analyzed.roleSummary ?? null,
+      industry: analyzed.industry ?? null,
       raw_data: {
         text: rawText,
         niceToHaveSkills: analyzed.niceToHaveSkills ?? [],

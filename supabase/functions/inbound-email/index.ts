@@ -58,6 +58,21 @@ function parseIsoDateOnly(value: unknown): string | null {
   return s
 }
 
+function parseOptionalInt(value: unknown, min: number, max: number): number | null {
+  if (value == null || value === '') return null
+  const n = typeof value === 'number' ? value : parseInt(String(value).trim(), 10)
+  if (!Number.isFinite(n)) return null
+  const x = Math.trunc(n)
+  if (x < min || x > max) return null
+  return x
+}
+
+function strOrNull(value: unknown): string | null {
+  if (value == null) return null
+  const s = String(value).trim()
+  return s.length > 0 ? s : null
+}
+
 const AI_MODEL = 'gemini-2.5-flash'
 
 async function generateJSON(
@@ -640,6 +655,9 @@ JSON:`.trim()
 - スキル列の区切り（「/」「・」,「、」）は必ず分割し、重複は除き、一般的な表記に統一してください（例: Javascript→JavaScript, Mysql→MySQL）。
 - budgetMin / budgetMax は月額単価の万円（数値のみ）。「60万」「60万円」は 60。年収・日額と本文で明記されている場合のみそれに従い、曖昧なら null。
 - startDate / endDate は YYYY-MM-DD のみ。和暦や「4月上旬」だけでは null（西暦の確定日がある場合のみセット）。
+- headcount は募集人数の整数（「2名」→2）。不明なら null。
+- settlementMin / settlementMax は本文に明記された精算の下限・上限を数値化できる場合のみ（例: 1日8時間→8、月次精算レンジ140〜180→140と180）。単位が曖昧なら null。
+- workLocation / remotePolicy / contractType / workload / roleSummary / industry は記載がある場合のみ短く要約。なければ null。
 
 件名: ${subject}
 
@@ -653,6 +671,15 @@ JSON:`.trim()
 - budgetMax: number | null（月額・万円）
 - startDate: string | null（YYYY-MM-DD）
 - endDate: string | null（YYYY-MM-DD）
+- workLocation: string | null（勤務地・オフィス・エリア）
+- remotePolicy: string | null（フルリモート可・週○出社・常駐など）
+- contractType: string | null（業務委託・派遣・準委任・請負など）
+- headcount: number | null
+- workload: string | null（週5日・月20日など稼働の目安）
+- settlementMin: number | null
+- settlementMax: number | null
+- roleSummary: string | null（PL/SE/PG・リーダー等）
+- industry: string | null（金融・製造・EC 等）
 
 本文:
 ${body.slice(0, 3000)}${driveTextSection}
@@ -673,6 +700,15 @@ JSON:`.trim()
         budgetMax: number | null
         startDate?: string | null
         endDate?: string | null
+        workLocation?: string | null
+        remotePolicy?: string | null
+        contractType?: string | null
+        headcount?: number | null
+        workload?: string | null
+        settlementMin?: number | null
+        settlementMax?: number | null
+        roleSummary?: string | null
+        industry?: string | null
       }
 
       const requiredSkills = Array.from(
@@ -694,6 +730,10 @@ JSON:`.trim()
 
       console.log('[STEP6 AI解析結果 project]', JSON.stringify(analyzed, null, 2))
 
+      const headcount = parseOptionalInt(analyzed.headcount, 1, 500)
+      const settlementMin = parseOptionalInt(analyzed.settlementMin, 0, 744)
+      const settlementMax = parseOptionalInt(analyzed.settlementMax, 0, 744)
+
       const { data, error } = await supabase.from('projects').insert({
         title: analyzed.title ?? '案件',
         client: analyzed.client ?? null,
@@ -703,6 +743,15 @@ JSON:`.trim()
         budget_max: analyzed.budgetMax ?? null,
         start_date: parseIsoDateOnly(analyzed.startDate),
         end_date: parseIsoDateOnly(analyzed.endDate),
+        work_location: strOrNull(analyzed.workLocation),
+        remote_policy: strOrNull(analyzed.remotePolicy),
+        contract_type: strOrNull(analyzed.contractType),
+        headcount,
+        workload: strOrNull(analyzed.workload),
+        settlement_min: settlementMin,
+        settlement_max: settlementMax,
+        role_summary: strOrNull(analyzed.roleSummary),
+        industry: strOrNull(analyzed.industry),
         raw_data: {
           text: body.slice(0, 5000),
           from,
