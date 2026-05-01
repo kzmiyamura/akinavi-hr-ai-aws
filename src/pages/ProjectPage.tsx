@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Briefcase, RefreshCw, Search, ChevronDown, ChevronUp, Pencil, Trash2, X } from 'lucide-react'
+import { Loader2, Briefcase, RefreshCw, Search, ChevronDown, ChevronUp, Pencil, Trash2, X, MapPin, Wifi, Mail } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { insertProject, fetchAllProjects, updateProject, deleteProject } from '../lib/db/projects'
 import type { Project } from '../lib/db/projects'
@@ -70,11 +70,12 @@ function toEditForm(p: Project): EditForm {
 
 interface EditModalProps {
   project: Project
+  nickname: string
   onClose: () => void
   onSaved: () => void
 }
 
-function EditModal({ project, onClose, onSaved }: EditModalProps) {
+function EditModal({ project, nickname, onClose, onSaved }: EditModalProps) {
   const [form, setForm] = useState<EditForm>(() => toEditForm(project))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -112,6 +113,7 @@ function EditModal({ project, onClose, onSaved }: EditModalProps) {
           ...(project.raw_data ?? {}),
           niceToHaveSkills,
         },
+        updated_by: nickname,
       })
       onSaved()
     } catch (e) {
@@ -349,6 +351,7 @@ export function ProjectPage({ nickname }: Props) {
       {editingProject && (
         <EditModal
           project={editingProject}
+          nickname={nickname}
           onClose={() => setEditingProject(null)}
           onSaved={() => {
             setEditingProject(null)
@@ -425,7 +428,11 @@ export function ProjectPage({ nickname }: Props) {
               const rawNice = (p.raw_data as { niceToHaveSkills?: unknown })?.niceToHaveSkills
               const nice = Array.isArray(rawNice) ? rawNice.map(String).filter(Boolean) : []
               const required = (p.required_skills as string[]) ?? []
+              const raw = (p.raw_data ?? {}) as { from?: unknown; subject?: unknown }
+              const mailFrom = typeof raw.from === 'string' ? raw.from : null
+              const mailSubject = typeof raw.subject === 'string' ? raw.subject : null
               const needsToggle = (required.length + nice.length) > 12 || (p.description?.length ?? 0) > 240
+              const hasLocation = Boolean(p.work_location) || Boolean(p.remote_policy)
 
               return (
                 <div key={p.id} className="border border-gray-100 rounded-lg p-4 space-y-2">
@@ -486,8 +493,6 @@ export function ProjectPage({ nickname }: Props) {
                     {p.end_date && (
                       <span>終了: {p.end_date}</span>
                     )}
-                    {p.work_location && <span>勤務地: {p.work_location}</span>}
-                    {p.remote_policy && <span>勤務形態: {p.remote_policy}</span>}
                     {p.workload && <span>稼働: {p.workload}</span>}
                     {(p.settlement_min != null || p.settlement_max != null) && (
                       <span>
@@ -495,6 +500,48 @@ export function ProjectPage({ nickname }: Props) {
                       </span>
                     )}
                     {p.role_summary && <span>役割: {p.role_summary}</span>}
+                  </div>
+
+                  {/* 勤務地情報（人材カードに合わせた見た目） */}
+                  {hasLocation && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1">
+                      {p.work_location && (
+                        <span className="flex items-center gap-1 text-xs text-gray-400">
+                          <MapPin size={11} />
+                          {p.work_location}
+                        </span>
+                      )}
+                      {p.remote_policy && (
+                        <span className="flex items-center gap-1 text-xs bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">
+                          <Wifi size={10} />
+                          {p.remote_policy}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 日時・メール転送情報 */}
+                  <div className="mt-1.5 border-t border-gray-50 pt-1.5 space-y-0.5">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                      <span className="flex items-center gap-1 text-xs text-gray-400 shrink-0">
+                        <Mail size={10} />
+                        受信: {p.created_at ? formatDate(p.created_at) : '—'}
+                      </span>
+                      {mailFrom && (
+                        <span className="text-xs text-gray-400 truncate max-w-xs" title={mailFrom}>
+                          転送: {mailFrom}
+                        </span>
+                      )}
+                      {mailSubject && (
+                        <span className="text-xs text-gray-400 truncate max-w-xs" title={mailSubject}>
+                          件名: {mailSubject}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-300">
+                      最終更新: {formatDate(p.updated_at)}
+                      {p.updated_by ? ` by ${p.updated_by}` : ''}
+                    </div>
                   </div>
 
                   {p.description && (

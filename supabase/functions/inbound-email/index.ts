@@ -106,11 +106,22 @@ async function generateJSON(
       const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
       const result = JSON.parse(cleaned)
 
-      // スキルと概要が両方空の場合はリトライ
-      const isEmpty = Array.isArray((result as any).skills) && (result as any).skills.length === 0
-        && !(result as any).summary
+      // 空結果の場合はリトライ（candidate / project 両対応）
+      const isCandidateEmpty =
+        Array.isArray((result as any).skills) &&
+        (result as any).skills.length === 0 &&
+        !(result as any).summary
+
+      const isProjectEmpty =
+        Array.isArray((result as any).requiredSkills) &&
+        (result as any).requiredSkills.length === 0 &&
+        Array.isArray((result as any).niceToHaveSkills) &&
+        (result as any).niceToHaveSkills.length === 0 &&
+        !(result as any).description
+
+      const isEmpty = isCandidateEmpty || isProjectEmpty
       if (isEmpty && attempt < maxRetries) {
-        console.warn(`[generateJSON] attempt ${attempt}: skills/summary が空のためリトライ`)
+        console.warn(`[generateJSON] attempt ${attempt}: 空結果のためリトライ`)
         continue
       }
 

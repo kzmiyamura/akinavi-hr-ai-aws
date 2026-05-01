@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS projects (
                    CHECK (status IN ('open','filled','closed')),
 
   created_by       text        NOT NULL,
+  updated_by       text,
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now()
 );

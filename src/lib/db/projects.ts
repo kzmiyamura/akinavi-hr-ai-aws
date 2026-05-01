@@ -23,6 +23,7 @@ export interface Project {
   raw_data: Record<string, unknown>
   status: 'open' | 'filled' | 'closed'
   created_by: string
+  updated_by: string | null
   created_at: string
   updated_at: string
 }
@@ -91,6 +92,7 @@ export interface UpdateProjectInput {
   industry: string | null
   status: Project['status']
   raw_data: Record<string, unknown>
+  updated_by: string
 }
 
 /** 案件を手動更新する（IDで直接UPDATE） */
