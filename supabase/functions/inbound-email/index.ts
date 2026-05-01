@@ -65,10 +65,68 @@ function parseOptionalInt(value: unknown, min: number, max: number): number | nu
   return x
 }
 
+/** 月額万円など、AIが number / 数値文字列で返すフィールド向け */
+function parseOptionalNumber(value: unknown): number | null {
+  if (value == null || value === '') return null
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  const n = parseFloat(String(value).replace(/[,，]/g, '').trim())
+  if (!Number.isFinite(n)) return null
+  return n
+}
+
 function strOrNull(value: unknown): string | null {
   if (value == null) return null
   const s = String(value).trim()
   return s.length > 0 ? s : null
+}
+
+/** AI の skills 配列を trim・重複除去（大文字小文字無視） */
+function dedupeTrimmedSkills(skills: unknown): string[] {
+  if (!Array.isArray(skills)) return []
+  return Array.from(
+    new Map(
+      skills
+        .map((s) => String(s).trim())
+        .filter((s) => s.length > 0)
+        .map((s) => [s.toLowerCase(), s]),
+    ).values(),
+  )
+}
+
+/** Gemini の案件JSONが「空」とみなせるか（配列は全要素が空なら空） */
+function isProjectAIResultEmpty(result: unknown): boolean {
+  if (Array.isArray(result)) {
+    if (result.length === 0) return true
+    return result.every((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return true
+      const o = item as Record<string, unknown>
+      const req = Array.isArray(o.requiredSkills) ? o.requiredSkills : []
+      const nice = Array.isArray(o.niceToHaveSkills) ? o.niceToHaveSkills : []
+      const desc = o.description
+      const hasDesc = typeof desc === 'string' && desc.trim().length > 0
+      return req.length === 0 && nice.length === 0 && !hasDesc
+    })
+  }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return true
+  const o = result as Record<string, unknown>
+  const req = Array.isArray(o.requiredSkills) ? o.requiredSkills : []
+  const nice = Array.isArray(o.niceToHaveSkills) ? o.niceToHaveSkills : []
+  const desc = o.description
+  const hasDesc = typeof desc === 'string' && desc.trim().length > 0
+  return req.length === 0 && nice.length === 0 && !hasDesc
+}
+
+/** 単一オブジェクトまたは配列を案件オブジェクトの配列に正規化 */
+function normalizeToProjectObjects(result: unknown): Record<string, unknown>[] {
+  if (Array.isArray(result)) {
+    return result.filter((item): item is Record<string, unknown> =>
+      item != null && typeof item === 'object' && !Array.isArray(item)
+    )
+  }
+  if (result != null && typeof result === 'object' && !Array.isArray(result)) {
+    return [result as Record<string, unknown>]
+  }
+  return []
 }
 
 const AI_MODEL = 'gemini-2.5-flash'
@@ -113,12 +171,7 @@ async function generateJSON(
         (result as any).skills.length === 0 &&
         !(result as any).summary
 
-      const isProjectEmpty =
-        Array.isArray((result as any).requiredSkills) &&
-        (result as any).requiredSkills.length === 0 &&
-        Array.isArray((result as any).niceToHaveSkills) &&
-        (result as any).niceToHaveSkills.length === 0 &&
-        !(result as any).description
+      const isProjectEmpty = isProjectAIResultEmpty(result)
 
       const isEmpty = isCandidateEmpty || isProjectEmpty
       if (isEmpty && attempt < maxRetries) {
@@ -713,10 +766,12 @@ JSON:`.trim()
 - headcount は募集人数の整数（「2名」→2）。不明なら null。
 - settlementMin / settlementMax は本文に明記された精算の下限・上限を数値化できる場合のみ（例: 1日8時間→8、月次精算レンジ140〜180→140と180）。単位が曖昧なら null。
 - workLocation / remotePolicy / contractType / workload / roleSummary / industry は記載がある場合のみ短く要約。なければ null。
+- **1つのメール・1つの文書の中に複数の独立した募集案件がある場合**は、各案件を1要素とする **JSON配列** で返してください（例: [{...},{...}]）。
+- **案件が1件だけ**の場合は、オブジェクト1つ **または** 要素1つの配列のどちらでも構いません。
 
 件名: ${subject}
 
-抽出項目（JSON形式のみ。前後に余分なテキスト不要）:
+抽出項目（各案件オブジェクトのフィールド。JSON形式のみ。前後に余分なテキスト不要）:
 - title: string（案件名。件名・本文見出しを優先。不明なら "案件"）
 - client: string | null（エンド・クライアント名。不明なら null）
 - description: string（作業内容・背景・場所・勤務形態などの要約。なければ ""）
@@ -745,103 +800,108 @@ JSON:`.trim()
       const { result, durationMs } = await generateJSON(prompt, allAttachments)
       console.log(`[STEP5 AI呼び出し完了 project] durationMs=${durationMs} elapsed=${elapsed()}`)
 
-      const analyzed = result as {
-        title: string
-        client: string | null
-        description: string
-        requiredSkills: string[]
-        niceToHaveSkills?: string[]
-        budgetMin: number | null
-        budgetMax: number | null
-        startDate?: string | null
-        endDate?: string | null
-        workLocation?: string | null
-        remotePolicy?: string | null
-        contractType?: string | null
-        headcount?: number | null
-        workload?: string | null
-        settlementMin?: number | null
-        settlementMax?: number | null
-        roleSummary?: string | null
-        industry?: string | null
+      const projectObjects = normalizeToProjectObjects(result)
+      if (projectObjects.length === 0) {
+        throw new Error('案件解析結果が空、または形式が不正です（オブジェクトまたは配列を期待）')
       }
 
-      const requiredSkills = Array.from(
-        new Map(
-          (analyzed.requiredSkills ?? [])
-            .map((s: string) => s.trim())
-            .filter((s: string) => s.length > 0)
-            .map((s: string) => [s.toLowerCase(), s]),
-        ).values(),
-      )
-      const niceToHaveSkills = Array.from(
-        new Map(
-          (analyzed.niceToHaveSkills ?? [])
-            .map((s: string) => s.trim())
-            .filter((s: string) => s.length > 0)
-            .map((s: string) => [s.toLowerCase(), s]),
-        ).values(),
-      )
+      console.log('[STEP6 AI解析結果 project]', JSON.stringify(projectObjects, null, 2))
 
-      console.log('[STEP6 AI解析結果 project]', JSON.stringify(analyzed, null, 2))
+      const sharedRawMeta = {
+        text: body.slice(0, 5000),
+        from,
+        subject,
+        attachmentCount: allAttachments.length,
+        attachmentNames: [
+          ...allAttachments.map((a) => a.name ?? a.mimeType),
+          ...officeTextContents.map((t) => t.label),
+        ],
+        driveLinks: driveTexts.map((t) => t.label),
+        batchSize: projectObjects.length,
+      }
 
-      const headcount = parseOptionalInt(analyzed.headcount, 1, 500)
-      const settlementMin = parseOptionalInt(analyzed.settlementMin, 0, 744)
-      const settlementMax = parseOptionalInt(analyzed.settlementMax, 0, 744)
+      const insertRows = projectObjects.map((raw, batchIndex) => {
+        const requiredSkills = dedupeTrimmedSkills(raw.requiredSkills)
+        const niceToHaveSkills = dedupeTrimmedSkills(raw.niceToHaveSkills)
+        const description = typeof raw.description === 'string' ? raw.description : ''
+        const headcount = parseOptionalInt(raw.headcount, 1, 500)
+        const settlementMin = parseOptionalInt(raw.settlementMin, 0, 744)
+        const settlementMax = parseOptionalInt(raw.settlementMax, 0, 744)
+        const title = strOrNull(raw.title) ?? '案件'
+        const budgetMin = parseOptionalNumber(raw.budgetMin)
+        const budgetMax = parseOptionalNumber(raw.budgetMax)
 
-      const { data, error } = await supabase.from('projects').insert({
-        title: analyzed.title ?? '案件',
-        client: analyzed.client ?? null,
-        description: analyzed.description ?? '',
-        required_skills: requiredSkills,
-        budget_min: analyzed.budgetMin ?? null,
-        budget_max: analyzed.budgetMax ?? null,
-        start_date: parseIsoDateOnly(analyzed.startDate),
-        end_date: parseIsoDateOnly(analyzed.endDate),
-        work_location: strOrNull(analyzed.workLocation),
-        remote_policy: strOrNull(analyzed.remotePolicy),
-        contract_type: strOrNull(analyzed.contractType),
-        headcount,
-        workload: strOrNull(analyzed.workload),
-        settlement_min: settlementMin,
-        settlement_max: settlementMax,
-        role_summary: strOrNull(analyzed.roleSummary),
-        industry: strOrNull(analyzed.industry),
-        raw_data: {
-          text: body.slice(0, 5000),
-          from,
-          subject,
-          attachmentCount: allAttachments.length,
-          attachmentNames: [
-            ...allAttachments.map((a) => a.name ?? a.mimeType),
-            ...officeTextContents.map((t) => t.label),
-          ],
-          driveLinks: driveTexts.map((t) => t.label),
-          niceToHaveSkills,
-          aiAnalysis: { ...analyzed, requiredSkills, niceToHaveSkills },
-        },
-        created_by: 'make-inbound',
-      }).select().single()
+        return {
+          title,
+          client: strOrNull(raw.client),
+          description,
+          required_skills: requiredSkills,
+          budget_min: budgetMin,
+          budget_max: budgetMax,
+          start_date: parseIsoDateOnly(raw.startDate),
+          end_date: parseIsoDateOnly(raw.endDate),
+          work_location: strOrNull(raw.workLocation),
+          remote_policy: strOrNull(raw.remotePolicy),
+          contract_type: strOrNull(raw.contractType),
+          headcount,
+          workload: strOrNull(raw.workload),
+          settlement_min: settlementMin,
+          settlement_max: settlementMax,
+          role_summary: strOrNull(raw.roleSummary),
+          industry: strOrNull(raw.industry),
+          raw_data: {
+            ...sharedRawMeta,
+            batchIndex,
+            niceToHaveSkills,
+            aiAnalysis: {
+              ...raw,
+              requiredSkills,
+              niceToHaveSkills,
+            },
+          },
+          created_by: 'make-inbound',
+        }
+      })
+
+      const { data: insertedRows, error } = await supabase.from('projects').insert(insertRows).select()
 
       if (error) throw new Error(`案件保存エラー: ${error.message}`)
+      if (!insertedRows?.length) throw new Error('案件保存後に行が返りませんでした')
 
-      const { error: logError } = await supabase.from('ai_logs').insert({
-        type: 'project',
-        model: AI_MODEL,
-        from_address: from,
-        subject,
-        ai_result: analyzed,
-        prompt_length: prompt.length,
-        status: 'success',
-        duration_ms: durationMs,
-        linked_id: data.id,
-      })
-      if (logError) console.error('[ai_logs INSERT error]', logError)
+      const logResults = await Promise.all(
+        insertedRows.map((row, i) =>
+          supabase.from('ai_logs').insert({
+            type: 'project',
+            model: AI_MODEL,
+            from_address: from,
+            subject,
+            ai_result: { ...projectObjects[i], batchIndex: i, batchSize: projectObjects.length },
+            prompt_length: prompt.length,
+            status: 'success',
+            duration_ms: durationMs,
+            linked_id: row.id,
+          })
+        ),
+      )
+      for (const lr of logResults) {
+        if (lr.error) console.error('[ai_logs INSERT error]', lr.error)
+      }
 
-      console.log(`[inbound] 案件登録完了: ${data.title}`)
-      return new Response(JSON.stringify({ ok: true, type: 'project', id: data.id, title: data.title }), {
-        status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+      console.log(
+        `[inbound] 案件登録完了: ${insertedRows.length}件 — ${insertedRows.map((r) => r.title).join(', ')}`,
+      )
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          type: 'project',
+          count: insertedRows.length,
+          ids: insertedRows.map((r) => r.id),
+          titles: insertedRows.map((r) => r.title),
+          id: insertedRows[0].id,
+          title: insertedRows[0].title,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
     }
 
     return new Response(JSON.stringify({ error: `不明な type: ${type}` }), {
