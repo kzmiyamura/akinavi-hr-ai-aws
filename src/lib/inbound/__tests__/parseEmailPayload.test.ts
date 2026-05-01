@@ -5,7 +5,7 @@ import {
   extractEmailFromFrom,
   buildCandidatePayload,
   extractNameFromFilename,
-  AnalyzedCandidate,
+  type AnalyzedCandidate,
 } from '../parseEmailPayload'
 
 // Default skillsByCategory for tests to ensure all required properties are present
