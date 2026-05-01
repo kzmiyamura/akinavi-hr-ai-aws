@@ -9,6 +9,7 @@ import { ProjectPage } from './pages/ProjectPage'
 import { MatchingPage } from './pages/MatchingPage'
 import { HistoryPage } from './pages/HistoryPage'
 import { DuplicatePage } from './pages/DuplicatePage'
+import { MonitorPage } from './pages/MonitorPage'
 
 const queryClient = new QueryClient()
 
@@ -27,6 +28,7 @@ function AppInner() {
       case 'matching':   return <MatchingPage nickname={nickname} />
       case 'history':    return <HistoryPage />
       case 'duplicates': return <DuplicatePage />
+      case 'monitor':    return <MonitorPage />
     }
   }
 

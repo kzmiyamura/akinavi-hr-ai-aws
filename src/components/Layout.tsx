@@ -1,6 +1,6 @@
-import { Users, Briefcase, Star, History, AlertTriangle, LogOut } from 'lucide-react'
+import { Users, Briefcase, Star, History, AlertTriangle, LogOut, Activity } from 'lucide-react'
 
-export type Page = 'candidates' | 'projects' | 'matching' | 'history' | 'duplicates'
+export type Page = 'candidates' | 'projects' | 'matching' | 'history' | 'duplicates' | 'monitor'
 
 interface Props {
   currentPage: Page
@@ -16,6 +16,7 @@ const NAV_ITEMS: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'matching',   label: 'マッチング', icon: <Star size={16} /> },
   { page: 'history',    label: '提案履歴', icon: <History size={16} /> },
   { page: 'duplicates', label: '重複管理', icon: <AlertTriangle size={16} /> },
+  { page: 'monitor',    label: '解析監視', icon: <Activity size={16} /> },
 ]
 
 export function Layout({ currentPage, onNavigate, nickname, onClearNickname, children }: Props) {
