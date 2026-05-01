@@ -8,7 +8,16 @@ import type { Candidate } from '../lib/db/candidates'
 interface SkillsByCategory {
   languages: string[]
   frameworks: string[]
+  libraries: string[]
   os: string[]
+  databases: string[]
+  clouds: string[]
+  infrastructures: string[]
+  tools: string[]
+  methodologies: string[]
+  certifications: string[]
+  design: string[]
+  marketing: string[]
   others: string[]
 }
 
@@ -23,10 +32,19 @@ function getRaw(c: Candidate): RawProfile {
 }
 
 const CATEGORY_STYLE: Record<keyof SkillsByCategory, { label: string; badge: string }> = {
-  languages: { label: '言語', badge: 'bg-blue-50 text-blue-700' },
-  frameworks: { label: 'FW',   badge: 'bg-green-50 text-green-700' },
-  os:         { label: 'OS',   badge: 'bg-amber-50 text-amber-700' },
-  others:     { label: 'その他', badge: 'bg-gray-100 text-gray-600' },
+  languages:      { label: '言語',       badge: 'bg-blue-50 text-blue-700' },
+  frameworks:     { label: 'FW',         badge: 'bg-green-50 text-green-700' },
+  libraries:      { label: 'ライブラリ', badge: 'bg-emerald-50 text-emerald-700' },
+  os:             { label: 'OS',         badge: 'bg-amber-50 text-amber-700' },
+  databases:      { label: 'DB',         badge: 'bg-orange-50 text-orange-700' },
+  clouds:         { label: 'クラウド',   badge: 'bg-sky-50 text-sky-700' },
+  infrastructures:{ label: 'インフラ',   badge: 'bg-cyan-50 text-cyan-700' },
+  tools:          { label: 'ツール',     badge: 'bg-violet-50 text-violet-700' },
+  methodologies:  { label: '手法',       badge: 'bg-indigo-50 text-indigo-700' },
+  certifications: { label: '資格',       badge: 'bg-yellow-50 text-yellow-700' },
+  design:         { label: 'デザイン',   badge: 'bg-pink-50 text-pink-700' },
+  marketing:      { label: 'マーケ',     badge: 'bg-rose-50 text-rose-700' },
+  others:         { label: 'その他',     badge: 'bg-gray-100 text-gray-600' },
 }
 
 interface Props { nickname: string }
@@ -167,16 +185,12 @@ export function CandidatePage({ nickname }: Props) {
                             const items = sbc[key]
                             if (!items || items.length === 0) return null
                             const { label, badge } = CATEGORY_STYLE[key]
-                            const shown = key === 'others' ? items.slice(0, 5) : items
                             return (
                               <div key={key} className="flex flex-wrap gap-1 items-center">
                                 <span className="text-xs text-gray-400 w-10 shrink-0">{label}</span>
-                                {shown.map((s) => (
+                                {items.map((s) => (
                                   <span key={s} className={`text-xs rounded px-1.5 py-0.5 ${badge}`}>{s}</span>
                                 ))}
-                                {key === 'others' && items.length > 5 && (
-                                  <span className="text-xs text-gray-400">+{items.length - 5}</span>
-                                )}
                               </div>
                             )
                           })
