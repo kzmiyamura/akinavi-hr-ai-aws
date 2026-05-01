@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { upsertCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import type { Candidate } from '../lib/db/candidates'
@@ -64,6 +64,7 @@ export function CandidatePage({ nickname }: Props) {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [searchQuery, setSearchQuery] = useState('')
   const queryClient = useQueryClient()
 
   function toggleExpand(id: string) {
@@ -95,6 +96,29 @@ export function CandidatePage({ nickname }: Props) {
   const { data: candidates = [], isLoading } = useQuery({
     queryKey: ['candidates'],
     queryFn: fetchCandidates,
+  })
+
+  const filteredCandidates = candidates.filter((c: Candidate) => {
+    if (!searchQuery.trim()) return true
+    const q = searchQuery.toLowerCase()
+    const raw = getRaw(c)
+    const sbc = raw.skillsByCategory
+    const allSkills = sbc
+      ? Object.values(sbc).flat()
+      : (c.skills as string[])
+    const searchTargets = [
+      c.name,
+      c.email,
+      c.phone,
+      ...(raw.roles ?? []),
+      ...(raw.industries ?? []),
+      ...allSkills,
+      raw.prefecture,
+      raw.nearestStation,
+      raw.currentWorkLocation,
+      ...(raw.availableRegions ?? []),
+    ].filter(Boolean).map((s) => s!.toLowerCase())
+    return searchTargets.some((t) => t.includes(q))
   })
 
   const mutation = useMutation({
@@ -151,17 +175,39 @@ export function CandidatePage({ nickname }: Props) {
 
       {/* 候補者一覧 */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <h2 className="text-base font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <RefreshCw size={18} className="text-gray-500" />
-          登録済み人材（{candidates.length}件）
-        </h2>
+        <div className="flex items-center gap-3 mb-4 flex-wrap">
+          <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
+            <RefreshCw size={18} className="text-gray-500" />
+            登録済み人材（{searchQuery.trim() ? `${filteredCandidates.length} / ${candidates.length}` : candidates.length}件）
+          </h2>
+          <div className="relative flex-1 min-w-48">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="名前・スキル・業界・勤務地などで検索..."
+              className="w-full border border-gray-300 rounded-lg pl-8 pr-4 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
         {isLoading ? (
           <p className="text-sm text-gray-400">読み込み中...</p>
         ) : candidates.length === 0 ? (
           <p className="text-sm text-gray-400">まだ登録されていません</p>
+        ) : filteredCandidates.length === 0 ? (
+          <p className="text-sm text-gray-400">「{searchQuery}」に一致する人材が見つかりません</p>
         ) : (
           <div className="space-y-3">
-            {candidates.map((c: Candidate) => {
+            {filteredCandidates.map((c: Candidate) => {
               const raw = getRaw(c)
               const { skillsByCategory: sbc, roles, industries,
                 prefecture, nearestStation, availableRegions,
