@@ -134,8 +134,10 @@ const AI_MODEL = 'gemini-2.5-flash'
 async function generateJSON(
   prompt: string,
   attachments: Attachment[],
+  kind: 'candidate' | 'project' | 'match' = 'project',
   /** 1回目が空/失敗のとき追加で試す回数を含む総試行回数（例: 2 なら最大2回） */
   maxRetries = 2,
+  timeoutMs?: number,
 ): Promise<{ result: unknown; durationMs: number }> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
   const model = genAI.getGenerativeModel({ model: AI_MODEL, generationConfig: { temperature: 0 } })
@@ -148,7 +150,9 @@ async function generateJSON(
   }
   parts.push({ text: prompt })
 
-  const GEMINI_TIMEOUT_MS = 50_000 // 1回あたり50秒でタイムアウト（Supabase 60s制限の前に発火させる）
+  // Make.com 側の HTTP タイムアウト（デフォルト40秒）に引っかかりやすいため、
+  // match は短め、candidate/project は従来通り長めにする
+  const GEMINI_TIMEOUT_MS = timeoutMs ?? (kind === 'match' ? 25_000 : 50_000)
 
   const start = Date.now()
   let lastError: unknown
@@ -165,13 +169,14 @@ async function generateJSON(
       const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
       const result = JSON.parse(cleaned)
 
-      // 空結果の場合はリトライ（candidate / project 両対応）
+      // 空結果の場合はリトライ（candidate / project のみ）。match はスキーマが違うため空判定しない。
       const isCandidateEmpty =
+        kind === 'candidate' &&
         Array.isArray((result as any).skills) &&
         (result as any).skills.length === 0 &&
         !(result as any).summary
 
-      const isProjectEmpty = isProjectAIResultEmpty(result)
+      const isProjectEmpty = kind === 'project' && isProjectAIResultEmpty(result)
 
       const isEmpty = isCandidateEmpty || isProjectEmpty
       if (isEmpty && attempt < maxRetries) {
@@ -189,6 +194,46 @@ async function generateJSON(
     }
   }
   throw lastError
+}
+
+type MatchResult = { score: number; summary: string; duplicateSuspected: boolean }
+
+// 初回リリースは手動運用しやすいように、環境変数で自動マッチを切替可能にする
+// - AUTO_MATCH_ENABLED="true" で有効化（未設定/それ以外は無効）
+const AUTO_MATCH_ENABLED = (Deno.env.get('AUTO_MATCH_ENABLED') ?? '').toLowerCase() === 'true'
+// Make.com 側のタイムアウトに引っかかりやすいので、まずは控えめに
+const AUTO_MATCH_MAX_CANDIDATES = 40
+
+async function matchCandidateToProject(
+  candidateProfile: Record<string, unknown>,
+  projectRequirements: Record<string, unknown>,
+): Promise<MatchResult> {
+  const prompt = `
+あなたはマッチング判定AIです。以下の「人材」と「案件」を読み、マッチング結果を JSON だけで返してください。
+余分な説明文・コードブロックは禁止です。
+
+人材:
+${JSON.stringify(candidateProfile, null, 2)}
+
+案件:
+${JSON.stringify(projectRequirements, null, 2)}
+
+返却 JSON フィールド:
+- score: number（0〜100）
+- summary: string（理由を200字以内）
+- duplicateSuspected: boolean（人材が既存と非常に似ている場合true）
+
+JSON:`.trim()
+
+  // match は軽量・高速優先（長いリトライはMakeのHTTPタイムアウトで無駄になりやすい）
+  const { result } = await generateJSON(prompt, [], 'match', 1, 25_000)
+  const r = result as Partial<MatchResult>
+  const score = typeof r.score === 'number' ? r.score : Number(r.score ?? 0)
+  return {
+    score: Number.isFinite(score) ? score : 0,
+    summary: typeof r.summary === 'string' ? r.summary : String(r.summary ?? ''),
+    duplicateSuspected: Boolean(r.duplicateSuspected),
+  }
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -628,7 +673,7 @@ ${body.slice(0, 3000)}${driveTextSection}
 JSON:`.trim()
 
       console.log(`[STEP5 AI呼び出し開始] elapsed=${elapsed()}`)
-      const { result, durationMs } = await generateJSON(prompt, allAttachments)
+      const { result, durationMs } = await generateJSON(prompt, allAttachments, 'candidate')
       console.log(`[STEP5 AI呼び出し完了] durationMs=${durationMs} elapsed=${elapsed()}`)
       const analyzed = result as {
         name: string; email: string | null; phone: string | null
@@ -797,7 +842,7 @@ ${body.slice(0, 3000)}${driveTextSection}
 JSON:`.trim()
 
       console.log(`[STEP5 AI呼び出し開始 project] elapsed=${elapsed()}`)
-      const { result, durationMs } = await generateJSON(prompt, allAttachments)
+      const { result, durationMs } = await generateJSON(prompt, allAttachments, 'project')
       console.log(`[STEP5 AI呼び出し完了 project] durationMs=${durationMs} elapsed=${elapsed()}`)
 
       const projectObjects = normalizeToProjectObjects(result)
@@ -867,6 +912,108 @@ JSON:`.trim()
 
       if (error) throw new Error(`案件保存エラー: ${error.message}`)
       if (!insertedRows?.length) throw new Error('案件保存後に行が返りませんでした')
+
+      // ── 案件登録後：自動マッチング（①） ─────────────────────────────────
+      // 参画確定(=submissions.status='accepted') の人材は以後のマッチング対象から除外して軽量化する
+      if (AUTO_MATCH_ENABLED) {
+        try {
+          const { data: acceptedRows, error: acceptedErr } = await supabase
+            .from('submissions')
+            .select('candidate_id')
+            .eq('status', 'accepted')
+            .limit(10000)
+
+          if (acceptedErr) throw new Error(`accepted人材取得エラー: ${acceptedErr.message}`)
+          const acceptedCandidateIds = new Set<string>(
+            (acceptedRows ?? [])
+              .map((r) => (r as { candidate_id?: string }).candidate_id)
+              .filter((x): x is string => typeof x === 'string' && x.length > 0),
+          )
+
+          let candidatesTotal = 0
+
+          for (const p of insertedRows as any[]) {
+            const requiredSkills = Array.isArray(p.required_skills) ? p.required_skills.map(String).filter(Boolean) : []
+
+            // まずは「必須スキルが1つでも重なる」人材だけに絞る（無い場合は全体から上限だけ）
+            let candQuery = supabase
+              .from('candidates')
+              .select('id, name, email, phone, skills, experience_years, raw_profile, merged_into')
+              .is('merged_into', null)
+              .limit(AUTO_MATCH_MAX_CANDIDATES)
+
+            if (requiredSkills.length > 0) {
+              // PostgREST: overlaps 演算子
+              candQuery = candQuery.overlaps('skills', requiredSkills)
+            }
+
+            const { data: candidates, error: candErr } = await candQuery
+            if (candErr) throw new Error(`候補者取得エラー: ${candErr.message}`)
+
+            candidatesTotal += (candidates ?? []).length
+
+            const targetCandidates = (candidates ?? [])
+              .map((c) => c as any)
+              .filter((c) => !acceptedCandidateIds.has(String(c.id)))
+
+            console.log(
+              `[AUTO_MATCH] project=${p.id} requiredSkills=${requiredSkills.length} candidatesFetched=${(candidates ?? []).length} accepted_locked=${acceptedCandidateIds.size} target=${targetCandidates.length}`,
+            )
+
+            const niceToHaveSkills = Array.isArray(p?.raw_data?.niceToHaveSkills)
+              ? p.raw_data.niceToHaveSkills.map(String).filter(Boolean)
+              : []
+
+            const projectRequirements: Record<string, unknown> = {
+              title: p.title,
+              client: p.client,
+              description: p.description,
+              requiredSkills,
+              niceToHaveSkills,
+              budgetMin: p.budget_min ?? null,
+              budgetMax: p.budget_max ?? null,
+              workLocation: p.work_location ?? null,
+              remotePolicy: p.remote_policy ?? null,
+              contractType: p.contract_type ?? null,
+              roleSummary: p.role_summary ?? null,
+              industry: p.industry ?? null,
+            }
+
+            for (const c of targetCandidates) {
+              const candidateProfile: Record<string, unknown> = {
+                name: c.name,
+                email: c.email ?? null,
+                phone: c.phone ?? null,
+                skills: c.skills ?? [],
+                experienceYears: c.experience_years ?? null,
+                summary: typeof c.raw_profile?.summary === 'string' ? c.raw_profile.summary : '',
+              }
+
+              const mr = await matchCandidateToProject(candidateProfile, projectRequirements)
+
+              const { error: upsertErr } = await supabase
+                .from('submissions')
+                .upsert(
+                  {
+                    candidate_id: c.id,
+                    project_id: p.id,
+                    match_score: mr.score,
+                    ai_summary: mr.summary,
+                    ai_raw: { duplicateSuspected: mr.duplicateSuspected, autoMatched: true },
+                    created_by: 'make-inbound',
+                  },
+                  { onConflict: 'candidate_id,project_id' },
+                )
+
+              if (upsertErr) console.error('[AUTO_MATCH] submissions upsert error', upsertErr)
+            }
+          }
+
+          console.log(`[AUTO_MATCH] done projects=${insertedRows.length} candidatesFetchedTotal=${candidatesTotal}`)
+        } catch (e) {
+          console.error('[AUTO_MATCH] failed', e)
+        }
+      }
 
       const logResults = await Promise.all(
         insertedRows.map((row, i) =>

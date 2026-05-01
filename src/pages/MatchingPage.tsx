@@ -1,6 +1,6 @@
 import { useState, useMemo, Fragment, type ReactNode } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown } from 'lucide-react'
+import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { fetchCandidates } from '../lib/db/candidates'
 import {
@@ -149,11 +149,13 @@ function ProjectModeRankCard({
   rankIndex,
   onOpenCandidateDetail,
   scoreColor,
+  onDecide,
 }: {
   s: RankedSubmission
   rankIndex: number
   onOpenCandidateDetail?: (candidateId: string) => void
   scoreColor: (score: number) => string
+  onDecide?: (submission: Submission) => void
 }) {
   return (
     <div className="border border-gray-100 rounded-lg p-3 sm:p-4 flex flex-col gap-3 sm:flex-row sm:items-start bg-white min-w-0">
@@ -197,11 +199,29 @@ function ProjectModeRankCard({
           </div>
         </div>
       </div>
-      <div
-        className={`flex sm:flex-col items-center justify-center gap-1 rounded-lg px-4 py-2 sm:py-1 sm:px-3 shrink-0 self-stretch sm:self-start text-center text-xl sm:text-2xl font-bold ${scoreColor(s.match_score)}`}
-      >
-        <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500 sm:hidden">スコア</span>
-        {s.match_score}
+      <div className="shrink-0 self-stretch sm:self-start flex flex-col gap-2">
+        <div
+          className={`flex sm:flex-col items-center justify-center gap-1 rounded-lg px-4 py-2 sm:py-1 sm:px-3 text-center text-xl sm:text-2xl font-bold ${scoreColor(s.match_score)}`}
+        >
+          <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500 sm:hidden">スコア</span>
+          {s.match_score}
+        </div>
+
+        {s.status === 'accepted' ? (
+          <span className="inline-flex items-center justify-center gap-1 rounded-md bg-green-50 text-green-700 text-xs font-medium px-2 py-1">
+            <CheckCircle size={14} />参画確定
+          </span>
+        ) : onDecide ? (
+          <button
+            type="button"
+            onClick={() => onDecide(s)}
+            className="inline-flex items-center justify-center gap-1 rounded-md bg-green-600 text-white text-xs font-semibold px-2.5 py-1.5 hover:bg-green-700 active:bg-green-800 transition-colors"
+            title="この人で参画確定（同一人材の他案件提案は不採用にします）"
+          >
+            <CheckCircle size={14} />
+            この人に決定
+          </button>
+        ) : null}
       </div>
     </div>
   )
@@ -213,12 +233,14 @@ function CandidateModeRankCard({
   p,
   onOpenProjectDetail,
   scoreColor,
+  onDecide,
 }: {
   s: Submission
   rankIndex: number
   p: Project | null
   onOpenProjectDetail?: (projectId: string) => void
   scoreColor: (score: number) => string
+  onDecide?: (submission: Submission) => void
 }) {
   return (
     <div className="border border-gray-100 rounded-lg p-3 sm:p-4 flex flex-col gap-3 sm:flex-row sm:items-start bg-white min-w-0">
@@ -261,11 +283,29 @@ function CandidateModeRankCard({
           </div>
         </div>
       </div>
-      <div
-        className={`flex sm:flex-col items-center justify-center gap-1 rounded-lg px-4 py-2 sm:py-1 sm:px-3 shrink-0 self-stretch sm:self-start text-center text-xl sm:text-2xl font-bold ${scoreColor(s.match_score)}`}
-      >
-        <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500 sm:hidden">スコア</span>
-        {s.match_score}
+      <div className="shrink-0 self-stretch sm:self-start flex flex-col gap-2">
+        <div
+          className={`flex sm:flex-col items-center justify-center gap-1 rounded-lg px-4 py-2 sm:py-1 sm:px-3 text-center text-xl sm:text-2xl font-bold ${scoreColor(s.match_score)}`}
+        >
+          <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500 sm:hidden">スコア</span>
+          {s.match_score}
+        </div>
+
+        {s.status === 'accepted' ? (
+          <span className="inline-flex items-center justify-center gap-1 rounded-md bg-green-50 text-green-700 text-xs font-medium px-2 py-1">
+            <CheckCircle size={14} />参画確定
+          </span>
+        ) : onDecide ? (
+          <button
+            type="button"
+            onClick={() => onDecide(s)}
+            className="inline-flex items-center justify-center gap-1 rounded-md bg-green-600 text-white text-xs font-semibold px-2.5 py-1.5 hover:bg-green-700 active:bg-green-800 transition-colors"
+            title="この案件で参画確定（同一人材の他案件提案は不採用にします）"
+          >
+            <CheckCircle size={14} />
+            この案件に決定
+          </button>
+        ) : null}
       </div>
     </div>
   )
@@ -346,6 +386,26 @@ export function MatchingPage({
     queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-candidates'] })
     queryClient.invalidateQueries({ queryKey: ['matching-support-projects'] })
   }
+
+  const decideMutation = useMutation({
+    mutationFn: async (submission: Submission) => {
+      const { error: e1 } = await supabase.from('submissions').update({ status: 'accepted' }).eq('id', submission.id)
+      if (e1) throw new Error(e1.message)
+
+      // 二重決定防止：同一人材の他案件提案は不採用にする
+      const { error: e2 } = await supabase
+        .from('submissions')
+        .update({ status: 'rejected' })
+        .eq('candidate_id', submission.candidate_id)
+        .neq('id', submission.id)
+      if (e2) throw new Error(e2.message)
+    },
+    onSuccess: () => {
+      invalidateMatchingQueries()
+      setMessage({ type: 'success', text: '参画確定にしました（同一人材の他案件は不採用に更新）' })
+    },
+    onError: (e) => setMessage({ type: 'error', text: String(e) }),
+  })
 
   const matchByProjectMutation = useMutation({
     mutationFn: async (projectId: string) => {
@@ -729,6 +789,7 @@ export function MatchingPage({
                                         rankIndex={i}
                                         onOpenCandidateDetail={onOpenCandidateDetail}
                                         scoreColor={scoreColor}
+                                        onDecide={(sub) => decideMutation.mutate(sub)}
                                       />
                                     ))}
                                     <RankingRestAccordion
@@ -742,6 +803,7 @@ export function MatchingPage({
                                           rankIndex={RANK_HEAD + idx}
                                           onOpenCandidateDetail={onOpenCandidateDetail}
                                           scoreColor={scoreColor}
+                                          onDecide={(sub) => decideMutation.mutate(sub)}
                                         />
                                       ))}
                                     </RankingRestAccordion>
@@ -876,6 +938,7 @@ export function MatchingPage({
                                           p={p}
                                           onOpenProjectDetail={onOpenProjectDetail}
                                           scoreColor={scoreColor}
+                                          onDecide={(sub) => decideMutation.mutate(sub)}
                                         />
                                       )
                                     })}
@@ -893,6 +956,7 @@ export function MatchingPage({
                                             p={p}
                                             onOpenProjectDetail={onOpenProjectDetail}
                                             scoreColor={scoreColor}
+                                            onDecide={(sub) => decideMutation.mutate(sub)}
                                           />
                                         )
                                       })}
