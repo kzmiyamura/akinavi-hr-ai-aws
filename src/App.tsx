@@ -10,36 +10,78 @@ import { MatchingPage } from './pages/MatchingPage'
 import { HistoryPage } from './pages/HistoryPage'
 import { DuplicatePage } from './pages/DuplicatePage'
 import { MonitorPage } from './pages/MonitorPage'
+import { CandidateDetailPage } from './pages/CandidateDetailPage'
+import { ProjectDetailPage } from './pages/ProjectDetailPage'
 
 const queryClient = new QueryClient()
 
+type DetailView =
+  | { kind: 'candidate'; id: string }
+  | { kind: 'project'; id: string }
+
 function AppInner() {
   const { nickname, saveNickname, clearNickname } = useNickname()
-  const [currentPage, setCurrentPage] = useState<Page>('candidates')
+  const [tabPage, setTabPage] = useState<Page>('candidates')
+  const [detail, setDetail] = useState<DetailView | null>(null)
 
   if (!nickname) {
     return <NicknameModal onSave={saveNickname} />
   }
 
-  const renderPage = () => {
-    switch (currentPage) {
-      case 'candidates': return <CandidatePage nickname={nickname} />
-      case 'projects':   return <ProjectPage nickname={nickname} />
-      case 'matching':   return <MatchingPage nickname={nickname} />
-      case 'history':    return <HistoryPage />
-      case 'duplicates': return <DuplicatePage />
-      case 'monitor':    return <MonitorPage />
+  function handleNavigate(page: Page) {
+    setTabPage(page)
+    setDetail(null)
+  }
+
+  function openCandidateDetail(id: string) {
+    setDetail({ kind: 'candidate', id })
+  }
+
+  function openProjectDetail(id: string) {
+    setDetail({ kind: 'project', id })
+  }
+
+  const renderMain = () => {
+    switch (tabPage) {
+      case 'candidates':
+        return <CandidatePage nickname={nickname} onOpenCandidateDetail={openCandidateDetail} />
+      case 'projects':
+        return <ProjectPage nickname={nickname} onOpenProjectDetail={openProjectDetail} />
+      case 'matching':
+        return (
+          <MatchingPage
+            nickname={nickname}
+            onOpenCandidateDetail={openCandidateDetail}
+            onOpenProjectDetail={openProjectDetail}
+          />
+        )
+      case 'history':
+        return <HistoryPage />
+      case 'duplicates':
+        return <DuplicatePage />
+      case 'monitor':
+        return <MonitorPage />
     }
   }
 
   return (
     <Layout
-      currentPage={currentPage}
-      onNavigate={setCurrentPage}
+      activeTab={tabPage}
+      onNavigate={handleNavigate}
       nickname={nickname}
       onClearNickname={clearNickname}
     >
-      {renderPage()}
+      {detail?.kind === 'candidate' ? (
+        <CandidateDetailPage
+          candidateId={detail.id}
+          nickname={nickname}
+          onBack={() => setDetail(null)}
+        />
+      ) : detail?.kind === 'project' ? (
+        <ProjectDetailPage projectId={detail.id} nickname={nickname} onBack={() => setDetail(null)} />
+      ) : (
+        renderMain()
+      )}
     </Layout>
   )
 }

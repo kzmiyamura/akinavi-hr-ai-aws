@@ -67,6 +67,18 @@ export async function upsertCandidate(input: UpsertCandidateInput): Promise<Cand
   }
 }
 
+/** IDで1件取得（詳細画面用） */
+export async function fetchCandidateById(id: string): Promise<Candidate | null> {
+  const { data, error } = await supabase
+    .from('candidates')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
+  return (data ?? null) as Candidate | null
+}
+
 /** 全候補者を取得（マージ済みを除外） */
 export async function fetchCandidates(): Promise<Candidate[]> {
   const { data, error } = await supabase

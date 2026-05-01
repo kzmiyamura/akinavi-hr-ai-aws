@@ -124,6 +124,162 @@ function splitComma(s: string): string[] {
   return s.split(',').map(x => x.trim()).filter(Boolean)
 }
 
+// ---- プロフィール表示（一覧カード・詳細画面で共用） ----
+export function CandidateProfileFields({
+  c,
+  isExpanded,
+  onToggleExpand,
+  detailMode = false,
+}: {
+  c: Candidate
+  isExpanded: boolean
+  onToggleExpand?: () => void
+  /** true のとき常に全表示（詳細画面） */
+  detailMode?: boolean
+}) {
+  const raw = getRaw(c)
+  const { skillsByCategory: sbc, roles, industries,
+    prefecture, nearestStation, availableRegions,
+    currentWorkLocation, remoteAvailable,
+    from: mailFrom, subject: mailSubject } = raw
+
+  const totalSkills = sbc
+    ? Object.values(sbc).reduce((sum, arr) => sum + (arr?.length ?? 0), 0)
+    : (c.skills as string[]).length
+  const needsToggle = !detailMode && totalSkills > EXPAND_THRESHOLD
+  const showAll = detailMode || isExpanded
+
+  const hasLocation = prefecture || nearestStation || currentWorkLocation ||
+    (availableRegions && availableRegions.length > 0) || remoteAvailable
+
+  return (
+    <div className="flex-1 min-w-0">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="font-medium text-gray-800 text-sm">{c.name}</span>
+        {c.duplicate_flag && (
+          <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
+        )}
+      </div>
+      <p className="text-xs text-gray-400 mt-0.5">
+        {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年
+      </p>
+
+      {hasLocation && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5">
+          <span className="flex items-center gap-1 text-xs text-gray-400">
+            <MapPin size={11} />
+            {[currentWorkLocation ?? prefecture, nearestStation].filter(Boolean).join(' / ')}
+          </span>
+          {availableRegions && availableRegions.length > 0 && (
+            <span className="text-xs text-gray-400">
+              対応: {availableRegions.join('・')}
+            </span>
+          )}
+          {remoteAvailable && (
+            <span className="flex items-center gap-1 text-xs bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">
+              <Wifi size={10} />リモート可
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="mt-1.5 border-t border-gray-50 pt-1.5 space-y-0.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+          <span className="flex items-center gap-1 text-xs text-gray-400 shrink-0">
+            <Mail size={10} />
+            受信: {c.created_at ? formatDate(c.created_at) : '—'}
+          </span>
+          {mailFrom && (
+            <span className="text-xs text-gray-400 truncate max-w-xs" title={mailFrom}>
+              転送: {mailFrom}
+            </span>
+          )}
+          {mailSubject && (
+            <span className="text-xs text-gray-400 truncate max-w-xs" title={mailSubject}>
+              件名: {mailSubject}
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-gray-300">
+          最終更新: {formatDate(c.updated_at)}
+          {c.updated_by ? ` by ${c.updated_by}` : ''}
+        </div>
+      </div>
+
+      <div className="space-y-1 mt-1.5">
+        {(roles ?? []).length > 0 && (
+          <div className="flex flex-wrap gap-1 items-center">
+            <span className="text-xs text-gray-400 w-12 shrink-0">役割</span>
+            {(roles ?? []).map((r) => (
+              <span key={r} className="text-xs bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5">{r}</span>
+            ))}
+          </div>
+        )}
+        {(industries ?? []).length > 0 && (
+          <div className="flex flex-wrap gap-1 items-center">
+            <span className="text-xs text-gray-400 w-12 shrink-0">業界</span>
+            {(showAll ? industries! : (industries ?? []).slice(0, COLLAPSED_PER_CATEGORY)).map((i) => (
+              <span key={i} className="text-xs bg-teal-50 text-teal-700 rounded px-1.5 py-0.5">{i}</span>
+            ))}
+            {!showAll && (industries ?? []).length > COLLAPSED_PER_CATEGORY && (
+              <span className="text-xs text-gray-400">+{(industries ?? []).length - COLLAPSED_PER_CATEGORY}</span>
+            )}
+          </div>
+        )}
+
+        {sbc ? (
+          (Object.keys(CATEGORY_STYLE) as (keyof SkillsByCategory)[]).map((key) => {
+            const items = sbc[key]
+            if (!items || items.length === 0) return null
+            const { label, badge } = CATEGORY_STYLE[key]
+            const shown = showAll ? items : items.slice(0, COLLAPSED_PER_CATEGORY)
+            const hidden = items.length - COLLAPSED_PER_CATEGORY
+            return (
+              <div key={key} className="flex flex-wrap gap-1 items-center">
+                <span className="text-xs text-gray-400 w-12 shrink-0">{label}</span>
+                {shown.map((s) => (
+                  <span key={s} className={`text-xs rounded px-1.5 py-0.5 ${badge}`}>{s}</span>
+                ))}
+                {!showAll && hidden > 0 && (
+                  <span className="text-xs text-gray-400">+{hidden}</span>
+                )}
+              </div>
+            )
+          })
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {(showAll
+              ? (c.skills as string[])
+              : (c.skills as string[]).slice(0, COLLAPSED_PER_CATEGORY)
+            ).map((s) => (
+              <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
+            ))}
+            {!showAll && (c.skills as string[]).length > COLLAPSED_PER_CATEGORY && (
+              <span className="text-xs text-gray-400">+{(c.skills as string[]).length - COLLAPSED_PER_CATEGORY}</span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {needsToggle && onToggleExpand && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleExpand()
+          }}
+          className="mt-2 flex items-center gap-1 text-xs text-blue-500 hover:text-blue-700 transition-colors"
+        >
+          {isExpanded
+            ? <><ChevronUp size={13} />閉じる</>
+            : <><ChevronDown size={13} />すべて表示（{totalSkills}件）</>
+          }
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ---- 編集モーダル ----
 interface EditModalProps {
   candidate: Candidate
@@ -132,7 +288,7 @@ interface EditModalProps {
   onSaved: () => void
 }
 
-function EditModal({ candidate, nickname, onClose, onSaved }: EditModalProps) {
+export function CandidateEditModal({ candidate, nickname, onClose, onSaved }: EditModalProps) {
   const [form, setForm] = useState<EditForm>(() => toEditForm(candidate))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -346,9 +502,13 @@ function EditModal({ candidate, nickname, onClose, onSaved }: EditModalProps) {
 }
 
 // ---- メインページ ----
-interface Props { nickname: string }
+interface Props {
+  nickname: string
+  /** カードクリックで人材詳細へ（未指定時は遷移なし） */
+  onOpenCandidateDetail?: (candidateId: string) => void
+}
 
-export function CandidatePage({ nickname }: Props) {
+export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -433,7 +593,7 @@ export function CandidatePage({ nickname }: Props) {
     <div className="space-y-6">
       {/* 編集モーダル */}
       {editingCandidate && (
-        <EditModal
+        <CandidateEditModal
           candidate={editingCandidate}
           nickname={nickname}
           onClose={() => setEditingCandidate(null)}
@@ -511,164 +671,52 @@ export function CandidatePage({ nickname }: Props) {
         ) : (
           <div className="space-y-3">
             {filteredCandidates.map((c: Candidate) => {
-              const raw = getRaw(c)
-              const { skillsByCategory: sbc, roles, industries,
-                prefecture, nearestStation, availableRegions,
-                currentWorkLocation, remoteAvailable,
-                from: mailFrom, subject: mailSubject } = raw
               const isExpanded = expandedIds.has(c.id)
-
-              // 全スキル合計数を計算してトグル表示要否を判断
-              const totalSkills = sbc
-                ? Object.values(sbc).reduce((sum, arr) => sum + (arr?.length ?? 0), 0)
-                : (c.skills as string[]).length
-              const needsToggle = totalSkills > EXPAND_THRESHOLD
-
-              // 勤務地情報の有無
-              const hasLocation = prefecture || nearestStation || currentWorkLocation ||
-                (availableRegions && availableRegions.length > 0) || remoteAvailable
-
+              const openDetail = onOpenCandidateDetail
               return (
-                <div key={c.id} className="border border-gray-100 rounded-lg p-4">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      {/* ヘッダー */}
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-gray-800 text-sm">{c.name}</span>
-                        {c.duplicate_flag && (
-                          <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年
-                      </p>
-
-                      {/* 勤務地情報 */}
-                      {hasLocation && (
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5">
-                          <span className="flex items-center gap-1 text-xs text-gray-400">
-                            <MapPin size={11} />
-                            {[currentWorkLocation ?? prefecture, nearestStation].filter(Boolean).join(' / ')}
-                          </span>
-                          {availableRegions && availableRegions.length > 0 && (
-                            <span className="text-xs text-gray-400">
-                              対応: {availableRegions.join('・')}
-                            </span>
-                          )}
-                          {remoteAvailable && (
-                            <span className="flex items-center gap-1 text-xs bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">
-                              <Wifi size={10} />リモート可
-                            </span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* 日時・メール転送情報 */}
-                      <div className="mt-1.5 border-t border-gray-50 pt-1.5 space-y-0.5">
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                          <span className="flex items-center gap-1 text-xs text-gray-400 shrink-0">
-                            <Mail size={10} />
-                            受信: {c.created_at ? formatDate(c.created_at) : '—'}
-                          </span>
-                          {mailFrom && (
-                            <span className="text-xs text-gray-400 truncate max-w-xs" title={mailFrom}>
-                              転送: {mailFrom}
-                            </span>
-                          )}
-                          {mailSubject && (
-                            <span className="text-xs text-gray-400 truncate max-w-xs" title={mailSubject}>
-                              件名: {mailSubject}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-gray-300">
-                          最終更新: {formatDate(c.updated_at)}
-                          {c.updated_by ? ` by ${c.updated_by}` : ''}
-                        </div>
-                      </div>
-
-                      {/* スキル・役割・業界 */}
-                      <div className="space-y-1 mt-1.5">
-                        {(roles ?? []).length > 0 && (
-                          <div className="flex flex-wrap gap-1 items-center">
-                            <span className="text-xs text-gray-400 w-12 shrink-0">役割</span>
-                            {(roles ?? []).map((r) => (
-                              <span key={r} className="text-xs bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5">{r}</span>
-                            ))}
-                          </div>
-                        )}
-                        {(industries ?? []).length > 0 && (
-                          <div className="flex flex-wrap gap-1 items-center">
-                            <span className="text-xs text-gray-400 w-12 shrink-0">業界</span>
-                            {(isExpanded ? industries! : (industries ?? []).slice(0, COLLAPSED_PER_CATEGORY)).map((i) => (
-                              <span key={i} className="text-xs bg-teal-50 text-teal-700 rounded px-1.5 py-0.5">{i}</span>
-                            ))}
-                            {!isExpanded && (industries ?? []).length > COLLAPSED_PER_CATEGORY && (
-                              <span className="text-xs text-gray-400">+{(industries ?? []).length - COLLAPSED_PER_CATEGORY}</span>
-                            )}
-                          </div>
-                        )}
-
-                        {sbc ? (
-                          (Object.keys(CATEGORY_STYLE) as (keyof SkillsByCategory)[]).map((key) => {
-                            const items = sbc[key]
-                            if (!items || items.length === 0) return null
-                            const { label, badge } = CATEGORY_STYLE[key]
-                            const shown = isExpanded ? items : items.slice(0, COLLAPSED_PER_CATEGORY)
-                            const hidden = items.length - COLLAPSED_PER_CATEGORY
-                            return (
-                              <div key={key} className="flex flex-wrap gap-1 items-center">
-                                <span className="text-xs text-gray-400 w-12 shrink-0">{label}</span>
-                                {shown.map((s) => (
-                                  <span key={s} className={`text-xs rounded px-1.5 py-0.5 ${badge}`}>{s}</span>
-                                ))}
-                                {!isExpanded && hidden > 0 && (
-                                  <span className="text-xs text-gray-400">+{hidden}</span>
-                                )}
-                              </div>
-                            )
-                          })
-                        ) : (
-                          // 旧レコード用フォールバック
-                          <div className="flex flex-wrap gap-1">
-                            {(isExpanded
-                              ? (c.skills as string[])
-                              : (c.skills as string[]).slice(0, COLLAPSED_PER_CATEGORY)
-                            ).map((s) => (
-                              <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
-                            ))}
-                            {!isExpanded && (c.skills as string[]).length > COLLAPSED_PER_CATEGORY && (
-                              <span className="text-xs text-gray-400">+{(c.skills as string[]).length - COLLAPSED_PER_CATEGORY}</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* 展開/折りたたみボタン */}
-                      {needsToggle && (
-                        <button
-                          onClick={() => toggleExpand(c.id)}
-                          className="mt-2 flex items-center gap-1 text-xs text-blue-500 hover:text-blue-700 transition-colors"
-                        >
-                          {isExpanded
-                            ? <><ChevronUp size={13} />閉じる</>
-                            : <><ChevronDown size={13} />すべて表示（{totalSkills}件）</>
+                <div
+                  key={c.id}
+                  role={openDetail ? 'button' : undefined}
+                  tabIndex={openDetail ? 0 : undefined}
+                  onClick={openDetail ? () => openDetail(c.id) : undefined}
+                  onKeyDown={
+                    openDetail
+                      ? (e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            openDetail(c.id)
                           }
-                        </button>
-                      )}
-                    </div>
+                        }
+                      : undefined
+                  }
+                  className={`border border-gray-100 rounded-lg p-4 ${openDetail ? 'cursor-pointer hover:border-blue-200 hover:bg-blue-50/30 transition-colors' : ''}`}
+                >
+                  <div className="flex items-start justify-between">
+                    <CandidateProfileFields
+                      c={c}
+                      isExpanded={isExpanded}
+                      onToggleExpand={() => toggleExpand(c.id)}
+                    />
 
                     <div className="flex items-center gap-2 ml-4 shrink-0">
                       <span className="text-xs text-gray-300">{c.created_by}</span>
                       <button
-                        onClick={() => setEditingCandidate(c)}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setEditingCandidate(c)
+                        }}
                         className="text-gray-300 hover:text-blue-500 transition-colors"
                         title="編集"
                       >
                         <Pencil size={15} />
                       </button>
                       <button
-                        onClick={() => handleDelete(c)}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDelete(c)
+                        }}
                         disabled={deletingId === c.id}
                         className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-50"
                         title="削除"

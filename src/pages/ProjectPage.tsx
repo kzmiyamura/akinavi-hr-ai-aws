@@ -12,7 +12,10 @@ import {
 } from '../lib/db/projects'
 import type { Project } from '../lib/db/projects'
 
-interface Props { nickname: string }
+interface Props {
+  nickname: string
+  onOpenProjectDetail?: (projectId: string) => void
+}
 
 function formatDate(iso: string) {
   const d = new Date(iso)
@@ -75,6 +78,161 @@ function toEditForm(p: Project): EditForm {
   }
 }
 
+export function ProjectProfileFields({
+  p,
+  isExpanded,
+  onToggleExpand,
+  detailMode = false,
+}: {
+  p: Project
+  isExpanded: boolean
+  onToggleExpand?: () => void
+  detailMode?: boolean
+}) {
+  const rawNice = (p.raw_data as { niceToHaveSkills?: unknown })?.niceToHaveSkills
+  const nice = Array.isArray(rawNice) ? rawNice.map(String).filter(Boolean) : []
+  const required = (p.required_skills as string[]) ?? []
+  const raw = (p.raw_data ?? {}) as { from?: unknown; subject?: unknown }
+  const mailFrom = typeof raw.from === 'string' ? raw.from : null
+  const mailSubject = typeof raw.subject === 'string' ? raw.subject : null
+  const needsToggle = !detailMode && ((required.length + nice.length) > 12 || (p.description?.length ?? 0) > 240)
+  const hasLocation = Boolean(p.work_location) || Boolean(p.remote_policy)
+  const showAll = detailMode || isExpanded
+
+  const statusLabel: Record<Project['status'], string> = {
+    open: '募集中',
+    filled: '充足',
+    closed: 'クローズ',
+  }
+  const statusColor: Record<Project['status'], string> = {
+    open: 'bg-green-100 text-green-700',
+    filled: 'bg-gray-100 text-gray-500',
+    closed: 'bg-red-100 text-red-500',
+  }
+
+  return (
+    <div className="flex-1 min-w-0 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="font-medium text-gray-800 text-sm">{p.title}</span>
+        <span className={`text-xs rounded px-2 py-0.5 ${statusColor[p.status]}`}>
+          {statusLabel[p.status]}
+        </span>
+      </div>
+      <div className="text-xs text-gray-400 flex flex-wrap gap-x-3 gap-y-0.5">
+        <span>{p.client ?? 'クライアント不明'}</span>
+        {p.created_at && <span>登録: {formatDate(p.created_at)}</span>}
+        <span className="text-gray-300">{p.created_by}</span>
+      </div>
+
+      {needsToggle && onToggleExpand && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleExpand()
+          }}
+          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
+          title={isExpanded ? '折りたたむ' : '展開'}
+        >
+          {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          {isExpanded ? '閉じる' : 'もっと'}
+        </button>
+      )}
+
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500">
+        {p.industry && <span>業界: {p.industry}</span>}
+        {p.contract_type && <span>{p.contract_type}</span>}
+        {p.headcount != null && <span>募集: {p.headcount}名</span>}
+        {p.budget_min != null && (
+          <span>予算: {p.budget_min}〜{p.budget_max ?? '?'}万</span>
+        )}
+        {p.start_date && <span>開始: {p.start_date}</span>}
+        {p.end_date && <span>終了: {p.end_date}</span>}
+        {p.workload && <span>稼働: {p.workload}</span>}
+        {(p.settlement_min != null || p.settlement_max != null) && (
+          <span>
+            精算: {p.settlement_min ?? '?'}〜{p.settlement_max ?? '?'}h
+          </span>
+        )}
+        {p.role_summary && <span>役割: {p.role_summary}</span>}
+      </div>
+
+      {hasLocation && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1">
+          {p.work_location && (
+            <span className="flex items-center gap-1 text-xs text-gray-400">
+              <MapPin size={11} />
+              {p.work_location}
+            </span>
+          )}
+          {p.remote_policy && (
+            <span className="flex items-center gap-1 text-xs bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">
+              <Wifi size={10} />
+              {p.remote_policy}
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="mt-1.5 border-t border-gray-50 pt-1.5 space-y-0.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+          <span className="flex items-center gap-1 text-xs text-gray-400 shrink-0">
+            <Mail size={10} />
+            受信: {p.created_at ? formatDate(p.created_at) : '—'}
+          </span>
+          {mailFrom && (
+            <span className="text-xs text-gray-400 truncate max-w-xs" title={mailFrom}>
+              転送: {mailFrom}
+            </span>
+          )}
+          {mailSubject && (
+            <span className="text-xs text-gray-400 truncate max-w-xs" title={mailSubject}>
+              件名: {mailSubject}
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-gray-300">
+          最終更新: {formatDate(p.updated_at)}
+          {p.updated_by ? ` by ${p.updated_by}` : ''}
+        </div>
+      </div>
+
+      {p.description && (
+        <p className="text-xs text-gray-500 leading-relaxed whitespace-pre-wrap">
+          {showAll ? p.description : (p.description.length > 240 ? `${p.description.slice(0, 240)}…` : p.description)}
+        </p>
+      )}
+
+      {(required.length > 0 || nice.length > 0) && (
+        <div className="space-y-1">
+          {required.length > 0 && (
+            <div className="flex flex-wrap gap-1 items-center">
+              <span className="text-xs text-gray-400 w-12 shrink-0">必須</span>
+              {(showAll ? required : required.slice(0, 10)).map((s) => (
+                <span key={s} className="text-xs bg-purple-50 text-purple-700 rounded px-1.5 py-0.5">{s}</span>
+              ))}
+              {!showAll && required.length > 10 && (
+                <span className="text-xs text-gray-400">+{required.length - 10}</span>
+              )}
+            </div>
+          )}
+          {nice.length > 0 && (
+            <div className="flex flex-wrap gap-1 items-center">
+              <span className="text-xs text-gray-400 w-12 shrink-0">尚可</span>
+              {(showAll ? nice : nice.slice(0, 10)).map((s) => (
+                <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
+              ))}
+              {!showAll && nice.length > 10 && (
+                <span className="text-xs text-gray-400">+{nice.length - 10}</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface EditModalProps {
   project: Project
   nickname: string
@@ -82,7 +240,7 @@ interface EditModalProps {
   onSaved: () => void
 }
 
-function EditModal({ project, nickname, onClose, onSaved }: EditModalProps) {
+export function ProjectEditModal({ project, nickname, onClose, onSaved }: EditModalProps) {
   const [form, setForm] = useState<EditForm>(() => toEditForm(project))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -265,7 +423,7 @@ function EditModal({ project, nickname, onClose, onSaved }: EditModalProps) {
   )
 }
 
-export function ProjectPage({ nickname }: Props) {
+export function ProjectPage({ nickname, onOpenProjectDetail }: Props) {
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -320,17 +478,6 @@ export function ProjectPage({ nickname }: Props) {
     },
   })
 
-  const statusLabel: Record<Project['status'], string> = {
-    open:   '募集中',
-    filled: '充足',
-    closed: 'クローズ',
-  }
-  const statusColor: Record<Project['status'], string> = {
-    open:   'bg-green-100 text-green-700',
-    filled: 'bg-gray-100 text-gray-500',
-    closed: 'bg-red-100 text-red-500',
-  }
-
   const filteredProjects = projects.filter((p: Project) => {
     if (!searchQuery.trim()) return true
     const q = searchQuery.toLowerCase()
@@ -356,7 +503,7 @@ export function ProjectPage({ nickname }: Props) {
     <div className="space-y-6">
       {/* 編集モーダル */}
       {editingProject && (
-        <EditModal
+        <ProjectEditModal
           project={editingProject}
           nickname={nickname}
           onClose={() => setEditingProject(null)}
@@ -432,52 +579,50 @@ export function ProjectPage({ nickname }: Props) {
           <div className="space-y-3">
             {filteredProjects.map((p: Project) => {
               const isExpanded = expandedIds.has(p.id)
-              const rawNice = (p.raw_data as { niceToHaveSkills?: unknown })?.niceToHaveSkills
-              const nice = Array.isArray(rawNice) ? rawNice.map(String).filter(Boolean) : []
-              const required = (p.required_skills as string[]) ?? []
-              const raw = (p.raw_data ?? {}) as { from?: unknown; subject?: unknown }
-              const mailFrom = typeof raw.from === 'string' ? raw.from : null
-              const mailSubject = typeof raw.subject === 'string' ? raw.subject : null
-              const needsToggle = (required.length + nice.length) > 12 || (p.description?.length ?? 0) > 240
-              const hasLocation = Boolean(p.work_location) || Boolean(p.remote_policy)
-
+              const openDetail = onOpenProjectDetail
               return (
-                <div key={p.id} className="border border-gray-100 rounded-lg p-4 space-y-2">
+                <div
+                  key={p.id}
+                  role={openDetail ? 'button' : undefined}
+                  tabIndex={openDetail ? 0 : undefined}
+                  onClick={openDetail ? () => openDetail(p.id) : undefined}
+                  onKeyDown={
+                    openDetail
+                      ? (e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            openDetail(p.id)
+                          }
+                        }
+                      : undefined
+                  }
+                  className={`border border-gray-100 rounded-lg p-4 space-y-2 ${openDetail ? 'cursor-pointer hover:border-blue-200 hover:bg-blue-50/30 transition-colors' : ''}`}
+                >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-gray-800 text-sm">{p.title}</span>
-                        <span className={`text-xs rounded px-2 py-0.5 ${statusColor[p.status]}`}>
-                          {statusLabel[p.status]}
-                        </span>
-                      </div>
-                      <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
-                        <span>{p.client ?? 'クライアント不明'}</span>
-                        {p.created_at && <span>登録: {formatDate(p.created_at)}</span>}
-                        <span className="text-gray-300">{p.created_by}</span>
-                      </div>
-                    </div>
+                    <ProjectProfileFields
+                      p={p}
+                      isExpanded={isExpanded}
+                      onToggleExpand={() => toggleExpand(p.id)}
+                    />
 
                     <div className="flex items-center gap-2 shrink-0">
-                      {needsToggle && (
-                        <button
-                          onClick={() => toggleExpand(p.id)}
-                          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
-                          title={isExpanded ? '折りたたむ' : '展開'}
-                        >
-                          {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                          {isExpanded ? '閉じる' : 'もっと'}
-                        </button>
-                      )}
                       <button
-                        onClick={() => setEditingProject(p)}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setEditingProject(p)
+                        }}
                         className="p-1.5 rounded hover:bg-gray-50 text-gray-500 hover:text-blue-600"
                         title="編集"
                       >
                         <Pencil size={15} />
                       </button>
                       <button
-                        onClick={() => handleDelete(p)}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDelete(p)
+                        }}
                         disabled={deletingId === p.id}
                         className="p-1.5 rounded hover:bg-gray-50 text-gray-500 hover:text-red-600 disabled:opacity-50 disabled:cursor-not-allowed"
                         title="削除"
@@ -486,103 +631,6 @@ export function ProjectPage({ nickname }: Props) {
                       </button>
                     </div>
                   </div>
-
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500">
-                    {p.industry && <span>業界: {p.industry}</span>}
-                    {p.contract_type && <span>{p.contract_type}</span>}
-                    {p.headcount != null && <span>募集: {p.headcount}名</span>}
-                    {p.budget_min != null && (
-                      <span>予算: {p.budget_min}〜{p.budget_max ?? '?'}万</span>
-                    )}
-                    {p.start_date && (
-                      <span>開始: {p.start_date}</span>
-                    )}
-                    {p.end_date && (
-                      <span>終了: {p.end_date}</span>
-                    )}
-                    {p.workload && <span>稼働: {p.workload}</span>}
-                    {(p.settlement_min != null || p.settlement_max != null) && (
-                      <span>
-                        精算: {p.settlement_min ?? '?'}〜{p.settlement_max ?? '?'}h
-                      </span>
-                    )}
-                    {p.role_summary && <span>役割: {p.role_summary}</span>}
-                  </div>
-
-                  {/* 勤務地情報（人材カードに合わせた見た目） */}
-                  {hasLocation && (
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1">
-                      {p.work_location && (
-                        <span className="flex items-center gap-1 text-xs text-gray-400">
-                          <MapPin size={11} />
-                          {p.work_location}
-                        </span>
-                      )}
-                      {p.remote_policy && (
-                        <span className="flex items-center gap-1 text-xs bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">
-                          <Wifi size={10} />
-                          {p.remote_policy}
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* 日時・メール転送情報 */}
-                  <div className="mt-1.5 border-t border-gray-50 pt-1.5 space-y-0.5">
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                      <span className="flex items-center gap-1 text-xs text-gray-400 shrink-0">
-                        <Mail size={10} />
-                        受信: {p.created_at ? formatDate(p.created_at) : '—'}
-                      </span>
-                      {mailFrom && (
-                        <span className="text-xs text-gray-400 truncate max-w-xs" title={mailFrom}>
-                          転送: {mailFrom}
-                        </span>
-                      )}
-                      {mailSubject && (
-                        <span className="text-xs text-gray-400 truncate max-w-xs" title={mailSubject}>
-                          件名: {mailSubject}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-gray-300">
-                      最終更新: {formatDate(p.updated_at)}
-                      {p.updated_by ? ` by ${p.updated_by}` : ''}
-                    </div>
-                  </div>
-
-                  {p.description && (
-                    <p className="text-xs text-gray-500 leading-relaxed whitespace-pre-wrap">
-                      {isExpanded ? p.description : (p.description.length > 240 ? `${p.description.slice(0, 240)}…` : p.description)}
-                    </p>
-                  )}
-
-                  {(required.length > 0 || nice.length > 0) && (
-                    <div className="space-y-1">
-                      {required.length > 0 && (
-                        <div className="flex flex-wrap gap-1 items-center">
-                          <span className="text-xs text-gray-400 w-12 shrink-0">必須</span>
-                          {(isExpanded ? required : required.slice(0, 10)).map((s) => (
-                            <span key={s} className="text-xs bg-purple-50 text-purple-700 rounded px-1.5 py-0.5">{s}</span>
-                          ))}
-                          {!isExpanded && required.length > 10 && (
-                            <span className="text-xs text-gray-400">+{required.length - 10}</span>
-                          )}
-                        </div>
-                      )}
-                      {nice.length > 0 && (
-                        <div className="flex flex-wrap gap-1 items-center">
-                          <span className="text-xs text-gray-400 w-12 shrink-0">尚可</span>
-                          {(isExpanded ? nice : nice.slice(0, 10)).map((s) => (
-                            <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
-                          ))}
-                          {!isExpanded && nice.length > 10 && (
-                            <span className="text-xs text-gray-400">+{nice.length - 10}</span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               )
             })}

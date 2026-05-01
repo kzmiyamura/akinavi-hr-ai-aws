@@ -3,7 +3,8 @@ import { Users, Briefcase, Star, History, AlertTriangle, LogOut, Activity } from
 export type Page = 'candidates' | 'projects' | 'matching' | 'history' | 'duplicates' | 'monitor'
 
 interface Props {
-  currentPage: Page
+  /** タブのハイライトに使う（詳細画面では戻り先のタブ） */
+  activeTab: Page
   onNavigate: (page: Page) => void
   nickname: string
   onClearNickname: () => void
@@ -19,7 +20,7 @@ const NAV_ITEMS: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'monitor',    label: '解析監視', icon: <Activity size={16} /> },
 ]
 
-export function Layout({ currentPage, onNavigate, nickname, onClearNickname, children }: Props) {
+export function Layout({ activeTab, onNavigate, nickname, onClearNickname, children }: Props) {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* ヘッダー */}
@@ -45,7 +46,7 @@ export function Layout({ currentPage, onNavigate, nickname, onClearNickname, chi
             key={page}
             onClick={() => onNavigate(page)}
             className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
-              currentPage === page
+              activeTab === page
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}

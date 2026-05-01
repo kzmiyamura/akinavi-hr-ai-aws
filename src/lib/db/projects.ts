@@ -155,6 +155,14 @@ export async function deleteProject(id: string): Promise<void> {
   if (error) throw new Error(`案件の削除に失敗しました: ${error.message}`)
 }
 
+/** IDで1件取得（詳細画面用） */
+export async function fetchProjectById(id: string): Promise<Project | null> {
+  const { data, error } = await supabase.from('projects').select('*').eq('id', id).maybeSingle()
+
+  if (error) throw new Error(`案件の取得に失敗しました: ${error.message}`)
+  return (data ?? null) as Project | null
+}
+
 /** ID一覧で案件を取得（マッチング履歴との突合用） */
 export async function fetchProjectsByIds(ids: string[]): Promise<Project[]> {
   if (ids.length === 0) return []

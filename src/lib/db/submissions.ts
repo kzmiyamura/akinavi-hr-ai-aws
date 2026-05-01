@@ -83,6 +83,24 @@ export async function fetchSubmissionsByProject(projectId: string): Promise<Subm
   return (data ?? []) as Submission[]
 }
 
+/** 複数案件のマッチング結果を一括取得（呼び出し側で project_id ごとに集約・スコア順に並べ替え） */
+export async function fetchSubmissionsByProjectIds(projectIds: string[]): Promise<Submission[]> {
+  if (projectIds.length === 0) return []
+  const { data, error } = await supabase.from('submissions').select('*').in('project_id', projectIds)
+
+  if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
+  return (data ?? []) as Submission[]
+}
+
+/** 複数人材のマッチング結果を一括取得（呼び出し側で candidate_id ごとに集約・スコア順に並べ替え） */
+export async function fetchSubmissionsByCandidateIds(candidateIds: string[]): Promise<Submission[]> {
+  if (candidateIds.length === 0) return []
+  const { data, error } = await supabase.from('submissions').select('*').in('candidate_id', candidateIds)
+
+  if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
+  return (data ?? []) as Submission[]
+}
+
 /** 人材に対するマッチング履歴を取得（スコア降順） */
 export async function fetchSubmissionsByCandidate(candidateId: string): Promise<Submission[]> {
   const { data, error } = await supabase
