@@ -691,15 +691,15 @@ export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
                   }
                   className={`border border-gray-100 rounded-lg p-3 sm:p-4 ${openDetail ? 'cursor-pointer hover:border-blue-200 hover:bg-blue-50/30 transition-colors' : ''}`}
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3 min-w-0">
+                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 md:gap-3 min-w-0">
                     <CandidateProfileFields
                       c={c}
                       isExpanded={isExpanded}
                       onToggleExpand={() => toggleExpand(c.id)}
                     />
 
-                    <div className="flex items-center justify-end gap-2 sm:ml-4 shrink-0">
-                      <span className="text-[11px] text-gray-300 hidden sm:inline">{c.created_by}</span>
+                    <div className="flex items-center justify-end gap-2 md:ml-4 shrink-0">
+                      <span className="text-[11px] text-gray-300 hidden md:inline">{c.created_by}</span>
                       <button
                         type="button"
                         onClick={(e) => {
