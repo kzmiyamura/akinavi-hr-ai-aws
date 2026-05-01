@@ -13,7 +13,7 @@ interface Props {
 const NAV_ITEMS: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'candidates', label: '人材登録', icon: <Users size={16} /> },
   { page: 'projects',   label: '案件登録', icon: <Briefcase size={16} /> },
-  { page: 'matching',   label: 'マッチング', icon: <Star size={16} /> },
+  { page: 'matching',   label: 'マッチング結果', icon: <Star size={16} /> },
   { page: 'history',    label: '提案履歴', icon: <History size={16} /> },
   { page: 'duplicates', label: '重複管理', icon: <AlertTriangle size={16} /> },
   { page: 'monitor',    label: '解析監視', icon: <Activity size={16} /> },

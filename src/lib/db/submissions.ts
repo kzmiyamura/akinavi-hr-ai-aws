@@ -47,6 +47,30 @@ export async function upsertSubmission(input: UpsertSubmissionInput): Promise<Su
   return data as Submission
 }
 
+/** 案件別・人材別のマッチング件数（一覧画面用） */
+export interface SubmissionStats {
+  countByProjectId: Record<string, number>
+  countByCandidateId: Record<string, number>
+}
+
+export async function fetchSubmissionStats(): Promise<SubmissionStats> {
+  const { data, error } = await supabase.from('submissions').select('project_id, candidate_id')
+
+  if (error) throw new Error(`提案履歴の集計に失敗しました: ${error.message}`)
+
+  const countByProjectId: Record<string, number> = {}
+  const countByCandidateId: Record<string, number> = {}
+
+  for (const row of data ?? []) {
+    const pid = row.project_id as string
+    const cid = row.candidate_id as string
+    countByProjectId[pid] = (countByProjectId[pid] ?? 0) + 1
+    countByCandidateId[cid] = (countByCandidateId[cid] ?? 0) + 1
+  }
+
+  return { countByProjectId, countByCandidateId }
+}
+
 /** 案件に対するマッチングランキングを取得（スコア降順） */
 export async function fetchSubmissionsByProject(projectId: string): Promise<Submission[]> {
   const { data, error } = await supabase

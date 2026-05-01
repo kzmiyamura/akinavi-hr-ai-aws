@@ -98,11 +98,11 @@ describe('タブナビゲーション', () => {
     expect(screen.getByText('案件を登録')).toBeInTheDocument()
   })
 
-  it('マッチングタブに切り替えられる', async () => {
+  it('マッチング結果タブに切り替えられる', async () => {
     renderApp()
-    await waitFor(() => screen.getByText('マッチング'))
-    fireEvent.click(screen.getByText('マッチング'))
-    expect(screen.getByText('マッチング実行')).toBeInTheDocument()
+    await waitFor(() => screen.getByText('マッチング結果'))
+    fireEvent.click(screen.getByText('マッチング結果'))
+    expect(screen.getByText('マッチング結果一覧')).toBeInTheDocument()
   })
 
   it('提案履歴タブに切り替えられる', async () => {
