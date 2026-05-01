@@ -48,12 +48,12 @@ function parseFrom(from: string): string {
   }
 }
 
-const AI_MODEL = 'gemini-2.5-flash-lite'
+const AI_MODEL = 'gemini-2.0-flash-lite'
 
 async function generateJSON(
   prompt: string,
   attachments: Attachment[],
-  maxRetries = 2,
+  maxRetries = 1,
 ): Promise<{ result: unknown; durationMs: number }> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
   const model = genAI.getGenerativeModel({ model: AI_MODEL, generationConfig: { temperature: 0 } })
