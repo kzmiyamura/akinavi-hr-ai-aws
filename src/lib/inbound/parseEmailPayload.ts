@@ -35,6 +35,8 @@ export interface AnalyzedCandidate {
   }
   experienceYears: number | null
   summary: string
+  roles: string[]
+  industries: string[]
   nearestStation: string | null
   prefecture: string | null
   availableRegions: string[] | null
