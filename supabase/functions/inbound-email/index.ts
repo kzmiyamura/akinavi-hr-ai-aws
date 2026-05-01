@@ -48,7 +48,7 @@ function parseFrom(from: string): string {
   }
 }
 
-const AI_MODEL = 'gemini-2.5-flash'
+const AI_MODEL = 'gemini-2.5-flash-lite'
 
 async function generateJSON(
   prompt: string,
