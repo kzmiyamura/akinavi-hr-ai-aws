@@ -10,13 +10,13 @@
 ```mermaid
 flowchart TD
     A[営業担当者\nブラウザ] -->|テキスト貼り付け| B[React フロントエンド\nVercel]
-    B -->|AI解析リクエスト| C[Gemini 2.5 Flash\nGoogle AI]
+    B -->|AI解析（クライアント）| C[Gemini 1.5 Flash 8B\ngemini-1.5-flash-8b]
     C -->|解析結果| B
     B -->|upsert / fetch| D[(Supabase\nPostgreSQL)]
     E[外部メール\nOutlook] -->|受信| F[Make.com]
     F -->|Webhook POST| G[Edge Function\nSupabase]
     G -->|Drive/Sheets URL検出→fetch| H[Google Drive\n共有リンク]
-    G -->|AI解析| I[Gemini 2.5 Flash Lite]
+    G -->|AI解析| I[Gemini 2.5 Flash\ngemini-2.5-flash]
     I -->|解析結果| G
     G -->|upsert| D
 ```
@@ -27,11 +27,12 @@ flowchart TD
 
 | レイヤー | 技術 |
 |---|---|
-| フロントエンド | React 18, Vite, TypeScript, Tailwind CSS |
+| フロントエンド | React 19, Vite 8, TypeScript, Tailwind CSS v4 |
 | 状態管理 | TanStack Query v5 |
 | DB / バックエンド | Supabase (PostgreSQL, Edge Functions) |
-| AI（Edge Function） | Google Gemini 2.5 Flash Lite（`gemini-2.5-flash-lite`） |
-| AI（Vercel API） | Google Gemini 2.5 Flash（`gemini-2.5-flash`） |
+| AI（ブラウザ・Vite） | Google Gemini（`gemini-1.5-flash-8b`）— `src/lib/ai/geminiProvider.ts` |
+| AI（Vercel `/api/analyze`） | Google Gemini（`gemini-2.5-flash`）— Make.com 等からの Serverless 解析 |
+| AI（Edge `inbound-email`） | Google Gemini（`gemini-2.5-flash`）— メール Webhook 経由の解析 |
 | メール自動受信 | Outlook 専用アカウント + Make.com Webhook |
 | デプロイ | Vercel（フロント）/ Supabase（バックエンド） |
 | テスト | Vitest, React Testing Library, MSW |
@@ -51,7 +52,7 @@ flowchart TD
 
 ### 前提条件
 
-- Node.js 18 以上
+- Node.js 20 以上（Vite 8 推奨環境）
 - npm 9 以上
 - Supabase CLI（`brew install supabase/tap/supabase`）
 - Git
@@ -84,15 +85,15 @@ VITE_GEMINI_API_KEY=（Google AI Studio から取得）
 VITE_AI_PROVIDER=gemini
 ```
 
+その他のキー（Vercel API 用の `GEMINI_API_KEY` や任意の `RESEND_API_KEY` 等）は `.env.example` を参照。
+
 ### 4. Supabase DB を初期化
 
-Supabase ダッシュボード → SQL Editor で以下を実行：
+Supabase ダッシュボード → SQL Editor で `supabase/schema.sql` を実行する。
 
-```
-supabase/schema.sql
-```
+続けて、未適用のものから `supabase/migrations/` 以下の SQL を**ファイル名の順に**実行する（`candidate_skills` のカテゴリ制約などはマイグレーション側が最新）。
 
-既存DBへの追加は `supabase/migrations/` 以下のファイルを順に実行。
+**注意:** リポジトリ内の `schema.sql` と `migrations/add_candidate_skills.sql` の `candidate_skills` 定義は異なる場合があります。新規環境ではマイグレーション適用後の制約を正としてください。
 
 ### 5. 開発サーバーを起動
 
@@ -165,7 +166,7 @@ Gemini AI 解析（PDF添付 + テキスト、temperature=0）
   ↓（空結果の場合は最大2回リトライ）
 抽出結果を DB に保存
   ├─ candidates / projects テーブル（upsert）
-  ├─ candidate_skills テーブル（11カテゴリ別、再INSERT）
+  ├─ candidate_skills テーブル（カテゴリ別・再INSERT。制約は `migrations/add_candidate_skills.sql` 参照）
   └─ ai_logs テーブル（実行ログ・所要時間・エラー）
 ```
 
@@ -180,24 +181,29 @@ Gemini AI 解析（PDF添付 + テキスト、temperature=0）
 | `candidates` | 人材マスタ |
 | `projects` | 案件マスタ |
 | `submissions` | マッチング提案履歴 |
-| `candidate_skills` | スキルの11カテゴリ別管理（検索最適化） |
+| `candidate_skills` | スキルのカテゴリ別管理（検索最適化・制約はマイグレーション準拠） |
 | `ai_logs` | AI解析実行ログ |
 | `app_config` | アプリ全体設定 |
 
 ### candidate_skills のカテゴリ定義
 
-| カテゴリ | 例 |
+`supabase/migrations/add_candidate_skills.sql` の CHECK 制約に準拠（**14 カテゴリ**）。
+
+| カテゴリ | 内容・例 |
 |---|---|
-| `languages` | PHP, Java, JavaScript, Python, SQL, TypeScript |
-| `frameworks` | React, Laravel, SpringBoot, Vue.js, Django |
-| `os` | Linux, Windows, MacOS, Unix |
-| `databases` | MySQL, PostgreSQL, Oracle, MongoDB, Redis |
-| `dwh` | Snowflake, BigQuery, Tableau, Looker |
-| `cloud` | AWS, Azure, GCP, Docker, Kubernetes |
-| `design` | Illustrator, Photoshop, Figma, After Effects |
-| `marketing` | SEO, Google Analytics, SNS運営 |
-| `management` | PM, PMO, アジャイル, スクラム, 要件定義 |
-| `business` | Excel, PowerPoint, Salesforce, JIRA |
+| `languages` | プログラミング・クエリ言語（例: Python, TypeScript, SQL） |
+| `frameworks` | フレームワーク（例: React, Laravel, Django） |
+| `libraries` | ライブラリ・UI キット等 |
+| `os` | OS（例: Linux, Windows, macOS） |
+| `databases` | RDB・NoSQL・KVS（例: PostgreSQL, Redis） |
+| `dwh` | DWH・BI（例: Snowflake, BigQuery） |
+| `clouds` | クラウドサービス（例: AWS, GCP, Azure） |
+| `infrastructures` | コンテナ・IaC 等（例: Docker, Kubernetes, Terraform） |
+| `tools` | Git, Jira, Slack, Notion 等 |
+| `methodologies` | PM・開発プロセス（例: アジャイル, スクラム） |
+| `certifications` | 資格・認定 |
+| `design` | デザインツール・クリエイティブ |
+| `marketing` | マーケ・集客 |
 | `others` | 上記以外 |
 
 ### candidates テーブルの主要カラム
@@ -215,12 +221,12 @@ Gemini AI 解析（PDF添付 + テキスト、temperature=0）
 
 ## AI プロバイダーの切り替え
 
-| プロバイダー | 設定値 | モデル |
+| プロバイダー | 設定値 | モデル（フロント） |
 |---|---|---|
-| Gemini（デフォルト） | `VITE_AI_PROVIDER=gemini` | `gemini-1.5-flash-8b` |
-| OpenAI | `VITE_AI_PROVIDER=openai` | （要実装） |
+| Gemini（デフォルト） | `VITE_AI_PROVIDER=gemini` | `gemini-1.5-flash-8b`（`geminiProvider.ts`） |
+| OpenAI | `VITE_AI_PROVIDER=openai` | 未実装（スタブ。`openaiProvider.ts` に実装が必要） |
 
-OpenAI に切り替える場合は `src/lib/ai/openaiProvider.ts` に実装を追加する。
+サーバー側（`api/analyze.ts`・Edge `inbound-email`）は環境変数 `GEMINI_API_KEY` とモデル ID `gemini-2.5-flash` を使用。OpenAI への切替はサーバー未対応。
 
 ---
 
