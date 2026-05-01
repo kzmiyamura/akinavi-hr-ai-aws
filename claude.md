@@ -7,7 +7,7 @@
 ## 2. 技術スタック
 - **Frontend**: React 19 (Vite 8), TypeScript, Tailwind CSS v4, TanStack Query v5
 - **Backend/DB**: Supabase (PostgreSQL, Edge Functions, Realtime)
-- **AI（ブラウザ）**: Google Gemini `gemini-1.5-flash-8b`（`src/lib/ai/geminiProvider.ts`）
+- **AI（ブラウザ）**: Google Gemini デフォルト `gemini-2.0-flash`（`VITE_GEMINI_MODEL` で上書き可。旧 `gemini-1.5-flash-8b` は API 非対応）
 - **AI（サーバー・自動取り込み）**: Google Gemini `gemini-2.5-flash` — **Supabase Edge Function `inbound-email` のみ**（旧 Vercel `api/analyze` は移設済み・本番 Webhook では未使用）
 - **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は `openaiProvider.ts` が未実装スタブ
 - **Email**: Outlook専用アカウント + Make.com（Inbound Webhook）
@@ -107,7 +107,7 @@
 - 取得失敗は無視してフォールバック
 
 ### AI プロバイダー抽象化
-- **ブラウザ（Vite）**: Gemini `gemini-1.5-flash-8b`（`VITE_GEMINI_API_KEY`）
+- **ブラウザ（Vite）**: Gemini（既定 `gemini-2.0-flash`、`VITE_GEMINI_MODEL` / `VITE_GEMINI_API_KEY`）
 - **サーバー（Edge `inbound-email` のみ）**: Gemini `gemini-2.5-flash`（Supabase Secrets の `GEMINI_API_KEY`）
 - **フロントの切替**: `.env.local` 等で `VITE_AI_PROVIDER=gemini`（デフォルト）または `openai` — 後者はスタブで未実装
 - **サーバー側**: 現状 Gemini 固定（OpenAI 切替なし）
