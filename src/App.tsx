@@ -39,20 +39,25 @@ function AppInner() {
   }
 
   const renderMain = () => {
-    switch (tabPage) {
-      case 'matching':
-        return (
+    // タブ切替でアンマウントすると、MatchingPage 内の長時間mutationが中断される。
+    // 常にマウントしつつ表示だけ切り替える。
+    return (
+      <>
+        <div className={tabPage === 'matching' ? 'block' : 'hidden'}>
           <MatchingPage
             nickname={nickname}
             onOpenCandidateDetail={openCandidateDetail}
             onOpenProjectDetail={openProjectDetail}
           />
-        )
-      case 'candidates':
-        return <CandidatePage nickname={nickname} onOpenCandidateDetail={openCandidateDetail} />
-      case 'projects':
-        return <ProjectPage nickname={nickname} onOpenProjectDetail={openProjectDetail} />
-    }
+        </div>
+        <div className={tabPage === 'candidates' ? 'block' : 'hidden'}>
+          <CandidatePage nickname={nickname} onOpenCandidateDetail={openCandidateDetail} />
+        </div>
+        <div className={tabPage === 'projects' ? 'block' : 'hidden'}>
+          <ProjectPage nickname={nickname} onOpenProjectDetail={openProjectDetail} />
+        </div>
+      </>
+    )
   }
 
   return (
