@@ -12,9 +12,6 @@ function formatDate(iso: string) {
   return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
-function splitLines(s: string): string[] {
-  return s.split('\n').map(x => x.trim()).filter(Boolean)
-}
 function splitComma(s: string): string[] {
   return s.split(',').map(x => x.trim()).filter(Boolean)
 }
