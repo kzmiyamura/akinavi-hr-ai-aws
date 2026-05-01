@@ -9,7 +9,12 @@ import type {
   MatchResponse,
 } from './types'
 
-const MODEL = 'gemini-1.5-flash-8b'
+/** v1beta で generateContent 可能なモデル（旧 gemini-1.5-flash-8b は 404 になる） */
+function resolveModel(): string {
+  const fromEnv = (import.meta.env.VITE_GEMINI_MODEL as string | undefined)?.trim()
+  if (fromEnv) return fromEnv
+  return 'gemini-2.0-flash'
+}
 
 function getClient(): GoogleGenerativeAI {
   const key = import.meta.env.VITE_GEMINI_API_KEY as string
@@ -19,7 +24,7 @@ function getClient(): GoogleGenerativeAI {
 
 async function generate(prompt: string): Promise<string> {
   const genAI = getClient()
-  const model = genAI.getGenerativeModel({ model: MODEL })
+  const model = genAI.getGenerativeModel({ model: resolveModel() })
   const result = await model.generateContent(prompt)
   return result.response.text()
 }

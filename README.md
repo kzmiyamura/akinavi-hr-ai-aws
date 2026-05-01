@@ -10,7 +10,7 @@
 ```mermaid
 flowchart TD
     A[営業担当者\nブラウザ] -->|テキスト貼り付け| B[React フロントエンド\nVercel]
-    B -->|AI解析（クライアント）| C[Gemini 1.5 Flash 8B\ngemini-1.5-flash-8b]
+    B -->|AI解析（クライアント）| C[Gemini 2.0 Flash 等\ngemini-2.0-flash 既定]
     C -->|解析結果| B
     B -->|upsert / fetch| D[(Supabase\nPostgreSQL)]
     E[外部メール\nOutlook] -->|受信| F[Make.com]
@@ -32,7 +32,7 @@ flowchart TD
 | フロントエンド | React 19, Vite 8, TypeScript, Tailwind CSS v4 |
 | 状態管理 | TanStack Query v5 |
 | DB / バックエンド | Supabase (PostgreSQL, Edge Functions) |
-| AI（ブラウザ・Vite） | Google Gemini（`gemini-1.5-flash-8b`）— `src/lib/ai/geminiProvider.ts` |
+| AI（ブラウザ・Vite） | Google Gemini（既定 `gemini-2.0-flash`、`VITE_GEMINI_MODEL` で変更可）— `src/lib/ai/geminiProvider.ts` |
 | AI（サーバー・Edge） | Google Gemini（`gemini-2.5-flash`）— **`supabase/functions/inbound-email`**（Make.com Webhook → 解析 → DB） |
 | メール自動受信 | Outlook 専用アカウント + Make.com Webhook |
 | デプロイ | Vercel（フロント）/ Supabase（バックエンド） |
@@ -223,7 +223,7 @@ Gemini AI 解析（PDF添付 + テキスト、temperature=0）
 
 | プロバイダー | 設定値 | モデル（フロント） |
 |---|---|---|
-| Gemini（デフォルト） | `VITE_AI_PROVIDER=gemini` | `gemini-1.5-flash-8b`（`geminiProvider.ts`） |
+| Gemini（デフォルト） | `VITE_AI_PROVIDER=gemini` | 既定 `gemini-2.0-flash`（`VITE_GEMINI_MODEL` で上書き） |
 | OpenAI | `VITE_AI_PROVIDER=openai` | 未実装（スタブ。`openaiProvider.ts` に実装が必要） |
 
 サーバー側の自動解析は **Edge `inbound-email` のみ**。Supabase Secrets の `GEMINI_API_KEY` とモデル ID `gemini-2.5-flash` を使用。OpenAI への切替はサーバー未対応。
