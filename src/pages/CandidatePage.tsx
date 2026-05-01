@@ -312,9 +312,8 @@ function EditModal({ candidate, nickname, onClose, onSaved }: EditModalProps) {
           <section className="space-y-3">
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">メール情報</h3>
             <div className="space-y-1">
-              <label className={labelCls}>件名</label>
-              <input className={inputCls} value={form.subject}
-                onChange={e => setField('subject', e.target.value)} />
+              <label className={labelCls}>件名（変更不可）</label>
+              <input className={readonlyCls} value={form.subject} readOnly />
             </div>
             <div className="space-y-1">
               <label className={labelCls}>転送元メールアドレス（変更不可）</label>
@@ -564,12 +563,12 @@ export function CandidatePage({ nickname }: Props) {
                         </div>
                       )}
 
-                      {/* メール転送情報 */}
-                      {(mailFrom || mailSubject || c.created_at) && (
-                        <div className="mt-1.5 flex flex-wrap items-start gap-x-3 gap-y-0.5 border-t border-gray-50 pt-1.5">
+                      {/* 日時・メール転送情報 */}
+                      <div className="mt-1.5 border-t border-gray-50 pt-1.5 space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
                           <span className="flex items-center gap-1 text-xs text-gray-400 shrink-0">
                             <Mail size={10} />
-                            {c.created_at ? formatDate(c.created_at) : ''}
+                            受信: {c.created_at ? formatDate(c.created_at) : '—'}
                           </span>
                           {mailFrom && (
                             <span className="text-xs text-gray-400 truncate max-w-xs" title={mailFrom}>
@@ -582,15 +581,11 @@ export function CandidatePage({ nickname }: Props) {
                             </span>
                           )}
                         </div>
-                      )}
-
-                      {/* 最終更新情報 */}
-                      {(c.updated_by || c.updated_at !== c.created_at) && (
-                        <div className="mt-0.5 text-xs text-gray-300">
+                        <div className="text-xs text-gray-300">
                           最終更新: {formatDate(c.updated_at)}
                           {c.updated_by ? ` by ${c.updated_by}` : ''}
                         </div>
-                      )}
+                      </div>
 
                       {/* スキル・役割・業界 */}
                       <div className="space-y-1 mt-1.5">

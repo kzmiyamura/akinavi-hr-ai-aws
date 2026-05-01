@@ -73,7 +73,7 @@ export async function fetchCandidates(): Promise<Candidate[]> {
     .from('candidates')
     .select('*')
     .is('merged_into', null)
-    .order('created_at', { ascending: false })
+    .order('updated_at', { ascending: false })
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
