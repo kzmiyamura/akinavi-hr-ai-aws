@@ -649,7 +649,6 @@ export function MatchingPage({
                   <tr className="border-b border-gray-100 text-left text-gray-500 bg-gray-50/80">
                     <th className="py-3 px-3 sm:px-6 font-medium">案件</th>
                     <th className="py-3 pr-3 sm:pr-4 font-medium whitespace-nowrap hidden md:table-cell">クライアント</th>
-                    <th className="py-3 pr-3 sm:pr-4 font-medium min-w-[8rem] sm:min-w-[10rem]">状態</th>
                     <th className="py-3 px-3 sm:px-6 font-medium text-right whitespace-nowrap">操作</th>
                   </tr>
                 </thead>
@@ -666,31 +665,27 @@ export function MatchingPage({
                       <Fragment key={p.id}>
                         <tr className="border-b border-gray-50">
                           <td className="py-3 px-3 sm:px-6 font-medium text-gray-900 max-w-[12rem] sm:max-w-none">
-                            {onOpenProjectDetail ? (
-                              <button
-                                type="button"
-                                onClick={() => onOpenProjectDetail(p.id)}
-                                className="text-left text-blue-700 hover:text-blue-900 hover:underline font-medium break-words w-full"
-                              >
-                                {p.title}
-                              </button>
-                            ) : (
-                              <span className="break-words">{p.title}</span>
-                            )}
+                            <div className="space-y-1">
+                              {onOpenProjectDetail ? (
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenProjectDetail(p.id)}
+                                  className="text-left text-blue-700 hover:text-blue-900 hover:underline font-medium break-words w-full"
+                                >
+                                  {p.title}
+                                </button>
+                              ) : (
+                                <span className="break-words">{p.title}</span>
+                              )}
+                              {!isLoadingStats && n === 0 && (
+                                <span className="inline-flex text-amber-700 bg-amber-50 rounded px-2 py-0.5 text-xs font-medium">
+                                  マッチング未実施
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-3 pr-3 sm:pr-4 text-gray-600 hidden md:table-cell whitespace-nowrap">
                             {p.client ?? '—'}
-                          </td>
-                          <td className="py-3 pr-3 sm:pr-4">
-                            {isLoadingStats ? (
-                              <span className="text-gray-400">読み込み中…</span>
-                            ) : n === 0 ? (
-                              <span className="text-amber-700 bg-amber-50 rounded px-2 py-0.5 text-xs font-medium">
-                                マッチング未実施
-                              </span>
-                            ) : (
-                              <span className="text-gray-700">実施済み（{n}名）</span>
-                            )}
                           </td>
                           <td className="py-3 px-3 sm:px-6 text-right">
                             <button
@@ -711,7 +706,7 @@ export function MatchingPage({
                         </tr>
                         {showRanking && (
                           <tr className="bg-slate-50/80 border-b border-gray-100">
-                            <td colSpan={4} className="px-3 sm:px-6 py-4 min-w-0">
+                            <td colSpan={3} className="px-3 sm:px-6 py-4 min-w-0">
                               {isLoadingProjectSubs ? (
                                 <p className="text-sm text-gray-400">読み込み中...</p>
                               ) : ranked.length === 0 ? (
@@ -799,7 +794,6 @@ export function MatchingPage({
                 <thead>
                   <tr className="border-b border-gray-100 text-left text-gray-500 bg-gray-50/80">
                     <th className="py-3 px-3 sm:px-6 font-medium">人材</th>
-                    <th className="py-3 pr-3 sm:pr-4 font-medium min-w-[8rem] sm:min-w-[10rem]">状態</th>
                     <th className="py-3 px-3 sm:px-6 font-medium text-right whitespace-nowrap">操作</th>
                   </tr>
                 </thead>
@@ -815,30 +809,26 @@ export function MatchingPage({
                       <Fragment key={c.id}>
                         <tr className="border-b border-gray-50">
                           <td className="py-3 px-3 sm:px-6 max-w-[11rem] sm:max-w-none min-w-0">
-                            {onOpenCandidateDetail ? (
-                              <button
-                                type="button"
-                                onClick={() => onOpenCandidateDetail(c.id)}
-                                className="font-medium text-gray-900 text-left hover:text-blue-700 hover:underline block w-full break-words"
-                              >
-                                {c.name}
-                              </button>
-                            ) : (
-                              <div className="font-medium text-gray-900 break-words">{c.name}</div>
-                            )}
+                            <div className="space-y-1">
+                              {onOpenCandidateDetail ? (
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenCandidateDetail(c.id)}
+                                  className="font-medium text-gray-900 text-left hover:text-blue-700 hover:underline block w-full break-words"
+                                >
+                                  {c.name}
+                                </button>
+                              ) : (
+                                <div className="font-medium text-gray-900 break-words">{c.name}</div>
+                              )}
+                              {!isLoadingStats && n === 0 && (
+                                <span className="inline-flex text-amber-700 bg-amber-50 rounded px-2 py-0.5 text-xs font-medium">
+                                  マッチング未実施
+                                </span>
+                              )}
+                            </div>
                             {c.email && (
                               <div className="text-xs text-gray-500 mt-0.5 break-all">{c.email}</div>
-                            )}
-                          </td>
-                          <td className="py-3 pr-3 sm:pr-4">
-                            {isLoadingStats ? (
-                              <span className="text-gray-400">読み込み中…</span>
-                            ) : n === 0 ? (
-                              <span className="text-amber-700 bg-amber-50 rounded px-2 py-0.5 text-xs font-medium">
-                                マッチング未実施
-                              </span>
-                            ) : (
-                              <span className="text-gray-700">実施済み（{n}件の案件）</span>
                             )}
                           </td>
                           <td className="py-3 px-3 sm:px-6 text-right">
@@ -860,7 +850,7 @@ export function MatchingPage({
                         </tr>
                         {showRanking && (
                           <tr className="bg-slate-50/80 border-b border-gray-100">
-                            <td colSpan={3} className="px-3 sm:px-6 py-4 min-w-0">
+                            <td colSpan={2} className="px-3 sm:px-6 py-4 min-w-0">
                               {subsLoading ? (
                                 <p className="text-sm text-gray-400">読み込み中...</p>
                               ) : subs.length === 0 ? (
