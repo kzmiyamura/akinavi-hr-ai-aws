@@ -44,7 +44,7 @@ describe('ニックネームフロー', () => {
     fireEvent.click(screen.getByText('使いはじめる'))
 
     await waitFor(() => {
-      expect(screen.getByText('人材登録')).toBeInTheDocument()
+      expect(screen.getByText('マッチング結果一覧')).toBeInTheDocument()
     })
   })
 
@@ -80,7 +80,7 @@ describe('ニックネームフロー', () => {
     renderApp()
 
     await waitFor(() => {
-      expect(screen.getByText('人材登録')).toBeInTheDocument()
+      expect(screen.getByText('マッチング結果一覧')).toBeInTheDocument()
       expect(screen.queryByPlaceholderText('例: 田中 / tanaka')).not.toBeInTheDocument()
     })
   })
@@ -89,6 +89,20 @@ describe('ニックネームフロー', () => {
 describe('タブナビゲーション', () => {
   beforeEach(() => {
     localStorage.setItem('akinavi_nickname', 'テストユーザー')
+  })
+
+  it('初回表示はマッチング結果である', async () => {
+    renderApp()
+    await waitFor(() => {
+      expect(screen.getByText('マッチング結果一覧')).toBeInTheDocument()
+    })
+  })
+
+  it('人材登録タブに切り替えられる', async () => {
+    renderApp()
+    await waitFor(() => screen.getByText('人材登録'))
+    fireEvent.click(screen.getByText('人材登録'))
+    expect(screen.getByText('人材を登録')).toBeInTheDocument()
   })
 
   it('案件登録タブに切り替えられる', async () => {
@@ -100,22 +114,10 @@ describe('タブナビゲーション', () => {
 
   it('マッチング結果タブに切り替えられる', async () => {
     renderApp()
-    await waitFor(() => screen.getByText('マッチング結果'))
+    await waitFor(() => screen.getByText('人材登録'))
+    fireEvent.click(screen.getByText('案件登録'))
+    await waitFor(() => screen.getByText('案件を登録'))
     fireEvent.click(screen.getByText('マッチング結果'))
     expect(screen.getByText('マッチング結果一覧')).toBeInTheDocument()
-  })
-
-  it('提案履歴タブに切り替えられる', async () => {
-    renderApp()
-    await waitFor(() => screen.getByText('提案履歴'))
-    fireEvent.click(screen.getByText('提案履歴'))
-    expect(screen.getByText('案件を選択...')).toBeInTheDocument()
-  })
-
-  it('重複管理タブに切り替えられる', async () => {
-    renderApp()
-    await waitFor(() => screen.getByText('重複管理'))
-    fireEvent.click(screen.getByText('重複管理'))
-    expect(screen.getByText(/重複の疑いがある人材/)).toBeInTheDocument()
   })
 })

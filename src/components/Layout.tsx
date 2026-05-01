@@ -1,6 +1,6 @@
-import { Users, Briefcase, Star, History, AlertTriangle, LogOut, Activity } from 'lucide-react'
+import { Users, Briefcase, Star, LogOut } from 'lucide-react'
 
-export type Page = 'candidates' | 'projects' | 'matching' | 'history' | 'duplicates' | 'monitor'
+export type Page = 'matching' | 'candidates' | 'projects'
 
 interface Props {
   /** タブのハイライトに使う（詳細画面では戻り先のタブ） */
@@ -12,53 +12,61 @@ interface Props {
 }
 
 const NAV_ITEMS: { page: Page; label: string; icon: React.ReactNode }[] = [
-  { page: 'candidates', label: '人材登録', icon: <Users size={16} /> },
-  { page: 'projects',   label: '案件登録', icon: <Briefcase size={16} /> },
-  { page: 'matching',   label: 'マッチング結果', icon: <Star size={16} /> },
-  { page: 'history',    label: '提案履歴', icon: <History size={16} /> },
-  { page: 'duplicates', label: '重複管理', icon: <AlertTriangle size={16} /> },
-  { page: 'monitor',    label: '解析監視', icon: <Activity size={16} /> },
+  { page: 'matching', label: 'マッチング結果', icon: <Star size={16} className="shrink-0" /> },
+  { page: 'candidates', label: '人材登録', icon: <Users size={16} className="shrink-0" /> },
+  { page: 'projects', label: '案件登録', icon: <Briefcase size={16} className="shrink-0" /> },
 ]
 
 export function Layout({ activeTab, onNavigate, nickname, onClearNickname, children }: Props) {
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* ヘッダー */}
-      <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
-        <h1 className="text-lg font-bold text-blue-700">AkiNavi HR-AI</h1>
-        <div className="flex items-center gap-3 text-sm text-gray-500">
-          <span>利用者: <strong className="text-gray-700">{nickname}</strong></span>
-          <button
-            onClick={onClearNickname}
-            className="flex items-center gap-1 text-xs text-gray-400 hover:text-blue-500 transition-colors"
-            title="名前を変更する"
-          >
-            <LogOut size={13} />
-            名前変更
-          </button>
-        </div>
-      </header>
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="sticky top-0 z-50 bg-white shadow-sm">
+        <header className="border-b border-gray-100 px-3 sm:px-4 py-2.5 sm:py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between max-w-4xl mx-auto w-full">
+            <h1 className="text-base sm:text-lg font-bold text-blue-700 truncate min-w-0">
+              AkiNavi HR-AI
+            </h1>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:text-sm text-gray-500">
+              <span className="min-w-0 break-all">
+                利用者: <strong className="text-gray-700">{nickname}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={onClearNickname}
+                className="flex items-center gap-1 text-xs text-gray-400 hover:text-blue-500 transition-colors shrink-0"
+                title="名前を変更する"
+              >
+                <LogOut size={13} />
+                名前変更
+              </button>
+            </div>
+          </div>
+        </header>
 
-      {/* タブナビゲーション */}
-      <nav className="bg-white border-b border-gray-200 px-4 flex gap-1 overflow-x-auto">
-        {NAV_ITEMS.map(({ page, label, icon }) => (
-          <button
-            key={page}
-            onClick={() => onNavigate(page)}
-            className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${
-              activeTab === page
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {icon}
-            {label}
-          </button>
-        ))}
-      </nav>
+        <nav className="border-b border-gray-200 bg-white max-w-4xl mx-auto w-full px-1 sm:px-4">
+          <div className="flex w-full">
+            {NAV_ITEMS.map(({ page, label, icon }) => (
+              <button
+                key={page}
+                type="button"
+                onClick={() => onNavigate(page)}
+                className={`flex flex-1 flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-4 py-2.5 sm:py-3 text-[11px] sm:text-sm font-medium border-b-2 transition-colors min-w-0 ${
+                  activeTab === page
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {icon}
+                <span className="text-center leading-tight sm:whitespace-nowrap">{label}</span>
+              </button>
+            ))}
+          </div>
+        </nav>
+      </div>
 
-      {/* メインコンテンツ */}
-      <main className="max-w-4xl mx-auto px-4 py-6">{children}</main>
+      <main className="flex-1 w-full max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 min-w-0">
+        {children}
+      </main>
     </div>
   )
 }

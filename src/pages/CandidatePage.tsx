@@ -605,7 +605,7 @@ export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
       )}
 
       {/* 入力フォーム */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 space-y-4 min-w-0">
         <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
           <UserPlus size={18} className="text-blue-600" />
           人材を登録
@@ -637,7 +637,7 @@ export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
       </div>
 
       {/* 候補者一覧 */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 min-w-0">
         <div className="flex items-center gap-3 mb-4 flex-wrap">
           <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
             <RefreshCw size={18} className="text-gray-500" />

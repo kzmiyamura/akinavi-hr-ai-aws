@@ -1,6 +1,6 @@
-import { useState, useMemo, Fragment } from 'react'
+import { useState, useMemo, Fragment, type ReactNode } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, AlertTriangle, Briefcase, User, RefreshCw } from 'lucide-react'
+import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { fetchCandidates } from '../lib/db/candidates'
 import {
@@ -65,6 +65,210 @@ function toRankedForProject(subs: Submission[], allCandidates: Candidate[]): Ran
       candidate: allCandidates.find((c) => c.id === s.candidate_id)!,
     }))
     .filter((s): s is RankedSubmission => Boolean(s.candidate))
+}
+
+/** 一覧に出す件数。それ以上はアコーディオン内へ */
+const RANK_HEAD = 5
+/** スキルタグの常時表示数。それ以上はアコーディオン内へ */
+const SKILL_HEAD = 12
+
+const accordionSummaryCls =
+  'flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden'
+
+function SkillTagsWithAccordion({ skills }: { skills: string[] }) {
+  if (skills.length === 0) return null
+  if (skills.length <= SKILL_HEAD) {
+    return (
+      <div className="flex flex-wrap gap-1 mt-1">
+        {skills.map((sk) => (
+          <span key={sk} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
+            {sk}
+          </span>
+        ))}
+      </div>
+    )
+  }
+  const rest = skills.length - SKILL_HEAD
+  return (
+    <div className="mt-1 space-y-2">
+      <div className="flex flex-wrap gap-1">
+        {skills.slice(0, SKILL_HEAD).map((sk) => (
+          <span key={sk} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
+            {sk}
+          </span>
+        ))}
+      </div>
+      <details className="group rounded-md border border-slate-200 bg-slate-50/90">
+        <summary
+          className={`${accordionSummaryCls} px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-slate-100 rounded-md text-left break-words`}
+        >
+          <ChevronDown size={14} className="shrink-0 text-slate-500 transition-transform group-open:rotate-180" />
+          <span className="min-w-0">スキルをさらに表示（{rest} 件）</span>
+        </summary>
+        <div className="flex flex-wrap gap-1 px-2.5 pb-2 pt-1 border-t border-slate-100">
+          {skills.slice(SKILL_HEAD).map((sk) => (
+            <span key={sk} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
+              {sk}
+            </span>
+          ))}
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function RankingRestAccordion({
+  count,
+  unitLabel,
+  children,
+}: {
+  count: number
+  /** 例: 「名」「件の案件」 */
+  unitLabel: string
+  children: ReactNode
+}) {
+  if (count <= 0) return null
+  return (
+    <details className="group mt-3 rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <summary
+        className={`${accordionSummaryCls} px-3 sm:px-4 py-3 text-xs sm:text-sm font-medium text-blue-800 bg-slate-50 hover:bg-slate-100 border-b border-slate-100 break-words text-left`}
+      >
+        <ChevronDown size={18} className="shrink-0 text-slate-500 transition-transform group-open:rotate-180" />
+        <span className="min-w-0">
+          さらに {count}
+          {unitLabel}のマッチング結果（スコア・理由）
+        </span>
+      </summary>
+      <div className="space-y-3 px-3 sm:px-4 py-4 bg-slate-50/40 min-w-0">{children}</div>
+    </details>
+  )
+}
+
+function ProjectModeRankCard({
+  s,
+  rankIndex,
+  onOpenCandidateDetail,
+  scoreColor,
+}: {
+  s: RankedSubmission
+  rankIndex: number
+  onOpenCandidateDetail?: (candidateId: string) => void
+  scoreColor: (score: number) => string
+}) {
+  return (
+    <div className="border border-gray-100 rounded-lg p-3 sm:p-4 flex flex-col gap-3 sm:flex-row sm:items-start bg-white min-w-0">
+      <div className="flex gap-3 min-w-0 flex-1">
+        <div className="text-xl sm:text-2xl font-bold text-gray-300 w-7 sm:w-8 text-center shrink-0">
+          {rankIndex + 1}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            {onOpenCandidateDetail ? (
+              <button
+                type="button"
+                onClick={() => onOpenCandidateDetail(s.candidate.id)}
+                className="font-medium text-gray-800 text-sm text-left hover:text-blue-700 hover:underline break-words"
+              >
+                {s.candidate.name}
+              </button>
+            ) : (
+              <span className="font-medium text-gray-800 text-sm break-words">{s.candidate.name}</span>
+            )}
+            {s.candidate.experience_years != null && (
+              <span className="text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">
+                経験{s.candidate.experience_years}年
+              </span>
+            )}
+            {s.candidate.duplicate_flag && (
+              <span className="flex items-center gap-1 text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">
+                <AlertTriangle size={11} />重複の疑い
+              </span>
+            )}
+          </div>
+          {s.candidate.email && (
+            <p className="text-xs text-gray-400 mt-0.5 break-all">{s.candidate.email}</p>
+          )}
+          <SkillTagsWithAccordion skills={s.candidate.skills as string[]} />
+          <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0">
+            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
+            <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words leading-relaxed">
+              {s.ai_summary || '（理由テキストなし）'}
+            </p>
+          </div>
+        </div>
+      </div>
+      <div
+        className={`flex sm:flex-col items-center justify-center gap-1 rounded-lg px-4 py-2 sm:py-1 sm:px-3 shrink-0 self-stretch sm:self-start text-center text-xl sm:text-2xl font-bold ${scoreColor(s.match_score)}`}
+      >
+        <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500 sm:hidden">スコア</span>
+        {s.match_score}
+      </div>
+    </div>
+  )
+}
+
+function CandidateModeRankCard({
+  s,
+  rankIndex,
+  p,
+  onOpenProjectDetail,
+  scoreColor,
+}: {
+  s: Submission
+  rankIndex: number
+  p: Project | null
+  onOpenProjectDetail?: (projectId: string) => void
+  scoreColor: (score: number) => string
+}) {
+  return (
+    <div className="border border-gray-100 rounded-lg p-3 sm:p-4 flex flex-col gap-3 sm:flex-row sm:items-start bg-white min-w-0">
+      <div className="flex gap-3 min-w-0 flex-1">
+        <div className="text-xl sm:text-2xl font-bold text-gray-300 w-7 sm:w-8 text-center shrink-0">
+          {rankIndex + 1}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            {onOpenProjectDetail ? (
+              <button
+                type="button"
+                onClick={() => onOpenProjectDetail(s.project_id)}
+                className="font-medium text-gray-800 text-sm text-left hover:text-blue-700 hover:underline break-words"
+              >
+                {p?.title ?? '（案件データなし）'}
+              </button>
+            ) : (
+              <span className="font-medium text-gray-800 text-sm break-words">
+                {p?.title ?? '（案件データなし）'}
+              </span>
+            )}
+            {p?.client && (
+              <span className="text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">{p.client}</span>
+            )}
+            {p && (
+              <span className="text-xs rounded px-1.5 py-0.5 bg-slate-100 text-slate-700">
+                {p.status === 'open' ? '募集中' : p.status === 'filled' ? '充足' : '終了'}
+              </span>
+            )}
+          </div>
+          {p?.work_location && (
+            <p className="text-xs text-gray-400 mt-0.5 break-words">{p.work_location}</p>
+          )}
+          <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0">
+            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
+            <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words leading-relaxed">
+              {s.ai_summary || '（理由テキストなし）'}
+            </p>
+          </div>
+        </div>
+      </div>
+      <div
+        className={`flex sm:flex-col items-center justify-center gap-1 rounded-lg px-4 py-2 sm:py-1 sm:px-3 shrink-0 self-stretch sm:self-start text-center text-xl sm:text-2xl font-bold ${scoreColor(s.match_score)}`}
+      >
+        <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500 sm:hidden">スコア</span>
+        {s.match_score}
+      </div>
+    </div>
+  )
 }
 
 export function MatchingPage({
@@ -365,36 +569,36 @@ export function MatchingPage({
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="min-w-0">
         <h1 className="text-lg font-semibold text-gray-900">マッチング結果一覧</h1>
-        <p className="text-sm text-gray-500 mt-1">
+        <p className="text-sm text-gray-500 mt-1 break-words">
           案件ごと・人材ごとに、保存済みのスコア順ランキングと AI によるマッチング理由をその場で表示します。未実施の行は「マッチング未実施」です。「再実行」でその案件（またはその人材）だけを更新できます。
         </p>
       </div>
 
-      <div className="flex rounded-lg border border-gray-200 bg-gray-50 p-1 w-fit gap-1">
+      <div className="flex flex-col sm:flex-row rounded-lg border border-gray-200 bg-gray-50 p-1 w-full sm:w-fit gap-1 min-w-0">
         <button
           type="button"
           onClick={() => switchMode('project')}
-          className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+          className={`flex flex-1 sm:flex-initial items-center justify-center gap-2 rounded-md px-3 sm:px-4 py-2.5 sm:py-2 text-sm font-medium transition-colors min-w-0 ${
             mode === 'project'
               ? 'bg-white text-gray-900 shadow-sm'
               : 'text-gray-600 hover:text-gray-900'
           }`}
         >
-          <Briefcase size={16} className="text-blue-600" />
+          <Briefcase size={16} className="text-blue-600 shrink-0" />
           案件から見る
         </button>
         <button
           type="button"
           onClick={() => switchMode('candidate')}
-          className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+          className={`flex flex-1 sm:flex-initial items-center justify-center gap-2 rounded-md px-3 sm:px-4 py-2.5 sm:py-2 text-sm font-medium transition-colors min-w-0 ${
             mode === 'candidate'
               ? 'bg-white text-gray-900 shadow-sm'
               : 'text-gray-600 hover:text-gray-900'
           }`}
         >
-          <User size={16} className="text-blue-600" />
+          <User size={16} className="text-blue-600 shrink-0" />
           人材から見る
         </button>
       </div>
@@ -412,11 +616,11 @@ export function MatchingPage({
       )}
 
       {mode === 'project' && (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100 flex flex-wrap items-start justify-between gap-3">
-            <div>
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden min-w-0">
+          <div className="px-3 sm:px-6 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:flex-wrap sm:items-start sm:justify-between gap-3">
+            <div className="min-w-0">
               <h2 className="text-base font-semibold text-gray-800">募集中の案件</h2>
-              <p className="text-sm text-gray-500 mt-0.5">
+              <p className="text-sm text-gray-500 mt-0.5 break-words">
                 各案件の下に、全人材のスコアとマッチング理由を表示します。一括は募集中の全案件 × 全人材を順に再スコアします。
               </p>
             </div>
@@ -428,7 +632,7 @@ export function MatchingPage({
                 || (candidates as Candidate[]).length === 0
                 || busy
               }
-              className="inline-flex items-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+              className="inline-flex w-full sm:w-auto items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2.5 sm:py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             >
               {bulkAllProjectsMutation.isPending
                 ? <Loader2 size={14} className="animate-spin" />
@@ -437,16 +641,16 @@ export function MatchingPage({
             </button>
           </div>
           {(projects as Project[]).length === 0 ? (
-            <p className="text-sm text-gray-400 px-6 py-8">募集中の案件がありません。</p>
+            <p className="text-sm text-gray-400 px-3 sm:px-6 py-8">募集中の案件がありません。</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
+            <div className="overflow-x-auto -mx-0 sm:mx-0 touch-pan-x">
+              <table className="min-w-[20rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 text-left text-gray-500 bg-gray-50/80">
-                    <th className="py-3 px-6 font-medium">案件</th>
-                    <th className="py-3 pr-4 font-medium whitespace-nowrap">クライアント</th>
-                    <th className="py-3 pr-4 font-medium min-w-[10rem]">状態</th>
-                    <th className="py-3 px-6 font-medium text-right whitespace-nowrap">操作</th>
+                    <th className="py-3 px-3 sm:px-6 font-medium">案件</th>
+                    <th className="py-3 pr-3 sm:pr-4 font-medium whitespace-nowrap hidden md:table-cell">クライアント</th>
+                    <th className="py-3 pr-3 sm:pr-4 font-medium min-w-[8rem] sm:min-w-[10rem]">状態</th>
+                    <th className="py-3 px-3 sm:px-6 font-medium text-right whitespace-nowrap">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -461,21 +665,23 @@ export function MatchingPage({
                     return (
                       <Fragment key={p.id}>
                         <tr className="border-b border-gray-50">
-                          <td className="py-3 px-6 font-medium text-gray-900">
+                          <td className="py-3 px-3 sm:px-6 font-medium text-gray-900 max-w-[12rem] sm:max-w-none">
                             {onOpenProjectDetail ? (
                               <button
                                 type="button"
                                 onClick={() => onOpenProjectDetail(p.id)}
-                                className="text-left text-blue-700 hover:text-blue-900 hover:underline font-medium"
+                                className="text-left text-blue-700 hover:text-blue-900 hover:underline font-medium break-words w-full"
                               >
                                 {p.title}
                               </button>
                             ) : (
-                              p.title
+                              <span className="break-words">{p.title}</span>
                             )}
                           </td>
-                          <td className="py-3 pr-4 text-gray-600">{p.client ?? '—'}</td>
-                          <td className="py-3 pr-4">
+                          <td className="py-3 pr-3 sm:pr-4 text-gray-600 hidden md:table-cell whitespace-nowrap">
+                            {p.client ?? '—'}
+                          </td>
+                          <td className="py-3 pr-3 sm:pr-4">
                             {isLoadingStats ? (
                               <span className="text-gray-400">読み込み中…</span>
                             ) : n === 0 ? (
@@ -486,7 +692,7 @@ export function MatchingPage({
                               <span className="text-gray-700">実施済み（{n}名）</span>
                             )}
                           </td>
-                          <td className="py-3 px-6 text-right">
+                          <td className="py-3 px-3 sm:px-6 text-right">
                             <button
                               type="button"
                               onClick={() => {
@@ -494,7 +700,7 @@ export function MatchingPage({
                                 matchByProjectMutation.mutate(p.id)
                               }}
                               disabled={(candidates as Candidate[]).length === 0 || busy}
-                              className="inline-flex items-center gap-1 bg-blue-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="inline-flex items-center justify-center gap-1 bg-blue-600 text-white rounded-lg px-2.5 sm:px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                             >
                               {rowSpin
                                 ? <Loader2 size={14} className="animate-spin" />
@@ -505,7 +711,7 @@ export function MatchingPage({
                         </tr>
                         {showRanking && (
                           <tr className="bg-slate-50/80 border-b border-gray-100">
-                            <td colSpan={4} className="px-6 py-4">
+                            <td colSpan={4} className="px-3 sm:px-6 py-4 min-w-0">
                               {isLoadingProjectSubs ? (
                                 <p className="text-sm text-gray-400">読み込み中...</p>
                               ) : ranked.length === 0 ? (
@@ -516,66 +722,34 @@ export function MatchingPage({
                                 <div className="space-y-3">
                                   <p className="text-xs font-medium text-gray-500">
                                     マッチングランキング（全 {ranked.length} 名）— スコアと理由は AI 判定です
+                                    {ranked.length > RANK_HEAD && (
+                                      <span className="text-gray-400">（先頭 {RANK_HEAD} 名を常時表示）</span>
+                                    )}
                                   </p>
                                   <div className="space-y-3">
-                                    {ranked.map((s, i) => (
-                                      <div
+                                    {ranked.slice(0, RANK_HEAD).map((s, i) => (
+                                      <ProjectModeRankCard
                                         key={s.id}
-                                        className="border border-gray-100 rounded-lg p-4 flex items-start gap-4 bg-white"
-                                      >
-                                        <div className="text-2xl font-bold text-gray-300 w-8 text-center shrink-0">
-                                          {i + 1}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                          <div className="flex items-center gap-2 flex-wrap">
-                                            {onOpenCandidateDetail ? (
-                                              <button
-                                                type="button"
-                                                onClick={() => onOpenCandidateDetail(s.candidate.id)}
-                                                className="font-medium text-gray-800 text-sm text-left hover:text-blue-700 hover:underline"
-                                              >
-                                                {s.candidate.name}
-                                              </button>
-                                            ) : (
-                                              <span className="font-medium text-gray-800 text-sm">{s.candidate.name}</span>
-                                            )}
-                                            {s.candidate.experience_years != null && (
-                                              <span className="text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">
-                                                経験{s.candidate.experience_years}年
-                                              </span>
-                                            )}
-                                            {s.candidate.duplicate_flag && (
-                                              <span className="flex items-center gap-1 text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">
-                                                <AlertTriangle size={11} />重複の疑い
-                                              </span>
-                                            )}
-                                          </div>
-                                          {s.candidate.email && (
-                                            <p className="text-xs text-gray-400 mt-0.5">{s.candidate.email}</p>
-                                          )}
-                                          <div className="flex flex-wrap gap-1 mt-1">
-                                            {(s.candidate.skills as string[]).map((sk) => (
-                                              <span key={sk} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
-                                                {sk}
-                                              </span>
-                                            ))}
-                                          </div>
-                                          <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2">
-                                            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
-                                              マッチング理由（AI）
-                                            </p>
-                                            <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap leading-relaxed">
-                                              {s.ai_summary || '（理由テキストなし）'}
-                                            </p>
-                                          </div>
-                                        </div>
-                                        <div
-                                          className={`text-2xl font-bold rounded-lg px-3 py-1 shrink-0 ${scoreColor(s.match_score)}`}
-                                        >
-                                          {s.match_score}
-                                        </div>
-                                      </div>
+                                        s={s}
+                                        rankIndex={i}
+                                        onOpenCandidateDetail={onOpenCandidateDetail}
+                                        scoreColor={scoreColor}
+                                      />
                                     ))}
+                                    <RankingRestAccordion
+                                      count={ranked.length - RANK_HEAD}
+                                      unitLabel="名"
+                                    >
+                                      {ranked.slice(RANK_HEAD).map((s, idx) => (
+                                        <ProjectModeRankCard
+                                          key={s.id}
+                                          s={s}
+                                          rankIndex={RANK_HEAD + idx}
+                                          onOpenCandidateDetail={onOpenCandidateDetail}
+                                          scoreColor={scoreColor}
+                                        />
+                                      ))}
+                                    </RankingRestAccordion>
                                   </div>
                                 </div>
                               )}
@@ -593,11 +767,11 @@ export function MatchingPage({
       )}
 
       {mode === 'candidate' && (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100 flex flex-wrap items-start justify-between gap-3">
-            <div>
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden min-w-0">
+          <div className="px-3 sm:px-6 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:flex-wrap sm:items-start sm:justify-between gap-3">
+            <div className="min-w-0">
               <h2 className="text-base font-semibold text-gray-800">登録人材</h2>
-              <p className="text-sm text-gray-500 mt-0.5">
+              <p className="text-sm text-gray-500 mt-0.5 break-words">
                 各人材の下に、全案件のスコアとマッチング理由を表示します。一括は全人材 × 募集中の全案件を順に再スコアします。
               </p>
             </div>
@@ -609,7 +783,7 @@ export function MatchingPage({
                 || (candidates as Candidate[]).length === 0
                 || busy
               }
-              className="inline-flex items-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+              className="inline-flex w-full sm:w-auto items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2.5 sm:py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
             >
               {bulkAllCandidatesMutation.isPending
                 ? <Loader2 size={14} className="animate-spin" />
@@ -618,15 +792,15 @@ export function MatchingPage({
             </button>
           </div>
           {(candidates as Candidate[]).length === 0 ? (
-            <p className="text-sm text-gray-400 px-6 py-8">登録人材がありません。</p>
+            <p className="text-sm text-gray-400 px-3 sm:px-6 py-8">登録人材がありません。</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
+            <div className="overflow-x-auto touch-pan-x">
+              <table className="min-w-[18rem] w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 text-left text-gray-500 bg-gray-50/80">
-                    <th className="py-3 px-6 font-medium">人材</th>
-                    <th className="py-3 pr-4 font-medium min-w-[10rem]">状態</th>
-                    <th className="py-3 px-6 font-medium text-right whitespace-nowrap">操作</th>
+                    <th className="py-3 px-3 sm:px-6 font-medium">人材</th>
+                    <th className="py-3 pr-3 sm:pr-4 font-medium min-w-[8rem] sm:min-w-[10rem]">状態</th>
+                    <th className="py-3 px-3 sm:px-6 font-medium text-right whitespace-nowrap">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -640,23 +814,23 @@ export function MatchingPage({
                     return (
                       <Fragment key={c.id}>
                         <tr className="border-b border-gray-50">
-                          <td className="py-3 px-6">
+                          <td className="py-3 px-3 sm:px-6 max-w-[11rem] sm:max-w-none min-w-0">
                             {onOpenCandidateDetail ? (
                               <button
                                 type="button"
                                 onClick={() => onOpenCandidateDetail(c.id)}
-                                className="font-medium text-gray-900 text-left hover:text-blue-700 hover:underline block w-full"
+                                className="font-medium text-gray-900 text-left hover:text-blue-700 hover:underline block w-full break-words"
                               >
                                 {c.name}
                               </button>
                             ) : (
-                              <div className="font-medium text-gray-900">{c.name}</div>
+                              <div className="font-medium text-gray-900 break-words">{c.name}</div>
                             )}
                             {c.email && (
-                              <div className="text-xs text-gray-500 mt-0.5">{c.email}</div>
+                              <div className="text-xs text-gray-500 mt-0.5 break-all">{c.email}</div>
                             )}
                           </td>
-                          <td className="py-3 pr-4">
+                          <td className="py-3 pr-3 sm:pr-4">
                             {isLoadingStats ? (
                               <span className="text-gray-400">読み込み中…</span>
                             ) : n === 0 ? (
@@ -667,7 +841,7 @@ export function MatchingPage({
                               <span className="text-gray-700">実施済み（{n}件の案件）</span>
                             )}
                           </td>
-                          <td className="py-3 px-6 text-right">
+                          <td className="py-3 px-3 sm:px-6 text-right">
                             <button
                               type="button"
                               onClick={() => {
@@ -675,7 +849,7 @@ export function MatchingPage({
                                 matchByCandidateMutation.mutate(c.id)
                               }}
                               disabled={(projects as Project[]).length === 0 || busy}
-                              className="inline-flex items-center gap-1 bg-blue-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="inline-flex items-center justify-center gap-1 bg-blue-600 text-white rounded-lg px-2.5 sm:px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                             >
                               {rowSpin
                                 ? <Loader2 size={14} className="animate-spin" />
@@ -686,7 +860,7 @@ export function MatchingPage({
                         </tr>
                         {showRanking && (
                           <tr className="bg-slate-50/80 border-b border-gray-100">
-                            <td colSpan={3} className="px-6 py-4">
+                            <td colSpan={3} className="px-3 sm:px-6 py-4 min-w-0">
                               {subsLoading ? (
                                 <p className="text-sm text-gray-400">読み込み中...</p>
                               ) : subs.length === 0 ? (
@@ -697,64 +871,42 @@ export function MatchingPage({
                                 <div className="space-y-3">
                                   <p className="text-xs font-medium text-gray-500">
                                     おすすめ案件（スコア順・全 {subs.length} 件）— スコアと理由は AI 判定です
+                                    {subs.length > RANK_HEAD && (
+                                      <span className="text-gray-400">（先頭 {RANK_HEAD} 件を常時表示）</span>
+                                    )}
                                   </p>
                                   <div className="space-y-3">
-                                    {subs.map((s, i) => {
+                                    {subs.slice(0, RANK_HEAD).map((s, i) => {
                                       const p = projectById.get(s.project_id) ?? null
                                       return (
-                                        <div
+                                        <CandidateModeRankCard
                                           key={s.id}
-                                          className="border border-gray-100 rounded-lg p-4 flex items-start gap-4 bg-white"
-                                        >
-                                          <div className="text-2xl font-bold text-gray-300 w-8 text-center shrink-0">
-                                            {i + 1}
-                                          </div>
-                                          <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                              {onOpenProjectDetail ? (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => onOpenProjectDetail(s.project_id)}
-                                                  className="font-medium text-gray-800 text-sm text-left hover:text-blue-700 hover:underline"
-                                                >
-                                                  {p?.title ?? '（案件データなし）'}
-                                                </button>
-                                              ) : (
-                                                <span className="font-medium text-gray-800 text-sm">
-                                                  {p?.title ?? '（案件データなし）'}
-                                                </span>
-                                              )}
-                                              {p?.client && (
-                                                <span className="text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">
-                                                  {p.client}
-                                                </span>
-                                              )}
-                                              {p && (
-                                                <span className="text-xs rounded px-1.5 py-0.5 bg-slate-100 text-slate-700">
-                                                  {p.status === 'open' ? '募集中' : p.status === 'filled' ? '充足' : '終了'}
-                                                </span>
-                                              )}
-                                            </div>
-                                            {p?.work_location && (
-                                              <p className="text-xs text-gray-400 mt-0.5">{p.work_location}</p>
-                                            )}
-                                            <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2">
-                                              <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
-                                                マッチング理由（AI）
-                                              </p>
-                                              <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap leading-relaxed">
-                                                {s.ai_summary || '（理由テキストなし）'}
-                                              </p>
-                                            </div>
-                                          </div>
-                                          <div
-                                            className={`text-2xl font-bold rounded-lg px-3 py-1 shrink-0 ${scoreColor(s.match_score)}`}
-                                          >
-                                            {s.match_score}
-                                          </div>
-                                        </div>
+                                          s={s}
+                                          rankIndex={i}
+                                          p={p}
+                                          onOpenProjectDetail={onOpenProjectDetail}
+                                          scoreColor={scoreColor}
+                                        />
                                       )
                                     })}
+                                    <RankingRestAccordion
+                                      count={subs.length - RANK_HEAD}
+                                      unitLabel="件"
+                                    >
+                                      {subs.slice(RANK_HEAD).map((s, idx) => {
+                                        const p = projectById.get(s.project_id) ?? null
+                                        return (
+                                          <CandidateModeRankCard
+                                            key={s.id}
+                                            s={s}
+                                            rankIndex={RANK_HEAD + idx}
+                                            p={p}
+                                            onOpenProjectDetail={onOpenProjectDetail}
+                                            scoreColor={scoreColor}
+                                          />
+                                        )
+                                      })}
+                                    </RankingRestAccordion>
                                   </div>
                                 </div>
                               )}

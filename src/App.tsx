@@ -7,9 +7,6 @@ import type { Page } from './components/Layout'
 import { CandidatePage } from './pages/CandidatePage'
 import { ProjectPage } from './pages/ProjectPage'
 import { MatchingPage } from './pages/MatchingPage'
-import { HistoryPage } from './pages/HistoryPage'
-import { DuplicatePage } from './pages/DuplicatePage'
-import { MonitorPage } from './pages/MonitorPage'
 import { CandidateDetailPage } from './pages/CandidateDetailPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
 
@@ -21,7 +18,7 @@ type DetailView =
 
 function AppInner() {
   const { nickname, saveNickname, clearNickname } = useNickname()
-  const [tabPage, setTabPage] = useState<Page>('candidates')
+  const [tabPage, setTabPage] = useState<Page>('matching')
   const [detail, setDetail] = useState<DetailView | null>(null)
 
   if (!nickname) {
@@ -43,10 +40,6 @@ function AppInner() {
 
   const renderMain = () => {
     switch (tabPage) {
-      case 'candidates':
-        return <CandidatePage nickname={nickname} onOpenCandidateDetail={openCandidateDetail} />
-      case 'projects':
-        return <ProjectPage nickname={nickname} onOpenProjectDetail={openProjectDetail} />
       case 'matching':
         return (
           <MatchingPage
@@ -55,12 +48,10 @@ function AppInner() {
             onOpenProjectDetail={openProjectDetail}
           />
         )
-      case 'history':
-        return <HistoryPage />
-      case 'duplicates':
-        return <DuplicatePage />
-      case 'monitor':
-        return <MonitorPage />
+      case 'candidates':
+        return <CandidatePage nickname={nickname} onOpenCandidateDetail={openCandidateDetail} />
+      case 'projects':
+        return <ProjectPage nickname={nickname} onOpenProjectDetail={openProjectDetail} />
     }
   }
 

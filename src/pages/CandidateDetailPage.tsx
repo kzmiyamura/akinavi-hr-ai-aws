@@ -70,7 +70,7 @@ export function CandidateDetailPage({ candidateId, nickname, onBack }: Props) {
         <p className="text-sm text-gray-500">人材が見つかりません（削除された可能性があります）。</p>
       )}
       {candidate && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 min-w-0">
           <CandidateProfileFields c={candidate} isExpanded={false} detailMode />
         </div>
       )}

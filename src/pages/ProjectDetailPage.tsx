@@ -70,7 +70,7 @@ export function ProjectDetailPage({ projectId, nickname, onBack }: Props) {
         <p className="text-sm text-gray-500">案件が見つかりません（削除された可能性があります）。</p>
       )}
       {project && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 min-w-0">
           <ProjectProfileFields p={project} isExpanded={false} detailMode />
         </div>
       )}
