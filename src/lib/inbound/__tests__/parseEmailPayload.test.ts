@@ -7,6 +7,23 @@ import {
   extractNameFromFilename,
 } from '../parseEmailPayload'
 
+// Default skillsByCategory for tests to ensure all required properties are present
+const defaultSkillsByCategory = {
+  languages: [],
+  frameworks: [],
+  libraries: [],
+  databases: [],
+  clouds: [],
+  infrastructures: [],
+  tools: [],
+  os: [],
+  methodologies: [],
+  certifications: [],
+  design: [],
+  marketing: [],
+  others: [],
+};
+
 // ─── extractEmailBody ──────────────────────────────────────
 
 describe('extractEmailBody', () => {
@@ -54,26 +71,34 @@ describe('extractEmailBody', () => {
 
 describe('parseAIResponse', () => {
   it('正常な JSON 文字列をパースする', () => {
-    const json = JSON.stringify({
-      name: '山田 太郎', email: 'yamada@example.com',
-      phone: null, skills: ['Java', 'AWS'], experienceYears: 5, summary: 'バックエンドエンジニア',
-    })
+    const analyzedData = {
+      name: '山田 太郎', email: 'yamada@example.com', phone: null,
+      skills: ['Java', 'AWS'], experienceYears: 5, summary: 'バックエンドエンジニア',
+      skillsByCategory: { ...defaultSkillsByCategory, languages: ['Java'], clouds: ['AWS'] },
+      roles: ['バックエンドエンジニア'], industries: [],
+      nearestStation: null, prefecture: null, availableRegions: null, currentWorkLocation: null, remoteAvailable: false,
+    };
+    const json = JSON.stringify(analyzedData);
     const result = parseAIResponse(json)
-    expect(result.name).toBe('山田 太郎')
-    expect(result.skills).toContain('Java')
+    expect(result).toEqual(analyzedData);
   })
 
   it('コードブロック付きレスポンスをパースする', () => {
-    const raw = '```json\n{"name":"佐藤 花子","email":null,"phone":null,"skills":["React"],"experienceYears":3,"summary":"FE"}\n```'
+    const analyzedData = { name: '佐藤 花子', email: null, phone: null, skills: ['React'], experienceYears: 3, summary: 'FE',
+      skillsByCategory: { ...defaultSkillsByCategory, languages: ['React'] }, roles: [], industries: [],
+      nearestStation: null, prefecture: null, availableRegions: null, currentWorkLocation: null, remoteAvailable: false };
+    const raw = '```json\n' + JSON.stringify(analyzedData) + '\n```';
     const result = parseAIResponse(raw)
-    expect(result.name).toBe('佐藤 花子')
-    expect(result.skills).toContain('React')
+    expect(result).toEqual(analyzedData);
   })
 
   it('前後の空白を無視してパースする', () => {
-    const raw = '  {"name":"鈴木","email":null,"phone":null,"skills":[],"experienceYears":null,"summary":""}  '
+    const analyzedData = { name: '鈴木', email: null, phone: null, skills: [], experienceYears: null, summary: '',
+      skillsByCategory: defaultSkillsByCategory, roles: [], industries: [],
+      nearestStation: null, prefecture: null, availableRegions: null, currentWorkLocation: null, remoteAvailable: false };
+    const raw = '  ' + JSON.stringify(analyzedData) + '  ';
     const result = parseAIResponse(raw)
-    expect(result.name).toBe('鈴木')
+    expect(result).toEqual(analyzedData);
   })
 
   it('不正な JSON の場合は例外をスローする', () => {
@@ -104,13 +129,20 @@ describe('extractEmailFromFrom', () => {
 // ─── buildCandidatePayload ─────────────────────────────────
 
 describe('buildCandidatePayload', () => {
-  const analyzed = {
+  const analyzed: AnalyzedCandidate = {
     name: '山田 太郎',
     email: 'yamada@example.com',
     phone: '090-1234-5678',
     skills: ['Java', 'AWS'],
     experienceYears: 5,
     summary: 'バックエンドエンジニア',
+    skillsByCategory: { // Added to match AnalyzedCandidate interface
+      ...defaultSkillsByCategory,
+      languages: ['Java'],
+      clouds: ['AWS'],
+    },
+    roles: ['バックエンドエンジニア'], // Added to match AnalyzedCandidate interface
+    industries: [], // Added to match AnalyzedCandidate interface
     nearestStation: '東京都 渋谷駅',
     prefecture: '東京都',
     availableRegions: ['東京都', '神奈川県'],
@@ -131,10 +163,12 @@ describe('buildCandidatePayload', () => {
     expect(payload.experience_years).toBe(5)
     expect(payload.created_by).toBe('resend-inbound')
     expect(payload.duplicate_flag).toBe(false)
+    expect(payload.raw_profile.skillsByCategory.languages).toContain('Java');
+    expect(payload.raw_profile.roles).toContain('バックエンドエンジニア');
   })
 
   it('AI が email を抽出できなかった場合、from フィールドから補完する', () => {
-    const noEmail = { ...analyzed, email: null }
+    const noEmail: AnalyzedCandidate = { ...analyzed, email: null }
     const payload = buildCandidatePayload(noEmail, parsed)
     expect(payload.email).toBe('yamada@example.com') // from から抽出
   })
@@ -158,7 +192,7 @@ describe('buildCandidatePayload', () => {
   })
 
   it('phone が null の場合も正しく扱う', () => {
-    const noPhone = { ...analyzed, phone: null }
+    const noPhone: AnalyzedCandidate = { ...analyzed, phone: null }
     const payload = buildCandidatePayload(noPhone, parsed)
     expect(payload.phone).toBeNull()
   })
@@ -196,13 +230,21 @@ describe('extractNameFromFilename', () => {
 // ─── ロケーション情報抽出テスト ──────────────────────────────────
 
 describe('buildCandidatePayload - ロケーション情報', () => {
-  const baseAnalyzed = {
+  const baseAnalyzed: AnalyzedCandidate = {
     name: 'MG',
     email: null,
     phone: null,
     skills: ['Illustrator', 'Photoshop'],
     experienceYears: 20,
     summary: 'グラフィックデザイナー',
+    skillsByCategory: defaultSkillsByCategory, // Added to match AnalyzedCandidate interface
+    roles: ['グラフィックデザイナー'], // Added to match AnalyzedCandidate interface
+    industries: [], // Added to match AnalyzedCandidate interface
+    nearestStation: null,
+    prefecture: null,
+    availableRegions: null,
+    currentWorkLocation: null,
+    remoteAvailable: false,
   }
   const parsed = {
     from: 'sales@example.com',
@@ -211,7 +253,7 @@ describe('buildCandidatePayload - ロケーション情報', () => {
   }
 
   it('最寄駅が raw_profile に含まれる', () => {
-    const analyzed = {
+    const analyzed: AnalyzedCandidate = {
       ...baseAnalyzed,
       nearestStation: '北海道 麻生駅',
       prefecture: '北海道',
@@ -225,7 +267,7 @@ describe('buildCandidatePayload - ロケーション情報', () => {
   })
 
   it('就業可能地区が配列で保存される', () => {
-    const analyzed = {
+    const analyzed: AnalyzedCandidate = {
       ...baseAnalyzed,
       nearestStation: '北海道 麻生駅',
       prefecture: '北海道',
@@ -238,7 +280,7 @@ describe('buildCandidatePayload - ロケーション情報', () => {
   })
 
   it('リモート勤務対応が保存される', () => {
-    const analyzed = {
+    const analyzed: AnalyzedCandidate = {
       ...baseAnalyzed,
       nearestStation: null,
       prefecture: null,
@@ -251,7 +293,7 @@ describe('buildCandidatePayload - ロケーション情報', () => {
   })
 
   it('ロケーション情報がない場合は null/false が保存される', () => {
-    const analyzed = {
+    const analyzed: AnalyzedCandidate = {
       ...baseAnalyzed,
       nearestStation: null,
       prefecture: null,

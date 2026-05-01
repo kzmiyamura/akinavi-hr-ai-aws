@@ -68,19 +68,21 @@
 | `ai_logs` | AI解析の実行ログ（モデル・所要時間・結果・エラー） |
 | `app_config` | アプリ全体設定 |
 
-### candidate_skills の11カテゴリ
+### candidate_skills の13カテゴリ
 | カテゴリ | 内容 |
 |---|---|
 | `languages` | プログラミング言語・クエリ言語 |
 | `frameworks` | FW・ライブラリ |
+| `libraries` | ライブラリ、UIキット等 |
 | `os` | OS |
 | `databases` | RDB・NoSQL・KVS |
-| `dwh` | DWH・BIツール |
-| `cloud` | クラウド・インフラ・コンテナ |
+| `clouds` | クラウドサービス |
+| `infrastructures` | インフラ技術 |
+| `tools` | Git, Jira, Slack, Notion, BIツール等 |
+| `methodologies` | PM・マネジメント系 |
+| `certifications` | 資格試験等 |
 | `design` | デザイン・クリエイティブ系 |
 | `marketing` | マーケティング・集客系 |
-| `management` | PM・マネジメント系 |
-| `business` | ビジネスツール |
 | `others` | その他 |
 
 ## 6. 追加要件（実装済み）

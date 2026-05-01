@@ -400,6 +400,8 @@ JSON:`.trim()
           clouds: string[]; infrastructures: string[]; tools: string[]; os: string[]
           methodologies: string[]; certifications: string[]; others: string[]
           design: string[]; marketing: string[]
+          // `business` and `dwh` were in claude.md but not in the UI's SkillsByCategory,
+          // aligning with UI's 13 categories.
         }
         roles: string[]
         industries: string[]
