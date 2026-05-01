@@ -4,6 +4,7 @@ import {
   parseAIResponse,
   extractEmailFromFrom,
   buildCandidatePayload,
+  extractNameFromFilename,
 } from '../parseEmailPayload'
 
 // ─── extractEmailBody ──────────────────────────────────────
@@ -155,5 +156,34 @@ describe('buildCandidatePayload', () => {
     const noPhone = { ...analyzed, phone: null }
     const payload = buildCandidatePayload(noPhone, parsed)
     expect(payload.phone).toBeNull()
+  })
+})
+
+// ─── extractNameFromFilename ──────────────────────────────────
+
+describe('extractNameFromFilename', () => {
+  it('日本語の姓名が含まれるファイル名から氏名を抽出する', () => {
+    expect(extractNameFromFilename('山田太郎.pdf')).toBe('山田太郎')
+    expect(extractNameFromFilename('一之江_太郎.pdf')).toBe('太郎')
+  })
+
+  it('拡張子を除去して処理する', () => {
+    expect(extractNameFromFilename('山田太郎.docx')).toBe('山田太郎')
+  })
+
+  it('アンダースコア区切りから最後の部分を氏名として抽出する', () => {
+    expect(extractNameFromFilename('OH_一之江.pdf')).toBe('一之江')
+    expect(extractNameFromFilename('resume_山田太郎.pdf')).toBe('山田太郎')
+  })
+
+  it('氏名パターンにマッチしない場合は null を返す', () => {
+    expect(extractNameFromFilename('document.pdf')).toBeNull()
+    expect(extractNameFromFilename('report_2023.pdf')).toBeNull()
+    expect(extractNameFromFilename('')).toBeNull()
+  })
+
+  it('文字数が2-4文字の日本語のみを有効とする', () => {
+    expect(extractNameFromFilename('山.pdf')).toBeNull() // 1文字
+    expect(extractNameFromFilename('山田太郎次郎.pdf')).toBeNull() // 5文字以上
   })
 })

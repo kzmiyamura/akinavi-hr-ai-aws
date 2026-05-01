@@ -1,8 +1,8 @@
 # 単体テスト項目書 兼 結果報告書
 ## Phase 4: Resend Inbound Webhook メール解析ロジック
 
-- **実施日**: 2026-04-30
-- **実施者**: Claude Code (claude-sonnet-4-6)
+- **実施日**: 2026-05-01
+- **実施者**: GitHub Copilot
 - **テストフレームワーク**: Vitest v4.1.5
 - **対象ファイル**: `src/lib/inbound/parseEmailPayload.ts`
 - **備考**: Edge Function（Deno）と共有する純粋関数を切り出してテスト。メール受信〜DB保存のフローは Edge Function デプロイ済みで自動処理される。
@@ -14,10 +14,10 @@
 | 項目 | 件数 |
 |---|---|
 | テストファイル | 1 |
-| テスト総数 | 19 |
-| **合格** | **19** |
+| テスト総数 | 24 |
+| **合格** | **24** |
 | 失敗 | 0 |
-| 累計テスト数（全フェーズ） | **46件 全パス** |
+| 累計テスト数（全フェーズ） | **51件 全パス** |
 
 ---
 
@@ -62,6 +62,16 @@
 | 18 | created_by を指定できる | 登録元の識別が可能なこと（'resend-inbound' 等） | ✅ PASS |
 | 19 | phone が null の場合も正しく扱う | null フィールドが安全に保存されること | ✅ PASS |
 
+### extractNameFromFilename（ファイル名から氏名抽出）
+
+| # | テストケース | 確認内容 | 結果 |
+|---|---|---|---|
+| 20 | 日本語の姓名が含まれるファイル名から氏名を抽出する | 山田太郎.pdf から「山田太郎」を抽出すること | ✅ PASS |
+| 21 | 拡張子を除去して処理する | .docx 等の拡張子を除去して処理すること | ✅ PASS |
+| 22 | アンダースコア区切りから最後の部分を氏名として抽出する | OH_一之江.pdf から「一之江」を抽出すること | ✅ PASS |
+| 23 | 氏名パターンにマッチしない場合は null を返す | document.pdf 等で null を返すこと | ✅ PASS |
+| 24 | 文字数が2-4文字の日本語のみを有効とする | 1文字や5文字以上は無効とすること | ✅ PASS |
+
 ---
 
 ## 累計テスト結果（全フェーズ）
@@ -71,5 +81,5 @@
 | Phase 2 AI Wrapper | `ai/__tests__/aiProvider.test.ts` | 9件 ✅ | `phase2-unit-test-report.md` |
 | Phase 2 DB ロジック | `db/__tests__/` | 8件 ✅ | `phase2-db-unit-test-report.md` |
 | Phase 3 結合テスト | `__tests__/integration/` | 10件 ✅ | `phase3-integration-test-report.md` |
-| Phase 4 メール解析 | `inbound/__tests__/` | 19件 ✅ | 本書 |
-| **合計** | **5ファイル** | **46件** | **全パス** |
+| Phase 4 メール解析 | `inbound/__tests__/` | 24件 ✅ | 本書 |
+| **合計** | **5ファイル** | **51件** | **全パス** |

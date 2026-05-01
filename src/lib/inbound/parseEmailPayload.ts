@@ -45,6 +45,24 @@ export function extractEmailFromFrom(from: string): string | null {
   return match ? match[0] : null
 }
 
+/** 添付ファイル名から氏名を推測する */
+export function extractNameFromFilename(filename: string): string | null {
+  if (!filename) return null
+  // 拡張子を除去
+  const nameWithoutExt = filename.replace(/\.[^/.]+$/, '')
+  // アンダースコアやハイフンで分割し、最後の部分を氏名候補とする
+  const parts = nameWithoutExt.split(/[_-]/)
+  const lastPart = parts[parts.length - 1]
+  // 日本語の姓名パターン（2-4文字の漢字ひらがなカタカナ）にマッチするかチェック
+  if (/^[ぁ-んァ-ン一-龯]{2,4}$/.test(lastPart)) {
+    return lastPart
+  }
+  // アルファベット+数字のパターン（例: OH_一之江 → 一之江）
+  const match = nameWithoutExt.match(/[a-zA-Z_]+([ぁ-んァ-ン一-龯]{2,4})/)
+  if (match) return match[1]
+  return null
+}
+
 /** AI 解析結果と差出人情報から DB 保存用ペイロードを構築する */
 export function buildCandidatePayload(
   analyzed: AnalyzedCandidate,

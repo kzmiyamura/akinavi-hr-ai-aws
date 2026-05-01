@@ -33,15 +33,15 @@ describe('ニックネームフロー', () => {
 
   it('初回アクセス時にニックネーム入力モーダルが表示される', () => {
     renderApp()
-    expect(screen.getByText('AkiNavi HR-AI')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('例: 田中 / tanaka')).toBeInTheDocument()
+    expect(screen.getByText('あなたの名前を入力してください')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('例: 田中 / Tanaka')).toBeInTheDocument()
   })
 
   it('ニックネームを入力してはじめるを押すとメイン画面に遷移する', async () => {
     renderApp()
-    const input = screen.getByPlaceholderText('例: 田中 / tanaka')
+    const input = screen.getByPlaceholderText('例: 田中 / Tanaka')
     fireEvent.change(input, { target: { value: '田中' } })
-    fireEvent.click(screen.getByText('はじめる'))
+    fireEvent.click(screen.getByText('使いはじめる'))
 
     await waitFor(() => {
       expect(screen.getByText('人材登録')).toBeInTheDocument()
@@ -50,23 +50,25 @@ describe('ニックネームフロー', () => {
 
   it('空のニックネームではエラーメッセージが表示される', () => {
     renderApp()
-    fireEvent.click(screen.getByText('はじめる'))
+    const input = screen.getByPlaceholderText('例: 田中 / Tanaka')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(screen.getByText('使いはじめる'))
     expect(screen.getByText('ニックネームを入力してください')).toBeInTheDocument()
   })
 
   it('21文字以上のニックネームではエラーメッセージが表示される', () => {
     renderApp()
-    const input = screen.getByPlaceholderText('例: 田中 / tanaka')
+    const input = screen.getByPlaceholderText('例: 田中 / Tanaka')
     fireEvent.change(input, { target: { value: 'a'.repeat(21) } })
-    fireEvent.click(screen.getByText('はじめる'))
+    fireEvent.click(screen.getByText('使いはじめる'))
     expect(screen.getByText('20文字以内で入力してください')).toBeInTheDocument()
   })
 
   it('ニックネームが localStorage に保存される', async () => {
     renderApp()
-    const input = screen.getByPlaceholderText('例: 田中 / tanaka')
+    const input = screen.getByPlaceholderText('例: 田中 / Tanaka')
     fireEvent.change(input, { target: { value: '鈴木' } })
-    fireEvent.click(screen.getByText('はじめる'))
+    fireEvent.click(screen.getByText('使いはじめる'))
 
     await waitFor(() => {
       expect(localStorage.getItem('akinavi_nickname')).toBe('鈴木')

@@ -263,8 +263,37 @@ Deno.serve(async (req: Request) => {
 
     // ── 人材メール ────────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
+      // ファイル名から氏名を推測
+      const extractNameFromFilename = (filename: string): string | null => {
+        if (!filename) return null
+        // 拡張子を除去
+        const nameWithoutExt = filename.replace(/\.[^/.]+$/, '')
+        // アンダースコアやハイフンで分割し、最後の部分を氏名候補とする
+        const parts = nameWithoutExt.split(/[_-]/)
+        const lastPart = parts[parts.length - 1]
+        // 日本語の姓名パターン（2-4文字の漢字ひらがなカタカナ）にマッチするかチェック
+        if (/^[ぁ-んァ-ン一-龯]{2,4}$/.test(lastPart)) {
+          return lastPart
+        }
+        // アルファベット+数字のパターン（例: OH_一之江 → 一之江）
+        const match = nameWithoutExt.match(/[a-zA-Z_]+([ぁ-んァ-ン一-龯]{2,4})/)
+        if (match) return match[1]
+        return null
+      }
+
+      const filenameCandidates: string[] = []
+      for (const att of allAttachments) {
+        if (att.name) {
+          const extracted = extractNameFromFilename(att.name)
+          if (extracted) filenameCandidates.push(extracted)
+        }
+      }
+      const filenameNote = filenameCandidates.length > 0
+        ? `\n※ファイル名から推測される氏名候補: ${filenameCandidates.join('、')}`
+        : ''
+
       const prompt = `
-これは営業担当者が転送・送付した人材紹介メールです。${attachmentNote}
+これは営業担当者が転送・送付した人材紹介メールです。${attachmentNote}${filenameNote}
 差出人（${from}）は営業担当者であり、候補者本人ではありません。
 
 【重要ルール】
@@ -273,13 +302,14 @@ Deno.serve(async (req: Request) => {
 
 【氏名の抽出ルール】
 - 氏名はPDFや本文の「テキスト内容」から読み取ってください。
-- 添付ファイルのファイル名（例: OH_一之江.pdf）は氏名ではありません。絶対に使わないでください。
+- 添付ファイルのファイル名に姓名が明記されている場合（例: 山田太郎.pdf）は、ファイル名から氏名を抽出してください。ただし、拡張子や記号を除去し、人名として妥当な部分のみを使用してください。
+- ファイル名から推測される氏名候補が提供される場合がありますが、これはヒントとして参考にしてください。駅名やイニシャルなどが混入している可能性があるため、必ず本文・PDFの内容と照合して判断してください。
 - 文字化けしている文字列（例：㻻㻴、㼃indows、㻼㻴㻼 等）は正しく読み取れていません。これらを氏名として使わないでください。
 - PDFは複数ページある場合があります。必ず全ページを確認してください。
 - 学歴/職歴ページ（最終ページ付近）に「フリガナ」「氏名」が明記されている場合、そのページの情報を最優先で使用してください。
-- イニシャル（例: O.H.）は氏名ではありません。同じPDF内にフルネームがあればそちらを使ってください。
+- イニシャル（例: O.H., T.Y.）が明記されている場合は、それを氏名として使用してください。フルネームが同じ文書内で見つからない場合でもイニシャルを有効とします。
 - 地名・駅名・会社名を氏名と混同しないでください。
-- 氏名が本文・添付テキストに明記されていない場合のみ "不明" にしてください。
+- 氏名が本文・添付テキスト・ファイル名に一切見つからない場合のみ "不明" にしてください。
 
 【メールアドレスの抽出ルール】
 - emailは候補者本人のアドレスのみです。
