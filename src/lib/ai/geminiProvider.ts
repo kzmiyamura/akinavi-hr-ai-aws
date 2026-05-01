@@ -5,8 +5,10 @@ import {
   type AnalyzeCandidateResponse,
   type AnalyzeProjectRequest,
   type AnalyzeProjectResponse,
+  type CandidateSkillsByCategory,
   type MatchRequest,
   type MatchResponse,
+  emptySkillsByCategory,
   normalizeCandidateSkillsByCategory,
   skillsByCategoryHasAny,
 } from './types'
@@ -35,6 +37,41 @@ function parseJSON<T>(raw: string): T {
   // コードブロック（```json ... ```）を除去してパース
   const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
   return JSON.parse(cleaned) as T
+}
+
+/** 第1パスで skillsByCategory が空のとき、skills 一覧だけ再分類（ブラウザ登録の取りこぼし対策） */
+async function categorizeSkillsOnly(skills: string[], contextText: string): Promise<CandidateSkillsByCategory> {
+  const unique = [
+    ...new Map(
+      skills
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => [s.toLowerCase(), s]),
+    ).values(),
+  ]
+  if (unique.length === 0) return emptySkillsByCategory()
+
+  const prompt = `
+あなたはスキル分類器です。次の skills の各要素を、次の14キーのうちちょうど1つにだけ割り当ててください。
+- skills にある文字列を**表記そのまま**使う（略称・別名に変えない）。
+- 各スキル語は**1つのキーにだけ**入れる（重複禁止）。
+- どのキーにも合わない語は others に。
+- JSONのみ。コードブロック禁止。
+
+キー（この14個のみ）:
+languages, frameworks, libraries, os, databases, dwh, clouds, infrastructures, tools, methodologies, certifications, design, marketing, others
+
+skills:
+${JSON.stringify(unique)}
+
+参考（文脈）:
+${contextText.slice(0, 3500)}
+
+JSON:
+`.trim()
+
+  const raw = await generate(prompt)
+  return normalizeCandidateSkillsByCategory(parseJSON<Partial<CandidateSkillsByCategory>>(raw))
 }
 
 export const geminiProvider: AIProvider = {
@@ -80,9 +117,24 @@ JSON:`.trim()
 
     const raw = await generate(prompt)
     const data = parseJSON<AnalyzeCandidateResponse>(raw)
-    if (data.skillsByCategory != null) {
-      data.skillsByCategory = normalizeCandidateSkillsByCategory(data.skillsByCategory)
+
+    const normalizedSbc =
+      data.skillsByCategory != null
+        ? normalizeCandidateSkillsByCategory(data.skillsByCategory)
+        : emptySkillsByCategory()
+    data.skillsByCategory = normalizedSbc
+
+    if (!skillsByCategoryHasAny(normalizedSbc) && (data.skills?.length ?? 0) > 0) {
+      try {
+        const repaired = await categorizeSkillsOnly(data.skills!, req.rawText)
+        if (skillsByCategoryHasAny(repaired)) {
+          data.skillsByCategory = repaired
+        }
+      } catch {
+        /* フォールバック失敗時は skills のみ */
+      }
     }
+
     if (
       (!data.skills || data.skills.length === 0)
       && data.skillsByCategory

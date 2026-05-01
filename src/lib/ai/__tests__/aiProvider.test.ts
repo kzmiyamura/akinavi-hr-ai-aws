@@ -1,5 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { AnalyzeCandidateResponse, AnalyzeProjectResponse, MatchResponse } from '../types'
+import type {
+  AnalyzeCandidateResponse,
+  AnalyzeProjectResponse,
+  CandidateSkillsByCategory,
+  MatchResponse,
+} from '../types'
+
+function sbc(partial: Partial<CandidateSkillsByCategory>): CandidateSkillsByCategory {
+  return {
+    languages: partial.languages ?? [],
+    frameworks: partial.frameworks ?? [],
+    libraries: partial.libraries ?? [],
+    os: partial.os ?? [],
+    databases: partial.databases ?? [],
+    dwh: partial.dwh ?? [],
+    clouds: partial.clouds ?? [],
+    infrastructures: partial.infrastructures ?? [],
+    tools: partial.tools ?? [],
+    methodologies: partial.methodologies ?? [],
+    certifications: partial.certifications ?? [],
+    design: partial.design ?? [],
+    marketing: partial.marketing ?? [],
+    others: partial.others ?? [],
+  }
+}
 
 // generateContent のモック関数（テストごとに差し替え）
 const mockGenerateContent = vi.fn()
@@ -45,6 +69,11 @@ describe('GeminiProvider', () => {
       skills: ['Java', 'Spring Boot', 'AWS'],
       experienceYears: 5,
       summary: 'Java 5年のバックエンドエンジニア',
+      skillsByCategory: sbc({
+        languages: ['Java'],
+        frameworks: ['Spring Boot'],
+        clouds: ['AWS'],
+      }),
     }
     mockGenerateContent.mockResolvedValueOnce(makeTextResponse(expected))
 
@@ -67,6 +96,7 @@ describe('GeminiProvider', () => {
       skills: ['React', 'TypeScript'],
       experienceYears: 3,
       summary: 'フロントエンドエンジニア',
+      skillsByCategory: sbc({ languages: ['React', 'TypeScript'] }),
     }
     mockGenerateContent.mockResolvedValueOnce(makeCodeBlockResponse(expected))
 
@@ -93,6 +123,30 @@ describe('GeminiProvider', () => {
 
     expect(result.email).toBeNull()
     expect(result.skills).toHaveLength(0)
+  })
+
+  it('analyzeCandidate: skills だけ返し skillsByCategory が空のとき第2パスで補完する', async () => {
+    const first: AnalyzeCandidateResponse = {
+      name: '補完テスト',
+      email: null,
+      phone: null,
+      skills: ['PHP', 'MySQL'],
+      experienceYears: 2,
+      summary: 'テスト',
+    }
+    const second = sbc({
+      languages: ['PHP'],
+      databases: ['MySQL'],
+    })
+    mockGenerateContent.mockResolvedValueOnce(makeTextResponse(first))
+    mockGenerateContent.mockResolvedValueOnce(makeTextResponse(second))
+
+    const { geminiProvider } = await import('../geminiProvider')
+    const result = await geminiProvider.analyzeCandidate({ rawText: 'PHPとMySQL' })
+
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2)
+    expect(result.skillsByCategory?.languages).toContain('PHP')
+    expect(result.skillsByCategory?.databases).toContain('MySQL')
   })
 
   // analyzeProject ───────────────────────────────────────────
