@@ -17,8 +17,9 @@ ALTER TABLE candidate_skills
   ADD CONSTRAINT check_category CHECK (
     category IN (
       'languages', 'frameworks', 'libraries', 'os',
-      'databases', 'clouds', 'infrastructures', 'tools',
-      'methodologies', 'certifications', 'design', 'marketing', 'others'
+      'databases', 'dwh', 'clouds', 'infrastructures',
+      'tools', 'methodologies', 'certifications',
+      'design', 'marketing', 'others'
     )
   );
 
@@ -27,8 +28,9 @@ ALTER TABLE candidate_skills
 -- ALTER TABLE candidate_skills ADD CONSTRAINT check_category CHECK (
 --   category IN (
 --     'languages', 'frameworks', 'libraries', 'os',
---     'databases', 'clouds', 'infrastructures', 'tools',
---     'methodologies', 'certifications', 'design', 'marketing', 'others'
+--     'databases', 'dwh', 'clouds', 'infrastructures',
+--     'tools', 'methodologies', 'certifications',
+--     'design', 'marketing', 'others'
 --   )
 -- );
 

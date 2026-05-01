@@ -11,6 +11,7 @@ interface SkillsByCategory {
   libraries: string[]
   os: string[]
   databases: string[]
+  dwh: string[]
   clouds: string[]
   infrastructures: string[]
   tools: string[]
@@ -42,6 +43,7 @@ const CATEGORY_STYLE: Record<keyof SkillsByCategory, { label: string; badge: str
   libraries:       { label: 'ライブラリ', badge: 'bg-emerald-50 text-emerald-700' },
   os:              { label: 'OS',         badge: 'bg-amber-50 text-amber-700' },
   databases:       { label: 'DB',         badge: 'bg-orange-50 text-orange-700' },
+  dwh:             { label: 'DWH',        badge: 'bg-fuchsia-50 text-fuchsia-700' },
   clouds:          { label: 'クラウド',   badge: 'bg-sky-50 text-sky-700' },
   infrastructures: { label: 'インフラ',   badge: 'bg-cyan-50 text-cyan-700' },
   tools:           { label: 'ツール',     badge: 'bg-violet-50 text-violet-700' },

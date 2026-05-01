@@ -362,20 +362,22 @@ Deno.serve(async (req: Request) => {
 - email: string | null（候補者本人のみ。なければ null）
 - phone: string | null（明記されたもののみ。なければ null）
 - skills: string[]（職種問わず明記されているもののみ。重複なし。正規化済み。なければ[]）
-- skillsByCategory: object（skillsを以下のカテゴリに分類。該当なしは[]）
-  - languages: string[]（プログラミング言語・クエリ言語）
-  - frameworks: string[]（Webフレームワーク等）
-  - libraries: string[]（ライブラリ、UIキット等）
-  - databases: string[]（RDB, NoSQL, KVS等）
-  - clouds: string[]（AWS, Azure, GCP等）
-  - infrastructures: string[]（Docker, Kubernetes, Terraform, Nginx, Apache等）
-  - tools: string[]（Git, Jira, Slack, Notion, BIツール等）
-  - os: string[]（Linux, Windows, MacOS等）
-  - methodologies: string[]（PM, アジャイル, 要件定義, 企画, ディレクション等）
-  - certifications: string[]（資格試験等）
-  - design: string[]（Illustrator, Photoshop, Figma, XD, 動画編集, グラフィックデザイン等）
-  - marketing: string[]（SEO, SNS運用, リサーチ, ECサイト運営, 広告運用等）
-  - others: string[]（上記に当てはまらないもの全て）
+- skillsByCategory: object（skillsを以下の14カテゴリに分類。該当なしは[]）
+  【カテゴリ厳守ルール】以下の14カテゴリキーのみ使用すること。それ以外のキーは絶対に追加しないこと。どのカテゴリにも当てはまらないスキルはすべて others に入れること。
+  - languages: string[]（プログラミング言語・クエリ言語。例: PHP, Java, Python, SQL, HTML/CSS）
+  - frameworks: string[]（Webフレームワーク・アプリFW等。例: Laravel, React, Vue, Spring）
+  - libraries: string[]（ライブラリ、UIキット等。例: jQuery, Bootstrap, NumPy）
+  - os: string[]（OS。例: Linux, Windows, MacOS, Unix）
+  - databases: string[]（RDB, NoSQL, KVS等。例: MySQL, PostgreSQL, MongoDB, Redis）
+  - dwh: string[]（データウェアハウス・分析基盤。例: BigQuery, Snowflake, Redshift, dbt, Looker, Tableau, Power BI）
+  - clouds: string[]（クラウドサービス。例: AWS, Azure, GCP, Firebase）
+  - infrastructures: string[]（インフラ技術。例: Docker, Kubernetes, Terraform, Nginx, Apache, CI/CD）
+  - tools: string[]（開発・業務ツール。例: Git, Jira, Slack, Notion, Salesforce, Excel, PowerPoint）
+  - methodologies: string[]（手法・マネジメント。例: アジャイル, スクラム, 要件定義, 企画立案, ディレクション, PM）
+  - certifications: string[]（資格試験等。例: AWS認定, 情報処理技術者, TOEIC）
+  - design: string[]（デザイン・クリエイティブ。例: Illustrator, Photoshop, Figma, XD, After Effects, Premiere Pro, グラフィックデザイン, 動画編集）
+  - marketing: string[]（マーケティング・集客。例: SEO, SNS運用, Web広告, ECサイト運営, デジタルマーケティング）
+  - others: string[]（上記14カテゴリに当てはまらないもの全て）
 - roles: string[]（担当役割・職種。例: ["PM", "グラフィックデザイナー", "クリエイティブディレクター", "ITコンサル"]。明記されているもののみ）
 - industries: string[]（業界経験。例: ["通信", "金融", "広告", "EC"]。職歴・本文から読み取れるもの）
 - experienceYears: number | null（計算または明記された値。なければ null）
@@ -396,12 +398,10 @@ JSON:`.trim()
         name: string; email: string | null; phone: string | null
         skills: string[]
         skillsByCategory: {
-          languages: string[]; frameworks: string[]; libraries: string[]; databases: string[]
-          clouds: string[]; infrastructures: string[]; tools: string[]; os: string[]
-          methodologies: string[]; certifications: string[]; others: string[]
-          design: string[]; marketing: string[]
-          // `business` and `dwh` were in claude.md but not in the UI's SkillsByCategory,
-          // aligning with UI's 13 categories.
+          languages: string[]; frameworks: string[]; libraries: string[]; os: string[]
+          databases: string[]; dwh: string[]; clouds: string[]; infrastructures: string[]
+          tools: string[]; methodologies: string[]; certifications: string[]
+          design: string[]; marketing: string[]; others: string[]
         }
         roles: string[]
         industries: string[]
@@ -415,9 +415,14 @@ JSON:`.trim()
 
       console.log('[AI解析結果 candidate]', JSON.stringify(analyzed, null, 2))
 
-      // スキル重複除去（大文字小文字を無視して正規化）
+      // スキル重複除去（trim + 大文字小文字を無視して正規化）
       const skills = Array.from(
-        new Map((analyzed.skills ?? []).map((s: string) => [s.toLowerCase(), s])).values()
+        new Map(
+          (analyzed.skills ?? [])
+            .map((s: string) => s.trim())
+            .filter((s: string) => s.length > 0)
+            .map((s: string) => [s.toLowerCase(), s])
+        ).values()
       )
 
       // 送信者メールアドレスが混入していたら除去
@@ -436,8 +441,10 @@ JSON:`.trim()
           text: body.slice(0, 5000),
           summary: analyzed.summary ?? '',
           skillsByCategory: analyzed.skillsByCategory ?? {
-            languages: [], frameworks: [], libraries: [], databases: [], clouds: [],
-            infrastructures: [], tools: [], os: [], methodologies: [], certifications: [], others: [], design: [], marketing: [],
+            languages: [], frameworks: [], libraries: [], os: [],
+            databases: [], dwh: [], clouds: [], infrastructures: [],
+            tools: [], methodologies: [], certifications: [],
+            design: [], marketing: [], others: [],
           },
           roles: analyzed.roles ?? [],
           industries: analyzed.industries ?? [],
@@ -463,7 +470,12 @@ JSON:`.trim()
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
 
       // candidate_skills に一括INSERT
-      const validCategories = ['languages', 'frameworks', 'libraries', 'databases', 'clouds', 'infrastructures', 'tools', 'os', 'methodologies', 'certifications', 'design', 'marketing', 'others']
+      const validCategories = [
+        'languages', 'frameworks', 'libraries', 'os',
+        'databases', 'dwh', 'clouds', 'infrastructures',
+        'tools', 'methodologies', 'certifications',
+        'design', 'marketing', 'others',
+      ]
       const skillsPayload: { candidate_id: string; category: string; skill: string }[] = []
       const categoryMap = analyzed.skillsByCategory ?? {}
       for (const category of validCategories) {
