@@ -5,9 +5,11 @@
 バグゼロを目指した徹底的なテスト、こまめなGit管理、および将来の担当者が即座に再現可能なドキュメント完備をゴールとする。
 
 ## 2. 技術スタック
-- **Frontend**: React 18 (Vite), TypeScript, Tailwind CSS, TanStack Query
+- **Frontend**: React 19 (Vite 8), TypeScript, Tailwind CSS v4, TanStack Query v5
 - **Backend/DB**: Supabase (PostgreSQL, Edge Functions, Realtime)
-- **AI**: Google Gemini 2.5 Flash Lite（メイン・無料枠）/ OpenAI GPT-4o（切替可）
+- **AI（ブラウザ）**: Google Gemini `gemini-1.5-flash-8b`（`src/lib/ai/geminiProvider.ts`）
+- **AI（サーバー）**: Google Gemini `gemini-2.5-flash`（Vercel `api/analyze.ts`、Edge `inbound-email`）
+- **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は `openaiProvider.ts` が未実装スタブ
 - **Email**: Outlook専用アカウント + Make.com（Inbound Webhook）
 - **Testing**: Vitest, React Testing Library, MSW (Mock Service Worker)
 - **Deployment**: Vercel (Frontend), Supabase (Backend)
@@ -36,14 +38,14 @@
 
 ### 【Phase 4】自動化・デプロイ・改善 ✅（継続中）
 1. **[Claude] 作業**: Make.com (Outlook) と連携した自動解析フローの実装
-   - フロー: メール受信 → Make.com が検知 → Supabase Edge Function → Gemini AI 解析 → DB 保存
+   - フロー: メール受信 → Make.com が検知 → **Supabase Edge Function** または **Vercel `/api/analyze`** → Gemini AI 解析 → DB 保存
    - 人材用メール: `akinavi.hr.ai.voice.human@outlook.jp`
    - 案件用メール: `akinavi.hr.ai.voice.project@outlook.jp`
 2. **[Claude] 作業**: AI解析精度の継続的改善（プロンプトチューニング）
 3. **[Claude] 作業**: Google Drive / Sheets / Docs リンクの自動取得機能実装
 
-### 【Phase 5】最終納品ドキュメント作成（未着手）
-1. **[Claude] 作業**: システム構成図（Mermaid.js形式）の作成
+### 【Phase 5】最終納品ドキュメント作成（一部未着手）
+1. **[Claude] 作業**: システム構成図のメンテナンス（`README.md` に Mermaid 図あり。詳細アーキテクチャが必要なら追記）
 2. **[Claude] 作業**: 操作マニュアル (Sales_Manual.md) の作成（営業担当者向け）
 3. **[Claude] 完了**: 全成果物を commit & push し、納品完了
 
@@ -58,26 +60,29 @@
 
 ## 5. データベース構成
 
+`candidate_skills` のカテゴリ CHECK 制約は **`supabase/migrations/add_candidate_skills.sql` を正**とする。`schema.sql` と定義が食い違う場合があるため、新規環境ではマイグレーション適用後の状態を確認すること。
+
 ### テーブル一覧
 | テーブル | 用途 |
 |---|---|
 | `candidates` | 人材マスタ。スキル・経歴・raw_profileを保持 |
 | `projects` | 案件マスタ。必要スキル・予算・raw_dataを保持 |
 | `submissions` | マッチング提案履歴。スコア・AI要約を保持 |
-| `candidate_skills` | スキルを11カテゴリに分解して保持（検索最適化） |
+| `candidate_skills` | スキルをカテゴリ別に分解して保持（検索最適化・**14カテゴリ**・上記マイグレーション準拠） |
 | `ai_logs` | AI解析の実行ログ（モデル・所要時間・結果・エラー） |
 | `app_config` | アプリ全体設定 |
 
-### candidate_skills の13カテゴリ
+### candidate_skills の14カテゴリ（マイグレーション準拠）
 | カテゴリ | 内容 |
 |---|---|
 | `languages` | プログラミング言語・クエリ言語 |
-| `frameworks` | FW・ライブラリ |
+| `frameworks` | フレームワーク |
 | `libraries` | ライブラリ、UIキット等 |
 | `os` | OS |
 | `databases` | RDB・NoSQL・KVS |
+| `dwh` | DWH・BI 等 |
 | `clouds` | クラウドサービス |
-| `infrastructures` | インフラ技術 |
+| `infrastructures` | インフラ技術（コンテナ・IaC 等） |
 | `tools` | Git, Jira, Slack, Notion, BIツール等 |
 | `methodologies` | PM・マネジメント系 |
 | `certifications` | 資格試験等 |
@@ -101,9 +106,11 @@
 - 取得失敗は無視してフォールバック
 
 ### AI プロバイダー抽象化
-- **メイン**: Google Gemini 2.5 Flash Lite（Edge Function）/ Gemini 2.5 Flash（Vercel API）
-- **切替**: `.env` の `AI_PROVIDER=gemini` / `AI_PROVIDER=openai` で切り替え可能
-- AI解析部分は `AIProvider` インターフェースで抽象化
+- **ブラウザ（Vite）**: Gemini `gemini-1.5-flash-8b`（`VITE_GEMINI_API_KEY`）
+- **Vercel Serverless（`api/analyze`）** / **Edge（`inbound-email`）**: Gemini `gemini-2.5-flash`（`GEMINI_API_KEY`）
+- **フロントの切替**: `.env.local` 等で `VITE_AI_PROVIDER=gemini`（デフォルト）または `openai` — 後者はスタブで未実装
+- **サーバー側**: 現状 Gemini 固定（OpenAI 切替なし）
+- フロントの AI 呼び出しは `AIProvider` インターフェースで抽象化
 
 ### 認証なし・ニックネーム制
 - ログイン機能は持たない
