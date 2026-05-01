@@ -320,6 +320,10 @@ function EditModal({ candidate, nickname, onClose, onSaved }: EditModalProps) {
               <label className={labelCls}>転送元メールアドレス（変更不可）</label>
               <input className={readonlyCls} value={form.from} readOnly />
             </div>
+            <div className="space-y-1">
+              <label className={labelCls}>メール受信日時（変更不可）</label>
+              <input className={readonlyCls} value={candidate.created_at ? formatDate(candidate.created_at) : ''} readOnly />
+            </div>
           </section>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
