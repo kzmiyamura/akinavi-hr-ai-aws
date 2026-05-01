@@ -6,9 +6,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
-// mammoth / xlsx: URLを変数化してバンドラーの静的解析を回避（コールドスタート軽量化）
-const _MAMMOTH_URL = 'https://esm.sh/' + 'mammoth@1.8.0'
-const _XLSX_URL = 'https://esm.sh/' + 'xlsx@0.18.5'
+// Word/Excel: esm.sh の動的 import は Edge 上で ERR_MODULE_NOT_FOUND になることがあるため npm: を使用
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -143,12 +141,25 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes
 }
 
-/** Word(.docx)をテキストに変換（バンドル回避の動的インポート） */
+/** npm 動的 import の default / namespace 差を吸収 */
+function npmDefault<T extends Record<string, unknown>>(mod: T): T {
+  const d = mod as { default?: T }
+  if (d.default && typeof d.default === 'object') {
+    const def = d.default as Record<string, unknown>
+    if (typeof def.read === 'function' || typeof def.extractRawText === 'function') return d.default as T
+  }
+  return mod
+}
+
+/** Word(.docx)をテキストに変換 */
 async function extractWordText(base64: string): Promise<string> {
   try {
-    const { default: mammoth } = await import(_MAMMOTH_URL)
+    const mammothMod = npmDefault(await import('npm:mammoth@1.8.0'))
+    const extractRawText = (mammothMod as { extractRawText?: (o: { arrayBuffer: ArrayBuffer }) => Promise<{ value?: string }> })
+      .extractRawText
+    if (!extractRawText) throw new Error('mammoth.extractRawText がありません')
     const buffer = base64ToUint8Array(base64).buffer
-    const result = await mammoth.extractRawText({ arrayBuffer: buffer })
+    const result = await extractRawText({ arrayBuffer: buffer })
     return result.value ?? ''
   } catch (e) {
     console.warn('[Word] テキスト抽出失敗', e)
@@ -156,10 +167,13 @@ async function extractWordText(base64: string): Promise<string> {
   }
 }
 
-/** Excel(.xlsx/.xls)をCSVテキストに変換（バンドル回避の動的インポート・最初の3シートまで） */
+/** Excel(.xlsx/.xls)をCSVテキストに変換（最初の3シートまで） */
 async function extractExcelText(base64: string): Promise<string> {
   try {
-    const XLSX = await import(_XLSX_URL)
+    const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
+      read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
+      utils: { sheet_to_csv: (sheet: unknown) => string }
+    }
     const bytes = base64ToUint8Array(base64)
     const workbook = XLSX.read(bytes, { type: 'array' })
     const texts: string[] = []
