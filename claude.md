@@ -8,7 +8,7 @@
 - **Frontend**: React 19 (Vite 8), TypeScript, Tailwind CSS v4, TanStack Query v5
 - **Backend/DB**: Supabase (PostgreSQL, Edge Functions, Realtime)
 - **AI（ブラウザ）**: Google Gemini `gemini-1.5-flash-8b`（`src/lib/ai/geminiProvider.ts`）
-- **AI（サーバー）**: Google Gemini `gemini-2.5-flash`（Vercel `api/analyze.ts`、Edge `inbound-email`）
+- **AI（サーバー・自動取り込み）**: Google Gemini `gemini-2.5-flash` — **Supabase Edge Function `inbound-email` のみ**（旧 Vercel `api/analyze` は移設済み・本番 Webhook では未使用）
 - **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は `openaiProvider.ts` が未実装スタブ
 - **Email**: Outlook専用アカウント + Make.com（Inbound Webhook）
 - **Testing**: Vitest, React Testing Library, MSW (Mock Service Worker)
@@ -38,7 +38,8 @@
 
 ### 【Phase 4】自動化・デプロイ・改善 ✅（継続中）
 1. **[Claude] 作業**: Make.com (Outlook) と連携した自動解析フローの実装
-   - フロー: メール受信 → Make.com が検知 → **Supabase Edge Function** または **Vercel `/api/analyze`** → Gemini AI 解析 → DB 保存
+   - フロー: メール受信 → Make.com が検知 → **Supabase Edge Function `inbound-email`**（解析API） → Gemini AI 解析 → DB 保存
+   - サーバー側解析は **Supabase Functions に移設済み**（Vercel Serverless の `api/analyze` はレガシー）
    - 人材用メール: `akinavi.hr.ai.voice.human@outlook.jp`
    - 案件用メール: `akinavi.hr.ai.voice.project@outlook.jp`
 2. **[Claude] 作業**: AI解析精度の継続的改善（プロンプトチューニング）
@@ -107,7 +108,7 @@
 
 ### AI プロバイダー抽象化
 - **ブラウザ（Vite）**: Gemini `gemini-1.5-flash-8b`（`VITE_GEMINI_API_KEY`）
-- **Vercel Serverless（`api/analyze`）** / **Edge（`inbound-email`）**: Gemini `gemini-2.5-flash`（`GEMINI_API_KEY`）
+- **サーバー（Edge `inbound-email` のみ）**: Gemini `gemini-2.5-flash`（Supabase Secrets の `GEMINI_API_KEY`）
 - **フロントの切替**: `.env.local` 等で `VITE_AI_PROVIDER=gemini`（デフォルト）または `openai` — 後者はスタブで未実装
 - **サーバー側**: 現状 Gemini 固定（OpenAI 切替なし）
 - フロントの AI 呼び出しは `AIProvider` インターフェースで抽象化

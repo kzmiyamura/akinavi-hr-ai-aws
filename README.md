@@ -14,12 +14,14 @@ flowchart TD
     C -->|解析結果| B
     B -->|upsert / fetch| D[(Supabase\nPostgreSQL)]
     E[外部メール\nOutlook] -->|受信| F[Make.com]
-    F -->|Webhook POST| G[Edge Function\nSupabase]
+    F -->|Webhook POST\n（解析API）| G[Edge Function\ninbound-email]
     G -->|Drive/Sheets URL検出→fetch| H[Google Drive\n共有リンク]
     G -->|AI解析| I[Gemini 2.5 Flash\ngemini-2.5-flash]
     I -->|解析結果| G
     G -->|upsert| D
 ```
+
+**サーバー側のメール／Webhook 解析API**は **Supabase Edge Function `inbound-email` に集約**している（以前の Vercel Serverless `api/analyze` から移設済み）。Make.com 等の送信先は Supabase の Functions URL のみを使う。
 
 ---
 
@@ -31,8 +33,7 @@ flowchart TD
 | 状態管理 | TanStack Query v5 |
 | DB / バックエンド | Supabase (PostgreSQL, Edge Functions) |
 | AI（ブラウザ・Vite） | Google Gemini（`gemini-1.5-flash-8b`）— `src/lib/ai/geminiProvider.ts` |
-| AI（Vercel `/api/analyze`） | Google Gemini（`gemini-2.5-flash`）— Make.com 等からの Serverless 解析 |
-| AI（Edge `inbound-email`） | Google Gemini（`gemini-2.5-flash`）— メール Webhook 経由の解析 |
+| AI（サーバー・Edge） | Google Gemini（`gemini-2.5-flash`）— **`supabase/functions/inbound-email`**（Make.com Webhook → 解析 → DB） |
 | メール自動受信 | Outlook 専用アカウント + Make.com Webhook |
 | デプロイ | Vercel（フロント）/ Supabase（バックエンド） |
 | テスト | Vitest, React Testing Library, MSW |
@@ -85,7 +86,7 @@ VITE_GEMINI_API_KEY=（Google AI Studio から取得）
 VITE_AI_PROVIDER=gemini
 ```
 
-その他のキー（Vercel API 用の `GEMINI_API_KEY` や任意の `RESEND_API_KEY` 等）は `.env.example` を参照。
+その他のキー（任意の `RESEND_API_KEY` 等）は `.env.example` を参照。サーバー側の `GEMINI_API_KEY` は **Supabase Functions の Secrets** で設定する（ローカルフロントのみなら不要なこともある）。
 
 ### 4. Supabase DB を初期化
 
@@ -109,17 +110,16 @@ npm run dev
 
 ### Vercel（フロントエンド）
 
-1. Vercel ダッシュボード → Settings → Environment Variables に以下を設定:
+1. Vercel ダッシュボード → Settings → Environment Variables に、**フロント用**を設定:
    - `VITE_SUPABASE_URL`
    - `VITE_SUPABASE_ANON_KEY`
    - `VITE_GEMINI_API_KEY`
    - `VITE_AI_PROVIDER=gemini`
-   - `GEMINI_API_KEY`（Vercel API用）
-   - `SUPABASE_URL`
-   - `SUPABASE_SERVICE_ROLE_KEY`
 2. GitHub の `main` ブランチへの push で自動デプロイ
 
-### Supabase Edge Function（メール自動受信）
+メール自動解析は Vercel 上では動かさず、次項の **Supabase Edge Function** の Secrets に `GEMINI_API_KEY` 等を置く。
+
+### Supabase Edge Function（メール自動受信・サーバー側解析API）
 
 ```bash
 # Secrets 登録
@@ -150,10 +150,10 @@ Make.com の POST パラメータ:
 
 ---
 
-## AI 解析フロー
+## AI 解析フロー（自動取り込み）
 
 ```
-メール受信（Make.com）
+メール受信（Make.com）→ Supabase Edge Function `inbound-email`
   ↓
 本文の HTML タグを自動除去（プレーンテキスト化）
   ↓
@@ -226,7 +226,9 @@ Gemini AI 解析（PDF添付 + テキスト、temperature=0）
 | Gemini（デフォルト） | `VITE_AI_PROVIDER=gemini` | `gemini-1.5-flash-8b`（`geminiProvider.ts`） |
 | OpenAI | `VITE_AI_PROVIDER=openai` | 未実装（スタブ。`openaiProvider.ts` に実装が必要） |
 
-サーバー側（`api/analyze.ts`・Edge `inbound-email`）は環境変数 `GEMINI_API_KEY` とモデル ID `gemini-2.5-flash` を使用。OpenAI への切替はサーバー未対応。
+サーバー側の自動解析は **Edge `inbound-email` のみ**。Supabase Secrets の `GEMINI_API_KEY` とモデル ID `gemini-2.5-flash` を使用。OpenAI への切替はサーバー未対応。
+
+リポジトリに `api/analyze.ts` が残っている場合は **移設前の Vercel Serverless の名残**（本番の Webhook では未使用）。
 
 ---
 
@@ -247,7 +249,7 @@ npm run test
 ```
 akinavi-hr-ai/
 ├── api/
-│   └── analyze.ts            # Vercel Serverless Function（Make.com Webhook受信）
+│   └── analyze.ts            # レガシー: 移設前の Vercel 解析API（本番Webhookでは未使用）
 ├── src/
 │   ├── lib/
 │   │   ├── ai/               # AI プロバイダー抽象化
