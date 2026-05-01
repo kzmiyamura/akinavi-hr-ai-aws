@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2 } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { upsertCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import type { Candidate } from '../lib/db/candidates'
@@ -25,6 +25,11 @@ interface RawProfile {
   skillsByCategory?: SkillsByCategory
   roles?: string[]
   industries?: string[]
+  prefecture?: string | null
+  nearestStation?: string | null
+  availableRegions?: string[] | null
+  currentWorkLocation?: string | null
+  remoteAvailable?: boolean
 }
 
 function getRaw(c: Candidate): RawProfile {
@@ -32,20 +37,25 @@ function getRaw(c: Candidate): RawProfile {
 }
 
 const CATEGORY_STYLE: Record<keyof SkillsByCategory, { label: string; badge: string }> = {
-  languages:      { label: '言語',       badge: 'bg-blue-50 text-blue-700' },
-  frameworks:     { label: 'FW',         badge: 'bg-green-50 text-green-700' },
-  libraries:      { label: 'ライブラリ', badge: 'bg-emerald-50 text-emerald-700' },
-  os:             { label: 'OS',         badge: 'bg-amber-50 text-amber-700' },
-  databases:      { label: 'DB',         badge: 'bg-orange-50 text-orange-700' },
-  clouds:         { label: 'クラウド',   badge: 'bg-sky-50 text-sky-700' },
-  infrastructures:{ label: 'インフラ',   badge: 'bg-cyan-50 text-cyan-700' },
-  tools:          { label: 'ツール',     badge: 'bg-violet-50 text-violet-700' },
-  methodologies:  { label: '手法',       badge: 'bg-indigo-50 text-indigo-700' },
-  certifications: { label: '資格',       badge: 'bg-yellow-50 text-yellow-700' },
-  design:         { label: 'デザイン',   badge: 'bg-pink-50 text-pink-700' },
-  marketing:      { label: 'マーケ',     badge: 'bg-rose-50 text-rose-700' },
-  others:         { label: 'その他',     badge: 'bg-gray-100 text-gray-600' },
+  languages:       { label: '言語',       badge: 'bg-blue-50 text-blue-700' },
+  frameworks:      { label: 'FW',         badge: 'bg-green-50 text-green-700' },
+  libraries:       { label: 'ライブラリ', badge: 'bg-emerald-50 text-emerald-700' },
+  os:              { label: 'OS',         badge: 'bg-amber-50 text-amber-700' },
+  databases:       { label: 'DB',         badge: 'bg-orange-50 text-orange-700' },
+  clouds:          { label: 'クラウド',   badge: 'bg-sky-50 text-sky-700' },
+  infrastructures: { label: 'インフラ',   badge: 'bg-cyan-50 text-cyan-700' },
+  tools:           { label: 'ツール',     badge: 'bg-violet-50 text-violet-700' },
+  methodologies:   { label: '手法',       badge: 'bg-indigo-50 text-indigo-700' },
+  certifications:  { label: '資格',       badge: 'bg-yellow-50 text-yellow-700' },
+  design:          { label: 'デザイン',   badge: 'bg-pink-50 text-pink-700' },
+  marketing:       { label: 'マーケ',     badge: 'bg-rose-50 text-rose-700' },
+  others:          { label: 'その他',     badge: 'bg-gray-100 text-gray-600' },
 }
+
+// カテゴリごとの折りたたみ閾値
+const COLLAPSED_PER_CATEGORY = 5
+// カード全体の折りたたみ表示を出す最低スキル合計数
+const EXPAND_THRESHOLD = 10
 
 interface Props { nickname: string }
 
@@ -53,7 +63,16 @@ export function CandidatePage({ nickname }: Props) {
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const queryClient = useQueryClient()
+
+  function toggleExpand(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
 
   const deleteMutation = useMutation({
     mutationFn: deleteCandidate,
@@ -81,8 +100,6 @@ export function CandidatePage({ nickname }: Props) {
   const mutation = useMutation({
     mutationFn: async (rawText: string) => {
       const analyzed = await ai.analyzeCandidate({ rawText })
-      // 既存候補と名前・スキルの類似チェックは AI のマッチング判定に委ねる
-      // ここでは単純に duplicateSuspected=false で登録（Phase 3 の重複管理で対応）
       return upsertCandidate({ analyzed, rawText, createdBy: nickname })
     },
     onSuccess: (candidate) => {
@@ -144,28 +161,63 @@ export function CandidatePage({ nickname }: Props) {
           <p className="text-sm text-gray-400">まだ登録されていません</p>
         ) : (
           <div className="space-y-3">
-            {candidates.map((c: Candidate) => (
-              <div key={c.id} className="border border-gray-100 rounded-lg p-4 flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-gray-800 text-sm">{c.name}</span>
-                    {c.duplicate_flag && (
-                      <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
-                    )}
-                  </div>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年
-                  </p>
-                  {(() => {
-                    const raw = getRaw(c)
-                    const { skillsByCategory: sbc, roles, industries } = raw
+            {candidates.map((c: Candidate) => {
+              const raw = getRaw(c)
+              const { skillsByCategory: sbc, roles, industries,
+                prefecture, nearestStation, availableRegions,
+                currentWorkLocation, remoteAvailable } = raw
+              const isExpanded = expandedIds.has(c.id)
 
-                    return (
+              // 全スキル合計数を計算してトグル表示要否を判断
+              const totalSkills = sbc
+                ? Object.values(sbc).reduce((sum, arr) => sum + (arr?.length ?? 0), 0)
+                : (c.skills as string[]).length
+              const needsToggle = totalSkills > EXPAND_THRESHOLD
+
+              // 勤務地情報の有無
+              const hasLocation = prefecture || nearestStation || currentWorkLocation ||
+                (availableRegions && availableRegions.length > 0) || remoteAvailable
+
+              return (
+                <div key={c.id} className="border border-gray-100 rounded-lg p-4">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      {/* ヘッダー */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-gray-800 text-sm">{c.name}</span>
+                        {c.duplicate_flag && (
+                          <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年
+                      </p>
+
+                      {/* 勤務地情報 */}
+                      {hasLocation && (
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5">
+                          <span className="flex items-center gap-1 text-xs text-gray-400">
+                            <MapPin size={11} />
+                            {[currentWorkLocation ?? prefecture, nearestStation].filter(Boolean).join(' / ')}
+                          </span>
+                          {availableRegions && availableRegions.length > 0 && (
+                            <span className="text-xs text-gray-400">
+                              対応: {availableRegions.join('・')}
+                            </span>
+                          )}
+                          {remoteAvailable && (
+                            <span className="flex items-center gap-1 text-xs bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">
+                              <Wifi size={10} />リモート可
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* スキル・役割・業界 */}
                       <div className="space-y-1 mt-1.5">
-                        {/* 役割・業界 */}
                         {(roles ?? []).length > 0 && (
                           <div className="flex flex-wrap gap-1 items-center">
-                            <span className="text-xs text-gray-400 w-10 shrink-0">役割</span>
+                            <span className="text-xs text-gray-400 w-12 shrink-0">役割</span>
                             {(roles ?? []).map((r) => (
                               <span key={r} className="text-xs bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5">{r}</span>
                             ))}
@@ -173,57 +225,82 @@ export function CandidatePage({ nickname }: Props) {
                         )}
                         {(industries ?? []).length > 0 && (
                           <div className="flex flex-wrap gap-1 items-center">
-                            <span className="text-xs text-gray-400 w-10 shrink-0">業界</span>
-                            {(industries ?? []).map((i) => (
+                            <span className="text-xs text-gray-400 w-12 shrink-0">業界</span>
+                            {(isExpanded ? industries! : (industries ?? []).slice(0, COLLAPSED_PER_CATEGORY)).map((i) => (
                               <span key={i} className="text-xs bg-teal-50 text-teal-700 rounded px-1.5 py-0.5">{i}</span>
                             ))}
+                            {!isExpanded && (industries ?? []).length > COLLAPSED_PER_CATEGORY && (
+                              <span className="text-xs text-gray-400">+{(industries ?? []).length - COLLAPSED_PER_CATEGORY}</span>
+                            )}
                           </div>
                         )}
-                        {/* スキル（カテゴリ別） */}
+
                         {sbc ? (
                           (Object.keys(CATEGORY_STYLE) as (keyof SkillsByCategory)[]).map((key) => {
                             const items = sbc[key]
                             if (!items || items.length === 0) return null
                             const { label, badge } = CATEGORY_STYLE[key]
+                            const shown = isExpanded ? items : items.slice(0, COLLAPSED_PER_CATEGORY)
+                            const hidden = items.length - COLLAPSED_PER_CATEGORY
                             return (
                               <div key={key} className="flex flex-wrap gap-1 items-center">
-                                <span className="text-xs text-gray-400 w-10 shrink-0">{label}</span>
-                                {items.map((s) => (
+                                <span className="text-xs text-gray-400 w-12 shrink-0">{label}</span>
+                                {shown.map((s) => (
                                   <span key={s} className={`text-xs rounded px-1.5 py-0.5 ${badge}`}>{s}</span>
                                 ))}
+                                {!isExpanded && hidden > 0 && (
+                                  <span className="text-xs text-gray-400">+{hidden}</span>
+                                )}
                               </div>
                             )
                           })
                         ) : (
                           // 旧レコード用フォールバック
                           <div className="flex flex-wrap gap-1">
-                            {(c.skills as string[]).slice(0, 6).map((s) => (
+                            {(isExpanded
+                              ? (c.skills as string[])
+                              : (c.skills as string[]).slice(0, COLLAPSED_PER_CATEGORY)
+                            ).map((s) => (
                               <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
                             ))}
-                            {(c.skills as string[]).length > 6 && (
-                              <span className="text-xs text-gray-400">+{(c.skills as string[]).length - 6}</span>
+                            {!isExpanded && (c.skills as string[]).length > COLLAPSED_PER_CATEGORY && (
+                              <span className="text-xs text-gray-400">+{(c.skills as string[]).length - COLLAPSED_PER_CATEGORY}</span>
                             )}
                           </div>
                         )}
                       </div>
-                    )
-                  })()}
+
+                      {/* 展開/折りたたみボタン */}
+                      {needsToggle && (
+                        <button
+                          onClick={() => toggleExpand(c.id)}
+                          className="mt-2 flex items-center gap-1 text-xs text-blue-500 hover:text-blue-700 transition-colors"
+                        >
+                          {isExpanded
+                            ? <><ChevronUp size={13} />閉じる</>
+                            : <><ChevronDown size={13} />すべて表示（{totalSkills}件）</>
+                          }
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-3 ml-4 shrink-0">
+                      <span className="text-xs text-gray-300">{c.created_by}</span>
+                      <button
+                        onClick={() => handleDelete(c)}
+                        disabled={deletingId === c.id}
+                        className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-50"
+                        title="削除"
+                      >
+                        {deletingId === c.id
+                          ? <Loader2 size={15} className="animate-spin" />
+                          : <Trash2 size={15} />}
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3 ml-4 shrink-0">
-                  <span className="text-xs text-gray-300">{c.created_by}</span>
-                  <button
-                    onClick={() => handleDelete(c)}
-                    disabled={deletingId === c.id}
-                    className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-50"
-                    title="削除"
-                  >
-                    {deletingId === c.id
-                      ? <Loader2 size={15} className="animate-spin" />
-                      : <Trash2 size={15} />}
-                  </button>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
