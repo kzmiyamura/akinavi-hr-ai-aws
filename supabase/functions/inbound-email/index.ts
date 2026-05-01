@@ -6,6 +6,8 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
+import mammoth from 'https://esm.sh/mammoth@1.8.0'
+import * as XLSX from 'https://esm.sh/xlsx@0.18.5'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -19,6 +21,15 @@ interface Attachment {
 }
 
 const SUPPORTED_MIME = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']
+
+const WORD_MIME = [
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/msword',
+]
+const EXCEL_MIME = [
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+]
 
 function getEnv(key: string): string {
   const val = Deno.env.get(key)
@@ -88,6 +99,46 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   let binary = ''
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
   return btoa(binary)
+}
+
+/** Base64データをUint8Arrayに変換 */
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+/** Word(.docx)をテキストに変換 */
+async function extractWordText(base64: string): Promise<string> {
+  try {
+    const buffer = base64ToUint8Array(base64).buffer
+    const result = await mammoth.extractRawText({ arrayBuffer: buffer })
+    return result.value ?? ''
+  } catch (e) {
+    console.warn('[Word] テキスト抽出失敗', e)
+    return ''
+  }
+}
+
+/** Excel(.xlsx/.xls)をCSVテキストに変換（最初の3シートまで） */
+function extractExcelText(base64: string): string {
+  try {
+    const bytes = base64ToUint8Array(base64)
+    const workbook = XLSX.read(bytes, { type: 'array' })
+    const texts: string[] = []
+    for (const sheetName of workbook.SheetNames.slice(0, 3)) {
+      const sheet = workbook.Sheets[sheetName]
+      const csv = XLSX.utils.sheet_to_csv(sheet)
+      if (csv.trim()) {
+        texts.push(`--- シート: ${sheetName} ---\n${csv}`)
+      }
+    }
+    return texts.join('\n\n')
+  } catch (e) {
+    console.warn('[Excel] テキスト抽出失敗', e)
+    return ''
+  }
 }
 
 /** 本文中の Google Drive / Sheets / Docs リンクを検出してコンテンツを取得 */
@@ -239,6 +290,26 @@ Deno.serve(async (req: Request) => {
       filtered: attachments.filter(a => !SUPPORTED_MIME.includes(a.mimeType)).map(a => a.mimeType),
     })
 
+    // Word/Excelのテキスト抽出
+    const officeTextContents: { label: string; content: string }[] = []
+    for (const att of attachments) {
+      if (WORD_MIME.includes(att.mimeType)) {
+        console.log(`[Office] Word変換開始: ${att.name}`)
+        const text = await extractWordText(att.data)
+        if (text.trim()) {
+          officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
+          console.log(`[Office] Word変換成功: ${text.length}文字`)
+        }
+      } else if (EXCEL_MIME.includes(att.mimeType)) {
+        console.log(`[Office] Excel変換開始: ${att.name}`)
+        const text = extractExcelText(att.data)
+        if (text.trim()) {
+          officeTextContents.push({ label: `Excelファイル(${att.name ?? 'spreadsheet'})`, content: text })
+          console.log(`[Office] Excel変換成功: ${text.length}文字`)
+        }
+      }
+    }
+
     if (!body.trim() && attachments.length === 0) {
       return new Response(JSON.stringify({ error: 'メール本文と添付ファイルが両方空です' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -258,13 +329,18 @@ Deno.serve(async (req: Request) => {
       })
     }
 
-    // Drive から取得したテキストをプロンプトに追記するための文字列
-    const driveTextSection = driveTexts.length > 0
-      ? '\n\n' + driveTexts.map(t => `--- ${t.label} ---\n${t.content.slice(0, 3000)}`).join('\n\n')
+    // Drive取得テキスト + Officeテキストを統合してプロンプトに追記
+    const allTextContents = [...driveTexts, ...officeTextContents]
+    const driveTextSection = allTextContents.length > 0
+      ? '\n\n' + allTextContents.map(t => `--- ${t.label} ---\n${t.content.slice(0, 3000)}`).join('\n\n')
       : ''
 
-    const attachmentNote = allAttachments.length > 0
-      ? `\n※添付ファイル（${allAttachments.map(a => a.name ?? a.mimeType).join('、')}）も含めて解析してください。`
+    const allAttachmentNames = [
+      ...allAttachments.map(a => a.name ?? a.mimeType),
+      ...officeTextContents.map(t => t.label),
+    ]
+    const attachmentNote = allAttachmentNames.length > 0
+      ? `\n※添付ファイル（${allAttachmentNames.join('、')}）も含めて解析してください。`
       : ''
 
     // ── 人材メール ────────────────────────────────────────────
@@ -455,7 +531,10 @@ JSON:`.trim()
           remoteAvailable: analyzed.remoteAvailable ?? false,
           from, subject,
           attachmentCount: allAttachments.length,
-          attachmentNames: allAttachments.map(a => a.name ?? a.mimeType),
+          attachmentNames: [
+            ...allAttachments.map(a => a.name ?? a.mimeType),
+            ...officeTextContents.map(t => t.label),
+          ],
           driveLinks: driveTexts.map(t => t.label),
           aiAnalysis: analyzed,
         },
