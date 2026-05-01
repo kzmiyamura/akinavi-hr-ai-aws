@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw } from 'lucide-react'
 import { ai } from '../lib/ai'
@@ -9,6 +9,10 @@ import {
   fetchSubmissionsByProject,
   fetchSubmissionsByCandidateWithProjects,
   fetchSubmissionStats,
+  fetchSubmissionsListPreview,
+  topSubmissionsPerProject,
+  topSubmissionsPerCandidate,
+  type SubmissionListPreviewRow,
 } from '../lib/db/submissions'
 import { supabase } from '../lib/supabase'
 import type { Candidate } from '../lib/db/candidates'
@@ -23,11 +27,24 @@ interface RankedSubmission extends Submission {
 
 type MatchMode = 'project' | 'candidate'
 
+function formatTopCandidatesLine(items: SubmissionListPreviewRow[]): string {
+  return items
+    .map((r) => `${r.candidate_name ?? '（不明）'} ${r.match_score}`)
+    .join(' · ')
+}
+
+function formatTopProjectsLine(items: SubmissionListPreviewRow[]): string {
+  return items
+    .map((r) => `${r.project_title ?? '（案件不明）'} ${r.match_score}`)
+    .join(' · ')
+}
+
 export function MatchingPage({ nickname }: Props) {
   const [mode, setMode] = useState<MatchMode>('project')
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
   const [selectedCandidateId, setSelectedCandidateId] = useState<string>('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null)
   const queryClient = useQueryClient()
 
   const { data: projects = [] } = useQuery({ queryKey: projectsQueryKeys.open, queryFn: fetchOpenProjects })
@@ -36,6 +53,13 @@ export function MatchingPage({ nickname }: Props) {
     queryKey: ['submission-stats'],
     queryFn: fetchSubmissionStats,
   })
+  const { data: previewRows = [], isLoading: isLoadingPreview } = useQuery({
+    queryKey: ['submissions-preview'],
+    queryFn: fetchSubmissionsListPreview,
+  })
+
+  const topByProject = useMemo(() => topSubmissionsPerProject(previewRows), [previewRows])
+  const topByCandidate = useMemo(() => topSubmissionsPerCandidate(previewRows), [previewRows])
 
   const { data: submissions = [], isLoading: isLoadingSubmissions } = useQuery({
     queryKey: ['submissions', selectedProjectId],
@@ -55,6 +79,14 @@ export function MatchingPage({ nickname }: Props) {
       candidate: (candidates as Candidate[]).find((c) => c.id === s.candidate_id)!,
     }))
     .filter((s) => s.candidate)
+
+  const invalidateMatchingQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ['submission-stats'] })
+    queryClient.invalidateQueries({ queryKey: ['submissions-preview'] })
+    queryClient.invalidateQueries({ queryKey: ['candidates'] })
+    queryClient.invalidateQueries({ queryKey: ['submissions'] })
+    queryClient.invalidateQueries({ queryKey: ['submissions-by-candidate'] })
+  }
 
   const matchByProjectMutation = useMutation({
     mutationFn: async (projectId: string) => {
@@ -83,8 +115,7 @@ export function MatchingPage({ nickname }: Props) {
     },
     onSuccess: (_data, projectId) => {
       queryClient.invalidateQueries({ queryKey: ['submissions', projectId] })
-      queryClient.invalidateQueries({ queryKey: ['submission-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      invalidateMatchingQueries()
       setMessage({ type: 'success', text: 'マッチングを更新しました' })
     },
     onError: (e) => setMessage({ type: 'error', text: String(e) }),
@@ -123,10 +154,107 @@ export function MatchingPage({ nickname }: Props) {
     },
     onSuccess: (_data, candidateId) => {
       queryClient.invalidateQueries({ queryKey: ['submissions-by-candidate', candidateId] })
-      queryClient.invalidateQueries({ queryKey: ['submission-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      invalidateMatchingQueries()
       setMessage({ type: 'success', text: 'マッチングを更新しました（この人材 × 募集中の全案件）' })
     },
+    onError: (e) => setMessage({ type: 'error', text: String(e) }),
+  })
+
+  const bulkAllProjectsMutation = useMutation({
+    mutationFn: async () => {
+      const plist = projects as Project[]
+      const clist = candidates as Candidate[]
+      const total = plist.length * clist.length
+      if (total === 0) return
+
+      let done = 0
+      setBulkProgress({ done: 0, total })
+      try {
+        for (const project of plist) {
+          const projectReq = projectToMatchRequirements(project)
+          for (const candidate of clist) {
+            const candidateProfile = {
+              name: candidate.name,
+              email: candidate.email,
+              phone: candidate.phone,
+              skills: candidate.skills as string[],
+              experienceYears: candidate.experience_years,
+              summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
+            }
+            const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
+
+            if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
+              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id)
+            }
+
+            await upsertSubmission({
+              candidateId: candidate.id,
+              projectId: project.id,
+              matchResult,
+              createdBy: nickname,
+            })
+            done += 1
+            setBulkProgress({ done, total })
+          }
+        }
+        setMessage({
+          type: 'success',
+          text: `一括マッチング完了（募集中 ${plist.length} 案件 × 全 ${clist.length} 名）`,
+        })
+      } finally {
+        setBulkProgress(null)
+      }
+    },
+    onSuccess: () => invalidateMatchingQueries(),
+    onError: (e) => setMessage({ type: 'error', text: String(e) }),
+  })
+
+  const bulkAllCandidatesMutation = useMutation({
+    mutationFn: async () => {
+      const plist = projects as Project[]
+      const clist = candidates as Candidate[]
+      const total = plist.length * clist.length
+      if (total === 0) return
+
+      let done = 0
+      setBulkProgress({ done: 0, total })
+      try {
+        for (const candidate of clist) {
+          const candidateProfile = {
+            name: candidate.name,
+            email: candidate.email,
+            phone: candidate.phone,
+            skills: candidate.skills as string[],
+            experienceYears: candidate.experience_years,
+            summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
+          }
+          for (const project of plist) {
+            const projectReq = projectToMatchRequirements(project)
+            const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
+
+            if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
+              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id)
+            }
+
+            await upsertSubmission({
+              candidateId: candidate.id,
+              projectId: project.id,
+              matchResult,
+              createdBy: nickname,
+            })
+            done += 1
+            setBulkProgress({ done, total })
+          }
+        }
+        setMessage({
+          type: 'success',
+          text: `一括マッチング完了（全 ${clist.length} 名 × 募集中 ${plist.length} 案件）`,
+        })
+      } finally {
+        setBulkProgress(null)
+      }
+    },
+    onSuccess: () => invalidateMatchingQueries(),
     onError: (e) => setMessage({ type: 'error', text: String(e) }),
   })
 
@@ -145,15 +273,51 @@ export function MatchingPage({ nickname }: Props) {
 
   const countByProject = stats?.countByProjectId ?? {}
   const countByCandidate = stats?.countByCandidateId ?? {}
-  const projectRerunPending = matchByProjectMutation.isPending
-  const candidateRerunPending = matchByCandidateMutation.isPending
+
+  const busy =
+    matchByProjectMutation.isPending ||
+    matchByCandidateMutation.isPending ||
+    bulkAllProjectsMutation.isPending ||
+    bulkAllCandidatesMutation.isPending
+
+  const runBulkAllProjects = () => {
+    const plist = projects as Project[]
+    const clist = candidates as Candidate[]
+    if (plist.length === 0 || clist.length === 0) return
+    const maxCalls = plist.length * clist.length
+    if (
+      !window.confirm(
+        `募集中の全 ${plist.length} 案件について、登録済みの全 ${clist.length} 名と AI マッチングを再実行します。\nAPI 呼び出しは最大 ${maxCalls} 回です。よろしいですか？`,
+      )
+    ) {
+      return
+    }
+    setMessage(null)
+    bulkAllProjectsMutation.mutate()
+  }
+
+  const runBulkAllCandidates = () => {
+    const plist = projects as Project[]
+    const clist = candidates as Candidate[]
+    if (plist.length === 0 || clist.length === 0) return
+    const maxCalls = plist.length * clist.length
+    if (
+      !window.confirm(
+        `全 ${clist.length} 名の人材について、募集中の全 ${plist.length} 案件と AI マッチングを再実行します。\nAPI 呼び出しは最大 ${maxCalls} 回です。よろしいですか？`,
+      )
+    ) {
+      return
+    }
+    setMessage(null)
+    bulkAllCandidatesMutation.mutate()
+  }
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-lg font-semibold text-gray-900">マッチング結果一覧</h1>
         <p className="text-sm text-gray-500 mt-1">
-          保存済みの AI スコアを案件別・人材別に確認できます。未実施の行は「マッチング未実施」と表示されます。「再実行」でその行について AI マッチングをやり直せます。
+          保存済みの AI スコアを案件別・人材別に確認できます。実施済みの行では上位の人材・案件名を一覧に表示します。未実施は「マッチング未実施」です。各行の「再実行」はその案件（またはその人材）だけを更新します。
         </p>
       </div>
 
@@ -184,6 +348,12 @@ export function MatchingPage({ nickname }: Props) {
         </button>
       </div>
 
+      {bulkProgress && (
+        <p className="text-sm text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-4 py-2">
+          一括実行中… {bulkProgress.done} / {bulkProgress.total}
+        </p>
+      )}
+
       {message && (
         <p className={`text-sm ${message.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
           {message.text}
@@ -193,11 +363,28 @@ export function MatchingPage({ nickname }: Props) {
       {mode === 'project' && (
         <>
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100">
-              <h2 className="text-base font-semibold text-gray-800">募集中の案件</h2>
-              <p className="text-sm text-gray-500 mt-0.5">
-                各行の「結果を見る」で人材ランキングを表示します。
-              </p>
+            <div className="px-6 py-4 border-b border-gray-100 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-gray-800">募集中の案件</h2>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  「結果を見る」で全人材のランキングを表示。一括は募集中の全案件 × 全人材を順に再スコアします。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={runBulkAllProjects}
+                disabled={
+                  (projects as Project[]).length === 0
+                  || (candidates as Candidate[]).length === 0
+                  || busy
+                }
+                className="inline-flex items-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+              >
+                {bulkAllProjectsMutation.isPending
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <RefreshCw size={14} />}
+                全案件×全人材を再マッチング
+              </button>
             </div>
             {(projects as Project[]).length === 0 ? (
               <p className="text-sm text-gray-400 px-6 py-8">募集中の案件がありません。</p>
@@ -208,13 +395,16 @@ export function MatchingPage({ nickname }: Props) {
                     <tr className="border-b border-gray-100 text-left text-gray-500 bg-gray-50/80">
                       <th className="py-3 px-6 font-medium">案件</th>
                       <th className="py-3 pr-4 font-medium whitespace-nowrap">クライアント</th>
-                      <th className="py-3 pr-4 font-medium whitespace-nowrap">マッチング</th>
+                      <th className="py-3 pr-4 font-medium min-w-[14rem]">マッチング</th>
                       <th className="py-3 px-6 font-medium text-right whitespace-nowrap">操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(projects as Project[]).map((p) => {
                       const n = isLoadingStats ? null : (countByProject[p.id] ?? 0)
+                      const top = topByProject.get(p.id) ?? []
+                      const rowSpin =
+                        matchByProjectMutation.isPending && matchByProjectMutation.variables === p.id
                       return (
                         <tr
                           key={p.id}
@@ -225,16 +415,22 @@ export function MatchingPage({ nickname }: Props) {
                           <td className="py-3 px-6 font-medium text-gray-900">{p.title}</td>
                           <td className="py-3 pr-4 text-gray-600">{p.client ?? '—'}</td>
                           <td className="py-3 pr-4">
-                            {isLoadingStats ? (
+                            {isLoadingStats || isLoadingPreview ? (
                               <span className="text-gray-400">読み込み中…</span>
                             ) : n === 0 ? (
                               <span className="text-amber-700 bg-amber-50 rounded px-2 py-0.5 text-xs font-medium">
                                 マッチング未実施
                               </span>
                             ) : (
-                              <span className="text-gray-700">
-                                実施済み（{n}名）
-                              </span>
+                              <div className="space-y-1 text-gray-700">
+                                <div>実施済み（{n}名）</div>
+                                {top.length > 0 && (
+                                  <div className="text-xs text-gray-600 leading-relaxed">
+                                    <span className="font-medium text-gray-500">上位: </span>
+                                    {formatTopCandidatesLine(top)}
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </td>
                           <td className="py-3 px-6 text-right">
@@ -255,13 +451,10 @@ export function MatchingPage({ nickname }: Props) {
                                   setMessage(null)
                                   matchByProjectMutation.mutate(p.id)
                                 }}
-                                disabled={
-                                  (candidates as Candidate[]).length === 0
-                                  || projectRerunPending
-                                }
+                                disabled={(candidates as Candidate[]).length === 0 || busy}
                                 className="inline-flex items-center gap-1 bg-blue-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                {projectRerunPending
+                                {rowSpin
                                   ? <Loader2 size={14} className="animate-spin" />
                                   : <RefreshCw size={14} />}
                                 再実行
@@ -336,11 +529,28 @@ export function MatchingPage({ nickname }: Props) {
       {mode === 'candidate' && (
         <>
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100">
-              <h2 className="text-base font-semibold text-gray-800">登録人材</h2>
-              <p className="text-sm text-gray-500 mt-0.5">
-                各行の「結果を見る」で案件ランキングを表示します。
-              </p>
+            <div className="px-6 py-4 border-b border-gray-100 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-gray-800">登録人材</h2>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  「結果を見る」で全案件のランキングを表示。一括は全人材 × 募集中の全案件を順に再スコアします。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={runBulkAllCandidates}
+                disabled={
+                  (projects as Project[]).length === 0
+                  || (candidates as Candidate[]).length === 0
+                  || busy
+                }
+                className="inline-flex items-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+              >
+                {bulkAllCandidatesMutation.isPending
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <RefreshCw size={14} />}
+                全人材×全案件を再マッチング
+              </button>
             </div>
             {(candidates as Candidate[]).length === 0 ? (
               <p className="text-sm text-gray-400 px-6 py-8">登録人材がありません。</p>
@@ -350,13 +560,16 @@ export function MatchingPage({ nickname }: Props) {
                   <thead>
                     <tr className="border-b border-gray-100 text-left text-gray-500 bg-gray-50/80">
                       <th className="py-3 px-6 font-medium">人材</th>
-                      <th className="py-3 pr-4 font-medium whitespace-nowrap">マッチング</th>
+                      <th className="py-3 pr-4 font-medium min-w-[14rem]">マッチング</th>
                       <th className="py-3 px-6 font-medium text-right whitespace-nowrap">操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(candidates as Candidate[]).map((c) => {
                       const n = isLoadingStats ? null : (countByCandidate[c.id] ?? 0)
+                      const top = topByCandidate.get(c.id) ?? []
+                      const rowSpin =
+                        matchByCandidateMutation.isPending && matchByCandidateMutation.variables === c.id
                       return (
                         <tr
                           key={c.id}
@@ -371,16 +584,22 @@ export function MatchingPage({ nickname }: Props) {
                             )}
                           </td>
                           <td className="py-3 pr-4">
-                            {isLoadingStats ? (
+                            {isLoadingStats || isLoadingPreview ? (
                               <span className="text-gray-400">読み込み中…</span>
                             ) : n === 0 ? (
                               <span className="text-amber-700 bg-amber-50 rounded px-2 py-0.5 text-xs font-medium">
                                 マッチング未実施
                               </span>
                             ) : (
-                              <span className="text-gray-700">
-                                実施済み（{n}件の案件）
-                              </span>
+                              <div className="space-y-1 text-gray-700">
+                                <div>実施済み（{n}件の案件）</div>
+                                {top.length > 0 && (
+                                  <div className="text-xs text-gray-600 leading-relaxed">
+                                    <span className="font-medium text-gray-500">上位案件: </span>
+                                    {formatTopProjectsLine(top)}
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </td>
                           <td className="py-3 px-6 text-right">
@@ -401,10 +620,10 @@ export function MatchingPage({ nickname }: Props) {
                                   setMessage(null)
                                   matchByCandidateMutation.mutate(c.id)
                                 }}
-                                disabled={(projects as Project[]).length === 0 || candidateRerunPending}
+                                disabled={(projects as Project[]).length === 0 || busy}
                                 className="inline-flex items-center gap-1 bg-blue-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                {candidateRerunPending
+                                {rowSpin
                                   ? <Loader2 size={14} className="animate-spin" />
                                   : <RefreshCw size={14} />}
                                 再実行

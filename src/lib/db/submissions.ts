@@ -113,3 +113,90 @@ export async function fetchSubmissionsByCandidateWithProjects(
     project: map.get(submission.project_id) ?? null,
   }))
 }
+
+/** 一覧の「上位プレビュー」用（案件名・人材名を FK 参照で取得） */
+export interface SubmissionListPreviewRow {
+  project_id: string
+  candidate_id: string
+  match_score: number
+  project_title: string | null
+  candidate_name: string | null
+}
+
+export async function fetchSubmissionsListPreview(): Promise<SubmissionListPreviewRow[]> {
+  const { data, error } = await supabase.from('submissions').select(`
+    project_id,
+    candidate_id,
+    match_score,
+    projects ( title ),
+    candidates ( name )
+  `)
+
+  if (error) throw new Error(`マッチング一覧プレビューの取得に失敗しました: ${error.message}`)
+
+  function pickTitle(projects: unknown): string | null {
+    if (projects == null) return null
+    if (Array.isArray(projects)) {
+      const first = projects[0] as { title?: string } | undefined
+      return first?.title ?? null
+    }
+    const o = projects as { title?: string }
+    return o.title ?? null
+  }
+
+  function pickName(candidates: unknown): string | null {
+    if (candidates == null) return null
+    if (Array.isArray(candidates)) {
+      const first = candidates[0] as { name?: string } | undefined
+      return first?.name ?? null
+    }
+    const o = candidates as { name?: string }
+    return o.name ?? null
+  }
+
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    project_id: String(row.project_id),
+    candidate_id: String(row.candidate_id),
+    match_score: Number(row.match_score),
+    project_title: pickTitle(row.projects),
+    candidate_name: pickName(row.candidates),
+  }))
+}
+
+const PREVIEW_TOP_N = 3
+
+export function topSubmissionsPerProject(
+  rows: SubmissionListPreviewRow[],
+  topN: number = PREVIEW_TOP_N,
+): Map<string, SubmissionListPreviewRow[]> {
+  const groups = new Map<string, SubmissionListPreviewRow[]>()
+  for (const r of rows) {
+    const list = groups.get(r.project_id) ?? []
+    list.push(r)
+    groups.set(r.project_id, list)
+  }
+  const out = new Map<string, SubmissionListPreviewRow[]>()
+  for (const [pid, list] of groups) {
+    list.sort((a, b) => b.match_score - a.match_score)
+    out.set(pid, list.slice(0, topN))
+  }
+  return out
+}
+
+export function topSubmissionsPerCandidate(
+  rows: SubmissionListPreviewRow[],
+  topN: number = PREVIEW_TOP_N,
+): Map<string, SubmissionListPreviewRow[]> {
+  const groups = new Map<string, SubmissionListPreviewRow[]>()
+  for (const r of rows) {
+    const list = groups.get(r.candidate_id) ?? []
+    list.push(r)
+    groups.set(r.candidate_id, list)
+  }
+  const out = new Map<string, SubmissionListPreviewRow[]>()
+  for (const [cid, list] of groups) {
+    list.sort((a, b) => b.match_score - a.match_score)
+    out.set(cid, list.slice(0, topN))
+  }
+  return out
+}
