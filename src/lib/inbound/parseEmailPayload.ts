@@ -18,6 +18,21 @@ export interface AnalyzedCandidate {
   email: string | null
   phone: string | null
   skills: string[]
+  skillsByCategory: {
+    languages: string[]
+    frameworks: string[]
+    libraries: string[]
+    databases: string[]
+    clouds: string[]
+    infrastructures: string[]
+    tools: string[]
+    os: string[]
+    methodologies: string[]
+    certifications: string[]
+    design: string[]
+    marketing: string[]
+    others: string[]
+  }
   experienceYears: number | null
   summary: string
   nearestStation: string | null
@@ -84,6 +99,9 @@ export function buildCandidatePayload(
     raw_profile: {
       text: parsed.body.slice(0, 5000),
       summary: analyzed.summary ?? '',
+      skillsByCategory: analyzed.skillsByCategory,
+      roles: analyzed.roles ?? [],
+      industries: analyzed.industries ?? [],
       nearestStation: analyzed.nearestStation ?? null,
       prefecture: analyzed.prefecture ?? null,
       availableRegions: analyzed.availableRegions ?? null,

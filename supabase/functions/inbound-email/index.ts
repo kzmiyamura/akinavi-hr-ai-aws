@@ -362,17 +362,19 @@ Deno.serve(async (req: Request) => {
 - email: string | null（候補者本人のみ。なければ null）
 - phone: string | null（明記されたもののみ。なければ null）
 - skills: string[]（職種問わず明記されているもののみ。重複なし。正規化済み。なければ[]）
-- skillsByCategory: object（skillsを以下の11カテゴリに分類。該当なしは[]。各カテゴリ内は経験年数が長い・主要なものを先頭に）
-  - languages: string[]（PHP, Java, JavaScript, Python, SQL, TypeScript, Ruby, Go 等のプログラミング言語・クエリ言語）
-  - frameworks: string[]（React, Laravel, SpringBoot, Vue.js, Django 等のFW・ライブラリ。なければ[]）
-  - os: string[]（Linux, Windows, MacOS, Unix 等のOS）
-  - databases: string[]（MySQL, PostgreSQL, Oracle, MongoDB, Redis, SQLServer 等のRDB・NoSQL・KVS）
-  - dwh: string[]（Snowflake, BigQuery, Redshift, Databricks, Tableau, Looker 等のDWH・BIツール）
-  - cloud: string[]（AWS, Azure, GCP, Docker, Kubernetes, Terraform 等のクラウド・インフラ・コンテナ）
-  - design: string[]（Illustrator, Photoshop, Figma, After Effects, Premiere Pro, XD, グラフィックデザイン, 動画編集 等のデザイン・クリエイティブ系）
-  - marketing: string[]（SEO, Google Analytics, SNS運営, デジタルマーケティング, SEM 等）
-  - management: string[]（PM, PMO, アジャイル, スクラム, 要件定義, RFP 等のマネジメント系）
-  - business: string[]（Excel, PowerPoint, Word, Salesforce, JIRA, Slack, Notion 等のビジネスツール）
+- skillsByCategory: object（skillsを以下のカテゴリに分類。該当なしは[]）
+  - languages: string[]（プログラミング言語・クエリ言語）
+  - frameworks: string[]（Webフレームワーク等）
+  - libraries: string[]（ライブラリ、UIキット等）
+  - databases: string[]（RDB, NoSQL, KVS等）
+  - clouds: string[]（AWS, Azure, GCP等）
+  - infrastructures: string[]（Docker, Kubernetes, Terraform, Nginx, Apache等）
+  - tools: string[]（Git, Jira, Slack, Notion, BIツール等）
+  - os: string[]（Linux, Windows, MacOS等）
+  - methodologies: string[]（PM, アジャイル, 要件定義, 企画, ディレクション等）
+  - certifications: string[]（資格試験等）
+  - design: string[]（Illustrator, Photoshop, Figma, XD, 動画編集, グラフィックデザイン等）
+  - marketing: string[]（SEO, SNS運用, リサーチ, ECサイト運営, 広告運用等）
   - others: string[]（上記に当てはまらないもの全て）
 - roles: string[]（担当役割・職種。例: ["PM", "グラフィックデザイナー", "クリエイティブディレクター", "ITコンサル"]。明記されているもののみ）
 - industries: string[]（業界経験。例: ["通信", "金融", "広告", "EC"]。職歴・本文から読み取れるもの）
@@ -394,10 +396,10 @@ JSON:`.trim()
         name: string; email: string | null; phone: string | null
         skills: string[]
         skillsByCategory: {
-          languages: string[]; frameworks: string[]; os: string[]
-          databases: string[]; dwh: string[]; cloud: string[]
-          design: string[]; marketing: string[]; management: string[]
-          business: string[]; others: string[]
+          languages: string[]; frameworks: string[]; libraries: string[]; databases: string[]
+          clouds: string[]; infrastructures: string[]; tools: string[]; os: string[]
+          methodologies: string[]; certifications: string[]; others: string[]
+          design: string[]; marketing: string[]
         }
         roles: string[]
         industries: string[]
@@ -432,8 +434,8 @@ JSON:`.trim()
           text: body.slice(0, 5000),
           summary: analyzed.summary ?? '',
           skillsByCategory: analyzed.skillsByCategory ?? {
-            languages: [], frameworks: [], os: [], databases: [], dwh: [],
-            cloud: [], design: [], marketing: [], management: [], business: [], others: [],
+            languages: [], frameworks: [], libraries: [], databases: [], clouds: [],
+            infrastructures: [], tools: [], os: [], methodologies: [], certifications: [], others: [], design: [], marketing: [],
           },
           roles: analyzed.roles ?? [],
           industries: analyzed.industries ?? [],
@@ -459,7 +461,7 @@ JSON:`.trim()
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
 
       // candidate_skills に一括INSERT
-      const validCategories = ['languages', 'frameworks', 'os', 'databases', 'dwh', 'cloud', 'design', 'marketing', 'management', 'business', 'others']
+      const validCategories = ['languages', 'frameworks', 'libraries', 'databases', 'clouds', 'infrastructures', 'tools', 'os', 'methodologies', 'certifications', 'design', 'marketing', 'others']
       const skillsPayload: { candidate_id: string; category: string; skill: string }[] = []
       const categoryMap = analyzed.skillsByCategory ?? {}
       for (const category of validCategories) {
