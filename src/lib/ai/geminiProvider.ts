@@ -1,12 +1,14 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
-import type {
-  AIProvider,
-  AnalyzeCandidateRequest,
-  AnalyzeCandidateResponse,
-  AnalyzeProjectRequest,
-  AnalyzeProjectResponse,
-  MatchRequest,
-  MatchResponse,
+import {
+  type AIProvider,
+  type AnalyzeCandidateRequest,
+  type AnalyzeCandidateResponse,
+  type AnalyzeProjectRequest,
+  type AnalyzeProjectResponse,
+  type MatchRequest,
+  type MatchResponse,
+  normalizeCandidateSkillsByCategory,
+  skillsByCategoryHasAny,
 } from './types'
 
 /** v1beta で generateContent 可能なモデル（旧 gemini-1.5-flash-8b は 404 になる） */
@@ -41,13 +43,35 @@ export const geminiProvider: AIProvider = {
 以下のテキストから人材情報を抽出し、JSON形式のみで返してください。
 コードブロックや説明文は不要です。
 
+【スキル】
+- 「/」「・」「,」「、」区切りは必ず個別要素に分割（例: "PHP / WordPress" → 別要素）。
+- skills は重複なしのフラット配列（全カテゴリに入った語を漏れなく含める）。
+- skillsByCategory は次の14キーのみ（追加禁止）。該当なしは []。どれにも当てはまらない語は必ず others に。
+  - languages: プログラミング・クエリ言語（PHP, JavaScript, Perl, SQL, HTML, CSS 等）
+  - frameworks: Web FW・アプリFW（CodeIgniter, FuelPHP 等）
+  - libraries: jQuery 等のライブラリ
+  - os: Linux, Windows 等
+  - databases: MySQL, FileMaker（DB用途）等
+  - dwh: DWH・BI 製品
+  - clouds: AWS, GCP 等
+  - infrastructures: VPN, Webサーバ, ネットワーク運用, Docker 等インフラ寄り
+  - tools: Git, Excel, WordPress（CMSツール運用）, Office, FileMaker（業務ツール）等
+  - methodologies: 要件定義, ディレクション, PM, アジャイル 等
+  - certifications: 資格・検定（ドットコムマスター等）
+  - design: デザイン・クリエイティブ（該当時のみ）
+  - marketing: マーケ・集客
+  - others: 上記以外（技術翻訳, 技術書執筆, アクセシビリティ対応 等もここで可）
+
+【その他フィールド】
+- roles: 経験職種・役割の配列
+- industries: 経験業界の配列
+- nearestStation: 最寄駅（都道府県＋駅名が分かればその形式）
+- prefecture, availableRegions, currentWorkLocation, remoteAvailable: 本文から判読できる範囲で
+
 抽出項目:
-- name: string（氏名。不明なら "不明"）
-- email: string | null
-- phone: string | null
-- skills: string[]（スキル・資格・言語等。空なら[]）
-- experienceYears: number | null（経験年数。不明ならnull）
-- summary: string（200字以内の要約）
+- name, email, phone, skills, skillsByCategory, roles, industries
+- experienceYears, summary（300字以内・強み・職種を具体的に）
+- nearestStation, prefecture, availableRegions, currentWorkLocation, remoteAvailable
 
 テキスト:
 ${req.rawText}
@@ -55,7 +79,19 @@ ${req.rawText}
 JSON:`.trim()
 
     const raw = await generate(prompt)
-    return parseJSON<AnalyzeCandidateResponse>(raw)
+    const data = parseJSON<AnalyzeCandidateResponse>(raw)
+    if (data.skillsByCategory != null) {
+      data.skillsByCategory = normalizeCandidateSkillsByCategory(data.skillsByCategory)
+    }
+    if (
+      (!data.skills || data.skills.length === 0)
+      && data.skillsByCategory
+      && skillsByCategoryHasAny(data.skillsByCategory)
+    ) {
+      const flat = Object.values(data.skillsByCategory).flat()
+      data.skills = [...new Map(flat.map((s) => [s.toLowerCase(), s])).values()]
+    }
+    return data
   },
 
   async analyzeProject(req: AnalyzeProjectRequest): Promise<AnalyzeProjectResponse> {

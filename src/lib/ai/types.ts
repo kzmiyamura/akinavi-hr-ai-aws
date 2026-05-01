@@ -7,14 +7,78 @@ export interface AnalyzeCandidateRequest {
   rawText: string // メール本文や自由記述テキスト
 }
 
+/** 人材スキル14カテゴリ（`candidate_skills` CHECK・Edge `inbound-email` と同一キー） */
+export interface CandidateSkillsByCategory {
+  languages: string[]
+  frameworks: string[]
+  libraries: string[]
+  os: string[]
+  databases: string[]
+  dwh: string[]
+  clouds: string[]
+  infrastructures: string[]
+  tools: string[]
+  methodologies: string[]
+  certifications: string[]
+  design: string[]
+  marketing: string[]
+  others: string[]
+}
+
+export function emptySkillsByCategory(): CandidateSkillsByCategory {
+  return {
+    languages: [],
+    frameworks: [],
+    libraries: [],
+    os: [],
+    databases: [],
+    dwh: [],
+    clouds: [],
+    infrastructures: [],
+    tools: [],
+    methodologies: [],
+    certifications: [],
+    design: [],
+    marketing: [],
+    others: [],
+  }
+}
+
+/** AI の部分キー・不正型を14カテゴリに正規化 */
+export function normalizeCandidateSkillsByCategory(
+  input: Partial<CandidateSkillsByCategory> | undefined | null,
+): CandidateSkillsByCategory {
+  const e = emptySkillsByCategory()
+  if (!input || typeof input !== 'object') return e
+  for (const k of Object.keys(e) as (keyof CandidateSkillsByCategory)[]) {
+    const arr = input[k]
+    e[k] = Array.isArray(arr) ? arr.map((x) => String(x).trim()).filter(Boolean) : []
+  }
+  return e
+}
+
+export function skillsByCategoryHasAny(sbc: CandidateSkillsByCategory): boolean {
+  return Object.values(sbc).some((arr) => arr.length > 0)
+}
+
 /** 人材プロフィール解析のレスポンス */
 export interface AnalyzeCandidateResponse {
   name: string
   email: string | null
   phone: string | null
+  /** 抽出スキル一覧（重複なし・検索・マッチング用）。skillsByCategory の要素と整合させること */
   skills: string[]
   experienceYears: number | null
   summary: string
+  /** スキルを14カテゴリに分類（画面の色分け表示に使用）。無い場合は skills のみ青タグ表示 */
+  skillsByCategory?: CandidateSkillsByCategory
+  roles?: string[]
+  industries?: string[]
+  nearestStation?: string | null
+  prefecture?: string | null
+  availableRegions?: string[] | null
+  currentWorkLocation?: string | null
+  remoteAvailable?: boolean
 }
 
 /** 案件情報解析のリクエスト */

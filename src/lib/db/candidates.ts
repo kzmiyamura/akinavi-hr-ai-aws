@@ -1,5 +1,9 @@
 import { supabase } from '../supabase'
-import type { AnalyzeCandidateResponse } from '../ai/types'
+import type { AnalyzeCandidateResponse, CandidateSkillsByCategory } from '../ai/types'
+import {
+  normalizeCandidateSkillsByCategory,
+  skillsByCategoryHasAny,
+} from '../ai/types'
 
 export interface Candidate {
   id: string
@@ -30,16 +34,47 @@ export interface UpsertCandidateInput {
  * - email がない場合は常に INSERT
  * - AI が重複疑いと判断した場合は duplicate_flag=true をセット
  */
+function buildCandidateRawProfile(rawText: string, analyzed: AnalyzeCandidateResponse): Record<string, unknown> {
+  const sbc: CandidateSkillsByCategory | null =
+    analyzed.skillsByCategory != null
+      ? normalizeCandidateSkillsByCategory(analyzed.skillsByCategory)
+      : null
+
+  const profile: Record<string, unknown> = {
+    text: rawText,
+    summary: analyzed.summary,
+  }
+  if (sbc && skillsByCategoryHasAny(sbc)) {
+    profile.skillsByCategory = sbc
+  }
+  if (analyzed.roles?.length) profile.roles = analyzed.roles
+  if (analyzed.industries?.length) profile.industries = analyzed.industries
+  if (analyzed.nearestStation != null) profile.nearestStation = analyzed.nearestStation
+  if (analyzed.prefecture != null) profile.prefecture = analyzed.prefecture
+  if (analyzed.availableRegions != null) profile.availableRegions = analyzed.availableRegions
+  if (analyzed.currentWorkLocation != null) profile.currentWorkLocation = analyzed.currentWorkLocation
+  if (analyzed.remoteAvailable != null) profile.remoteAvailable = analyzed.remoteAvailable
+  return profile
+}
+
 export async function upsertCandidate(input: UpsertCandidateInput): Promise<Candidate> {
   const { analyzed, rawText, createdBy, duplicateSuspected = false } = input
+
+  let skills = [...(analyzed.skills ?? [])].map((s) => s.trim()).filter(Boolean)
+  if (skills.length === 0 && analyzed.skillsByCategory != null) {
+    const sbc = normalizeCandidateSkillsByCategory(analyzed.skillsByCategory)
+    if (skillsByCategoryHasAny(sbc)) {
+      skills = [...new Map(Object.values(sbc).flat().map((s) => [s.toLowerCase(), s])).values()]
+    }
+  }
 
   const payload = {
     name: analyzed.name,
     email: analyzed.email,
     phone: analyzed.phone,
-    skills: analyzed.skills,
+    skills,
     experience_years: analyzed.experienceYears,
-    raw_profile: { text: rawText, summary: analyzed.summary },
+    raw_profile: buildCandidateRawProfile(rawText, analyzed),
     duplicate_flag: duplicateSuspected,
     created_by: createdBy,
   }
