@@ -87,9 +87,9 @@ export function ProjectPage({ nickname }: Props) {
         ) : (
           <div className="space-y-3">
             {projects.map((p: Project) => (
-              <div key={p.id} className="border border-gray-100 rounded-lg p-4">
+              <div key={p.id} className="border border-gray-100 rounded-lg p-4 space-y-2">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium text-gray-800 text-sm">{p.title}</span>
                     <span className={`text-xs rounded px-2 py-0.5 ${statusColor[p.status]}`}>
                       {statusLabel[p.status]}
@@ -97,15 +97,28 @@ export function ProjectPage({ nickname }: Props) {
                   </div>
                   <span className="text-xs text-gray-300">{p.created_by}</span>
                 </div>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  {p.client ?? 'クライアント不明'}
-                  {p.budget_min && ` ／ ${p.budget_min}〜${p.budget_max ?? '?'}万`}
-                </p>
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {(p.required_skills as string[]).slice(0, 6).map((s) => (
-                    <span key={s} className="text-xs bg-purple-50 text-purple-700 rounded px-1.5 py-0.5">{s}</span>
-                  ))}
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500">
+                  <span>{p.client ?? 'クライアント不明'}</span>
+                  {p.budget_min != null && (
+                    <span>予算: {p.budget_min}〜{p.budget_max ?? '?'}万</span>
+                  )}
+                  {p.start_date && (
+                    <span>開始: {p.start_date}</span>
+                  )}
+                  {p.end_date && (
+                    <span>終了: {p.end_date}</span>
+                  )}
                 </div>
+                {p.description && (
+                  <p className="text-xs text-gray-500 leading-relaxed">{p.description}</p>
+                )}
+                {(p.required_skills as string[]).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {(p.required_skills as string[]).map((s) => (
+                      <span key={s} className="text-xs bg-purple-50 text-purple-700 rounded px-1.5 py-0.5">{s}</span>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>

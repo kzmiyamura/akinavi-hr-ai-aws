@@ -9,6 +9,11 @@ import type { Project } from '../lib/db/projects'
 import type { Candidate } from '../lib/db/candidates'
 import type { Submission } from '../lib/db/submissions'
 
+function formatDate(iso: string) {
+  const d = new Date(iso)
+  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
 export function HistoryPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
   const queryClient = useQueryClient()
@@ -42,8 +47,11 @@ export function HistoryPage() {
     rejected: 'bg-red-100 text-red-500',
   }
 
-  const getCandidateName = (id: string) =>
-    (candidates as Candidate[]).find((c) => c.id === id)?.name ?? '不明'
+  const getCandidate = (id: string) =>
+    (candidates as Candidate[]).find((c) => c.id === id)
+
+  const getProject = (id: string) =>
+    (projects as Project[]).find((p) => p.id === id)
 
   return (
     <div className="space-y-6">
@@ -65,60 +73,107 @@ export function HistoryPage() {
         </select>
       </div>
 
-      {selectedProjectId && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          {isLoading ? (
-            <p className="text-sm text-gray-400">読み込み中...</p>
-          ) : (submissions as Submission[]).length === 0 ? (
-            <p className="text-sm text-gray-400">この案件の提案履歴はありません</p>
-          ) : (
-            <div className="space-y-3">
-              {(submissions as Submission[]).map((s) => (
-                <div key={s.id} className="border border-gray-100 rounded-lg p-4 flex items-center justify-between gap-4">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm text-gray-800">{getCandidateName(s.candidate_id)}</span>
-                      <span className={`text-xs rounded px-2 py-0.5 ${statusColor[s.status]}`}>
-                        {statusLabel[s.status]}
-                      </span>
-                      <span className="text-sm font-bold text-gray-600">Score: {s.match_score}</span>
-                    </div>
-                    <p className="text-xs text-gray-400 mt-0.5">{s.ai_summary}</p>
-                  </div>
-
-                  {/* ステータス操作ボタン */}
-                  <div className="flex gap-1 shrink-0">
-                    {s.status === 'pending' && (
-                      <button
-                        onClick={() => statusMutation.mutate({ id: s.id, status: 'sent' })}
-                        className="flex items-center gap-1 text-xs bg-blue-50 text-blue-700 rounded px-2 py-1 hover:bg-blue-100"
-                      >
-                        <Send size={12} />送信済みにする
-                      </button>
-                    )}
-                    {s.status === 'sent' && (
-                      <>
-                        <button
-                          onClick={() => statusMutation.mutate({ id: s.id, status: 'accepted' })}
-                          className="flex items-center gap-1 text-xs bg-green-50 text-green-700 rounded px-2 py-1 hover:bg-green-100"
-                        >
-                          <CheckCircle size={12} />採用
-                        </button>
-                        <button
-                          onClick={() => statusMutation.mutate({ id: s.id, status: 'rejected' })}
-                          className="flex items-center gap-1 text-xs bg-red-50 text-red-500 rounded px-2 py-1 hover:bg-red-100"
-                        >
-                          <XCircle size={12} />不採用
-                        </button>
-                      </>
-                    )}
-                  </div>
+      {selectedProjectId && (() => {
+        const proj = getProject(selectedProjectId)
+        return (
+          <>
+            {/* 案件詳細サマリ */}
+            {proj && (
+              <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-semibold text-gray-800">{proj.title}</span>
+                  {proj.client && <span className="text-xs text-gray-500">{proj.client}</span>}
+                  {proj.budget_min != null && (
+                    <span className="text-xs text-gray-500">予算: {proj.budget_min}〜{proj.budget_max ?? '?'}万</span>
+                  )}
+                  {proj.start_date && <span className="text-xs text-gray-400">開始: {proj.start_date}</span>}
+                  {proj.end_date && <span className="text-xs text-gray-400">終了: {proj.end_date}</span>}
                 </div>
-              ))}
+                {proj.description && (
+                  <p className="text-xs text-gray-500 leading-relaxed">{proj.description}</p>
+                )}
+                {(proj.required_skills as string[]).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {(proj.required_skills as string[]).map((s) => (
+                      <span key={s} className="text-xs bg-purple-50 text-purple-700 rounded px-1.5 py-0.5">{s}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              {isLoading ? (
+                <p className="text-sm text-gray-400">読み込み中...</p>
+              ) : (submissions as Submission[]).length === 0 ? (
+                <p className="text-sm text-gray-400">この案件の提案履歴はありません</p>
+              ) : (
+                <div className="space-y-3">
+                  {(submissions as Submission[]).map((s) => {
+                    const cand = getCandidate(s.candidate_id)
+                    return (
+                      <div key={s.id} className="border border-gray-100 rounded-lg p-4 flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-sm text-gray-800">{cand?.name ?? '不明'}</span>
+                            <span className={`text-xs rounded px-2 py-0.5 ${statusColor[s.status]}`}>
+                              {statusLabel[s.status]}
+                            </span>
+                            <span className="text-sm font-bold text-gray-600">Score: {s.match_score}</span>
+                          </div>
+                          {cand && (
+                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-400">
+                              {cand.email && <span>{cand.email}</span>}
+                              {cand.experience_years != null && <span>経験{cand.experience_years}年</span>}
+                            </div>
+                          )}
+                          {cand && (cand.skills as string[]).length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {(cand.skills as string[]).map((sk) => (
+                                <span key={sk} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{sk}</span>
+                              ))}
+                            </div>
+                          )}
+                          <p className="text-xs text-gray-400">{s.ai_summary}</p>
+                          <p className="text-xs text-gray-300">{formatDate(s.created_at)}</p>
+                        </div>
+
+                        {/* ステータス操作ボタン */}
+                        <div className="flex gap-1 shrink-0">
+                          {s.status === 'pending' && (
+                            <button
+                              onClick={() => statusMutation.mutate({ id: s.id, status: 'sent' })}
+                              className="flex items-center gap-1 text-xs bg-blue-50 text-blue-700 rounded px-2 py-1 hover:bg-blue-100"
+                            >
+                              <Send size={12} />送信済みにする
+                            </button>
+                          )}
+                          {s.status === 'sent' && (
+                            <>
+                              <button
+                                onClick={() => statusMutation.mutate({ id: s.id, status: 'accepted' })}
+                                className="flex items-center gap-1 text-xs bg-green-50 text-green-700 rounded px-2 py-1 hover:bg-green-100"
+                              >
+                                <CheckCircle size={12} />採用
+                              </button>
+                              <button
+                                onClick={() => statusMutation.mutate({ id: s.id, status: 'rejected' })}
+                                className="flex items-center gap-1 text-xs bg-red-50 text-red-500 rounded px-2 py-1 hover:bg-red-100"
+                              >
+                                <XCircle size={12} />不採用
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
+          </>
+        )
+      })()}
     </div>
   )
 }

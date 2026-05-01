@@ -136,24 +136,30 @@ export function MatchingPage({ nickname }: Props) {
             <div className="space-y-3">
               {ranked.map((s, i) => (
                 <div key={s.id} className="border border-gray-100 rounded-lg p-4 flex items-start gap-4">
-                  <div className="text-2xl font-bold text-gray-300 w-8 text-center">{i + 1}</div>
-                  <div className="flex-1">
+                  <div className="text-2xl font-bold text-gray-300 w-8 text-center shrink-0">{i + 1}</div>
+                  <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-gray-800 text-sm">{s.candidate.name}</span>
+                      {s.candidate.experience_years != null && (
+                        <span className="text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">経験{s.candidate.experience_years}年</span>
+                      )}
                       {s.candidate.duplicate_flag && (
                         <span className="flex items-center gap-1 text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">
                           <AlertTriangle size={11} />重複の疑い
                         </span>
                       )}
                     </div>
+                    {s.candidate.email && (
+                      <p className="text-xs text-gray-400 mt-0.5">{s.candidate.email}</p>
+                    )}
                     <div className="flex flex-wrap gap-1 mt-1">
-                      {(s.candidate.skills as string[]).slice(0, 5).map((sk) => (
+                      {(s.candidate.skills as string[]).map((sk) => (
                         <span key={sk} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{sk}</span>
                       ))}
                     </div>
                     <p className="text-xs text-gray-500 mt-1.5">{s.ai_summary}</p>
                   </div>
-                  <div className={`text-2xl font-bold rounded-lg px-3 py-1 ${scoreColor(s.match_score)}`}>
+                  <div className={`text-2xl font-bold rounded-lg px-3 py-1 shrink-0 ${scoreColor(s.match_score)}`}>
                     {s.match_score}
                   </div>
                 </div>
