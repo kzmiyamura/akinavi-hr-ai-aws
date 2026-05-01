@@ -33,6 +33,21 @@ async function generate(prompt: string): Promise<string> {
   return result.response.text()
 }
 
+/** スキル分類など JSON 確度を上げる（responseMimeType: application/json） */
+async function generateJsonText(prompt: string): Promise<string> {
+  const genAI = getClient()
+  const model = genAI.getGenerativeModel({
+    model: resolveModel(),
+    generationConfig: {
+      temperature: 0.15,
+      maxOutputTokens: 8192,
+      responseMimeType: 'application/json',
+    },
+  })
+  const result = await model.generateContent(prompt)
+  return result.response.text()
+}
+
 function parseJSON<T>(raw: string): T {
   // コードブロック（```json ... ```）を除去してパース
   const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
@@ -51,12 +66,12 @@ async function categorizeSkillsOnly(skills: string[], contextText: string): Prom
   ]
   if (unique.length === 0) return emptySkillsByCategory()
 
-  const prompt = `
+  const body = `
 あなたはスキル分類器です。次の skills の各要素を、次の14キーのうちちょうど1つにだけ割り当ててください。
 - skills にある文字列を**表記そのまま**使う（略称・別名に変えない）。
-- 各スキル語は**1つのキーにだけ**入れる（重複禁止）。
+- 各スキル語は**1つのキーにだけ**入れる（重複禁止）。skills の語を省略しない。
 - どのキーにも合わない語は others に。
-- JSONのみ。コードブロック禁止。
+- 出力は有効な JSON オブジェクト1つだけ（14キーすべて必須。値は string[]）。
 
 キー（この14個のみ）:
 languages, frameworks, libraries, os, databases, dwh, clouds, infrastructures, tools, methodologies, certifications, design, marketing, others
@@ -66,12 +81,24 @@ ${JSON.stringify(unique)}
 
 参考（文脈）:
 ${contextText.slice(0, 3500)}
-
-JSON:
 `.trim()
 
-  const raw = await generate(prompt)
-  return normalizeCandidateSkillsByCategory(parseJSON<Partial<CandidateSkillsByCategory>>(raw))
+  let lastErr: unknown
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const suffix =
+      attempt > 0
+        ? `\n\n【再試行${attempt}】14キーすべてを含む JSON のみ。skills の語を1つも漏らさないこと。`
+        : ''
+    try {
+      const raw = await generateJsonText(body + suffix)
+      const parsed = normalizeCandidateSkillsByCategory(parseJSON<Partial<CandidateSkillsByCategory>>(raw))
+      if (skillsByCategoryHasAny(parsed)) return parsed
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  if (lastErr) console.warn('[akinavi] categorizeSkillsOnly failed after retries', lastErr)
+  return emptySkillsByCategory()
 }
 
 export const geminiProvider: AIProvider = {
