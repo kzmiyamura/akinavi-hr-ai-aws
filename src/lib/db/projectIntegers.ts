@@ -9,11 +9,21 @@ export function normalizeOptionalInt(value: unknown, min: number, max: number): 
 }
 
 export function normalizeProjectIntegerColumns(input: {
+  budget_min: number | null
+  budget_max: number | null
   headcount: number | null
   settlement_min: number | null
   settlement_max: number | null
-}): { headcount: number | null; settlement_min: number | null; settlement_max: number | null } {
+}): {
+  budget_min: number | null
+  budget_max: number | null
+  headcount: number | null
+  settlement_min: number | null
+  settlement_max: number | null
+} {
   return {
+    budget_min: normalizeOptionalInt(input.budget_min, 0, 10_000),
+    budget_max: normalizeOptionalInt(input.budget_max, 0, 10_000),
     headcount: normalizeOptionalInt(input.headcount, 0, 10_000),
     settlement_min: normalizeOptionalInt(input.settlement_min, 0, 744),
     settlement_max: normalizeOptionalInt(input.settlement_max, 0, 744),

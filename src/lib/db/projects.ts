@@ -75,8 +75,16 @@ export interface InsertProjectInput {
 export async function insertProject(input: InsertProjectInput): Promise<Project> {
   const { analyzed, rawText, createdBy } = input
 
-  const { headcount, settlement_min: settlementMin, settlement_max: settlementMax } =
+  const {
+    budget_min: budgetMin,
+    budget_max: budgetMax,
+    headcount,
+    settlement_min: settlementMin,
+    settlement_max: settlementMax,
+  } =
     normalizeProjectIntegerColumns({
+      budget_min: analyzed.budgetMin ?? null,
+      budget_max: analyzed.budgetMax ?? null,
       headcount: analyzed.headcount ?? null,
       settlement_min: analyzed.settlementMin ?? null,
       settlement_max: analyzed.settlementMax ?? null,
@@ -89,8 +97,8 @@ export async function insertProject(input: InsertProjectInput): Promise<Project>
       client: analyzed.client,
       description: analyzed.description,
       required_skills: analyzed.requiredSkills,
-      budget_min: analyzed.budgetMin,
-      budget_max: analyzed.budgetMax,
+      budget_min: budgetMin,
+      budget_max: budgetMax,
       start_date: analyzed.startDate ?? null,
       end_date: analyzed.endDate ?? null,
       work_location: analyzed.workLocation ?? null,
@@ -142,8 +150,16 @@ export interface UpdateProjectInput {
 /** 案件を手動更新する（IDで直接UPDATE） */
 export async function updateProject(input: UpdateProjectInput): Promise<Project> {
   const { id, ...rest } = input
-  const { headcount, settlement_min: settlementMin, settlement_max: settlementMax } =
+  const {
+    budget_min: budgetMin,
+    budget_max: budgetMax,
+    headcount,
+    settlement_min: settlementMin,
+    settlement_max: settlementMax,
+  } =
     normalizeProjectIntegerColumns({
+      budget_min: rest.budget_min,
+      budget_max: rest.budget_max,
       headcount: rest.headcount,
       settlement_min: rest.settlement_min,
       settlement_max: rest.settlement_max,
@@ -152,6 +168,8 @@ export async function updateProject(input: UpdateProjectInput): Promise<Project>
     .from('projects')
     .update({
       ...rest,
+      budget_min: budgetMin,
+      budget_max: budgetMax,
       headcount,
       settlement_min: settlementMin,
       settlement_max: settlementMax,
