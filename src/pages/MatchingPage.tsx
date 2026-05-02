@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect, Fragment, type ReactNode } from 'react'
+import { useState, useMemo, useEffect, useCallback, Fragment, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle } from 'lucide-react'
 import { ai } from '../lib/ai'
@@ -38,6 +39,31 @@ type MatchingRunMode = 'fast' | 'full'
 const MATCHING_RUN_MODE_KEY = 'akinavi.matchingRunMode.v1'
 const FAST_MAX_CANDIDATES_PER_PROJECT = 20
 const FAST_MAX_PROJECTS_PER_CANDIDATE = 10
+
+/** マッチング実行中の進捗（一括・単体の「再実行」共通） */
+type MatchRunProgress = {
+  overall: { done: number; total: number }
+  outer?: { current: number; total: number; unit: '案件' | '人材'; detail?: string }
+  inner?: { current: number; total: number; unit: '候補者' | '案件' }
+}
+
+function truncateProgressLabel(s: string, max: number): string {
+  if (s.length <= max) return s
+  return `${s.slice(0, Math.max(0, max - 1))}…`
+}
+
+function formatMatchRunProgressLine(p: MatchRunProgress): string {
+  const chunks: string[] = []
+  if (p.outer && p.outer.total > 1) {
+    const tail = p.outer.detail ? `（${truncateProgressLabel(p.outer.detail, 32)}）` : ''
+    chunks.push(`${p.outer.unit} ${p.outer.current}/${p.outer.total}${tail}`)
+  }
+  if (p.inner && p.inner.total > 0) {
+    chunks.push(`${p.inner.unit} ${p.inner.current}/${p.inner.total} 件目`)
+  }
+  chunks.push(`全体 ${p.overall.done}/${p.overall.total}`)
+  return chunks.join(' · ')
+}
 
 function normalizeSkillToken(s: string): string {
   return s.trim().toLowerCase()
@@ -404,7 +430,13 @@ export function MatchingPage({
     return 'fast'
   })
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
-  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null)
+  const [matchRunProgress, setMatchRunProgress] = useState<MatchRunProgress | null>(null)
+  /** 非同期ループ内でも進捗が確実に1件ずつ描画されるよう同期コミットする */
+  const setMatchRunProgressNow = useCallback((next: MatchRunProgress | null) => {
+    flushSync(() => {
+      setMatchRunProgress(next)
+    })
+  }, [])
   const queryClient = useQueryClient()
 
   useEffect(() => {
@@ -519,29 +551,44 @@ export function MatchingPage({
 
       const projectReq = projectToMatchRequirements(project)
       const targets = pickCandidatesForProjectMatch(project, candidates as Candidate[], matchingRunMode)
+      const total = targets.length
+      if (total === 0) return
 
-      for (const candidate of targets) {
-        const candidateProfile = {
-          name: candidate.name,
-          email: candidate.email,
-          phone: candidate.phone,
-          skills: candidate.skills as string[],
-          experienceYears: candidate.experience_years,
-          summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
+      try {
+        for (let i = 0; i < targets.length; i++) {
+          const candidate = targets[i]
+          setMatchRunProgressNow({
+            overall: { done: i, total },
+            inner: { current: i + 1, total, unit: '候補者' },
+          })
+          const candidateProfile = {
+            name: candidate.name,
+            email: candidate.email,
+            phone: candidate.phone,
+            skills: candidate.skills as string[],
+            experienceYears: candidate.experience_years,
+            summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
+          }
+          const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
+
+          if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
+            await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+          }
+
+          await upsertSubmission({
+            candidateId: candidate.id,
+            projectId,
+            matchResult,
+            createdBy: nickname,
+            dataEnv,
+          })
+          setMatchRunProgressNow({
+            overall: { done: i + 1, total },
+            inner: { current: i + 1, total, unit: '候補者' },
+          })
         }
-        const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
-
-        if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-          await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
-        }
-
-        await upsertSubmission({
-          candidateId: candidate.id,
-          projectId,
-          matchResult,
-          createdBy: nickname,
-          dataEnv,
-        })
+      } finally {
+        setMatchRunProgressNow(null)
       }
     },
     onSuccess: () => {
@@ -573,22 +620,37 @@ export function MatchingPage({
       }
 
       const targetProjects = pickProjectsForCandidateMatch(candidate, projects as Project[], matchingRunMode)
+      const total = targetProjects.length
+      if (total === 0) return
 
-      for (const project of targetProjects) {
-        const projectReq = projectToMatchRequirements(project)
-        const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
+      try {
+        for (let i = 0; i < targetProjects.length; i++) {
+          const project = targetProjects[i]
+          setMatchRunProgressNow({
+            overall: { done: i, total },
+            inner: { current: i + 1, total, unit: '案件' },
+          })
+          const projectReq = projectToMatchRequirements(project)
+          const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
 
-        if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-          await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+          if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
+            await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+          }
+
+          await upsertSubmission({
+            candidateId: candidate.id,
+            projectId: project.id,
+            matchResult,
+            createdBy: nickname,
+            dataEnv,
+          })
+          setMatchRunProgressNow({
+            overall: { done: i + 1, total },
+            inner: { current: i + 1, total, unit: '案件' },
+          })
         }
-
-        await upsertSubmission({
-          candidateId: candidate.id,
-          projectId: project.id,
-          matchResult,
-          createdBy: nickname,
-          dataEnv,
-        })
+      } finally {
+        setMatchRunProgressNow(null)
       }
     },
     onSuccess: () => {
@@ -615,12 +677,27 @@ export function MatchingPage({
       if (total === 0) return
 
       let done = 0
-      setBulkProgress({ done: 0, total })
+      const projectTotal = plist.length
+      setMatchRunProgressNow({ overall: { done: 0, total } })
       try {
-        for (const project of plist) {
+        for (let pi = 0; pi < plist.length; pi++) {
+          const project = plist[pi]
           const projectReq = projectToMatchRequirements(project)
           const targets = pickCandidatesForProjectMatch(project, clist, matchingRunMode)
-          for (const candidate of targets) {
+          const candTotal = targets.length
+          for (let ci = 0; ci < targets.length; ci++) {
+            const candidate = targets[ci]
+            setMatchRunProgressNow({
+              overall: { done, total },
+              outer:
+                projectTotal > 1
+                  ? { current: pi + 1, total: projectTotal, unit: '案件', detail: project.title }
+                  : undefined,
+              inner:
+                candTotal > 0
+                  ? { current: ci + 1, total: candTotal, unit: '候補者' }
+                  : undefined,
+            })
             const candidateProfile = {
               name: candidate.name,
               email: candidate.email,
@@ -643,7 +720,17 @@ export function MatchingPage({
               dataEnv,
             })
             done += 1
-            setBulkProgress({ done, total })
+            setMatchRunProgressNow({
+              overall: { done, total },
+              outer:
+                projectTotal > 1
+                  ? { current: pi + 1, total: projectTotal, unit: '案件', detail: project.title }
+                  : undefined,
+              inner:
+                candTotal > 0
+                  ? { current: ci + 1, total: candTotal, unit: '候補者' }
+                  : undefined,
+            })
           }
         }
         setMessage({
@@ -654,7 +741,7 @@ export function MatchingPage({
               : `一括マッチング完了（全件モード：募集中 ${plist.length} 案件 × 全 ${clist.length} 名）`,
         })
       } finally {
-        setBulkProgress(null)
+        setMatchRunProgressNow(null)
       }
     },
     onSuccess: () => invalidateMatchingQueries(),
@@ -672,9 +759,11 @@ export function MatchingPage({
       if (total === 0) return
 
       let done = 0
-      setBulkProgress({ done: 0, total })
+      const peopleTotal = clist.length
+      setMatchRunProgressNow({ overall: { done: 0, total } })
       try {
-        for (const candidate of clist) {
+        for (let ci = 0; ci < clist.length; ci++) {
+          const candidate = clist[ci]
           const candidateProfile = {
             name: candidate.name,
             email: candidate.email,
@@ -684,8 +773,21 @@ export function MatchingPage({
             summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
           }
           const targetProjects = pickProjectsForCandidateMatch(candidate, plist, matchingRunMode)
+          const projTotal = targetProjects.length
 
-          for (const project of targetProjects) {
+          for (let pi = 0; pi < targetProjects.length; pi++) {
+            const project = targetProjects[pi]
+            setMatchRunProgressNow({
+              overall: { done, total },
+              outer:
+                peopleTotal > 1
+                  ? { current: ci + 1, total: peopleTotal, unit: '人材', detail: candidate.name }
+                  : undefined,
+              inner:
+                projTotal > 0
+                  ? { current: pi + 1, total: projTotal, unit: '案件' }
+                  : undefined,
+            })
             const projectReq = projectToMatchRequirements(project)
             const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
 
@@ -701,7 +803,17 @@ export function MatchingPage({
               dataEnv,
             })
             done += 1
-            setBulkProgress({ done, total })
+            setMatchRunProgressNow({
+              overall: { done, total },
+              outer:
+                peopleTotal > 1
+                  ? { current: ci + 1, total: peopleTotal, unit: '人材', detail: candidate.name }
+                  : undefined,
+              inner:
+                projTotal > 0
+                  ? { current: pi + 1, total: projTotal, unit: '案件' }
+                  : undefined,
+            })
           }
         }
         setMessage({
@@ -712,7 +824,7 @@ export function MatchingPage({
               : `一括マッチング完了（全件モード：全 ${clist.length} 名 × 募集中 ${plist.length} 案件）`,
         })
       } finally {
-        setBulkProgress(null)
+        setMatchRunProgressNow(null)
       }
     },
     onSuccess: () => invalidateMatchingQueries(),
@@ -843,10 +955,21 @@ export function MatchingPage({
         </p>
       </div>
 
-      {bulkProgress && (
-        <p className="text-sm text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-4 py-2">
-          一括実行中… {bulkProgress.done} / {bulkProgress.total}
-        </p>
+      {matchRunProgress && (
+        <div className="sticky top-0 z-20 text-sm text-blue-800 bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 space-y-2 shadow-sm">
+          <p className="font-semibold text-blue-900">マッチング実行中…</p>
+          <p className="text-blue-800/95 leading-snug break-words">{formatMatchRunProgressLine(matchRunProgress)}</p>
+          {matchRunProgress.overall.total > 0 && (
+            <div className="h-1.5 w-full bg-blue-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-blue-500 transition-[width] duration-300 ease-out"
+                style={{
+                  width: `${Math.min(100, (matchRunProgress.overall.done / matchRunProgress.overall.total) * 100)}%`,
+                }}
+              />
+            </div>
+          )}
+        </div>
       )}
 
       {message && (
@@ -930,21 +1053,30 @@ export function MatchingPage({
                           <td className="py-3 pr-3 sm:pr-4 text-gray-600 hidden md:table-cell whitespace-nowrap">
                             {p.client ?? '—'}
                           </td>
-                          <td className="py-3 px-3 sm:px-6 text-right">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setMessage(null)
-                                matchByProjectMutation.mutate(p.id)
-                              }}
-                              disabled={(candidates as Candidate[]).length === 0 || busy}
-                              className="inline-flex items-center justify-center gap-1 bg-blue-600 text-white rounded-lg px-2.5 sm:px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                            >
-                              {rowSpin
-                                ? <Loader2 size={14} className="animate-spin" />
-                                : <RefreshCw size={14} />}
-                              再実行
-                            </button>
+                          <td className="py-3 px-3 sm:px-6 text-right align-top">
+                            <div className="flex flex-col items-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMessage(null)
+                                  matchByProjectMutation.mutate(p.id)
+                                }}
+                                disabled={(candidates as Candidate[]).length === 0 || busy}
+                                className="inline-flex items-center justify-center gap-1 bg-blue-600 text-white rounded-lg px-2.5 sm:px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                              >
+                                {rowSpin
+                                  ? <Loader2 size={14} className="animate-spin" />
+                                  : <RefreshCw size={14} />}
+                                再実行
+                              </button>
+                              {rowSpin && (
+                                <p className="text-[11px] text-blue-800 font-medium leading-snug max-w-[min(100%,16rem)] text-right break-words">
+                                  {matchRunProgress
+                                    ? formatMatchRunProgressLine(matchRunProgress)
+                                    : 'AI 評価を準備しています…'}
+                                </p>
+                              )}
+                            </div>
                           </td>
                         </tr>
                         {showRanking && (
@@ -1079,21 +1211,30 @@ export function MatchingPage({
                               <div className="text-xs text-gray-500 mt-0.5 break-all">{c.email}</div>
                             )}
                           </td>
-                          <td className="py-3 px-3 sm:px-6 text-right">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setMessage(null)
-                                matchByCandidateMutation.mutate(c.id)
-                              }}
-                              disabled={(projects as Project[]).length === 0 || busy}
-                              className="inline-flex items-center justify-center gap-1 bg-blue-600 text-white rounded-lg px-2.5 sm:px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                            >
-                              {rowSpin
-                                ? <Loader2 size={14} className="animate-spin" />
-                                : <RefreshCw size={14} />}
-                              再実行
-                            </button>
+                          <td className="py-3 px-3 sm:px-6 text-right align-top">
+                            <div className="flex flex-col items-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMessage(null)
+                                  matchByCandidateMutation.mutate(c.id)
+                                }}
+                                disabled={(projects as Project[]).length === 0 || busy}
+                                className="inline-flex items-center justify-center gap-1 bg-blue-600 text-white rounded-lg px-2.5 sm:px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                              >
+                                {rowSpin
+                                  ? <Loader2 size={14} className="animate-spin" />
+                                  : <RefreshCw size={14} />}
+                                再実行
+                              </button>
+                              {rowSpin && (
+                                <p className="text-[11px] text-blue-800 font-medium leading-snug max-w-[min(100%,16rem)] text-right break-words">
+                                  {matchRunProgress
+                                    ? formatMatchRunProgressLine(matchRunProgress)
+                                    : 'AI 評価を準備しています…'}
+                                </p>
+                              )}
+                            </div>
                           </td>
                         </tr>
                         {showRanking && (

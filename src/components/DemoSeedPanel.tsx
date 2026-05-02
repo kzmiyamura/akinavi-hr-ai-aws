@@ -21,116 +21,178 @@ function makeEmail(prefix: string): string {
   return `${prefix}+${id}@demo.invalid`
 }
 
+/** 実際の求人・経歴書っぽいデモ用ペア（架空の個人・社名） */
 function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateResponse; analyzedProject: AnalyzeProjectResponse } {
   const stacks = [
     {
-      role: 'バックエンド',
-      langs: ['TypeScript', 'Node.js'],
+      role: 'バックエンドエンジニア',
+      langs: ['TypeScript', 'Node.js', 'SQL'],
       fw: ['NestJS', 'Express'],
       db: ['PostgreSQL', 'Redis'],
       cloud: ['AWS'],
-      biz: 'API開発・決済連携',
+      dwh: [] as string[],
+      biz: '決済・会員基盤のAPI設計〜実装、外部サービス連携',
+      projectHook: '既存ECのカート・決済周りのリプレイスと負荷対策',
+      industriesC: ['EC', 'SaaS', '金融FinTech'],
+      industryP: 'EC・小売向けIT',
     },
     {
-      role: 'フロントエンド',
-      langs: ['TypeScript', 'JavaScript'],
+      role: 'フロントエンドエンジニア',
+      langs: ['TypeScript', 'JavaScript', 'HTML/CSS'],
       fw: ['React', 'Next.js'],
-      db: [],
-      cloud: ['Vercel'],
-      biz: 'Webアプリ画面開発',
+      db: ['PostgreSQL'],
+      cloud: ['Vercel', 'AWS'],
+      dwh: [] as string[],
+      biz: '管理画面・顧客向けWebのSPA開発、アクセシビリティ対応',
+      projectHook: 'BtoB向けダッシュボードの新規開発とレガシー画面の段階的移行',
+      industriesC: ['IT', 'マーケティング', 'メディア'],
+      industryP: 'Web広告・マーケティング',
     },
     {
-      role: 'インフラ/SRE',
-      langs: ['Shell'],
+      role: 'インフラ／SRE',
+      langs: ['Shell', 'YAML'],
       fw: [],
       db: [],
       cloud: ['AWS', 'GCP'],
-      biz: 'IaC・監視・運用自動化',
+      dwh: [] as string[],
+      biz: 'Kubernetes運用、TerraformによるIaC、監視・アラート設計',
+      projectHook: 'マルチアカウント環境の権限整理とCI/CDパイプライン整備',
+      industriesC: ['クラウド', '製造', '通信'],
+      industryP: '製造業向けIoT',
     },
     {
-      role: 'データ基盤',
+      role: 'データエンジニア',
       langs: ['SQL', 'Python'],
-      fw: [],
+      fw: ['dbt'],
       db: ['BigQuery', 'PostgreSQL'],
       cloud: ['GCP'],
-      biz: 'ETL・ダッシュボード',
+      dwh: ['BigQuery', 'Snowflake'],
+      biz: 'ログ収集〜ワンバッチパイプライン、経営向けダッシュボード用データマート',
+      projectHook: '売上・在庫データの日次集計とLooker Studioレポート整備',
+      industriesC: ['小売', '物流', 'データ分析'],
+      industryP: '物流・サプライチェーン',
     },
   ] as const
 
+  const family = ['田中', '佐藤', '鈴木', '高橋', '渡辺', '伊藤', '山本', '中村', '小林', '加藤'][seed % 10]!
+  const given = ['誠', '翔太', '大輔', '健一', '拓也', '美咲', '優子', 'あゆみ', '玲奈', '健'][seed % 10]!
+  const displayName = `${family} ${given}`
+
+  const clients = [
+    '株式会社テックブリッジ',
+    'グローバルスタンダード・ソリューションズ',
+    'メディカルデータ・ラボ',
+    'ネクストリンク情報システム',
+    'ユナイテッドデジタルワークス',
+    'サンライズエンジニアリング',
+  ]
+  const client = clients[seed % clients.length]!
+
   const s = stacks[seed % stacks.length]
-  const exp = randInt(3, 18)
+  const exp = randInt(4, 22)
 
   const requiredSkills = Array.from(
     new Set([...s.langs.slice(0, 2), ...(s.fw.slice(0, 1)), ...(s.db.slice(0, 1))].filter(Boolean)),
   )
 
-  const niceToHaveSkills = Array.from(new Set([...(s.cloud.slice(0, 1)), 'Docker', 'Git'].filter(Boolean)))
+  const niceToHaveSkills = Array.from(
+    new Set([...(s.cloud.slice(0, 1)), ...(s.dwh.slice(0, 1)), 'Docker', 'GitHub Actions'].filter(Boolean)),
+  )
 
-  const budgetMin = randInt(45, 75)
-  const budgetMax = Math.min(budgetMin + randInt(0, 15), 120)
+  const budgetMin = randInt(55, 85)
+  const budgetMax = Math.min(budgetMin + randInt(5, 25), 130)
 
   const candidateSkills = Array.from(
     new Set([
       ...requiredSkills,
       ...niceToHaveSkills,
-      randPick(['Jira', 'Slack', 'Notion']),
-      randPick(['要件定義', '設計', 'コードレビュー']),
+      randPick(['Jira', 'Slack', 'Notion', 'Confluence']),
+      randPick(['要件定義', '基本設計', 'コードレビュー', 'オンコール対応']),
     ]),
-  ).slice(0, 12)
+  ).slice(0, 14)
+
+  const region = seed % 3
+  const loc =
+    region === 0
+      ? { prefecture: '東京都', station: '東京都港区 田町駅', regions: ['東京都', '神奈川県'] as string[], wl: '東京都' }
+      : region === 1
+        ? { prefecture: '大阪府', station: '大阪府大阪市 梅田駅', regions: ['大阪府', '京都府'] as string[], wl: '大阪府' }
+        : { prefecture: '福岡県', station: '福岡県福岡市 博多駅', regions: ['福岡県'] as string[], wl: '福岡県' }
 
   const sbc = {
     languages: [...s.langs],
     frameworks: [...s.fw],
-    libraries: [] as string[],
-    os: ['Linux'],
+    libraries: s.role.includes('フロント') ? ['TanStack Query'] : [],
+    os: ['Linux', 'macOS'],
     databases: [...s.db],
-    dwh: [] as string[],
+    dwh: [...s.dwh],
     clouds: [...s.cloud],
-    infrastructures: ['Docker'],
-    tools: ['Git', 'Slack'],
-    methodologies: ['アジャイル'],
-    certifications: [],
+    infrastructures: ['Docker', 'GitHub Actions'],
+    tools: ['Git', 'Slack', 'Jira'],
+    methodologies: ['スクラム', 'コードレビュー'],
+    certifications: seed % 4 === 0 ? ['AWS Certified Solutions Architect – Associate'] : [],
     design: [],
     marketing: [],
     others: [],
   }
 
+  const summary = [
+    `${displayName}。${s.role}として約${exp}年。${s.biz}を担当。`,
+    `直近は${s.projectHook}に従事。設計レビュー・障害時の一次切り分けも経験。`,
+    loc.prefecture === '東京都'
+      ? 'リモート・ハイブリッド双方の実務あり。'
+      : 'リモート中心だが出社・客先訪問の経験あり。',
+  ].join('')
+
   const analyzedCandidate: AnalyzeCandidateResponse = {
-    name: `デモ_${s.role}_${seed}`,
+    name: displayName,
     email: makeEmail('demo.candidate'),
-    phone: null,
+    phone: randPick([null, `090-${randInt(1000, 9999)}-${randInt(1000, 9999)}`]),
     skills: candidateSkills,
     experienceYears: exp,
-    summary: `${s.role}として${exp}年程度。${s.biz}の経験。`,
+    summary,
     skillsByCategory: sbc,
-    roles: [s.role],
-    industries: ['IT'],
-    nearestStation: '東京都 例駅',
-    prefecture: '東京都',
-    availableRegions: ['東京都'],
-    currentWorkLocation: '東京都',
+    roles: [s.role, randPick(['テックリード', 'メンバー', 'サブリーダー'])],
+    industries: s.industriesC,
+    nearestStation: loc.station,
+    prefecture: loc.prefecture,
+    availableRegions: loc.regions,
+    currentWorkLocation: loc.wl,
     remoteAvailable: randPick([true, false]),
   }
 
+  const projectTitle =
+    seed % 2 === 0
+      ? `【${loc.prefecture.slice(0, 2)}】${s.projectHook.slice(0, 28)}…（${s.role}）`
+      : `${client.replace(/株式会社|・/g, '').slice(0, 12)}向け ${s.role}募集`
+
   const analyzedProject: AnalyzeProjectResponse = {
-    title: `デモ案件_${s.role}_${seed}`,
-    client: `デモクライアント_${randInt(1, 99)}`,
-    description: `${s.biz}。チーム開発。ドキュメント作成あり。`,
+    title: projectTitle,
+    client,
+    description: [
+      `【背景】${s.projectHook}。既存チームと協業し、設計書・テスト観点の整備も依頼予定です。`,
+      `【稼働】週5を想定。状況によりオンコールの可能性あり（要相談）。`,
+      `【環境】GitHub、Slack、${randPick(['Notion', 'Confluence'])}でドキュメント管理。`,
+    ].join(''),
     requiredSkills,
     niceToHaveSkills,
     budgetMin,
     budgetMax,
     startDate: null,
     endDate: null,
-    workLocation: randPick(['東京都（ハイブリッド）', 'フルリモート', '大阪府（週2出社）']),
-    remotePolicy: randPick(['フルリモート可', 'ハイブリッド', '出社']),
-    contractType: randPick(['業務委託', '準委任']),
-    headcount: randInt(1, 3),
-    workload: '週5',
-    settlementMin: 140,
-    settlementMax: 180,
+    workLocation: randPick([
+      `${loc.prefecture}（ハイブリッド）`,
+      'フルリモート（日本国内）',
+      `${loc.prefecture}オフィス＋リモート併用`,
+    ]),
+    remotePolicy: randPick(['週3リモート可', 'フルリモート可', 'ハイブリッド（週2出社目安）']),
+    contractType: randPick(['業務委託（準委任）', '業務委託', '派遣']),
+    headcount: randInt(1, 2),
+    workload: randPick(['週5日（40h）', '週4〜5', '月20日']),
+    settlementMin: randPick([140, 150, 160]),
+    settlementMax: randPick([175, 180, 190]),
     roleSummary: s.role,
-    industry: 'IT',
+    industry: s.industryP,
   }
 
   return { analyzedCandidate, analyzedProject }
