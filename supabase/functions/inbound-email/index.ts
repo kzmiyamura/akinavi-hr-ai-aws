@@ -457,8 +457,16 @@ async function fetchGoogleLinks(body: string): Promise<{
   const textContents: { label: string; content: string }[] = []
   const pdfAttachments: Attachment[] = []
 
+  const sheetsMatchesPreview = [...body.matchAll(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]{25,})[^\s]*/g)]
+  const docsMatchesPreview = [...body.matchAll(/https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{25,})/g)]
+  const driveMatchesPreview = [...body.matchAll(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)([a-zA-Z0-9_-]{25,})/g)]
+  console.log('[STEP4 fetchGoogleLinks] 開始', {
+    bodyLen: body.length,
+    linkCounts: { sheets: sheetsMatchesPreview.length, docs: docsMatchesPreview.length, drive: driveMatchesPreview.length },
+  })
+
   // Google Sheets → CSV
-  const sheetsMatches = [...body.matchAll(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]{25,})[^\s]*/g)]
+  const sheetsMatches = sheetsMatchesPreview
   for (const match of sheetsMatches) {
     const id = match[1]
     const gidMatch = match[0].match(/[?&]gid=(\d+)/)
@@ -481,7 +489,7 @@ async function fetchGoogleLinks(body: string): Promise<{
   }
 
   // Google Docs → plain text
-  const docsMatches = [...body.matchAll(/https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{25,})/g)]
+  const docsMatches = docsMatchesPreview
   for (const match of docsMatches) {
     const id = match[1]
     const exportUrl = `https://docs.google.com/document/d/${id}/export?format=txt`
@@ -497,7 +505,7 @@ async function fetchGoogleLinks(body: string): Promise<{
   }
 
   // Google Drive ファイル → PDF or テキスト
-  const driveMatches = [...body.matchAll(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)([a-zA-Z0-9_-]{25,})/g)]
+  const driveMatches = driveMatchesPreview
   for (const match of driveMatches) {
     const id = match[1]
     const downloadUrl = `https://drive.google.com/uc?export=download&id=${id}`
@@ -697,7 +705,17 @@ Deno.serve(async (req: Request) => {
       )
     }
 
+    // STEP4 がログに出ない場合の切り分け: createClient 前後と fetchGoogleLinks 内で止まるかを分離する
+    console.log('[STEP3→4間] emptyチェック通過', {
+      bodyLen: body.trim().length,
+      attachmentCount: attachments.length,
+      type,
+      inboundDataEnv,
+      elapsed: elapsed(),
+    })
+    console.log('[STEP3→4間] Supabase createClient 直前')
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
+    console.log('[STEP3→4間] Supabase createClient 完了')
 
     // Google Drive / Sheets / Docs リンクの取得
     console.log(`[STEP4 DriveLink開始] elapsed=${elapsed()}`)
@@ -1259,7 +1277,8 @@ JSON:`.trim()
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error('[inbound-email] エラー:', message)
+    const stack = err instanceof Error ? err.stack : undefined
+    console.error('[inbound-email] エラー:', message, stack ?? '')
 
     try {
       const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
