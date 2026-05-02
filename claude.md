@@ -10,7 +10,7 @@
 - **AI（ブラウザ）**: Google Gemini デフォルト `gemini-2.0-flash`（`VITE_GEMINI_MODEL` で上書き可）
 - **AI（サーバー・自動取り込み）**: Google Gemini `gemini-2.5-flash` — Supabase Edge Function `inbound-email` のみ
 - **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は未実装スタブ
-- **メール自動取り込み（実装予定）**: Microsoft Graph API ポーリング + Supabase pg_cron（詳細は Phase 4.5）
+- **メール自動取り込み（現行・稼働中）**: Microsoft Graph API ポーリング + Supabase pg_cron（Make.com不要・完全無料・5分間隔）
 - **メール自動取り込み（旧・現在停止中）**: Make.com → Pipedream（いずれも無料枠超過により運用停止）
 - **Testing**: Vitest, React Testing Library, MSW (Mock Service Worker)
 - **Deployment**: Vercel (Frontend), Supabase (Backend)
@@ -50,7 +50,7 @@
 5. **[Claude] 作業**: 人材・案件の編集機能・最終更新者/日時表示
 6. **[人間] 判断**: Make.com・Pipedreamともに無料枠超過 → Microsoft Graph API ポーリングへ移行決定
 
-### 【Phase 4.5】Microsoft Graph API ポーリングへ移行 ⏳（作業中）
+### 【Phase 4.5】Microsoft Graph API ポーリングへ移行 ✅（完了・稼働中）
 
 #### 方針
 Make.com・Pipedream等の外部SaaSを廃止し、**完全無料・永続稼働**のメール自動取り込みを実現する。
@@ -122,27 +122,21 @@ Gemini AI 解析 → DB 保存
    - `supabase/migrations/add_email_polling_cron.sql` をSQL Editorで実行
    - pg_cron・pg_net の有効化とスケジュール登録
 
-**【Claude Code】作業**
+**【Claude Code】作業（完了）**
 
-1. **認証コードをリフレッシュトークンに交換**（人間からcodeを受け取り次第）
-   - Microsoft Token Endpoint へPOSTしてリフレッシュトークンを取得
-   - 取得したトークンを人間へ渡す（Secretsに登録してもらう）
-
-2. **Edge Function `poll-email` の実装**
+1. ✅ **Edge Function `poll-email` の実装**
    - `supabase/functions/poll-email/index.ts` を新規作成
-   - 処理内容:
-     - リフレッシュトークンからアクセストークンを取得
-     - `GET /me/messages?$filter=isRead eq false&$top=10` で未読メール取得
-     - 2アカウント分を順番に処理
-     - 既存の `inbound-email` の解析ロジックを呼び出し（内部でinbound-emailをPOST）
-     - 処理済みを既読マーク（`PATCH /me/messages/{id}` で `isRead: true`）
+   - 4アカウント（human/prod, project/prod, human/demo, project/demo）を `Promise.allSettled` で並列処理
+   - リフレッシュトークンを `app_config` テーブルでローテーション保存（フォールバック: Secrets）
+   - `resolveCallKey()`: `INBOUND_CALL_KEY` → `SUPABASE_SERVICE_ROLE_KEY` → `SUPABASE_ANON_KEY` の順で `eyJ` 始まりJWTを使用
+   - 処理失敗時は `markAsUnread` で元に戻し次回再試行
 
-3. **pg_cronマイグレーションSQL作成**
+2. ✅ **pg_cronマイグレーションSQL作成**
    - `supabase/migrations/add_email_polling_cron.sql` を作成
-   - pg_cron・pg_net の有効化
+   - pg_cron・pg_net の有効化、`app_config` の UNIQUE 制約追加
    - 5分ごとに `poll-email` を起動するスケジュール登録
 
-4. **テスト・動作確認**・commit & push
+3. ✅ **動作確認**: 4アカウント全て正常稼働（未読メール → 解析 → DB保存 → 既読マーク）
 
 ### 【Phase 5】最終納品ドキュメント作成（未着手）
 1. **[Claude] 作業**: システム構成図のメンテナンス（README.md に Mermaid 図あり）
