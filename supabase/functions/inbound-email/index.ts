@@ -1,7 +1,8 @@
 // Supabase Edge Function: Make.com (Outlook) → AI解析 → DB保存
 // Runtime: Deno / タイムアウト: 最大150秒（Vercel Hobbyの10秒制限を回避）
-// POST body (form-urlencoded):
+// POST body (form-urlencoded or JSON):
 //   type, from, subject, body
+//   mode: prod | demo（省略時は prod。Make からデモ取り込み時は demo）
 //   attachment[data], attachment[mimeType], attachment[name]
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -12,9 +13,6 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
-
-/** メール取り込みは prod に保存（フロントの data_env=demo と分離） */
-const INBOUND_DATA_ENV = 'prod' as const
 
 interface Attachment {
   data: string
@@ -81,6 +79,13 @@ function strOrNull(value: unknown): string | null {
   if (value == null) return null
   const s = String(value).trim()
   return s.length > 0 ? s : null
+}
+
+/** Make 等からの mode（prod | demo）。不正・省略は prod */
+function resolveInboundDataEnv(modeRaw: unknown): 'prod' | 'demo' {
+  const s = String(modeRaw ?? '').trim().toLowerCase()
+  if (s === 'demo') return 'demo'
+  return 'prod'
 }
 
 /** AI の skills 配列を trim・重複除去（大文字小文字無視） */
@@ -452,8 +457,14 @@ Deno.serve(async (req: Request) => {
       const params = new URLSearchParams(text)
       for (const [k, v] of params.entries()) raw[k] = v
     } else {
-      raw = await req.json()
+      const j = (await req.json()) as Record<string, unknown>
+      for (const [k, v] of Object.entries(j)) {
+        raw[k] = v == null ? '' : String(v)
+      }
     }
+
+    const inboundDataEnv = resolveInboundDataEnv(raw.mode)
+    console.log('[inbound] data_env=', inboundDataEnv, 'mode=', raw.mode ?? '')
 
     const type: string = raw.type ?? 'candidate'
     const from: string = parseFrom(raw.from ?? '')
@@ -716,7 +727,7 @@ JSON:`.trim()
         : null
 
       const dbPayload = {
-        data_env: INBOUND_DATA_ENV,
+        data_env: inboundDataEnv,
         name: analyzed.name ?? '不明',
         email,
         phone: analyzed.phone ?? null,
@@ -881,7 +892,7 @@ JSON:`.trim()
         const budgetMax = parseOptionalNumber(raw.budgetMax)
 
         return {
-          data_env: INBOUND_DATA_ENV,
+          data_env: inboundDataEnv,
           title,
           client: strOrNull(raw.client),
           description,
@@ -925,7 +936,7 @@ JSON:`.trim()
           const { data: acceptedRows, error: acceptedErr } = await supabase
             .from('submissions')
             .select('candidate_id')
-            .eq('data_env', INBOUND_DATA_ENV)
+            .eq('data_env', inboundDataEnv)
             .eq('status', 'accepted')
             .limit(10000)
 
@@ -945,7 +956,7 @@ JSON:`.trim()
             let candQuery = supabase
               .from('candidates')
               .select('id, name, email, phone, skills, experience_years, raw_profile, merged_into')
-              .eq('data_env', INBOUND_DATA_ENV)
+              .eq('data_env', inboundDataEnv)
               .is('merged_into', null)
               .limit(AUTO_MATCH_MAX_CANDIDATES)
 
@@ -1002,7 +1013,7 @@ JSON:`.trim()
                 .from('submissions')
                 .upsert(
                   {
-                    data_env: INBOUND_DATA_ENV,
+                    data_env: inboundDataEnv,
                     candidate_id: c.id,
                     project_id: p.id,
                     match_score: mr.score,
