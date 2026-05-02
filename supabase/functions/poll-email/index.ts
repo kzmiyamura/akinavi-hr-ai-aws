@@ -18,9 +18,31 @@ const CLIENT_ID = Deno.env.get('GRAPH_CLIENT_ID') ?? ''
 const CLIENT_SECRET = Deno.env.get('GRAPH_CLIENT_SECRET') ?? ''
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-// inbound-email 呼び出し用: ANON_KEY は Edge Functions に自動注入される
-const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
 const INBOUND_URL = `${SUPABASE_URL}/functions/v1/inbound-email`
+
+/**
+ * SUPABASE_SECRET_KEYS（新形式・JSON辞書）または
+ * SUPABASE_SERVICE_ROLE_KEY（旧形式・DEPRECATED）から
+ * inbound-email 呼び出し用の JWT を取得する
+ */
+function resolveCallKey(): string {
+  // 新形式: {"default": "<jwt>"} または {"<name>": "<jwt>"}
+  const secretKeys = Deno.env.get('SUPABASE_SECRET_KEYS') ?? ''
+  if (secretKeys) {
+    try {
+      const parsed = JSON.parse(secretKeys)
+      if (typeof parsed === 'object' && parsed !== null) {
+        const first = Object.values(parsed)[0]
+        if (typeof first === 'string' && first) return first
+      }
+    } catch { /* JSON でなければ素の文字列として使用 */ }
+    if (secretKeys) return secretKeys
+  }
+  // 旧形式フォールバック
+  return SERVICE_ROLE_KEY || Deno.env.get('SUPABASE_ANON_KEY') || ''
+}
+
+const CALL_KEY = resolveCallKey()
 
 // 1回のポーリングで取得するメール上限（タイムアウト対策）
 const MAX_EMAILS_PER_ACCOUNT = 3
@@ -230,7 +252,7 @@ async function callInboundEmail(
   const res = await fetch(INBOUND_URL, {
     method:  'POST',
     headers: {
-      Authorization:  `Bearer ${ANON_KEY}`,
+      Authorization:  `Bearer ${CALL_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
