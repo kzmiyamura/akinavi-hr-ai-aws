@@ -11,6 +11,7 @@
 //   GEMINI_INBOUND_TIMEOUT_MS: candidate/project の Gemini 1回あたり ms（Secrets。15〜300000。未設定時 38000）
 //   ※ 全体の壁時計は Edge の上限もあり（関連度・Drive取得・Gemini の合計。プランにより概ね150〜400秒程度）
 //   INBOUND_MAKE_SOFT_FAIL=true: 例外時も HTTP 200 + ok:false（Make がエラーでシナリオ停止しにくくする）
+//   INBOUND_BODY_FALLBACK_ON_GEMINI_TIMEOUT=false: 人材で添付Geminiタイムアウト時の本文のみ再試行を無効化（既定は true）
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
@@ -265,6 +266,11 @@ function isInboundRelevanceCheckEnabled(): boolean {
 /** true のとき FATAL でも HTTP 200（JSON は ok:false）。Make のシナリオ全体停止を避ける */
 function isInboundMakeSoftFail(): boolean {
   return (Deno.env.get('INBOUND_MAKE_SOFT_FAIL') ?? '').toLowerCase() === 'true'
+}
+
+/** 人材: 添付付き Gemini がタイムアウトしたら添付なしで再試行（既定 true） */
+function isCandidateBodyFallbackOnTimeoutEnabled(): boolean {
+  return (Deno.env.get('INBOUND_BODY_FALLBACK_ON_GEMINI_TIMEOUT') ?? 'true').toLowerCase() !== 'false'
 }
 
 /** 1 リクエストを追跡（Supabase ログで rid で検索） */
@@ -1073,13 +1079,10 @@ JSON:`.trim()
       tracePhase = 'gemini_candidate_extract'
       pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
       console.log(`[STEP5 AI呼び出し開始] elapsed=${elapsed()}`, { rid: traceRid })
-      const { result, durationMs } = await generateJSON(prompt, allAttachments, 'candidate', 2, undefined, {
-        rid: traceRid,
-        phase: 'gemini_candidate_extract',
-      })
-      tracePhase = 'gemini_candidate_done'
-      console.log(`[STEP5 AI呼び出し完了] durationMs=${durationMs} elapsed=${elapsed()}`, { rid: traceRid })
-      const analyzed = result as {
+
+      let durationMs: number
+      let parseFallback: 'none' | 'body_only_after_attachment_timeout' = 'none'
+      type CandAi = {
         name: string; email: string | null; phone: string | null
         skills: string[]
         skillsByCategory: {
@@ -1097,6 +1100,44 @@ JSON:`.trim()
         currentWorkLocation: string | null
         remoteAvailable: boolean
       }
+      let analyzed: CandAi
+
+      try {
+        const { result, durationMs: d1 } = await generateJSON(prompt, allAttachments, 'candidate', 2, undefined, {
+          rid: traceRid,
+          phase: 'gemini_candidate_extract',
+        })
+        durationMs = d1
+        analyzed = result as CandAi
+        tracePhase = 'gemini_candidate_done'
+      } catch (e) {
+        const msg = String(e)
+        const canFallback =
+          isCandidateBodyFallbackOnTimeoutEnabled() &&
+          allAttachments.length > 0 &&
+          msg.includes('Gemini APIタイムアウト')
+        if (!canFallback) throw e
+
+        tracePhase = 'gemini_candidate_extract_body_only'
+        pipe(traceRid, tracePhase, { rid: traceRid })
+        console.warn('[candidate] 添付付きGeminiがタイムアウト。本文・Drive・Officeテキストのみで再試行', { rid: traceRid })
+        const slimPrompt = `${prompt}
+
+【システム通知】初回解析がタイムアウトしたため、画像・PDF添付バイナリは参照していません。メール本文・Driveリンク由来テキスト・Office抽出テキストのみを根拠に抽出してください。推測はしないでください。`
+        const { result, durationMs: d2 } = await generateJSON(slimPrompt, [], 'candidate', 2, undefined, {
+          rid: traceRid,
+          phase: 'gemini_candidate_extract_body_only',
+        })
+        durationMs = d2
+        analyzed = result as CandAi
+        parseFallback = 'body_only_after_attachment_timeout'
+        tracePhase = 'gemini_candidate_done_body_only'
+      }
+
+      console.log(`[STEP5 AI呼び出し完了] durationMs=${durationMs} elapsed=${elapsed()}`, {
+        rid: traceRid,
+        parseFallback,
+      })
 
       console.log(`[STEP6 AI解析結果 candidate] elapsed=${elapsed()}`, JSON.stringify(analyzed, null, 2))
 
@@ -1147,6 +1188,7 @@ JSON:`.trim()
           ],
           driveLinks: driveTexts.map(t => t.label),
           aiAnalysis: analyzed,
+          geminiParseFallback: parseFallback,
         },
         duplicate_flag: false,
         created_by: 'make-inbound',
@@ -1207,9 +1249,18 @@ JSON:`.trim()
       if (logError) console.error('[ai_logs INSERT error]', logError)
 
       console.log(`[inbound] 人材登録完了: ${data.name}`)
-      return new Response(JSON.stringify({ ok: true, type: 'candidate', id: data.id, name: data.name }), {
-        status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          type: 'candidate',
+          id: data.id,
+          name: data.name,
+          geminiParseFallback: parseFallback,
+        }),
+        {
+          status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
     }
 
     // ── 案件メール ────────────────────────────────────────────
