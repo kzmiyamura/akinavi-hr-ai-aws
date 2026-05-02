@@ -6,13 +6,16 @@
 
 ## 2. 技術スタック
 - **Frontend**: React 19 (Vite 8), TypeScript, Tailwind CSS v4, TanStack Query v5
-- **Backend/DB**: Supabase (PostgreSQL, Edge Functions, Realtime)
-- **AI（ブラウザ）**: Google Gemini デフォルト `gemini-2.0-flash`（`VITE_GEMINI_MODEL` で上書き可。旧 `gemini-1.5-flash-8b` は API 非対応）
-- **AI（サーバー・自動取り込み）**: Google Gemini `gemini-2.5-flash` — **Supabase Edge Function `inbound-email` のみ**（旧 Vercel `api/analyze` は移設済み・本番 Webhook では未使用）
-- **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は `openaiProvider.ts` が未実装スタブ
-- **Email**: Outlook 専用アカウント + **Make.com**（Inbound Webhook → Edge `inbound-email`）。Make は **Free でも月次オペレーション上限**があり、本番負荷では枠切れや有料プラン・代替連携の検討が必要
+- **Backend/DB**: Supabase (PostgreSQL, Edge Functions, Realtime, pg_cron, pg_net)
+- **AI（ブラウザ）**: Google Gemini デフォルト `gemini-2.0-flash`（`VITE_GEMINI_MODEL` で上書き可）
+- **AI（サーバー・自動取り込み）**: Google Gemini `gemini-2.5-flash` — Supabase Edge Function `inbound-email` のみ
+- **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は未実装スタブ
+- **メール自動取り込み（実装予定）**: Microsoft Graph API ポーリング + Supabase pg_cron（詳細は Phase 4.5）
+- **メール自動取り込み（旧・現在停止中）**: Make.com → Pipedream（いずれも無料枠超過により運用停止）
 - **Testing**: Vitest, React Testing Library, MSW (Mock Service Worker)
 - **Deployment**: Vercel (Frontend), Supabase (Backend)
+
+---
 
 ## 3. 開発・品質管理工程表（人間とClaude Codeの共同作業）
 
@@ -36,33 +39,131 @@
 3. **[人間] 手作業**: 実際のメールデータを用いた解析・マッチング精度の最終検証
 4. **[Claude] 作業**: 完了後、commit & push
 
-### 【Phase 4】自動化・デプロイ・改善 ✅（継続中）
+### 【Phase 4】Make.com 連携・UI改善・デモ環境整備 ✅（完了・メール連携は停止中）
 1. **[Claude] 作業**: Make.com (Outlook) と連携した自動解析フローの実装
-   - フロー: メール受信 → Make.com が検知 → **Supabase Edge Function `inbound-email`**（解析API） → Gemini AI 解析 → DB 保存
-   - サーバー側解析は **Supabase Functions に移設済み**（Vercel Serverless の `api/analyze` はレガシー）
+   - フロー: メール受信 → Make.com が検知 → Edge Function `inbound-email` → Gemini AI 解析 → DB 保存
    - 人材用メール: `akinavi.hr.ai.voice.human@outlook.jp`
    - 案件用メール: `akinavi.hr.ai.voice.project@outlook.jp`
 2. **[Claude] 作業**: AI解析精度の継続的改善（プロンプトチューニング）
 3. **[Claude] 作業**: Google Drive / Sheets / Docs リンクの自動取得機能実装
+4. **[Claude] 作業**: デモ環境（data_env）分離・DemoSeedPanel実装
+5. **[Claude] 作業**: 人材・案件の編集機能・最終更新者/日時表示
+6. **[人間] 判断**: Make.com・Pipedreamともに無料枠超過 → Microsoft Graph API ポーリングへ移行決定
 
-### 【Phase 5】最終納品ドキュメント作成（一部未着手）
-1. **[Claude] 作業**: システム構成図のメンテナンス（`README.md` に Mermaid 図あり。詳細アーキテクチャが必要なら追記）
+### 【Phase 4.5】Microsoft Graph API ポーリングへ移行 ⏳（作業中）
+
+#### 方針
+Make.com・Pipedream等の外部SaaSを廃止し、**完全無料・永続稼働**のメール自動取り込みを実現する。
+
+**新フロー:**
+```
+Outlook受信（5分以内）
+  ↓
+Supabase pg_cron（5分ごとに起動）
+  ↓
+Edge Function: poll-email
+  - Graph APIでアクセストークン取得（リフレッシュトークンから）
+  - GET /me/messages（未読メールを取得）
+  - 既存の inbound-email と同じ解析ロジックへ渡す
+  - 処理済みメールを既読にマーク
+  ↓
+Gemini AI 解析 → DB 保存
+```
+
+**コスト試算（すべて無料枠内）:**
+| コンポーネント | 無料枠 | 予想消費量（5分に1回） |
+|---|---|---|
+| pg_cron | 制限なし | 約 8,640回/月 |
+| pg_net | 制限なし | 約 8,640回/月 |
+| Edge Functions | 500,000回/月 | 約 8,640回/月 |
+| Microsoft Graph API | 無料 | 約 8,640回/月 |
+
+#### 作業一覧
+
+**【人間】手作業（Claude Codeでは実施不可）**
+
+1. **Azureアプリ登録**（所要: 約30分）
+   - https://portal.azure.com にアクセス（Microsoftアカウントでログイン・無料）
+   - 「Microsoft Entra ID」→「アプリの登録」→「新規登録」
+   - 名前: 任意（例: `akinavi-mail-poller`）
+   - サポートされるアカウントの種類: 「個人用Microsoftアカウントのみ」を選択
+   - リダイレクトURL: `http://localhost` を追加
+   - 登録後、以下を控える:
+     - **クライアントID（アプリケーションID）**
+     - 「証明書とシークレット」→「新しいクライアントシークレット」→ **クライアントシークレット（値）**
+   - 「APIのアクセス許可」→「アクセス許可の追加」→ Microsoft Graph → 委任されたアクセス許可
+     - `Mail.Read` を追加
+     - `Mail.ReadWrite`（既読マーク用）を追加
+
+2. **リフレッシュトークン取得（2アカウント分）**（所要: 約30分）
+   - 以下のURLをブラウザで開き、**human@outlook.jp** でログイン:
+     ```
+     https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize
+       ?client_id=<クライアントID>
+       &response_type=code
+       &redirect_uri=http://localhost
+       &scope=offline_access Mail.Read Mail.ReadWrite
+     ```
+   - ログイン後にリダイレクトされるURL（`http://localhost/?code=...`）から `code=` の値を控える
+   - Claude Codeに渡してリフレッシュトークンに交換（次のClaude作業で実施）
+   - **project@outlook.jp** でも同様に繰り返す
+
+3. **Supabase Secrets に登録**（所要: 約10分）
+   - Supabase Dashboard → Project Settings → Edge Functions → Secrets
+   - 以下を追加:
+     | シークレット名 | 値 |
+     |---|---|
+     | `GRAPH_CLIENT_ID` | AzureのクライアントID |
+     | `GRAPH_CLIENT_SECRET` | Azureのクライアントシークレット |
+     | `GRAPH_REFRESH_TOKEN_HUMAN` | human@outlook.jp のリフレッシュトークン |
+     | `GRAPH_REFRESH_TOKEN_PROJECT` | project@outlook.jp のリフレッシュトークン |
+
+4. **SupabaseでSQL実行**（所要: 約5分）
+   - `supabase/migrations/add_email_polling_cron.sql` をSQL Editorで実行
+   - pg_cron・pg_net の有効化とスケジュール登録
+
+**【Claude Code】作業**
+
+1. **認証コードをリフレッシュトークンに交換**（人間からcodeを受け取り次第）
+   - Microsoft Token Endpoint へPOSTしてリフレッシュトークンを取得
+   - 取得したトークンを人間へ渡す（Secretsに登録してもらう）
+
+2. **Edge Function `poll-email` の実装**
+   - `supabase/functions/poll-email/index.ts` を新規作成
+   - 処理内容:
+     - リフレッシュトークンからアクセストークンを取得
+     - `GET /me/messages?$filter=isRead eq false&$top=10` で未読メール取得
+     - 2アカウント分を順番に処理
+     - 既存の `inbound-email` の解析ロジックを呼び出し（内部でinbound-emailをPOST）
+     - 処理済みを既読マーク（`PATCH /me/messages/{id}` で `isRead: true`）
+
+3. **pg_cronマイグレーションSQL作成**
+   - `supabase/migrations/add_email_polling_cron.sql` を作成
+   - pg_cron・pg_net の有効化
+   - 5分ごとに `poll-email` を起動するスケジュール登録
+
+4. **テスト・動作確認**・commit & push
+
+### 【Phase 5】最終納品ドキュメント作成（未着手）
+1. **[Claude] 作業**: システム構成図のメンテナンス（README.md に Mermaid 図あり）
 2. **[Claude] 作業**: 操作マニュアルのメンテナンス（`docs/Sales_Manual.md` / `docs/Sales_Manual.pdf`・営業担当者向け）
 3. **[Claude] 完了**: 全成果物を commit & push し、納品完了
 
 ---
 
 ## 4. Claude Codeへの重要な行動指針
-- **正の所在**: 仕様・挙動の優先順位は **本リポジトリのソース** と **`README.md`**。本ファイル（`claude.md`）はそれに追従するメモであり、食い違いがあれば **ソースを正として本ファイルを更新**すること（`CLAUDE.md` と内容を揃えること）。
+- **正の所在**: 仕様・挙動の優先順位は **本リポジトリのソース** と **`README.md`**。本ファイル（`CLAUDE.md`）はそれに追従するメモであり、食い違いがあれば **ソースを正として本ファイルを更新**すること。
 - **こまめな Git 操作**: 機能実装単位、またはテスト通過ごとに、意味のあるメッセージと共に **commit & push** を行うこと。
 - **バグゼロの追求**: ロジックには必ずテストコードを付随させ、テスト項目書をエビデンスとして出力すること。
 - **ドキュメントの対象読者**:
   - README/構成図は「後任エンジニア」が最短で再現できるように。
   - 操作マニュアルは「非IT営業職」がIT用語なしで理解できるように。
 
+---
+
 ## 5. データベース構成
 
-`candidate_skills` のカテゴリ CHECK 制約は **`supabase/migrations/add_candidate_skills.sql` を正**とする。`schema.sql` と定義が食い違う場合があるため、新規環境ではマイグレーション適用後の状態を確認すること。
+`candidate_skills` のカテゴリ CHECK 制約は **`supabase/migrations/add_candidate_skills.sql` を正**とする。
 
 ### テーブル一覧
 | テーブル | 用途 |
@@ -70,11 +171,11 @@
 | `candidates` | 人材マスタ。スキル・経歴・raw_profile を保持。**`data_env`**（`prod` \| `demo`）で論理分離 |
 | `projects` | 案件マスタ。必要スキル・予算・raw_data を保持。**`data_env`** 同上 |
 | `submissions` | マッチング提案履歴。スコア・AI要約を保持。**`data_env`** 同上 |
-| `candidate_skills` | スキルをカテゴリ別に分解して保持（検索最適化・**14カテゴリ**・上記マイグレーション準拠） |
+| `candidate_skills` | スキルをカテゴリ別に分解して保持（検索最適化・14カテゴリ） |
 | `ai_logs` | AI解析の実行ログ（モデル・所要時間・結果・エラー） |
 | `app_config` | アプリ全体設定 |
 
-### candidate_skills の14カテゴリ（マイグレーション準拠）
+### candidate_skills の14カテゴリ
 | カテゴリ | 内容 |
 |---|---|
 | `languages` | プログラミング言語・クエリ言語 |
@@ -92,88 +193,66 @@
 | `marketing` | マーケティング・集客系 |
 | `others` | その他 |
 
-## 6. 追加要件（実装済み）
+---
 
-### メール自動受信の方針
-- **採用**: Outlook（専用アカウント）+ Make.com（Webhook で **Supabase Edge Function `inbound-email`** を POST）
-- Make は **無料枠にオペレーション上限**がある（「完全無料で無制限」ではない）。詳細は Make ダッシュボードの Usage を正とする
-- フロー: メール受信 → Make が検知 → **`inbound-email`** → Gemini 解析 → DB 保存（サーバー側解析はこの Edge のみ）
-- 人材用メール: `akinavi.hr.ai.voice.human@outlook.jp`
-- 案件用メール: `akinavi.hr.ai.voice.project@outlook.jp`
-- Edge の `type` で人材／案件を振り分け（`type=candidate` / `type=project`）。POST は **form-urlencoded または JSON**（`README.md` のパラメータ表を正とする）
-- **`from`**: プレーンなメール文字列に加え、**Microsoft Graph 形式の JSON 文字列**も `inbound-email` 内 `parseFrom` で解釈可能（Power Automate 等への置き換え時の手がかり）
+## 6. 実装済み機能の詳細
 
-### Power Automate を採用しなかった理由（運用メモ）
-- **Supabase Edge Function への Webhook** は **任意の外部 URL へ HTTP POST** が必要
-- **Power Automate** ではその **「HTTP」コネクタがプレミアム扱い**であり、**無料枠のみでは外部 URL へのリクエストが組めない**（又は個人用フローのみで足りない）ケースが多い。**有償ライセンス（ユーザー単位・月額など）が別途必要**になりやすい。契約・SKU は Microsoft 公式を正とし、組織ごとに異なる
-- 参考（**各社プラン・時点で変動**。数値は目安・要公式確認）:
+### メール自動受信（現行・ポーリング方式）
+- **Edge Function**: `supabase/functions/poll-email/index.ts`（Phase 4.5 で実装）
+- **スケジューラ**: Supabase pg_cron（5分ごとに起動）
+- **認証**: Microsoft Graph API（OAuthリフレッシュトークン方式）
+- 人材用: `akinavi.hr.ai.voice.human@outlook.jp`
+- 案件用: `akinavi.hr.ai.voice.project@outlook.jp`
+- 処理済みメールは既読マークで重複取得を防止
 
-| ツール | 外部 URL への HTTP POST（無料枠） | 無料枠の目安 |
-|--------|-----------------------------------|-------------|
-| Make.com | 利用可 | 例: 約 1,000 ops（credits）/ 月 等 |
-| Pipedream | 利用可 | 例: 多めの無料実行（公式で確認） |
-| Power Automate | **有料プランが必要になりやすい**（HTTP がプレミアム） | 無料のみでは本連携が困難なことが多い |
+### メール自動受信（旧方式・停止中）
+- **Make.com**: 無料枠 約1,000ops/月 → 超過により停止
+- **Pipedream**: 無料枠 10クレジット/日 → 当日中に超過・停止
+- **Power Automate**: 外部URLへのHTTP POSTがプレミアムコネクタのため不採用
 
-### Edge `inbound-email`（`supabase/functions/inbound-email/index.ts` 準拠）
-- **データ環境**: ボディまたはクエリの `mode` / `data_env`（`prod` | `demo` | `dev` ※ `dev` は `demo` と同扱い）。省略時は `prod`。URL クエリ `?mode=demo` やヘッダ `X-Data-Env` / `X-Mode` も補完に利用
-- **Secrets 例**: `GEMINI_API_KEY`、`SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`。**`GEMINI_INBOUND_TIMEOUT_MS`**: 1 回の Gemini 待ち上限（15〜300000 ms、未設定時 38000）。全体の壁時計は Edge プランにより **概ね 150〜400 秒程度**
-- **その他 Secrets / フラグ（コメント参照）**: `INBOUND_RELEVANCE_CHECK`、`INBOUND_MAKE_SOFT_FAIL`（例外時も HTTP 200 + `ok:false` で Make 停止しにくくする）、`INBOUND_BODY_FALLBACK_ON_GEMINI_TIMEOUT` など
-- 本文・添付とも空: **HTTP 200 + skipped**（Webhook 連携継続向け）。添付は README 記載のキー（例: `attachment[data]` 等）
+### Edge Function `inbound-email`（`supabase/functions/inbound-email/index.ts` 準拠）
+- **データ環境**: ボディまたはクエリの `mode` / `data_env`（`prod` | `demo` | `dev`）。省略時は `prod`
+- **Secrets**: `GEMINI_API_KEY`、`SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`
+- **`GEMINI_INBOUND_TIMEOUT_MS`**: 1回のGemini待ち上限（未設定時 38,000ms）
+- **`INBOUND_MAKE_SOFT_FAIL`**: 例外時も HTTP 200 + `ok:false` で返す（Make/外部サービス停止回避）
+- 本文・添付とも空: HTTP 200 + skipped
 
-### 論理データ環境 `data_env`（DB・アプリ）
-- **`supabase/migrations/add_data_env.sql`**: `candidates` / `projects` / `submissions` に `data_env text NOT NULL`、CHECK は **`prod` | `demo`**
-- **フロント**: `src/lib/dataEnv.ts` の `DataEnv`（`prod` | `demo`）、`localStorage` の **`akinavi.dataEnv.v1`**（選択中環境）と **`akinavi.demoUnlock.v1`**（デモ UI 解除フラグ）。**デモ解除**は `VITE_DEMO_KEY` と URL クエリ `?demo=`（`demoKey` / `demo_key` も可）のトグル（`applyDemoKeyFromUrlToggle`）と連動
-- クエリ・更新は各ページで **`dataEnv` を渡し**、本番データとデモデータを同一 Supabase 内で分離
+### 論理データ環境 `data_env`
+- `prod` / `demo` を同一Supabase内で分離（`data_env` カラムでフィルター）
+- **デモ解除**: `VITE_DEMO_KEY` と URL クエリ `?demo=<鍵>` でトグル
+- 解除時にヘッダの「データ」セレクトが表示される
+- デモ UI 未解除時は常に `prod` 固定
 
-### デモと本番の切り替えモード（ブラウザ・`App.tsx` / `Layout.tsx` / `src/lib/dataEnv.ts` 準拠）
-- **目的**: 同一 Supabase 上の **`data_env` = `prod` / `demo`** を、ブラウザごとにどちらを見るか切り替える（本番データの誤操作を避けつつ営業デモ用データを使う）
-- **既定（デモ UI 未解除）**: **`本番相当（prod）` のみ**。`localStorage` に `demo` が残っていても起動時は **`prod` に読み替え**。ヘッダに環境セレクトは**出ない**
-- **解除（デモ／本番の切替を有効化）**: **`VITE_DEMO_KEY`** がビルドに設定されている前提で、**`?demo=<鍵>`** で開く（`demoKey` / `demo_key` クエリ名も可・`parseDemoKeyFromLocation`）。鍵が一致すると **`akinavi.demoUnlock.v1` = オン**、ヘッダに **「データ」セレクト**（`Layout.tsx`）が表示される。初回成功時は環境を **`demo` にし**、鍵クエリは URL から除去
-- **再ロック（本番固定に戻す）**: **既に解除済み**の同一ブラウザで、**同じ正しい `?demo=` 付き URL を再度開く**と **`applyDemoKeyFromUrlToggle` がトグル**し、解除フラグがオフ・**`prod` 固定**・セレクト非表示（営業後にデモ切替を閉じる用途）
-- **鍵が空／不一致**: 処理しない、またはクエリだけ除去（**`VITE_DEMO_KEY` 未設定**では有効な鍵にならない）
-- **セレクト表示中**: 「**本番相当（prod）**」「**デモ（demo）**」を選ぶと **`akinavi.dataEnv.v1`** が更新され、**全画面の取得・更新はその `data_env` の行のみ**を対象にする
-- **解除がオフになったあと `demo` を選んでいた場合**: `demoUiEnabled === false` なら **`demo` を `prod` に自動補正**
-- **コンポーネント別**: **`demoUiEnabled`** を渡すのは主に人材・案件ページ（デモ用パネル等）。**`MatchingPage` は `dataEnv` のみ**（マッチングも選択中環境のデータのみ）
-
-### マッチング画面（`src/pages/MatchingPage.tsx` 準拠）
-- **実行モード**: `fast`（高速）/ `full`（全件）。選択は **`localStorage` キー `akinavi.matchingRunMode.v1`**
-- **高速モードの上限（定数）**: 案件あたり候補 **最大 20 名**（`FAST_MAX_CANDIDATES_PER_PROJECT`）、人材あたり案件 **最大 10 件**（`FAST_MAX_PROJECTS_PER_CANDIDATE`）。必須スキル重複が多い順に優先
-- **進捗**: 一括・行単位の再実行とも **何件目か**を表示。`flushSync` でループ中の `setState` を確実に描画。長い一覧では **sticky** の進捗カード＋**行内**の進捗文
-- **一括マッチング（全案件／全人材）**: **`bulkCancelRequestedRef`** により **キャンセル可能**（各組み合わせの区切りで打ち切り。**進行中の 1 件の AI 応答は完了まで待つ**）。完了分は保存済みとしてメッセージ表示
+### マッチング画面
+- **実行モード**: `fast`（高速・上限あり）/ `full`（全件）
+- **高速モード上限**: 案件あたり候補 最大20名、人材あたり案件 最大10件
+- **一括マッチングのキャンセル**: `bulkCancelRequestedRef` による途中停止対応
+- **MatchingPage は常時マウント**: タブ切替で mutation が中断されないよう `hidden` で切替
 
 ### デモシード（`src/components/DemoSeedPanel.tsx`）
-- デモ環境向けに **人材・案件のサンプルペア**を DB 投入（架空だが実務に近い文言・スキル構成。`AnalyzeCandidateResponse` / `AnalyzeProjectResponse` 形状で投入）
+- デモ環境向けに人材・案件のサンプルペアをDB投入
 
-### アプリシェル（`src/App.tsx` 準拠）
-- **マッチング**タブを非表示にしても **`MatchingPage` はアンマウントしない**（`hidden` で切替）。長時間の一括マッチング mutation がタブ移動で中断されないため
+### 画面構成
+- タブは3つに整理（`マッチング結果` / `人材登録` / `案件登録`）
+- `提案履歴` / `重複管理` / `解析監視` は実装済みだがナビから非表示
 
 ### Google Drive / Sheets / Docs 自動取得
-- メール本文中の Google Drive・Sheets・Docs の共有リンクを自動検出
-- Sheets → CSV export、Docs → txt export、Drive PDF → base64化してGeminiに渡す
-- 認証不要（「リンクを知っている全員が閲覧可」の共有設定前提）
-- 取得失敗は無視してフォールバック
+- メール本文中のリンクを自動検出・取得
+- Sheets → CSV、Docs → txt、Drive PDF → base64化してGeminiに渡す
+- 認証不要（リンクを知っている全員が閲覧可の共有設定前提）
 
-### AI プロバイダー抽象化
-- **ブラウザ（Vite）**: Gemini（既定 `gemini-2.0-flash`、`VITE_GEMINI_MODEL` / `VITE_GEMINI_API_KEY`）
-- **サーバー（Edge `inbound-email` のみ）**: Gemini `gemini-2.5-flash`（Supabase Secrets の `GEMINI_API_KEY`）
-- **フロントの切替**: `.env.local` 等で `VITE_AI_PROVIDER=gemini`（デフォルト）または `openai` — 後者はスタブで未実装
-- **サーバー側**: 現状 Gemini 固定（OpenAI 切替なし）
-- フロントの AI 呼び出しは `AIProvider` インターフェースで抽象化
+### AI プロバイダー
+- **ブラウザ**: Gemini（既定 `gemini-2.0-flash`）
+- **サーバー（Edge Function）**: Gemini `gemini-2.5-flash` 固定
+- フロントは `AIProvider` インターフェースで抽象化（OpenAI切替はスタブのみ）
 
-### 認証なし・ニックネーム制
-- ログイン機能は持たない
-- 初回アクセス時に「利用者のニックネーム」を入力させ、`localStorage` に保存
-
-### 画面構成（現状）
-- タブは **3つに整理**（運用をシンプルにするため、他タブは一旦非表示）
-  - `マッチング結果`（初期表示）
-  - `人材登録`
-  - `案件登録`
-- `提案履歴` / `重複管理` / `解析監視` は実装が残っていても **ナビからは非表示**
+### 認証・ニックネーム制
+- ログイン機能なし
+- 初回アクセス時にニックネームを入力させ `localStorage` に保存
 
 ### データ重複管理
-- **email が同じ**場合は自動で既存レコードを **UPDATE**（上書き更新）
-- **AI が「名前やスキルが似ている」と判断**した場合は `duplicate_flag = true` を立てるだけ（自動マージ不可）
+- email が同じ場合は自動で既存レコードを UPDATE（上書き更新）
+- AI が重複疑いと判断した場合は `duplicate_flag = true` を立てるだけ（自動マージ不可）
 
 ### AI解析ログ（ai_logs）
 - 全AI解析呼び出しをDBに記録（モデル名・所要時間ms・結果JSON・エラー）
