@@ -1,4 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist'
+import * as XLSX from 'xlsx'
+import mammoth from 'mammoth'
 
 // Vite の URL import でワーカーを解決
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -22,6 +24,28 @@ export async function extractTextFromPDF(file: File): Promise<string> {
   return pages.join('\n')
 }
 
+/** Excel ファイル (.xlsx / .xls) から全シートのテキストを抽出する */
+export async function extractTextFromExcel(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer()
+  const workbook = XLSX.read(arrayBuffer, { type: 'array' })
+  const parts: string[] = []
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName]
+    const text = XLSX.utils.sheet_to_csv(sheet, { blankrows: false })
+    if (text.trim()) {
+      parts.push(`[シート: ${sheetName}]\n${text}`)
+    }
+  }
+  return parts.join('\n\n')
+}
+
+/** Word ファイル (.docx) から本文テキストを抽出する */
+export async function extractTextFromWord(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer()
+  const result = await mammoth.extractRawText({ arrayBuffer })
+  return result.value
+}
+
 /** 画像ファイルを base64 に変換する（Gemini multimodal 用） */
 export async function imageFileToBase64(
   file: File,
@@ -40,8 +64,20 @@ export async function imageFileToBase64(
 }
 
 /** ファイルの種類を判定する */
-export function getFileCategory(file: File): 'pdf' | 'image' | 'unsupported' {
+export function getFileCategory(
+  file: File,
+): 'pdf' | 'excel' | 'word' | 'image' | 'unsupported' {
   if (file.type === 'application/pdf') return 'pdf'
+  if (
+    file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    file.type === 'application/vnd.ms-excel' ||
+    file.name.endsWith('.xlsx') ||
+    file.name.endsWith('.xls')
+  ) return 'excel'
+  if (
+    file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    file.name.endsWith('.docx')
+  ) return 'word'
   if (file.type.startsWith('image/')) return 'image'
   return 'unsupported'
 }

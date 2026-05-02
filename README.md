@@ -8,8 +8,8 @@
 ## 画面構成
 
 - **マッチング結果**（初期表示）
-- **人材登録**（テキスト貼り付け・PDF・画像アップロード対応）
-- **案件登録**（テキスト貼り付け・PDF・画像アップロード対応）
+- **人材登録**（テキスト貼り付け・PDF・Excel・Word・画像アップロード対応）
+- **案件登録**（テキスト貼り付け・PDF・Excel・Word・画像アップロード対応）
 
 ※提案履歴・重複管理・解析監視は実装済みだが、現状のナビからは非表示（運用をシンプルにするため）。
 
@@ -191,6 +191,8 @@ inbound-email Edge Function
 テキスト貼り付け・PDFアップロード（テキスト抽出）・画像アップロード（マルチモーダル解析）→ フロント（Vite）から Gemini 2.0 Flash を呼び出し → Supabase に保存。
 
 - **PDF**: `pdfjs-dist` でテキスト抽出 → テキストとしてGeminiに渡す（テキストベースPDFのみ）
+- **Excel（.xlsx/.xls）**: `xlsx`（SheetJS）で全シートをCSV変換 → テキストとしてGeminiに渡す
+- **Word（.docx）**: `mammoth` で本文テキスト抽出 → テキストとしてGeminiに渡す
 - **画像（JPG/PNG等）**: base64変換 → Gemini multimodal API（`inlineData`）で直接解析
 
 ---

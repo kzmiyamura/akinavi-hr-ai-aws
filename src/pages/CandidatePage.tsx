@@ -7,7 +7,7 @@ import type { Candidate } from '../lib/db/candidates'
 import type { DataEnv } from '../lib/dataEnv'
 import type { ImageFileData } from '../lib/ai/types'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
-import { extractTextFromPDF, imageFileToBase64, getFileCategory } from '../lib/fileParser'
+import { extractTextFromPDF, extractTextFromExcel, extractTextFromWord, imageFileToBase64, getFileCategory } from '../lib/fileParser'
 
 interface SkillsByCategory {
   languages: string[]
@@ -543,12 +543,20 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           const extracted = await extractTextFromPDF(file)
           setText((prev) => prev ? `${prev}\n\n${extracted}` : extracted)
           newNames.push(`${file.name}（テキスト抽出済み）`)
+        } else if (category === 'excel') {
+          const extracted = await extractTextFromExcel(file)
+          setText((prev) => prev ? `${prev}\n\n${extracted}` : extracted)
+          newNames.push(`${file.name}（テキスト抽出済み）`)
+        } else if (category === 'word') {
+          const extracted = await extractTextFromWord(file)
+          setText((prev) => prev ? `${prev}\n\n${extracted}` : extracted)
+          newNames.push(`${file.name}（テキスト抽出済み）`)
         } else if (category === 'image') {
           const imgData = await imageFileToBase64(file)
           newImages.push(imgData)
           newNames.push(file.name)
         } else {
-          setMessage({ type: 'error', text: `${file.name} はPDFまたは画像ファイルを選択してください` })
+          setMessage({ type: 'error', text: `${file.name} はPDF・Excel・Word・画像ファイルを選択してください` })
         }
       }
       setImageFiles((prev) => [...prev, ...newImages])
@@ -563,10 +571,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   function removeFile(index: number) {
     setUploadedFileNames((prev) => prev.filter((_, i) => i !== index))
-    // imageFiles はテキスト抽出済みPDFを含まないため、imageFiles のインデックスとずれる可能性がある
-    // 画像ファイルのみ削除対象のため、names と images を対応管理
     setImageFiles((prev) => {
-      // uploadedFileNames のうち「テキスト抽出済み」でないものが imageFiles に対応する
       const namesBefore = uploadedFileNames.slice(0, index)
       const imageIndexOffset = namesBefore.filter((n) => !n.includes('テキスト抽出済み')).length
       if (uploadedFileNames[index]?.includes('テキスト抽出済み')) return prev
@@ -704,7 +709,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           <input
             ref={fileInputRef}
             type="file"
-            accept="application/pdf,image/*"
+            accept="application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,.xlsx,.xls,.docx"
             multiple
             className="hidden"
             onChange={handleFileChange}
@@ -716,7 +721,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
             className="flex items-center gap-1.5 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {fileLoading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
-            {fileLoading ? '読み込み中...' : 'PDF・画像を添付'}
+            {fileLoading ? '読み込み中...' : 'PDF・Excel・Word・画像を添付'}
           </button>
           {uploadedFileNames.map((name, i) => (
             <span key={i} className="flex items-center gap-1 bg-blue-50 text-blue-700 text-xs rounded px-2 py-1">

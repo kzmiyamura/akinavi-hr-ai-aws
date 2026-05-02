@@ -8,7 +8,7 @@
 - **Frontend**: React 19 (Vite 8), TypeScript, Tailwind CSS v4, TanStack Query v5
 - **Backend/DB**: Supabase (PostgreSQL, Edge Functions, Realtime, pg_cron, pg_net)
 - **AI（ブラウザ）**: Google Gemini デフォルト `gemini-2.0-flash`（`VITE_GEMINI_MODEL` で上書き可）・マルチモーダル対応（画像解析）
-- **PDFパース（ブラウザ）**: `pdfjs-dist` — テキストベースPDFのテキスト抽出（`src/lib/fileParser.ts`）
+- **ファイルパース（ブラウザ）**: `pdfjs-dist`（PDF）・`xlsx`（Excel）・`mammoth`（Word）— `src/lib/fileParser.ts`
 - **AI（サーバー・自動取り込み）**: Google Gemini `gemini-2.5-flash` — Supabase Edge Function `inbound-email` のみ
 - **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は未実装スタブ
 - **メール自動取り込み（現行・稼働中）**: Microsoft Graph API ポーリング + Supabase pg_cron（Make.com不要・完全無料・5分間隔）
@@ -240,6 +240,8 @@ Gemini AI 解析 → DB 保存
 - **実装**: `src/lib/fileParser.ts`
 - **PDF（テキストベース）**: `pdfjs-dist` でテキスト抽出 → テキストエリアへ自動転記 → 既存の解析フローへ
 - **PDF（スキャン・画像化）**: テキスト抽出不可。画像として添付するか手動テキスト入力が必要
+- **Excel（.xlsx/.xls）**: `xlsx`（SheetJS）で全シートをCSV変換 → テキストエリアへ自動転記
+- **Word（.docx）**: `mammoth` で本文テキスト抽出 → テキストエリアへ自動転記
 - **画像（JPG/PNG等）**: base64変換 → `AnalyzeCandidateRequest.imageFiles` / `AnalyzeProjectRequest.imageFiles` に格納 → Gemini multimodal API（`inlineData`）で解析
 - 対応ページ: 人材登録（`CandidatePage.tsx`）・案件登録（`ProjectPage.tsx`）
 - 複数ファイル同時選択可。テキスト貼り付けとの併用も可能
