@@ -88,6 +88,16 @@ function resolveInboundDataEnv(modeRaw: unknown): 'prod' | 'demo' {
   return 'prod'
 }
 
+/**
+ * Make が type に空文字や未設定を渡すと raw.type ?? 'candidate' が効かず 400（不明な type）になるため正規化する。
+ */
+function normalizeInboundType(rawType: string | undefined): string {
+  const t = String(rawType ?? '').trim().toLowerCase()
+  if (t === '' || t === 'candidate' || t === 'human') return t === 'human' ? 'human' : 'candidate'
+  if (t === 'project') return 'project'
+  return 'candidate'
+}
+
 /** AI の skills 配列を trim・重複除去（大文字小文字無視） */
 function dedupeTrimmedSkills(skills: unknown): string[] {
   if (!Array.isArray(skills)) return []
@@ -466,7 +476,7 @@ Deno.serve(async (req: Request) => {
     const inboundDataEnv = resolveInboundDataEnv(raw.mode)
     console.log('[inbound] data_env=', inboundDataEnv, 'mode=', raw.mode ?? '')
 
-    const type: string = raw.type ?? 'candidate'
+    const type: string = normalizeInboundType(raw.type)
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
     const rawBody: string = raw.body ?? ''
