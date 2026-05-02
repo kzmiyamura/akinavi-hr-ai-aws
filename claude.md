@@ -103,6 +103,17 @@
 - Edge の `type` で人材／案件を振り分け（`type=candidate` / `type=project`）。POST は **form-urlencoded または JSON**（`README.md` のパラメータ表を正とする）
 - **`from`**: プレーンなメール文字列に加え、**Microsoft Graph 形式の JSON 文字列**も `inbound-email` 内 `parseFrom` で解釈可能（Power Automate 等への置き換え時の手がかり）
 
+### Power Automate を採用しなかった理由（運用メモ）
+- **Supabase Edge Function への Webhook** は **任意の外部 URL へ HTTP POST** が必要
+- **Power Automate** ではその **「HTTP」コネクタがプレミアム扱い**であり、**無料枠のみでは外部 URL へのリクエストが組めない**（又は個人用フローのみで足りない）ケースが多い。**有償ライセンス（ユーザー単位・月額など）が別途必要**になりやすい。契約・SKU は Microsoft 公式を正とし、組織ごとに異なる
+- 参考（**各社プラン・時点で変動**。数値は目安・要公式確認）:
+
+| ツール | 外部 URL への HTTP POST（無料枠） | 無料枠の目安 |
+|--------|-----------------------------------|-------------|
+| Make.com | 利用可 | 例: 約 1,000 ops（credits）/ 月 等 |
+| Pipedream | 利用可 | 例: 多めの無料実行（公式で確認） |
+| Power Automate | **有料プランが必要になりやすい**（HTTP がプレミアム） | 無料のみでは本連携が困難なことが多い |
+
 ### Edge `inbound-email`（`supabase/functions/inbound-email/index.ts` 準拠）
 - **データ環境**: ボディまたはクエリの `mode` / `data_env`（`prod` | `demo` | `dev` ※ `dev` は `demo` と同扱い）。省略時は `prod`。URL クエリ `?mode=demo` やヘッダ `X-Data-Env` / `X-Mode` も補完に利用
 - **Secrets 例**: `GEMINI_API_KEY`、`SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`。**`GEMINI_INBOUND_TIMEOUT_MS`**: 1 回の Gemini 待ち上限（15〜300000 ms、未設定時 38000）。全体の壁時計は Edge プランにより **概ね 150〜400 秒程度**
