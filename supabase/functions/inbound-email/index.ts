@@ -10,6 +10,7 @@
 //   INBOUND_RELEVANCE_CHECK: false で事前の無関係メール判定を無効化（既定は true）
 //   GEMINI_INBOUND_TIMEOUT_MS: candidate/project の Gemini 1回あたり ms（Secrets。15〜300000。未設定時 38000）
 //   ※ 全体の壁時計は Edge の上限もあり（関連度・Drive取得・Gemini の合計。プランにより概ね150〜400秒程度）
+//   INBOUND_MAKE_SOFT_FAIL=true: 例外時も HTTP 200 + ok:false（Make がエラーでシナリオ停止しにくくする）
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
@@ -259,6 +260,11 @@ function resolveInboundGeminiTimeoutMs(kind: 'candidate' | 'project' | 'match', 
 
 function isInboundRelevanceCheckEnabled(): boolean {
   return (Deno.env.get('INBOUND_RELEVANCE_CHECK') ?? 'true').toLowerCase() !== 'false'
+}
+
+/** true のとき FATAL でも HTTP 200（JSON は ok:false）。Make のシナリオ全体停止を避ける */
+function isInboundMakeSoftFail(): boolean {
+  return (Deno.env.get('INBOUND_MAKE_SOFT_FAIL') ?? '').toLowerCase() === 'true'
 }
 
 /** 1 リクエストを追跡（Supabase ログで rid で検索） */
@@ -1508,8 +1514,20 @@ JSON:`.trim()
       })
     } catch { /* ログ保存失敗は握りつぶす */ }
 
-    return new Response(JSON.stringify({ ok: false, error: message }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+    const soft = isInboundMakeSoftFail()
+    const httpStatus = soft ? 200 : 500
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: message,
+        rid: traceRid || null,
+        phase: tracePhase,
+        makeSoftFail: soft,
+      }),
+      {
+        status: httpStatus,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    )
   }
 })
