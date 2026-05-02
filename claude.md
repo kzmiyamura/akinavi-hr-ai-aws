@@ -114,6 +114,16 @@
 - **フロント**: `src/lib/dataEnv.ts` の `DataEnv`（`prod` | `demo`）、`localStorage` の **`akinavi.dataEnv.v1`**（選択中環境）と **`akinavi.demoUnlock.v1`**（デモ UI 解除フラグ）。**デモ解除**は `VITE_DEMO_KEY` と URL クエリ `?demo=`（`demoKey` / `demo_key` も可）のトグル（`applyDemoKeyFromUrlToggle`）と連動
 - クエリ・更新は各ページで **`dataEnv` を渡し**、本番データとデモデータを同一 Supabase 内で分離
 
+### デモと本番の切り替えモード（ブラウザ・`App.tsx` / `Layout.tsx` / `src/lib/dataEnv.ts` 準拠）
+- **目的**: 同一 Supabase 上の **`data_env` = `prod` / `demo`** を、ブラウザごとにどちらを見るか切り替える（本番データの誤操作を避けつつ営業デモ用データを使う）
+- **既定（デモ UI 未解除）**: **`本番相当（prod）` のみ**。`localStorage` に `demo` が残っていても起動時は **`prod` に読み替え**。ヘッダに環境セレクトは**出ない**
+- **解除（デモ／本番の切替を有効化）**: **`VITE_DEMO_KEY`** がビルドに設定されている前提で、**`?demo=<鍵>`** で開く（`demoKey` / `demo_key` クエリ名も可・`parseDemoKeyFromLocation`）。鍵が一致すると **`akinavi.demoUnlock.v1` = オン**、ヘッダに **「データ」セレクト**（`Layout.tsx`）が表示される。初回成功時は環境を **`demo` にし**、鍵クエリは URL から除去
+- **再ロック（本番固定に戻す）**: **既に解除済み**の同一ブラウザで、**同じ正しい `?demo=` 付き URL を再度開く**と **`applyDemoKeyFromUrlToggle` がトグル**し、解除フラグがオフ・**`prod` 固定**・セレクト非表示（営業後にデモ切替を閉じる用途）
+- **鍵が空／不一致**: 処理しない、またはクエリだけ除去（**`VITE_DEMO_KEY` 未設定**では有効な鍵にならない）
+- **セレクト表示中**: 「**本番相当（prod）**」「**デモ（demo）**」を選ぶと **`akinavi.dataEnv.v1`** が更新され、**全画面の取得・更新はその `data_env` の行のみ**を対象にする
+- **解除がオフになったあと `demo` を選んでいた場合**: `demoUiEnabled === false` なら **`demo` を `prod` に自動補正**
+- **コンポーネント別**: **`demoUiEnabled`** を渡すのは主に人材・案件ページ（デモ用パネル等）。**`MatchingPage` は `dataEnv` のみ**（マッチングも選択中環境のデータのみ）
+
 ### マッチング画面（`src/pages/MatchingPage.tsx` 準拠）
 - **実行モード**: `fast`（高速）/ `full`（全件）。選択は **`localStorage` キー `akinavi.matchingRunMode.v1`**
 - **高速モードの上限（定数）**: 案件あたり候補 **最大 20 名**（`FAST_MAX_CANDIDATES_PER_PROJECT`）、人材あたり案件 **最大 10 件**（`FAST_MAX_PROJECTS_PER_CANDIDATE`）。必須スキル重複が多い順に優先
