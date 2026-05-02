@@ -1,273 +1,626 @@
-# AkiNavi HR-AI 環境構築ハンズオン
+# AkiNavi HR-AI 環境構築ガイド
 
-新規メンバーまたは新しい Supabase プロジェクトで、**フロント・DB・Edge Functions・メール自動取り込み**まで一通り再現するための手順書です。  
-前提知識は「Git とターミナルが触れる」「ブラウザで Supabase / Vercel の画面を操作できる」程度を想定しています。
+このガイドに沿って作業することで、**メール自動取り込みを含むシステム全体**を新しい環境でゼロから動かすことができます。
 
----
-
-## この資料のゴール
-
-- ローカルで `npm run dev` が動き、Supabase の **本番相当の DB** に接続できる。
-- SQL を適用し、`candidates` / `projects` 等のテーブルと RLS が揃っている。
-- Edge Function `inbound-email` / `poll-email` がデプロイされ、Secrets が揃っている。
-- （任意）Vercel にフロントを載せ、本番 URL から同じ Supabase を参照できる。
-- （任意）Outlook + Microsoft Graph のリフレッシュトークンと pg_cron で、**メール自動取り込み**が回る。
-
-**目安時間**: 初回 3〜6 時間（Azure AD / Graph の初回設定を含むと上限側）。
+**作業時間の目安**: 3〜6時間（初回）
 
 ---
 
-## 第0章 全体像と用意するもの
+## 全体の流れ
 
-### アーキテクチャ（要点）
-
-- **フロント**: React（Vite）→ ブラウザから Gemini で解析することも、Supabase に直接 read/write することもある。
-- **DB / API**: Supabase（PostgreSQL + Edge Functions）。
-- **メール（本リポジトリの標準経路）**: **pg_cron** が 5 分ごとに **`poll-email`** を叩く → **Microsoft Graph** で Outlook 未読取得 → 各メールを **`inbound-email`** に渡して Gemini 解析 → DB 保存。  
-  `inbound-email` は **Make.com 等の Webhook から直接 POST する経路**にも対応している（ペイロード仕様は Edge ソース先頭コメント参照）。
-
-### アカウント・キー（チェックリスト）
-
-| 項目 | 用途 |
-|------|------|
-| GitHub アクセス | リポジトリの clone |
-| Supabase プロジェクト | DB・Edge・Secrets |
-| Google AI（Gemini）API キー | ブラウザ解析・Edge `inbound-email` |
-| （メール自動）Microsoft アカウント（Outlook）× 本番/デモの数 | Graph ポーリング |
-| （メール自動）Azure AD アプリ登録 | `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` |
-| （フロント本番）Vercel | ホスティング・`VITE_*` 環境変数 |
-
-### コストの目安
-
-- Supabase / Vercel は無料枠内に収まる構成を想定しているが、**利用量とプランは各自で Dashboard を確認**すること。
-- Gemini は無料枠・従量課金のどちらもあり得る。
+```
+第0章: Outlookアカウントを4つ作る
+  ↓
+第1章: 必要なツールのインストール・ソースコードの取得
+  ↓
+第2章: データベースの作成（Supabase）
+  ↓
+第3章: AIの設定（Gemini APIキーの取得）
+  ↓
+第4章: サーバー機能のデプロイ（Edge Functions）
+  ↓
+第5章: メール自動取り込みの設定（Azure + Microsoft Graph API）
+  ↓
+第6章: 本番サイトの公開（Vercel）
+```
 
 ---
 
-## 第1章 リポジトリとローカルフロント
+## 第0章　Outlookメールアドレスを4つ作る
 
-### 1.1 前提
+### なぜ4つ必要か
 
-- **Node.js 20 以上**、npm 9 以上（`README.md` 準拠）。
-- **Git**。
-- Edge をデプロイする場合は **Supabase CLI**（例: `brew install supabase/tap/supabase`）。
+このシステムは、専用のメールアドレスに転送・送信されたメールを自動で解析してデータベースに保存します。  
+用途ごとに別のメールアドレスを使うため、合計4つ必要です。
 
-### 1.2 Clone と依存関係
+| 用途 | 例 |
+|---|---|
+| 人材情報の受信（本番用） | `yourname.hr.human@outlook.jp` |
+| 案件情報の受信（本番用） | `yourname.hr.project@outlook.jp` |
+| 人材情報の受信（デモ用） | `yourname.hr.human.dev@outlook.jp` |
+| 案件情報の受信（デモ用） | `yourname.hr.project.dev@outlook.jp` |
+
+> 名前は自由に決めてOKです。ただし **すべて同じ Microsoft アカウント（Outlook）** ではなく、**それぞれ別のアカウント**として作成してください。1アカウント = 1メールアドレスです。
+
+### 作成手順（1アカウントあたり）
+
+**1. Microsoftアカウント作成ページを開く**
+
+ブラウザで `https://outlook.com` を開き、「無料アカウントを作成」をクリック。
+
+---
+
+**2. メールアドレスを決める**
+
+「新しいメールアドレスを取得」を選び、希望のメールアドレスを入力して「次へ」。
+
+---
+
+**3. パスワード・名前・生年月日などを設定して完了**
+
+---
+
+**4. 同じ手順を繰り返す**
+
+上記を 4回繰り返し、4つのアカウントを作成する。
+
+> **重要**: 4つのメールアドレスと、それぞれのパスワードをメモしておいてください。後の章で使います。
+
+### 完了チェック
+
+- [ ] Outlookアカウントを4つ作成した
+- [ ] 4つのメールアドレスとパスワードをメモした
+
+---
+
+## 第1章　必要なツールのインストール・ソースコードの取得
+
+### 1-1. 必要なものを確認する
+
+以下がインストールされているか確認してください。
+
+**Node.js（バージョン20以上）**
+
+ターミナルを開いて以下を入力し、バージョン番号が表示されればOKです。
+
+```bash
+node -v
+```
+
+`v20.x.x` のように表示されればOKです。表示されない場合は `https://nodejs.org` からインストールしてください。
+
+---
+
+**Git**
+
+```bash
+git --version
+```
+
+バージョンが表示されればOKです。表示されない場合は `https://git-scm.com` からインストールしてください。
+
+---
+
+**Supabase CLI**（後でサーバー機能をデプロイするために必要）
+
+Mac の場合:
+
+```bash
+brew install supabase/tap/supabase
+```
+
+確認:
+
+```bash
+supabase --version
+```
+
+### 1-2. ソースコードをダウンロードする
+
+「ソースコード」とは、このシステムのプログラム本体です。GitHub（プログラムの保管場所）からダウンロードします。
 
 ```bash
 git clone https://github.com/kzmiyamura/akinavi-hr-ai.git
 cd akinavi-hr-ai
+```
+
+### 1-3. 必要なパッケージをインストールする
+
+プログラムが動くために必要な部品（ライブラリ）を一括インストールします。
+
+```bash
 npm install
 ```
 
-### 1.3 環境変数（フロント）
+完了までしばらく待ちます。エラーが出なければOKです。
+
+### 完了チェック
+
+- [ ] `node -v` でバージョンが表示された
+- [ ] `git --version` でバージョンが表示された
+- [ ] `supabase --version` でバージョンが表示された
+- [ ] `npm install` がエラーなく完了した
+
+---
+
+## 第2章　データベースの作成（Supabase）
+
+「データベース」とは、人材情報・案件情報などのデータを保存する場所です。このシステムでは **Supabase**（無料で使えるデータベースサービス）を使います。
+
+### 2-1. Supabaseにサインアップ・プロジェクトを作成する
+
+**1. `https://supabase.com` を開いてアカウントを作成する**
+
+「Start your project」をクリック → GitHubアカウントでサインアップすると簡単です。
+
+---
+
+**2. 新しいプロジェクトを作成する**
+
+ダッシュボードの「New project」をクリックし、以下を入力して「Create new project」。
+
+- **Name**: 任意（例: `akinavi-hr-ai`）
+- **Database Password**: 自分でパスワードを設定（**メモしておく**）
+- **Region**: `Northeast Asia (Tokyo)` を選択
+
+プロジェクトの作成が完了するまで1〜2分待ちます。
+
+---
+
+**3. 接続情報をメモする**
+
+プロジェクトが作成されたら、左メニューの「Settings」→「API」を開く。
+
+以下の2つをメモしてください:
+
+| メモするもの | 場所 | 用途 |
+|---|---|---|
+| **Project URL** | 「Project URL」の欄 | アプリからDBへの接続先 |
+| **anon（公開）キー** | 「Project API keys」の「anon」の欄 | アプリがDBに接続するための鍵 |
+| **service_role キー** | 「Project API keys」の「service_role」の欄 | サーバー機能がDBを操作するための鍵（**絶対に他人に見せない**） |
+
+### 2-2. 環境変数ファイルを作成する
+
+「環境変数」とは、プログラムに渡す設定値（APIキーやURLなど）のことです。
 
 ```bash
 cp .env.example .env.local
 ```
 
-`.env.local` を編集する。**実際のプロジェクト URL / anon key は自分の Supabase から取得**する。
+`.env.local` をテキストエディタで開き、以下を書き換えます（この時点では Gemini APIキーはまだなくてOKです）:
 
-| 変数 | 説明 |
-|------|------|
-| `VITE_SUPABASE_URL` | Supabase プロジェクト URL |
-| `VITE_SUPABASE_ANON_KEY` | anon（公開）キー |
-| `VITE_AI_PROVIDER` | 通常は `gemini` |
-| `VITE_GEMINI_API_KEY` | ブラウザから呼ぶ Gemini 用 |
-| `VITE_GEMINI_MODEL` | 任意。未指定時は既定モデル（README 参照） |
-| `VITE_DEMO_KEY` | 任意。`?demo=` でデモ環境表示切替（README「データ環境」参照） |
+```env
+VITE_SUPABASE_URL=（Project URL を貼り付け）
+VITE_SUPABASE_ANON_KEY=（anon キーを貼り付け）
+VITE_GEMINI_API_KEY=（次の章で設定します）
+VITE_AI_PROVIDER=gemini
+VITE_DEMO_KEY=（任意の文字列。例: demo2024）
+```
 
-`.env.example` にある `GEMINI_API_KEY` / `SUPABASE_SERVICE_ROLE_KEY` 等は **Vercel のサーバーレスやローカルバックエンド用**の名残であり、**通常の `npm run dev` だけなら必須ではない**場合が多い。迷ったら `README.md` の「ローカル開発環境の構築手順」に合わせる。
+### 2-3. データベースのテーブルを作成する
 
-### 1.4 起動とビルド確認
+「テーブル」とは、データベースの中の表（Excel のシートのようなもの）です。SQLという命令文を実行して作成します。
+
+**1. Supabase ダッシュボードの「SQL Editor」を開く**
+
+左メニューの「SQL Editor」をクリック。
+
+---
+
+**2. `supabase/schema.sql` の中身を貼り付けて実行する**
+
+ダウンロードしたソースコードの `supabase/schema.sql` をテキストエディタで開き、**全文をコピー**して SQL Editor に貼り付け、「Run」をクリック。
+
+エラーが出なければOKです。
+
+---
+
+**3. 追加のSQLファイルを順番に実行する**
+
+同じ手順で、以下のファイルを**上から順番に**実行してください。
+
+| 順番 | ファイル名 | 内容 |
+|---|---|---|
+| 1 | `supabase/migrations/add_ai_logs.sql` | AI解析のログテーブル |
+| 2 | `supabase/migrations/add_candidate_skills.sql` | スキルのカテゴリ分けテーブル |
+| 3 | `supabase/migrations/add_data_env.sql` | 本番/デモの環境分けカラム |
+| 4 | `supabase/migrations/add_project_detail_fields.sql` | 案件の詳細項目 |
+| 5 | `supabase/migrations/add_projects_updated_by.sql` | 案件の更新者記録 |
+| 6 | `supabase/migrations/add_updated_by.sql` | 人材の更新者記録 |
+
+> `add_email_polling_cron.sql` は第5章で別途設定するため、今は実行しないでください。
+
+### 2-4. ローカルで動作確認する
 
 ```bash
 npm run dev
 ```
 
-ブラウザで `http://localhost:5173` を開き、エラーなく表示されることを確認。
+ブラウザで `http://localhost:5173` を開き、画面が表示されればOKです。
 
-```bash
-npm run build
-```
+### 完了チェック
 
-TypeScript と Vite ビルドが通ることを確認。
-
-### 1.5 テスト（任意だが推奨）
-
-```bash
-npm run test:run
-```
+- [ ] Supabaseのプロジェクトを作成した
+- [ ] Project URL・anon キー・service_role キーをメモした
+- [ ] `.env.local` に URL と anon キーを設定した
+- [ ] `schema.sql` を実行した
+- [ ] 6つのマイグレーションSQLを順番に実行した
+- [ ] `npm run dev` で画面が表示された
 
 ---
 
-## 第2章 Supabase データベース
+## 第3章　AIの設定（Gemini APIキーの取得）
 
-### 2.1 新規プロジェクト
+このシステムはGoogle の AI（Gemini）を使ってメールや資料を自動解析します。  
+利用するには「APIキー」（AIを使うための認証コード）が必要です。
 
-1. Supabase でプロジェクト作成。
-2. **Project Settings → API** で `URL`・`anon`・`service_role` を控える（`service_role` は**絶対にフロントに埋め込まない**）。
+### 3-1. Gemini APIキーを取得する
 
-### 2.2 ベーススキーマ
+**1. `https://aistudio.google.com` をブラウザで開く**
 
-SQL Editor で **`supabase/schema.sql`** を実行する（テーブル・RLS の土台）。
-
-### 2.3 マイグレーション（ファイル名の辞書順）
-
-`README.md` では `supabase/migrations/` を**ファイル名順**に実行するとある。本リポジトリでは次の並びになる。
-
-1. `add_ai_logs.sql`
-2. `add_candidate_skills.sql`（**14 カテゴリの CHECK 制約はこのマイグレーションを正**とする。`CLAUDE.md` 参照）
-3. `add_data_env.sql`
-4. `add_email_polling_cron.sql` → **第3章の後半**で中身を書き換えてから実行推奨（`YOUR_PROJECT_REF` / `YOUR_SERVICE_ROLE_KEY`）
-5. `add_project_detail_fields.sql`
-6. `add_projects_updated_by.sql`
-7. `add_updated_by.sql`
-
-各ファイルを**そのまま全文**コピーして SQL Editor で実行すればよい。エラーが出た場合は、同じマイグレーションを二重実行していないか、`schema.sql` が先に成功しているかを確認する。
-
-### 2.4 拡張（メールポーリングを使う場合）
-
-`add_email_polling_cron.sql` 実行前に、Dashboard → **Database → Extensions** で **`pg_cron`** と **`pg_net`** を有効にする（ファイル内コメントにも記載あり）。
+Googleアカウントでログインします。
 
 ---
 
-## 第3章 Edge Functions
+**2. 「Get API key」をクリック**
 
-### 3.1 CLI でログイン・リンク
+---
+
+**3. 「Create API key」をクリックしてAPIキーを発行する**
+
+表示されたキー（`AIza...` のような文字列）をメモしてください。
+
+### 3-2. 環境変数に設定する
+
+`.env.local` を開き、先ほどのキーを設定します:
+
+```env
+VITE_GEMINI_API_KEY=（取得したAPIキーを貼り付け）
+```
+
+### 3-3. 動作確認
 
 ```bash
-cd /path/to/akinavi-hr-ai
+npm run dev
+```
+
+「人材登録」タブを開き、適当なテキストを貼り付けて「解析して登録」をクリック。  
+AIが解析を始めれば（またはエラーなく登録されれば）OKです。
+
+### 完了チェック
+
+- [ ] Google AI Studio で APIキーを取得した
+- [ ] `.env.local` に `VITE_GEMINI_API_KEY` を設定した
+- [ ] ブラウザからAI解析が動作した
+
+---
+
+## 第4章　サーバー機能のデプロイ（Edge Functions）
+
+「Edge Functions」とは、Supabase のサーバー上で動くプログラムです。  
+メールの自動解析（`inbound-email`）と Outlook のメール取得（`poll-email`）の2つをデプロイします。
+
+### 4-1. Supabase CLIでログインする
+
+```bash
 npx supabase login
-npx supabase link --project-ref <YOUR_PROJECT_REF>
 ```
 
-### 3.2 デプロイ
+ブラウザが自動で開くのでログインしてください。
+
+### 4-2. このプロジェクトに接続する
+
+「Project Reference ID」（プロジェクトID）を Supabase ダッシュボードの「Settings」→「General」→「Reference ID」で確認してメモしてください。
+
+```bash
+npx supabase link --project-ref （Reference IDを貼り付け）
+```
+
+### 4-3. Edge Functions をデプロイする
 
 ```bash
 npx supabase functions deploy inbound-email
 npx supabase functions deploy poll-email
 ```
 
-### 3.3 Secrets（Dashboard → Edge Functions → Secrets）
+それぞれ「Deployed」と表示されればOKです。
 
-**`inbound-email` で必須（コード上 `getEnv` で読むもの）**
+### 4-4. Secrets（機密情報）を登録する
 
-| Secret | 説明 |
-|--------|------|
-| `GEMINI_API_KEY` | Gemini（サーバー側解析） |
-| `SUPABASE_URL` | 通常は CLI / ダッシュボードが自動設定 |
-| `SUPABASE_SERVICE_ROLE_KEY` | DB 書き込み用（**漏洩厳禁**） |
+「Secrets」とは、サーバー上のプログラムが使うAPIキーやパスワードを安全に保管する場所です。  
+Supabase ダッシュボード → 「Edge Functions」→「Secrets」から登録します。
 
-**任意（`inbound-email` 先頭コメント参照）**
+「Add new secret」をクリックして、以下を1つずつ登録してください。
 
-| Secret | 説明 |
-|--------|------|
-| `GEMINI_INBOUND_TIMEOUT_MS` | 1 回の解析タイムアウト（ms） |
-| `INBOUND_RELEVANCE_CHECK` | `false` で無関係メール判定オフ |
-| `INBOUND_MAKE_SOFT_FAIL` | `true` で例外時も 200 応答など |
-| `INBOUND_BODY_FALLBACK_ON_GEMINI_TIMEOUT` | タイムアウト時のフォールバック制御 |
-| `AUTO_MATCH_ENABLED` | 自動マッチング系の有効化 |
+**必須（今すぐ登録）**
 
-**`poll-email` 用（Graph ポーリング）**
+| Secret名 | 値 |
+|---|---|
+| `GEMINI_API_KEY` | 第3章で取得したGemini APIキー |
+| `INBOUND_CALL_KEY` | Supabase の service_role キー（第2章でメモしたもの） |
 
-| Secret | 説明 |
-|--------|------|
-| `GRAPH_CLIENT_ID` | Azure AD アプリ |
-| `GRAPH_CLIENT_SECRET` | 同上 |
-| `GRAPH_REFRESH_TOKEN_HUMAN` | 人材用 Outlook（prod） |
-| `GRAPH_REFRESH_TOKEN_PROJECT` | 案件用 Outlook（prod） |
-| `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 人材用（demo） |
-| `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 案件用（demo） |
+> `SUPABASE_URL` と `SUPABASE_SERVICE_ROLE_KEY` は Supabase が自動で設定するため、手動登録は不要な場合があります。もしエラーが出る場合は手動で追加してください。
 
-`poll-email` のソースでは、`inbound-email` 呼び出しに **JWT 形式**のキーを使う想定で **`INBOUND_CALL_KEY`**（service_role と同じ JWT でも可）を読む。未設定時は `SUPABASE_SERVICE_ROLE_KEY` 等のフォールバック順があるが、**運用ポリシーに合わせて明示設定を推奨**。
+**メール自動取り込み用（第5章で登録）**
 
-### 3.4 `inbound-email` の手動検証（最小）
+| Secret名 | 用途 |
+|---|---|
+| `GRAPH_CLIENT_ID` | 第5章で取得 |
+| `GRAPH_CLIENT_SECRET` | 第5章で取得 |
+| `GRAPH_REFRESH_TOKEN_HUMAN` | 第5章で取得 |
+| `GRAPH_REFRESH_TOKEN_PROJECT` | 第5章で取得 |
+| `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 第5章で取得 |
+| `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 第5章で取得 |
 
-Webhook と同じように JSON で叩ける（認証ヘッダはプロジェクトの設定に合わせる。通常は `Authorization: Bearer <anon または service_role>` と `apikey`）。
+### 完了チェック
 
-- `type`: `candidate` または `project`
-- `from`, `subject`, `body`（空ばかりだとスキップされる動きあり）
-
-詳細フィールド（添付・`attachments` 配列・`data_env` 等）は **`supabase/functions/inbound-email/index.ts` 先頭のコメント**が仕様の正である。
-
-### 3.5 pg_cron の有効化（`add_email_polling_cron.sql`）
-
-1. `add_email_polling_cron.sql` 内の `YOUR_PROJECT_REF` を実際の Reference ID に置換。
-2. `YOUR_SERVICE_ROLE_KEY` を service_role キーに置換。
-3. SQL Editor で実行。
-4. ファイル末尾の `SELECT ... FROM cron.job` でジョブが登録されたことを確認。
+- [ ] `supabase login` が完了した
+- [ ] `supabase link` でプロジェクトに接続した
+- [ ] `inbound-email` をデプロイした
+- [ ] `poll-email` をデプロイした
+- [ ] `GEMINI_API_KEY` と `INBOUND_CALL_KEY` を Secrets に登録した
 
 ---
 
-## 第4章 Vercel（フロント本番）
+## 第5章　メール自動取り込みの設定
 
-1. Vercel にリポジトリをインポート。
-2. Environment Variables に少なくとも以下を設定（`README.md` と同様）。
+この章では、第0章で作成した4つのOutlookアカウントと、このシステムを連携させます。  
+「5分ごとに未読メールを自動で取得・解析・保存する」という仕組みを作ります。
 
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
-   - `VITE_GEMINI_API_KEY`
-   - `VITE_AI_PROVIDER=gemini`
-   - `VITE_DEMO_KEY`（任意）
+設定には3つのステップがあります。
 
-3. `main` への push でデプロイされる想定なら、そのままビルド成功を確認。
+```
+① Azureにアプリを登録する（接続許可の設定）
+② 各Outlookアカウントのリフレッシュトークンを取得する
+③ Supabaseにスケジューラを登録する
+```
 
----
+### 5-1. Azureにアプリを登録する
 
-## 第5章 メール連携（運用の要点）
+「Azure」は Microsoft のクラウドサービスです。ここでアプリを登録することで、このシステムがOutlookにアクセスする許可を得ます。**Microsoftアカウントがあれば無料で使えます。**
 
-### 5.1 標準経路（Graph + `poll-email`）
+**1. `https://portal.azure.com` をブラウザで開く**
 
-- Outlook の**未読**が対象。処理の流れは `README.md` のフロー図および「メール自動受信フロー」の節が正。
-- リフレッシュトークンは **`app_config` にローテーション保存**されるため、初回だけ Secrets に入れれば以降は DB 側に寄っていく（異常時は Secrets / DB を確認）。
-
-### 5.2 外部オートメーション経路（Make / Pipedream 等）
-
-- `inbound-email` は **form-urlencoded / JSON** 双方や添付の複数表現に対応している。
-- 外部ツール側で **本文が空・添付メタだけ**になるケースや、`from` が JSON 文字列になるケースがある。挙動は Edge 実装のパースロジックに従う。
-
-### 5.3 よくある落とし穴
-
-| 現象 | 確認すること |
-|------|----------------|
-| メールが DB に入らない | `inbound-email` ログ、`ai_logs`、無関係メール判定（`INBOUND_RELEVANCE_CHECK`） |
-| ポーリングが動かない | `pg_cron` / `pg_net`、Secrets、`poll-email` のログ、cron ジョブ名 |
-| デモと本番が混ざる | `data_env` / `mode` / クエリ `?demo=` と `VITE_DEMO_KEY`（README 参照） |
+Microsoftアカウント（Outlookアカウントのどれかでも可）でログインします。
 
 ---
 
-## 第6章 完了チェックリスト
+**2. 「Microsoft Entra ID」を検索して開く**
 
-- [ ] `npm run dev` で画面表示、`npm run build` 成功
-- [ ] `schema.sql` + `migrations`（辞書順）適用済み
-- [ ] `inbound-email` / `poll-email` デプロイ済み
-- [ ] Secrets（Gemini・Supabase・Graph 系）設定済み
-- [ ] （任意）pg_cron 登録済み
-- [ ] （任意）Vercel 環境変数設定済み
-- [ ] （任意）`npm run test:run` 成功
+上部の検索バーに「Microsoft Entra ID」と入力して選択します。
 
 ---
 
-## 付録 A 参考ドキュメント（リポジトリ内）
+**3. 「アプリの登録」→「新規登録」をクリック**
+
+---
+
+**4. 以下を入力して「登録」をクリック**
+
+| 項目 | 入力内容 |
+|---|---|
+| 名前 | 任意（例: `akinavi-mail-reader`） |
+| サポートされるアカウントの種類 | 「**個人用 Microsoft アカウントのみ**」を選択 |
+| リダイレクト URI | 「Web」を選び、`http://localhost` と入力 |
+
+---
+
+**5. クライアントIDをメモする**
+
+登録完了画面に表示される「**アプリケーション（クライアント）ID**」をメモします。
+
+---
+
+**6. クライアントシークレットを作成する**
+
+左メニュー「証明書とシークレット」→「新しいクライアントシークレット」→ 説明を入力して「追加」。
+
+表示された「**値**」（`xxxxxxxx-xxxx-...` のような文字列）をメモします。  
+**この画面を閉じると二度と確認できないので必ずメモしてください。**
+
+---
+
+**7. APIの権限を追加する**
+
+左メニュー「APIのアクセス許可」→「アクセス許可の追加」→「Microsoft Graph」→「委任されたアクセス許可」で以下を検索して追加:
+
+- `Mail.Read`
+- `Mail.ReadWrite`
+
+追加後、「（テナント名）に管理者の同意を与えます」のボタンが表示される場合はクリックしてください。
+
+---
+
+**メモしたもの**
+
+- クライアントID（`GRAPH_CLIENT_ID`）
+- クライアントシークレットの値（`GRAPH_CLIENT_SECRET`）
+
+### 5-2. 各Outlookアカウントのリフレッシュトークンを取得する
+
+「リフレッシュトークン」とは、このシステムがOutlookにアクセスし続けるための認証情報です。  
+4つのアカウント分を取得します。
+
+**1. 以下のURLをブラウザで開く**
+
+`（クライアントID）` の部分を 5-1 でメモしたクライアントIDに置き換えてください。
+
+```
+https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=（クライアントID）&response_type=code&redirect_uri=http://localhost&scope=offline_access%20Mail.Read%20Mail.ReadWrite
+```
+
+---
+
+**2. 1つ目のOutlookアカウント（人材用・本番）でログインする**
+
+ログインするとブラウザが `http://localhost/?code=（長い文字列）` というURLに遷移します。  
+（ページは表示されませんが問題ありません）
+
+アドレスバーの `code=` 以降の文字列を全部コピーしてメモします。
+
+---
+
+**3. コードをリフレッシュトークンに変換する**
+
+ターミナルで以下を実行します（`（...）` 部分を実際の値に置き換え）:
+
+```bash
+curl -X POST https://login.microsoftonline.com/consumers/oauth2/v2.0/token \
+  -d "client_id=（クライアントID）" \
+  -d "client_secret=（クライアントシークレット）" \
+  -d "redirect_uri=http://localhost" \
+  -d "grant_type=authorization_code" \
+  -d "code=（コピーしたcode）" \
+  -d "scope=offline_access Mail.Read Mail.ReadWrite"
+```
+
+返ってきたJSON の `"refresh_token"` の値をメモします。これが **リフレッシュトークン**です。
+
+---
+
+**4. 残り3アカウント分も繰り返す**
+
+同じ手順を残り3つのアカウントで繰り返します。ブラウザで別のアカウントにログインするときは、**一度ログアウトしてから**次のアカウントでログインしてください。
+
+| アカウント | Secretキー名 |
+|---|---|
+| 人材用・本番 | `GRAPH_REFRESH_TOKEN_HUMAN` |
+| 案件用・本番 | `GRAPH_REFRESH_TOKEN_PROJECT` |
+| 人材用・デモ | `GRAPH_REFRESH_TOKEN_HUMAN_DEV` |
+| 案件用・デモ | `GRAPH_REFRESH_TOKEN_PROJECT_DEV` |
+
+---
+
+**5. Supabase Secrets に登録する**
+
+Supabase ダッシュボード → 「Edge Functions」→「Secrets」で、以下を登録します:
+
+| Secret名 | 値 |
+|---|---|
+| `GRAPH_CLIENT_ID` | 5-1でメモしたクライアントID |
+| `GRAPH_CLIENT_SECRET` | 5-1でメモしたクライアントシークレット |
+| `GRAPH_REFRESH_TOKEN_HUMAN` | 人材用・本番のリフレッシュトークン |
+| `GRAPH_REFRESH_TOKEN_PROJECT` | 案件用・本番のリフレッシュトークン |
+| `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 人材用・デモのリフレッシュトークン |
+| `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 案件用・デモのリフレッシュトークン |
+
+### 5-3. 拡張機能を有効にする
+
+Supabase のスケジューラ機能（pg_cron）と HTTP通信機能（pg_net）を有効にします。
+
+Supabase ダッシュボード → 「Database」→「Extensions」を開き、以下を検索してONにします:
+
+- `pg_cron`
+- `pg_net`
+
+### 5-4. 5分ごとのスケジュールを登録する
+
+`supabase/migrations/add_email_polling_cron.sql` をテキストエディタで開き、以下の2箇所を書き換えます:
+
+| 書き換え前 | 書き換え後 |
+|---|---|
+| `YOUR_PROJECT_REF` | Supabase の Reference ID（第4章でメモしたもの） |
+| `YOUR_SERVICE_ROLE_KEY` | Supabase の service_role キー（第2章でメモしたもの） |
+
+書き換えたら、Supabase の SQL Editor に全文貼り付けて「Run」をクリック。
+
+最後の SELECT 結果に `poll-email-every-5-minutes` というジョブが表示されればOKです。
+
+### 完了チェック
+
+- [ ] Azureにアプリを登録し、クライアントID・シークレットをメモした
+- [ ] Mail.Read / Mail.ReadWrite の権限を追加した
+- [ ] 4つのアカウントのリフレッシュトークンを取得した
+- [ ] 6つの Graph 関連 Secrets を Supabase に登録した
+- [ ] pg_cron・pg_net を有効にした
+- [ ] `add_email_polling_cron.sql` を書き換えて実行した
+
+---
+
+## 第6章　本番サイトの公開（Vercel）
+
+「Vercel」とは、作ったWebサイトをインターネット上に公開するためのサービスです。無料で使えます。
+
+### 6-1. Vercelにサインアップ・プロジェクトをインポートする
+
+**1. `https://vercel.com` を開き、GitHubアカウントでサインアップ**
+
+---
+
+**2. 「Add New Project」→「Import Git Repository」でこのリポジトリを選択**
+
+---
+
+**3. 「Environment Variables」に以下を設定してから「Deploy」をクリック**
+
+| 変数名 | 値 |
+|---|---|
+| `VITE_SUPABASE_URL` | Supabase の Project URL |
+| `VITE_SUPABASE_ANON_KEY` | Supabase の anon キー |
+| `VITE_GEMINI_API_KEY` | Gemini の APIキー |
+| `VITE_AI_PROVIDER` | `gemini` |
+| `VITE_DEMO_KEY` | 任意の文字列（デモ環境の解除キー） |
+
+デプロイが完了すると `https://（プロジェクト名）.vercel.app` のような URLが発行されます。
+
+以降は `main` ブランチに変更を push するたびに自動でデプロイされます。
+
+### 完了チェック
+
+- [ ] Vercel にプロジェクトをインポートした
+- [ ] 環境変数を設定した
+- [ ] デプロイが成功してURLが発行された
+
+---
+
+## 最終確認チェックリスト
+
+全章が完了したら、以下をすべて確認してください。
+
+- [ ] `npm run dev` でブラウザにエラーなく画面が表示される
+- [ ] 人材登録タブでテキストを貼り付けて「解析して登録」が動く
+- [ ] マッチング結果タブでスコアが表示される
+- [ ] 専用のOutlookアドレスにメールを送って5分以内に人材/案件が登録される
+- [ ] Vercel の本番URLでも同じ動作が確認できる
+
+---
+
+## うまくいかないときは
+
+### 画面が真っ白になる・エラーが出る
+
+ブラウザの開発者ツールを開いて（F12 キー）、「Console」タブにエラーメッセージが出ていないか確認する。
+
+よくある原因:
+- `.env.local` の値が間違っている（スペースや余分な文字が入っていないか確認）
+- `npm install` をしていない
+
+### AIが解析されない（登録できない）
+
+- Gemini APIキーが正しく設定されているか確認
+- Supabase の「Edge Functions」→「Logs」でエラーが出ていないか確認
+
+### メールが自動取り込みされない
+
+Supabase の「Edge Functions」→「Logs」→「poll-email」のログを確認する。
+
+よくある原因:
+- Graph API の Secrets が1つでも登録されていない
+- リフレッシュトークンが間違っている（取得後に有効期限が切れた場合は再取得が必要）
+- `pg_cron` または `pg_net` が有効になっていない
+- `add_email_polling_cron.sql` の `YOUR_PROJECT_REF` / `YOUR_SERVICE_ROLE_KEY` を書き換えずに実行してしまった
+
+### マイグレーションでエラーが出る
+
+- `schema.sql` を先に実行したか確認
+- 同じSQLを二重実行していないか確認（多くのSQLは `IF NOT EXISTS` で二重実行に対応しているが念のため）
+
+---
+
+## 参考ドキュメント
 
 | ファイル | 内容 |
-|----------|------|
-| `README.md` | 構成図・デプロイ・Secrets 一覧・ディレクトリ構成 |
-| `CLAUDE.md` | プロジェクト方針・DB カテゴリ一覧・運用メモ |
-| `supabase/functions/inbound-email/index.ts` | メール/Webhook ペイロード仕様（コメント） |
-| `supabase/functions/poll-email/index.ts` | Graph ポーリング・必要 Secrets（コメント） |
-| `docs/Sales_Manual.md` | 営業向け操作（あれば PDF 版も同梱） |
-
----
-
-## 付録 B トラブル時の切り分け順
-
-1. ブラウザの開発者ツール（ネットワーク）で Supabase へのリクエストが 401/403 になっていないか。
-2. Supabase **Logs**（Edge Functions）で `inbound-email` / `poll-email` のエラー本文。
-3. SQL Editor で `ai_logs` の直近行、テーブルに行が増えているか。
-4. マイグレーションを飛ばしていないか（特に `add_candidate_skills.sql` と `add_data_env.sql`）。
-
----
-
-*文書バージョン: リポジトリ同期用ドラフト。実際の Dashboard の文言・ボタン名は Supabase / Vercel / Azure の更新で変わる場合がある。*
+|---|---|
+| `README.md` | システム全体の概要・技術スタック |
+| `docs/Sales_Manual.md` | 営業担当者向けの操作マニュアル |
+| `docs/DataEnv_Demo_Prod.md` | 本番・デモ環境の切替方法 |
