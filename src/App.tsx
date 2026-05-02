@@ -11,7 +11,7 @@ import { CandidateDetailPage } from './pages/CandidateDetailPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import type { DataEnv } from './lib/dataEnv'
 import {
-  applyDemoKeyFromUrlOnce,
+  applyDemoKeyFromUrlToggle,
   getDemoUiEnabled,
   readStoredDataEnv,
   writeStoredDataEnv,
@@ -50,13 +50,24 @@ function AppInner() {
   })
 
   useEffect(() => {
-    const unlockedNow = applyDemoKeyFromUrlOnce()
-    if (unlockedNow) {
+    const r = applyDemoKeyFromUrlToggle()
+    if (r === 'absent') return
+    if (r === 'invalid') {
+      stripDemoKeyQueryParams()
+      return
+    }
+    if (r === 'unlocked') {
       setDemoUiEnabled(true)
       setDataEnv('demo')
       writeStoredDataEnv('demo')
       stripDemoKeyQueryParams()
+      return
     }
+    // locked: 本番固定・デモ選択不可
+    setDemoUiEnabled(false)
+    setDataEnv('prod')
+    writeStoredDataEnv('prod')
+    stripDemoKeyQueryParams()
   }, [])
 
   useEffect(() => {

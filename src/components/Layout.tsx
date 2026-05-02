@@ -10,7 +10,7 @@ interface Props {
   nickname: string
   onClearNickname: () => void
   dataEnv: DataEnv
-  /** デモ環境（data_env=demo）のUIを出す（URLキー解除後） */
+  /** デモ／本番の切替を出す（正しい ?demoKey= のトグルでオン・オフ） */
   demoUiEnabled: boolean
   onChangeDataEnv: (env: DataEnv) => void
   children: React.ReactNode
@@ -49,8 +49,8 @@ export function Layout({
                   disabled={!demoUiEnabled}
                   title={
                     demoUiEnabled
-                      ? '参照する data_env（demo はデモ解除後のみ）'
-                      : 'デモ環境を見るには URL に demoKey を付与してください'
+                      ? '参照する data_env。同じ ?demoKey= URL をもう一度開くと本番固定に戻ります'
+                      : '正しい ?demoKey= を付けて開くとデモ切替が使えます。同じURLでもう一度で本番固定に戻ります'
                   }
                   className="border border-gray-200 rounded-lg px-2 py-1 text-xs sm:text-sm bg-white text-gray-700 disabled:opacity-60"
                 >

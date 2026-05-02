@@ -63,12 +63,25 @@ export function isDemoKeyValid(key: string): boolean {
   return key.trim() === expected
 }
 
-export function applyDemoKeyFromUrlOnce(): boolean {
+/** `?demoKey=` が無い・空 */
+export type DemoKeyUrlResult = 'absent' | 'invalid' | 'unlocked' | 'locked'
+
+/**
+ * 正しい demoKey が URL にあるときだけ処理する。
+ * - 未解除 → 解除（デモ／本番を選べるようになる）
+ * - 解除済み → ロック（本番のみ・デモは選べない）
+ * トグルは同一ブラウザの localStorage と連動。
+ */
+export function applyDemoKeyFromUrlToggle(): DemoKeyUrlResult {
   const key = parseDemoKeyFromLocation()
-  if (!key) return false
-  if (!isDemoKeyValid(key)) return false
+  if (!key) return 'absent'
+  if (!isDemoKeyValid(key)) return 'invalid'
+  if (readStoredDemoUnlock()) {
+    clearDemoUiEnabled()
+    return 'locked'
+  }
   writeStoredDemoUnlock(true)
-  return true
+  return 'unlocked'
 }
 
 export function getDemoUiEnabled(): boolean {
