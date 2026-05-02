@@ -153,7 +153,7 @@ function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateRespo
     summary,
     skillsByCategory: sbc,
     roles: [s.role, randPick(['テックリード', 'メンバー', 'サブリーダー'])],
-    industries: s.industriesC,
+    industries: [...s.industriesC],
     nearestStation: loc.station,
     prefecture: loc.prefecture,
     availableRegions: loc.regions,
