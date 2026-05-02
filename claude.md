@@ -10,7 +10,7 @@
 - **AI（ブラウザ）**: Google Gemini デフォルト `gemini-2.0-flash`（`VITE_GEMINI_MODEL` で上書き可。旧 `gemini-1.5-flash-8b` は API 非対応）
 - **AI（サーバー・自動取り込み）**: Google Gemini `gemini-2.5-flash` — **Supabase Edge Function `inbound-email` のみ**（旧 Vercel `api/analyze` は移設済み・本番 Webhook では未使用）
 - **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は `openaiProvider.ts` が未実装スタブ
-- **Email**: Outlook専用アカウント + Make.com（Inbound Webhook）
+- **Email**: Outlook 専用アカウント + **Make.com**（Inbound Webhook → Edge `inbound-email`）。Make は **Free でも月次オペレーション上限**があり、本番負荷では枠切れや有料プラン・代替連携の検討が必要
 - **Testing**: Vitest, React Testing Library, MSW (Mock Service Worker)
 - **Deployment**: Vercel (Frontend), Supabase (Backend)
 
@@ -47,12 +47,13 @@
 
 ### 【Phase 5】最終納品ドキュメント作成（一部未着手）
 1. **[Claude] 作業**: システム構成図のメンテナンス（`README.md` に Mermaid 図あり。詳細アーキテクチャが必要なら追記）
-2. **[Claude] 作業**: 操作マニュアル (Sales_Manual.md) の作成（営業担当者向け）
+2. **[Claude] 作業**: 操作マニュアルのメンテナンス（`docs/Sales_Manual.md` / `docs/Sales_Manual.pdf`・営業担当者向け）
 3. **[Claude] 完了**: 全成果物を commit & push し、納品完了
 
 ---
 
 ## 4. Claude Codeへの重要な行動指針
+- **正の所在**: 仕様・挙動の優先順位は **本リポジトリのソース** と **`README.md`**。本ファイル（`claude.md`）はそれに追従するメモであり、食い違いがあれば **ソースを正として本ファイルを更新**すること（`CLAUDE.md` と内容を揃えること）。
 - **こまめな Git 操作**: 機能実装単位、またはテスト通過ごとに、意味のあるメッセージと共に **commit & push** を行うこと。
 - **バグゼロの追求**: ロジックには必ずテストコードを付随させ、テスト項目書をエビデンスとして出力すること。
 - **ドキュメントの対象読者**:
@@ -66,9 +67,9 @@
 ### テーブル一覧
 | テーブル | 用途 |
 |---|---|
-| `candidates` | 人材マスタ。スキル・経歴・raw_profileを保持 |
-| `projects` | 案件マスタ。必要スキル・予算・raw_dataを保持 |
-| `submissions` | マッチング提案履歴。スコア・AI要約を保持 |
+| `candidates` | 人材マスタ。スキル・経歴・raw_profile を保持。**`data_env`**（`prod` \| `demo`）で論理分離 |
+| `projects` | 案件マスタ。必要スキル・予算・raw_data を保持。**`data_env`** 同上 |
+| `submissions` | マッチング提案履歴。スコア・AI要約を保持。**`data_env`** 同上 |
 | `candidate_skills` | スキルをカテゴリ別に分解して保持（検索最適化・**14カテゴリ**・上記マイグレーション準拠） |
 | `ai_logs` | AI解析の実行ログ（モデル・所要時間・結果・エラー） |
 | `app_config` | アプリ全体設定 |
@@ -94,11 +95,36 @@
 ## 6. 追加要件（実装済み）
 
 ### メール自動受信の方針
-- **採用**: Outlook（専用アカウント）+ Make.com（完全無料）
-- フロー: メール受信 → Make.com が検知 → Supabase Edge Function を呼び出し → Gemini AI 解析 → DB 保存
+- **採用**: Outlook（専用アカウント）+ Make.com（Webhook で **Supabase Edge Function `inbound-email`** を POST）
+- Make は **無料枠にオペレーション上限**がある（「完全無料で無制限」ではない）。詳細は Make ダッシュボードの Usage を正とする
+- フロー: メール受信 → Make が検知 → **`inbound-email`** → Gemini 解析 → DB 保存（サーバー側解析はこの Edge のみ）
 - 人材用メール: `akinavi.hr.ai.voice.human@outlook.jp`
 - 案件用メール: `akinavi.hr.ai.voice.project@outlook.jp`
-- Edge Function の `type` パラメータで人材／案件を振り分け（`type=candidate` / `type=project`）
+- Edge の `type` で人材／案件を振り分け（`type=candidate` / `type=project`）。POST は **form-urlencoded または JSON**（`README.md` のパラメータ表を正とする）
+- **`from`**: プレーンなメール文字列に加え、**Microsoft Graph 形式の JSON 文字列**も `inbound-email` 内 `parseFrom` で解釈可能（Power Automate 等への置き換え時の手がかり）
+
+### Edge `inbound-email`（`supabase/functions/inbound-email/index.ts` 準拠）
+- **データ環境**: ボディまたはクエリの `mode` / `data_env`（`prod` | `demo` | `dev` ※ `dev` は `demo` と同扱い）。省略時は `prod`。URL クエリ `?mode=demo` やヘッダ `X-Data-Env` / `X-Mode` も補完に利用
+- **Secrets 例**: `GEMINI_API_KEY`、`SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`。**`GEMINI_INBOUND_TIMEOUT_MS`**: 1 回の Gemini 待ち上限（15〜300000 ms、未設定時 38000）。全体の壁時計は Edge プランにより **概ね 150〜400 秒程度**
+- **その他 Secrets / フラグ（コメント参照）**: `INBOUND_RELEVANCE_CHECK`、`INBOUND_MAKE_SOFT_FAIL`（例外時も HTTP 200 + `ok:false` で Make 停止しにくくする）、`INBOUND_BODY_FALLBACK_ON_GEMINI_TIMEOUT` など
+- 本文・添付とも空: **HTTP 200 + skipped**（Webhook 連携継続向け）。添付は README 記載のキー（例: `attachment[data]` 等）
+
+### 論理データ環境 `data_env`（DB・アプリ）
+- **`supabase/migrations/add_data_env.sql`**: `candidates` / `projects` / `submissions` に `data_env text NOT NULL`、CHECK は **`prod` | `demo`**
+- **フロント**: `src/lib/dataEnv.ts` の `DataEnv`（`prod` | `demo`）、`localStorage` の **`akinavi.dataEnv.v1`**（選択中環境）と **`akinavi.demoUnlock.v1`**（デモ UI 解除フラグ）。**デモ解除**は `VITE_DEMO_KEY` と URL クエリ `?demo=`（`demoKey` / `demo_key` も可）のトグル（`applyDemoKeyFromUrlToggle`）と連動
+- クエリ・更新は各ページで **`dataEnv` を渡し**、本番データとデモデータを同一 Supabase 内で分離
+
+### マッチング画面（`src/pages/MatchingPage.tsx` 準拠）
+- **実行モード**: `fast`（高速）/ `full`（全件）。選択は **`localStorage` キー `akinavi.matchingRunMode.v1`**
+- **高速モードの上限（定数）**: 案件あたり候補 **最大 20 名**（`FAST_MAX_CANDIDATES_PER_PROJECT`）、人材あたり案件 **最大 10 件**（`FAST_MAX_PROJECTS_PER_CANDIDATE`）。必須スキル重複が多い順に優先
+- **進捗**: 一括・行単位の再実行とも **何件目か**を表示。`flushSync` でループ中の `setState` を確実に描画。長い一覧では **sticky** の進捗カード＋**行内**の進捗文
+- **一括マッチング（全案件／全人材）**: **`bulkCancelRequestedRef`** により **キャンセル可能**（各組み合わせの区切りで打ち切り。**進行中の 1 件の AI 応答は完了まで待つ**）。完了分は保存済みとしてメッセージ表示
+
+### デモシード（`src/components/DemoSeedPanel.tsx`）
+- デモ環境向けに **人材・案件のサンプルペア**を DB 投入（架空だが実務に近い文言・スキル構成。`AnalyzeCandidateResponse` / `AnalyzeProjectResponse` 形状で投入）
+
+### アプリシェル（`src/App.tsx` 準拠）
+- **マッチング**タブを非表示にしても **`MatchingPage` はアンマウントしない**（`hidden` で切替）。長時間の一括マッチング mutation がタブ移動で中断されないため
 
 ### Google Drive / Sheets / Docs 自動取得
 - メール本文中の Google Drive・Sheets・Docs の共有リンクを自動検出
