@@ -11,7 +11,7 @@
 ```
 第0章: Outlookアカウントを4つ作る
   ↓
-第1章: 必要なツールのインストール・ソースコードの取得
+第1章: 必要なツールの準備・ソースコードへのアクセス
   ↓
 第2章: データベースの作成（Supabase）
   ↓
@@ -21,8 +21,11 @@
   ↓
 第5章: メール自動取り込みの設定（Azure + Microsoft Graph API）
   ↓
-第6章: 本番サイトの公開（Vercel）
+第6章: 本番サイトの公開（Vercel）← ここで環境変数をまとめて設定して完成
 ```
+
+> **ローカル環境（自分のPCでの開発サーバー起動）は使いません。**  
+> 設定はすべて Vercel と Supabase のダッシュボード上で行います。
 
 ---
 
@@ -91,35 +94,27 @@ Microsoft Graph API は **Microsoft のメールサービス（Outlook / Hotmail
 
 ---
 
-## 第1章　必要なツールのインストール・ソースコードの取得
+## 第1章　必要なツールの準備・ソースコードへのアクセス
 
-### 1-1. 必要なものを確認する
+### 1-1. 必要なツールをインストールする
 
-以下がインストールされているか確認してください。
-
-**Node.js（バージョン20以上）**
-
-ターミナルを開いて以下を入力し、バージョン番号が表示されればOKです。
-
-```bash
-node -v
-```
-
-`v20.x.x` のように表示されればOKです。表示されない場合は `https://nodejs.org` からインストールしてください。
+以下の2つをインストールします。
 
 ---
 
-**Git**
+**Git**（ソースコードをダウンロードするためのツール）
+
+ターミナルを開いて以下を入力し、バージョン番号が表示されればインストール済みです。
 
 ```bash
 git --version
 ```
 
-バージョンが表示されればOKです。表示されない場合は `https://git-scm.com` からインストールしてください。
+表示されない場合は `https://git-scm.com` からインストールしてください。
 
 ---
 
-**Supabase CLI**（後でサーバー機能をデプロイするために必要）
+**Supabase CLI**（サーバー機能をデプロイするためのツール）
 
 Mac の場合:
 
@@ -132,6 +127,8 @@ brew install supabase/tap/supabase
 ```bash
 supabase --version
 ```
+
+バージョンが表示されればOKです。
 
 ### 1-2. GitHubアカウントを作成する
 
@@ -173,25 +170,13 @@ git clone https://github.com/kzmiyamura/akinavi-hr-ai.git
 cd akinavi-hr-ai
 ```
 
-### 1-5. 必要なパッケージをインストールする
-
-プログラムが動くために必要な部品（ライブラリ）を一括インストールします。
-
-```bash
-npm install
-```
-
-完了までしばらく待ちます。エラーが出なければOKです。
-
 ### 完了チェック
 
-- [ ] `node -v` でバージョンが表示された
-- [ ] `git --version` でバージョンが表示された
-- [ ] `supabase --version` でバージョンが表示された
+- [ ] Git をインストールした
+- [ ] Supabase CLI をインストールした
 - [ ] GitHubアカウントを作成し、ユーザー名をメモした
 - [ ] 担当者にアクセス権を依頼し、招待を承諾した
 - [ ] `git clone` でソースコードをダウンロードした
-- [ ] `npm install` がエラーなく完了した
 
 ---
 
@@ -223,7 +208,7 @@ npm install
 
 プロジェクトが作成されたら、左メニューの「Settings」→「API」を開く。
 
-以下の2つをメモしてください:
+以下の3つをメモしてください（第6章のVercel設定で使います）:
 
 | メモするもの | 場所 | 用途 |
 |---|---|---|
@@ -231,25 +216,7 @@ npm install
 | **anon（公開）キー** | 「Project API keys」の「anon」の欄 | アプリがDBに接続するための鍵 |
 | **service_role キー** | 「Project API keys」の「service_role」の欄 | サーバー機能がDBを操作するための鍵（**絶対に他人に見せない**） |
 
-### 2-2. 環境変数ファイルを作成する
-
-「環境変数」とは、プログラムに渡す設定値（APIキーやURLなど）のことです。
-
-```bash
-cp .env.example .env.local
-```
-
-`.env.local` をテキストエディタで開き、以下を書き換えます（この時点では Gemini APIキーはまだなくてOKです）:
-
-```env
-VITE_SUPABASE_URL=（Project URL を貼り付け）
-VITE_SUPABASE_ANON_KEY=（anon キーを貼り付け）
-VITE_GEMINI_API_KEY=（次の章で設定します）
-VITE_AI_PROVIDER=gemini
-VITE_DEMO_KEY=（任意の文字列。例: demo2024）
-```
-
-### 2-3. データベースのテーブルを作成する
+### 2-2. データベースのテーブルを作成する
 
 「テーブル」とは、データベースの中の表（Excel のシートのようなもの）です。SQLという命令文を実行して作成します。
 
@@ -282,22 +249,12 @@ VITE_DEMO_KEY=（任意の文字列。例: demo2024）
 
 > `add_email_polling_cron.sql` は第5章で別途設定するため、今は実行しないでください。
 
-### 2-4. ローカルで動作確認する
-
-```bash
-npm run dev
-```
-
-ブラウザで `http://localhost:5173` を開き、画面が表示されればOKです。
-
 ### 完了チェック
 
 - [ ] Supabaseのプロジェクトを作成した
 - [ ] Project URL・anon キー・service_role キーをメモした
-- [ ] `.env.local` に URL と anon キーを設定した
 - [ ] `schema.sql` を実行した
 - [ ] 6つのマイグレーションSQLを順番に実行した
-- [ ] `npm run dev` で画面が表示された
 
 ---
 
@@ -305,6 +262,8 @@ npm run dev
 
 このシステムはGoogle の AI（Gemini）を使ってメールや資料を自動解析します。  
 利用するには「APIキー」（AIを使うための認証コード）が必要です。
+
+> **取得したAPIキーは第6章のVercel設定でまとめて登録します。ここではメモするだけでOKです。**
 
 ### 3-1. Gemini APIキーを取得する
 
@@ -322,28 +281,9 @@ Googleアカウントでログインします。
 
 表示されたキー（`AIza...` のような文字列）をメモしてください。
 
-### 3-2. 環境変数に設定する
-
-`.env.local` を開き、先ほどのキーを設定します:
-
-```env
-VITE_GEMINI_API_KEY=（取得したAPIキーを貼り付け）
-```
-
-### 3-3. 動作確認
-
-```bash
-npm run dev
-```
-
-「人材登録」タブを開き、適当なテキストを貼り付けて「解析して登録」をクリック。  
-AIが解析を始めれば（またはエラーなく登録されれば）OKです。
-
 ### 完了チェック
 
-- [ ] Google AI Studio で APIキーを取得した
-- [ ] `.env.local` に `VITE_GEMINI_API_KEY` を設定した
-- [ ] ブラウザからAI解析が動作した
+- [ ] Google AI Studio で APIキーを取得し、メモした
 
 ---
 
@@ -362,9 +302,10 @@ npx supabase login
 
 ### 4-2. このプロジェクトに接続する
 
-「Project Reference ID」（プロジェクトID）を Supabase ダッシュボードの「Settings」→「General」→「Reference ID」で確認してメモしてください。
+「Reference ID」（プロジェクトID）を Supabase ダッシュボードの「Settings」→「General」→「Reference ID」で確認してメモしてください。
 
 ```bash
+cd akinavi-hr-ai
 npx supabase link --project-ref （Reference IDを貼り付け）
 ```
 
@@ -380,20 +321,18 @@ npx supabase functions deploy poll-email
 ### 4-4. Secrets（機密情報）を登録する
 
 「Secrets」とは、サーバー上のプログラムが使うAPIキーやパスワードを安全に保管する場所です。  
-Supabase ダッシュボード → 「Edge Functions」→「Secrets」から登録します。
+Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add new secret」から登録します。
 
-「Add new secret」をクリックして、以下を1つずつ登録してください。
-
-**必須（今すぐ登録）**
+**今すぐ登録するもの**
 
 | Secret名 | 値 |
 |---|---|
-| `GEMINI_API_KEY` | 第3章で取得したGemini APIキー |
-| `INBOUND_CALL_KEY` | Supabase の service_role キー（第2章でメモしたもの） |
+| `GEMINI_API_KEY` | 第3章でメモしたGemini APIキー |
+| `INBOUND_CALL_KEY` | 第2章でメモした service_role キー |
 
-> `SUPABASE_URL` と `SUPABASE_SERVICE_ROLE_KEY` は Supabase が自動で設定するため、手動登録は不要な場合があります。もしエラーが出る場合は手動で追加してください。
+> `SUPABASE_URL` と `SUPABASE_SERVICE_ROLE_KEY` は Supabase が自動で設定するため、手動登録は不要です。もしエラーが出る場合は手動で追加してください。
 
-**メール自動取り込み用（第5章で登録）**
+**第5章で追加登録するもの（今はスキップ）**
 
 | Secret名 | 用途 |
 |---|---|
@@ -467,7 +406,7 @@ Microsoftアカウント（Outlookアカウントのどれかでも可）でロ�
 
 左メニュー「証明書とシークレット」→「新しいクライアントシークレット」→ 説明を入力して「追加」。
 
-表示された「**値**」（`xxxxxxxx-xxxx-...` のような文字列）をメモします。  
+表示された「**値**」をメモします。  
 **この画面を閉じると二度と確認できないので必ずメモしてください。**
 
 ---
@@ -483,10 +422,12 @@ Microsoftアカウント（Outlookアカウントのどれかでも可）でロ�
 
 ---
 
-**メモしたもの**
+この時点でメモしたもの:
 
-- クライアントID（`GRAPH_CLIENT_ID`）
-- クライアントシークレットの値（`GRAPH_CLIENT_SECRET`）
+- クライアントID → Supabase Secrets の `GRAPH_CLIENT_ID` に登録
+- クライアントシークレットの値 → Supabase Secrets の `GRAPH_CLIENT_SECRET` に登録
+
+今すぐ Supabase ダッシュボード → 「Edge Functions」→「Secrets」に登録してください。
 
 ### 5-2. 各Outlookアカウントのリフレッシュトークンを取得する
 
@@ -549,8 +490,6 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」で、以
 
 | Secret名 | 値 |
 |---|---|
-| `GRAPH_CLIENT_ID` | 5-1でメモしたクライアントID |
-| `GRAPH_CLIENT_SECRET` | 5-1でメモしたクライアントシークレット |
 | `GRAPH_REFRESH_TOKEN_HUMAN` | 人材用・本番のリフレッシュトークン |
 | `GRAPH_REFRESH_TOKEN_PROJECT` | 案件用・本番のリフレッシュトークン |
 | `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 人材用・デモのリフレッシュトークン |
@@ -582,8 +521,9 @@ Supabase ダッシュボード → 「Database」→「Extensions」を開き、
 
 - [ ] Azureにアプリを登録し、クライアントID・シークレットをメモした
 - [ ] Mail.Read / Mail.ReadWrite の権限を追加した
+- [ ] `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` を Secrets に登録した
 - [ ] 4つのアカウントのリフレッシュトークンを取得した
-- [ ] 6つの Graph 関連 Secrets を Supabase に登録した
+- [ ] 4つのリフレッシュトークンを Secrets に登録した
 - [ ] pg_cron・pg_net を有効にした
 - [ ] `add_email_polling_cron.sql` を書き換えて実行した
 
@@ -591,7 +531,8 @@ Supabase ダッシュボード → 「Database」→「Extensions」を開き、
 
 ## 第6章　本番サイトの公開（Vercel）
 
-「Vercel」とは、作ったWebサイトをインターネット上に公開するためのサービスです。無料で使えます。
+「Vercel」とは、作ったWebサイトをインターネット上に公開するためのサービスです。無料で使えます。  
+**ここで環境変数（設定値）をまとめて登録してデプロイすると、本番サイトが完成します。**
 
 ### 6-1. Vercelにサインアップ・プロジェクトをインポートする
 
@@ -599,41 +540,56 @@ Supabase ダッシュボード → 「Database」→「Extensions」を開き、
 
 ---
 
-**2. 「Add New Project」→「Import Git Repository」でこのリポジトリを選択**
+**2. 「Add New Project」→「Import Git Repository」でこのリポジトリ（`akinavi-hr-ai`）を選択**
 
 ---
 
-**3. 「Environment Variables」に以下を設定してから「Deploy」をクリック**
+**3. 「Environment Variables」に以下をすべて入力する**
 
-| 変数名 | 値 |
-|---|---|
-| `VITE_SUPABASE_URL` | Supabase の Project URL |
-| `VITE_SUPABASE_ANON_KEY` | Supabase の anon キー |
-| `VITE_GEMINI_API_KEY` | Gemini の APIキー |
-| `VITE_AI_PROVIDER` | `gemini` |
-| `VITE_DEMO_KEY` | 任意の文字列（デモ環境の解除キー） |
+「Deploy」ボタンを押す**前に**、以下の環境変数を全部登録してください。
 
-デプロイが完了すると `https://（プロジェクト名）.vercel.app` のような URLが発行されます。
+| 変数名 | 値 | メモした場所 |
+|---|---|---|
+| `VITE_SUPABASE_URL` | Supabase の Project URL | 第2章 |
+| `VITE_SUPABASE_ANON_KEY` | Supabase の anon キー | 第2章 |
+| `VITE_GEMINI_API_KEY` | Gemini の APIキー | 第3章 |
+| `VITE_AI_PROVIDER` | `gemini`（そのまま入力） | — |
+| `VITE_DEMO_KEY` | 任意の文字列（例: `demo2024`）| — |
 
-以降は `main` ブランチに変更を push するたびに自動でデプロイされます。
+> `VITE_DEMO_KEY` はデモ環境の解除キーです。自分で決めた文字列を設定してください。  
+> 詳細は `docs/DataEnv_Demo_Prod.md` を参照。
+
+---
+
+**4. 「Deploy」をクリックする**
+
+デプロイが完了すると `https://（プロジェクト名）.vercel.app` のような URLが発行されます。  
+このURLが本番サイトのアドレスになります。
+
+以降は `main` ブランチに変更を push するたびに**自動で再デプロイ**されます。
+
+### 6-2. 環境変数を後から変更する場合
+
+Vercel ダッシュボード → プロジェクトを選択 → 「Settings」→「Environment Variables」から変更できます。  
+変更後は「Deployments」→「Redeploy」で再デプロイが必要です。
 
 ### 完了チェック
 
 - [ ] Vercel にプロジェクトをインポートした
-- [ ] 環境変数を設定した
+- [ ] 5つの環境変数をすべて設定した
 - [ ] デプロイが成功してURLが発行された
+- [ ] 発行されたURLでサイトが表示された
 
 ---
 
 ## 最終確認チェックリスト
 
-全章が完了したら、以下をすべて確認してください。
+全章が完了したら、以下を本番URLで確認してください。
 
-- [ ] `npm run dev` でブラウザにエラーなく画面が表示される
+- [ ] 本番URLでブラウザにエラーなく画面が表示される
 - [ ] 人材登録タブでテキストを貼り付けて「解析して登録」が動く
 - [ ] マッチング結果タブでスコアが表示される
 - [ ] 専用のOutlookアドレスにメールを送って5分以内に人材/案件が登録される
-- [ ] Vercel の本番URLでも同じ動作が確認できる
 
 ---
 
@@ -644,13 +600,13 @@ Supabase ダッシュボード → 「Database」→「Extensions」を開き、
 ブラウザの開発者ツールを開いて（F12 キー）、「Console」タブにエラーメッセージが出ていないか確認する。
 
 よくある原因:
-- `.env.local` の値が間違っている（スペースや余分な文字が入っていないか確認）
-- `npm install` をしていない
+- Vercel の環境変数に誤りがある（スペースや余分な文字が入っていないか確認）
+- 環境変数を設定後に再デプロイしていない
 
 ### AIが解析されない（登録できない）
 
-- Gemini APIキーが正しく設定されているか確認
-- Supabase の「Edge Functions」→「Logs」でエラーが出ていないか確認
+- Vercel の `VITE_GEMINI_API_KEY` が正しく設定されているか確認
+- Supabase の「Edge Functions」→「Logs」→「inbound-email」でエラーが出ていないか確認
 
 ### メールが自動取り込みされない
 
