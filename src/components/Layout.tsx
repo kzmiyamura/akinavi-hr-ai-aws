@@ -41,25 +41,20 @@ export function Layout({
               AkiNavi HR-AI
             </h1>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:text-sm text-gray-500">
-              <label className="flex items-center gap-1.5 shrink-0">
-                <span className="text-gray-400">データ</span>
-                <select
-                  value={dataEnv}
-                  onChange={(e) => onChangeDataEnv(e.target.value as DataEnv)}
-                  disabled={!demoUiEnabled}
-                  title={
-                    demoUiEnabled
-                      ? '参照する data_env。同じ ?demoKey= URL をもう一度開くと本番固定に戻ります'
-                      : '正しい ?demoKey= を付けて開くとデモ切替が使えます。同じURLでもう一度で本番固定に戻ります'
-                  }
-                  className="border border-gray-200 rounded-lg px-2 py-1 text-xs sm:text-sm bg-white text-gray-700 disabled:opacity-60"
-                >
-                  <option value="prod">本番相当（prod）</option>
-                  <option value="demo" disabled={!demoUiEnabled}>
-                    デモ（demo）
-                  </option>
-                </select>
-              </label>
+              {demoUiEnabled && (
+                <label className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-gray-400">データ</span>
+                  <select
+                    value={dataEnv}
+                    onChange={(e) => onChangeDataEnv(e.target.value as DataEnv)}
+                    title="参照するデータ環境。同じ ?demoKey= 付きURLでもう一度開くと、デモ切替をオフにして本番のみ表示に戻ります"
+                    className="border border-gray-200 rounded-lg px-2 py-1 text-xs sm:text-sm bg-white text-gray-700"
+                  >
+                    <option value="prod">本番相当（prod）</option>
+                    <option value="demo">デモ（demo）</option>
+                  </select>
+                </label>
+              )}
               <span className="min-w-0 break-all">
                 利用者: <strong className="text-gray-700">{nickname}</strong>
               </span>
