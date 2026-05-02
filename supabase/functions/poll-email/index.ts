@@ -18,6 +18,8 @@ const CLIENT_ID = Deno.env.get('GRAPH_CLIENT_ID') ?? ''
 const CLIENT_SECRET = Deno.env.get('GRAPH_CLIENT_SECRET') ?? ''
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+// inbound-email 呼び出し用: ANON_KEY は Edge Functions に自動注入される
+const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
 const INBOUND_URL = `${SUPABASE_URL}/functions/v1/inbound-email`
 
 // 1回のポーリングで取得するメール上限（タイムアウト対策）
@@ -228,7 +230,7 @@ async function callInboundEmail(
   const res = await fetch(INBOUND_URL, {
     method:  'POST',
     headers: {
-      Authorization:  `Bearer ${SERVICE_ROLE_KEY}`,
+      Authorization:  `Bearer ${ANON_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
