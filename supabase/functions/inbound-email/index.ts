@@ -626,12 +626,25 @@ Deno.serve(async (req: Request) => {
     const type: string = normalizeInboundType(raw.type)
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
-    let rawBody: string = pickEmailPlainBody(raw)
+    const pickedPlain = pickEmailPlainBody(raw)
+    let rawBody: string = pickedPlain
     rawBody = unwrapMicrosoftGraphBody(rawBody)
+    if (!rawBody.trim() && pickedPlain.trim()) {
+      console.warn('[body] unwrap で空のため pickedPlain にフォールバック', { picked_len: pickedPlain.length })
+      rawBody = pickedPlain.trim()
+    }
     // HTMLタグが含まれている場合は除去してプレーンテキスト化
-    const body: string = rawBody.includes('<html') || rawBody.includes('<div') || rawBody.includes('<p ')
+    let body: string = rawBody.includes('<html') || rawBody.includes('<div') || rawBody.includes('<p ')
       ? stripHtml(rawBody)
       : rawBody
+    // stripHtml が過剰に空になるケース（構造だけの HTML 等）は解析不能になるため raw にフォールバック
+    if (!body.trim() && rawBody.trim()) {
+      console.warn('[body] stripHtml で空のため rawBody にフォールバック', {
+        picked_plain_len: pickedPlain.length,
+        rawBody_len: rawBody.length,
+      })
+      body = rawBody.trim()
+    }
 
     // 添付ファイルの解決（attachment[data] 形式 → Attachment オブジェクト）
     let attachments: Attachment[] = []
@@ -687,6 +700,16 @@ Deno.serve(async (req: Request) => {
     console.log(`[STEP3 Office完了] elapsed=${elapsed()}`)
 
     if (!body.trim() && attachments.length === 0) {
+      // STEP3→4間 ログの前に 400 で抜けるため、ここで必ず理由を残す
+      console.warn('[EMPTY_BODY_AND_ATTACHMENTS] 400 返却', {
+        picked_plain_len: pickedPlain.length,
+        rawBody_len: rawBody.length,
+        body_final_len: body.length,
+        note: 'STEP0 フィールド長の picked_plain_len は stripHtml 前。STEP1 bodyLength は展開・HTML除去後。',
+        type,
+        inboundDataEnv,
+        receivedKeys: rawKeys,
+      })
       return new Response(
         JSON.stringify({
           error: 'メール本文と添付ファイルが両方空です',
