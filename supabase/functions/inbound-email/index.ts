@@ -107,6 +107,7 @@ function pickEmailPlainBody(raw: Record<string, string>): string {
     'bodyText',
     'bodyPreview',
     'body_preview',
+    'uniqueBody',
     'emailBody',
     'message',
     'content',
@@ -117,6 +118,24 @@ function pickEmailPlainBody(raw: Record<string, string>): string {
     if (v != null && String(v).trim().length > 0) return String(v)
   }
   return ''
+}
+
+/** Microsoft Graph のメール本文が JSON（contentType + content）で届く場合に本文だけ取り出す */
+function unwrapMicrosoftGraphBody(text: string): string {
+  const t = text.trim()
+  if (!t.startsWith('{')) return text
+  try {
+    const o = JSON.parse(t) as Record<string, unknown>
+    if (typeof o.content === 'string' && o.content.trim()) return o.content
+    const b = o.body
+    if (b && typeof b === 'object' && !Array.isArray(b)) {
+      const inner = b as Record<string, unknown>
+      if (typeof inner.content === 'string' && inner.content.trim()) return inner.content
+    }
+  } catch {
+    return text
+  }
+  return text
 }
 
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -548,7 +567,8 @@ Deno.serve(async (req: Request) => {
     const type: string = normalizeInboundType(raw.type)
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
-    const rawBody: string = pickEmailPlainBody(raw)
+    let rawBody: string = pickEmailPlainBody(raw)
+    rawBody = unwrapMicrosoftGraphBody(rawBody)
     // HTMLタグが含まれている場合は除去してプレーンテキスト化
     const body: string = rawBody.includes('<html') || rawBody.includes('<div') || rawBody.includes('<p ')
       ? stripHtml(rawBody)
