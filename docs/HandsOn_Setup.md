@@ -40,7 +40,25 @@
 | 人材情報の受信（デモ用） | `yourname.hr.human.dev@outlook.jp` |
 | 案件情報の受信（デモ用） | `yourname.hr.project.dev@outlook.jp` |
 
-> 名前は自由に決めてOKです。ただし **すべて同じ Microsoft アカウント（Outlook）** ではなく、**それぞれ別のアカウント**として作成してください。1アカウント = 1メールアドレスです。
+> **`yourname` の部分は自分で決めた名前や識別子に置き換えてください。**  
+> 例：会社名・サービス名・自分のイニシャルなど。他の人がすでに使っているアドレスは取得できないため、ユニークになるよう工夫してください。  
+> 例：`akinavi.hr.human@outlook.jp`、`tanaka2024.hr.human@outlook.jp` など
+
+> **すべて同じ Microsoft アカウントではなく、それぞれ別のアカウントとして作成してください。** 1アカウント = 1メールアドレスです。
+
+### なぜ Outlook（Microsoft）でないといけないのか
+
+このシステムのメール自動取り込みは、**Microsoft Graph API** という仕組みを使ってメールを取得しています。  
+Microsoft Graph API は **Microsoft のメールサービス（Outlook / Hotmail / Live）専用** のAPIです。
+
+| メールサービス | 使えるか | 理由 |
+|---|---|---|
+| Outlook / Hotmail / Live（`@outlook.jp` / `@outlook.com` など） | **使える** | Microsoft Graph API に対応している |
+| Gmail（`@gmail.com`） | **使えない** | Google のサービスのため Graph API が使えない |
+| Yahoo!メール | **使えない** | 同上 |
+| 会社の独自ドメインメール | 条件次第 | Microsoft 365（旧Office 365）のメールであれば対応可能だが設定が複雑になる |
+
+> Gmail などを使いたい場合は、このシステムの `poll-email` Edge Function を Gmail の API（Google Workspace API）向けに作り直す必要があります。現状は対応していません。
 
 ### 作成手順（1アカウントあたり）
 
