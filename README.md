@@ -8,8 +8,8 @@
 ## 画面構成
 
 - **マッチング結果**（初期表示）
-- **人材登録**
-- **案件登録**
+- **人材登録**（テキスト貼り付け・PDF・画像アップロード対応）
+- **案件登録**（テキスト貼り付け・PDF・画像アップロード対応）
 
 ※提案履歴・重複管理・解析監視は実装済みだが、現状のナビからは非表示（運用をシンプルにするため）。
 
@@ -44,7 +44,7 @@ flowchart TD
 | フロントエンド | React 19, Vite 8, TypeScript, Tailwind CSS v4 |
 | 状態管理 | TanStack Query v5 |
 | DB / バックエンド | Supabase (PostgreSQL, Edge Functions, pg_cron, pg_net) |
-| AI（ブラウザ） | Google Gemini（既定 `gemini-2.0-flash`、`VITE_GEMINI_MODEL` で変更可） |
+| AI（ブラウザ） | Google Gemini（既定 `gemini-2.0-flash`、`VITE_GEMINI_MODEL` で変更可）・マルチモーダル対応（画像解析） |
 | AI（サーバー） | Google Gemini `gemini-2.5-flash` — `supabase/functions/inbound-email` |
 | メール自動受信 | Microsoft Graph API ポーリング + Supabase pg_cron（**Make.com不要・完全無料**） |
 | デプロイ | Vercel（フロント）/ Supabase（バックエンド） |
@@ -188,7 +188,10 @@ inbound-email Edge Function
 
 ## AI 解析フロー（ブラウザ貼り付け）
 
-テキスト貼り付け → フロント（Vite）から Gemini 2.0 Flash を呼び出し → Supabase に保存。
+テキスト貼り付け・PDFアップロード（テキスト抽出）・画像アップロード（マルチモーダル解析）→ フロント（Vite）から Gemini 2.0 Flash を呼び出し → Supabase に保存。
+
+- **PDF**: `pdfjs-dist` でテキスト抽出 → テキストとしてGeminiに渡す（テキストベースPDFのみ）
+- **画像（JPG/PNG等）**: base64変換 → Gemini multimodal API（`inlineData`）で直接解析
 
 ---
 
@@ -290,6 +293,7 @@ akinavi-hr-ai/
 │   │   │   ├── projects.ts
 │   │   │   └── submissions.ts
 │   │   ├── inbound/          # メールペイロードパース
+│   │   ├── fileParser.ts     # PDF テキスト抽出・画像 base64 変換
 │   │   ├── dataEnv.ts        # prod/demo 環境切替
 │   │   └── supabase.ts
 │   ├── pages/                # 各画面
