@@ -8,7 +8,8 @@
 //   attachment[data], attachment[mimeType], attachment[name]
 //   本文・添付とも空: HTTP 200 + skipped（Make 継続）。DB は書かない。
 //   INBOUND_RELEVANCE_CHECK: false で事前の無関係メール判定を無効化（既定は true）
-//   GEMINI_INBOUND_TIMEOUT_MS: candidate/project の1回あたり ms（未設定時 38000。長い解析は Make の HTTP タイムアウトも延長）
+//   GEMINI_INBOUND_TIMEOUT_MS: candidate/project の Gemini 1回あたり ms（Secrets。15〜300000。未設定時 38000）
+//   ※ 全体の壁時計は Edge の上限もあり（関連度・Drive取得・Gemini の合計。プランにより概ね150〜400秒程度）
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
@@ -242,14 +243,15 @@ function normalizeToProjectObjects(result: unknown): Record<string, unknown>[] {
 
 const AI_MODEL = 'gemini-2.5-flash'
 
-/** candidate/project の 1 回あたり上限（ms）。Supabase Secrets: GEMINI_INBOUND_TIMEOUT_MS（例: 38000） */
+/** candidate/project の Gemini 1 回あたり待ち上限（ms）。Secrets GEMINI_INBOUND_TIMEOUT_MS（15〜300000） */
 function resolveInboundGeminiTimeoutMs(kind: 'candidate' | 'project' | 'match', override?: number): number {
   if (override != null) return override
   if (kind === 'match') return 25_000
   const raw = (Deno.env.get('GEMINI_INBOUND_TIMEOUT_MS') ?? '').trim()
   if (/^\d+$/.test(raw)) {
     const n = parseInt(raw, 10)
-    return Math.min(120_000, Math.max(15_000, n))
+    // Make.com HTTP の Timeout 最大 300 秒に合わせる（以前の 120 秒 cap はここ由来だっただけ）
+    return Math.min(300_000, Math.max(15_000, n))
   }
   // Make.com HTTP 既定 40s 超えにくいようやや短め（長い解析は Make 側タイムアウト延長も推奨）
   return 38_000
