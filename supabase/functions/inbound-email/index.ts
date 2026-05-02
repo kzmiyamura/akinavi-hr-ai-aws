@@ -6,6 +6,7 @@
 //   ?mode=demo や ?data_env=demo（Webhook URL のクエリ）も可（ボディが空のとき補完）
 //   ヘッダ X-Data-Env / X-Mode も補完として利用可
 //   attachment[data], attachment[mimeType], attachment[name]
+//   本文・添付とも空: HTTP 200 + skipped（Make 継続）。DB は書かない。
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
@@ -700,8 +701,8 @@ Deno.serve(async (req: Request) => {
     console.log(`[STEP3 Office完了] elapsed=${elapsed()}`)
 
     if (!body.trim() && attachments.length === 0) {
-      // STEP3→4間 ログの前に 400 で抜けるため、ここで必ず理由を残す
-      console.warn('[EMPTY_BODY_AND_ATTACHMENTS] 400 返却', {
+      // Make.com は HTTP エラーでシナリオが止まるため、明らかな空メールは 200 でスキップし後続フローを継続させる
+      console.warn('[EMPTY_BODY_AND_ATTACHMENTS] 取り込みスキップ（200）', {
         picked_plain_len: pickedPlain.length,
         rawBody_len: rawBody.length,
         body_final_len: body.length,
@@ -712,17 +713,17 @@ Deno.serve(async (req: Request) => {
       })
       return new Response(
         JSON.stringify({
-          error: 'メール本文と添付ファイルが両方空です',
-          code: 'EMPTY_BODY_AND_ATTACHMENTS',
-          hint:
-            'Make のボディに本文が入っているか確認してください。フィールド名は body / text / plainText 等。multipart のファイルは attachment[data] 形式でも可。',
+          ok: true,
+          skipped: true,
+          reason: 'EMPTY_BODY_AND_ATTACHMENTS',
+          message: '本文・添付ともに無いため取り込みをスキップしました（Make の後続処理は続行できます）',
           receivedKeys: rawKeys,
           bodyLengthAfterPick: body.trim().length,
           type,
           inboundDataEnv,
         }),
         {
-          status: 400,
+          status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         },
       )
