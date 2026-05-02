@@ -2,7 +2,9 @@
 // Runtime: Deno / タイムアウト: 最大150秒（Vercel Hobbyの10秒制限を回避）
 // POST body (form-urlencoded or JSON):
 //   type, from, subject, body
-//   mode: prod | demo | dev（dev は demo と同じ。省略時は prod）
+//   mode または data_env: prod | demo | dev（dev は demo と同じ。省略時は prod）
+//   ?mode=demo や ?data_env=demo（Webhook URL のクエリ）も可（ボディが空のとき補完）
+//   ヘッダ X-Data-Env / X-Mode も補完として利用可
 //   attachment[data], attachment[mimeType], attachment[name]
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -86,6 +88,45 @@ function resolveInboundDataEnv(modeRaw: unknown): 'prod' | 'demo' {
   const s = String(modeRaw ?? '').trim().toLowerCase()
   if (s === 'demo' || s === 'dev') return 'demo'
   return 'prod'
+}
+
+/** ボディに無いキーだけ URL クエリで埋める（Make が ?mode=demo を URL に付ける運用向け） */
+function mergeUrlSearchParamsIntoRaw(req: Request, raw: Record<string, string>): void {
+  let url: URL
+  try {
+    url = new URL(req.url)
+  } catch {
+    return
+  }
+  for (const [k, v] of url.searchParams.entries()) {
+    const t = String(v ?? '').trim()
+    if (!t) continue
+    const cur = raw[k]
+    if (cur == null || String(cur).trim() === '') {
+      raw[k] = v
+    }
+  }
+}
+
+/**
+ * Make が mode / data_env / 大小文字違い / URL・ヘッダで渡すケースをまとめて解決する。
+ */
+function pickInboundMode(raw: Record<string, string>, req: Request): unknown {
+  const explicitKeys = ['mode', 'data_env', 'dataEnv']
+  for (const k of explicitKeys) {
+    const v = raw[k]
+    if (v != null && String(v).trim() !== '') return v
+  }
+  for (const key of Object.keys(raw)) {
+    const lower = key.toLowerCase()
+    if (lower === 'mode' || lower === 'data_env') {
+      const v = raw[key]
+      if (v != null && String(v).trim() !== '') return v
+    }
+  }
+  const h = req.headers.get('x-data-env') ?? req.headers.get('x-mode')
+  if (h != null && String(h).trim() !== '') return h.trim()
+  return undefined
 }
 
 /**
@@ -545,7 +586,15 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    mergeUrlSearchParamsIntoRaw(req, raw)
+
     const rawKeys = Object.keys(raw).sort()
+    const pickedMode = pickInboundMode(raw, req)
+    let queryHasMode = false
+    try {
+      const u = new URL(req.url)
+      queryHasMode = u.searchParams.has('mode') || u.searchParams.has('data_env')
+    } catch { /* ignore */ }
     console.log('[STEP0 受信メタ]', {
       method: req.method,
       contentType,
@@ -553,6 +602,8 @@ Deno.serve(async (req: Request) => {
       rawKeys,
       rawType: raw.type ?? '(unset)',
       rawMode: raw.mode ?? '(unset)',
+      pickedMode: pickedMode ?? '(unset)',
+      queryHasMode,
     })
     console.log('[STEP0 フィールド長]', {
       raw_body_len: (raw.body ?? '').length,
@@ -561,8 +612,8 @@ Deno.serve(async (req: Request) => {
       attachment_mime: (raw['attachment[mimeType]'] ?? '').slice(0, 80),
     })
 
-    const inboundDataEnv = resolveInboundDataEnv(raw.mode)
-    console.log('[inbound] data_env=', inboundDataEnv, 'mode=', raw.mode ?? '')
+    const inboundDataEnv = resolveInboundDataEnv(pickedMode)
+    console.log('[inbound] data_env=', inboundDataEnv, 'pickedMode=', pickedMode ?? '', 'raw.mode=', raw.mode ?? '')
 
     const type: string = normalizeInboundType(raw.type)
     const from: string = parseFrom(raw.from ?? '')
