@@ -6,6 +6,8 @@
 //   ?mode=demo や ?data_env=demo（Webhook URL のクエリ）も可（ボディが空のとき補完）
 //   ヘッダ X-Data-Env / X-Mode も補完として利用可
 //   attachment[data], attachment[mimeType], attachment[name]
+//   attachmentsJson: JSON 配列文字列 [{data,mimeType,name?} | Pipedream: content_base64,content_type,name]
+//   attachments: 上記と同じ配列を JSON.stringify したトップレベルキー（application/json ボディ時）
 //   本文・添付とも空: HTTP 200 + skipped（Make 継続）。DB は書かない。
 //   INBOUND_RELEVANCE_CHECK: false で事前の無関係メール判定を無効化（既定は true）
 //   GEMINI_INBOUND_TIMEOUT_MS: candidate/project の Gemini 1回あたり ms（Secrets。15〜300000。未設定時 38000）
@@ -26,6 +28,41 @@ interface Attachment {
   data: string
   mimeType: string
   name?: string
+}
+
+/**
+ * 添付オブジェクトの配列を正規化（Pipedream 等: `content_base64` / `content_type` / `name`。
+ * Make 互換: `data` / `mimeType` / `name`）
+ */
+function attachmentsFromParsedArray(parsed: unknown[]): Attachment[] {
+  const out: Attachment[] = []
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const o = item as Record<string, unknown>
+    const dataRaw = o.data ?? o.content_base64 ?? o.contentBytes
+    if (typeof dataRaw !== 'string' || !dataRaw.trim()) continue
+    const mimeRaw = o.mimeType ?? o.content_type ?? o.contentType ?? ''
+    const nameRaw = o.name
+    out.push({
+      data: dataRaw.trim(),
+      mimeType: typeof mimeRaw === 'string' ? mimeRaw : String(mimeRaw ?? ''),
+      name: nameRaw != null && String(nameRaw).trim() ? String(nameRaw) : undefined,
+    })
+  }
+  return out
+}
+
+/** JSON 配列文字列（トップレベルが `attachments` として stringify されたもの） */
+function attachmentsFromJsonArrayString(jsonStr: string): Attachment[] {
+  const s = jsonStr.trim()
+  if (!s.startsWith('[')) return []
+  try {
+    const parsed = JSON.parse(s) as unknown
+    if (!Array.isArray(parsed)) return []
+    return attachmentsFromParsedArray(parsed)
+  } catch {
+    return []
+  }
 }
 
 const SUPPORTED_MIME = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/webp']
@@ -786,9 +823,11 @@ Deno.serve(async (req: Request) => {
       }]
     } else if (raw.attachmentsJson) {
       try {
-        const parsed = JSON.parse(raw.attachmentsJson)
-        if (Array.isArray(parsed)) attachments = parsed
+        const parsed = JSON.parse(raw.attachmentsJson) as unknown
+        if (Array.isArray(parsed)) attachments = attachmentsFromParsedArray(parsed)
       } catch { /* ignore */ }
+    } else if (raw.attachments?.trim()) {
+      attachments = attachmentsFromJsonArrayString(raw.attachments)
     }
 
     const t0 = Date.now()
