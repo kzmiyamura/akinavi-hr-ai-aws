@@ -2,9 +2,11 @@ import { supabase } from '../supabase'
 import type { MatchResponse } from '../ai/types'
 import { fetchProjectsByIds } from './projects'
 import type { Project } from './projects'
+import type { DataEnv } from '../dataEnv'
 
 export interface Submission {
   id: string
+  data_env: DataEnv
   candidate_id: string
   project_id: string
   match_score: number
@@ -21,16 +23,18 @@ export interface UpsertSubmissionInput {
   projectId: string
   matchResult: MatchResponse
   createdBy: string
+  dataEnv?: DataEnv
 }
 
 /** マッチング結果を保存（同一ペアは上書き） */
 export async function upsertSubmission(input: UpsertSubmissionInput): Promise<Submission> {
-  const { candidateId, projectId, matchResult, createdBy } = input
+  const { candidateId, projectId, matchResult, createdBy, dataEnv = 'prod' } = input
 
   const { data, error } = await supabase
     .from('submissions')
     .upsert(
       {
+        data_env: dataEnv,
         candidate_id: candidateId,
         project_id: projectId,
         match_score: matchResult.score,
@@ -53,8 +57,11 @@ export interface SubmissionStats {
   countByCandidateId: Record<string, number>
 }
 
-export async function fetchSubmissionStats(): Promise<SubmissionStats> {
-  const { data, error } = await supabase.from('submissions').select('project_id, candidate_id')
+export async function fetchSubmissionStats(dataEnv: DataEnv): Promise<SubmissionStats> {
+  const { data, error } = await supabase
+    .from('submissions')
+    .select('project_id, candidate_id')
+    .eq('data_env', dataEnv)
 
   if (error) throw new Error(`提案履歴の集計に失敗しました: ${error.message}`)
 
@@ -72,10 +79,11 @@ export async function fetchSubmissionStats(): Promise<SubmissionStats> {
 }
 
 /** 案件に対するマッチングランキングを取得（スコア降順） */
-export async function fetchSubmissionsByProject(projectId: string): Promise<Submission[]> {
+export async function fetchSubmissionsByProject(projectId: string, dataEnv: DataEnv): Promise<Submission[]> {
   const { data, error } = await supabase
     .from('submissions')
     .select('*')
+    .eq('data_env', dataEnv)
     .eq('project_id', projectId)
     .order('match_score', { ascending: false })
 
@@ -84,28 +92,37 @@ export async function fetchSubmissionsByProject(projectId: string): Promise<Subm
 }
 
 /** 複数案件のマッチング結果を一括取得（呼び出し側で project_id ごとに集約・スコア順に並べ替え） */
-export async function fetchSubmissionsByProjectIds(projectIds: string[]): Promise<Submission[]> {
+export async function fetchSubmissionsByProjectIds(projectIds: string[], dataEnv: DataEnv): Promise<Submission[]> {
   if (projectIds.length === 0) return []
-  const { data, error } = await supabase.from('submissions').select('*').in('project_id', projectIds)
+  const { data, error } = await supabase
+    .from('submissions')
+    .select('*')
+    .eq('data_env', dataEnv)
+    .in('project_id', projectIds)
 
   if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Submission[]
 }
 
 /** 複数人材のマッチング結果を一括取得（呼び出し側で candidate_id ごとに集約・スコア順に並べ替え） */
-export async function fetchSubmissionsByCandidateIds(candidateIds: string[]): Promise<Submission[]> {
+export async function fetchSubmissionsByCandidateIds(candidateIds: string[], dataEnv: DataEnv): Promise<Submission[]> {
   if (candidateIds.length === 0) return []
-  const { data, error } = await supabase.from('submissions').select('*').in('candidate_id', candidateIds)
+  const { data, error } = await supabase
+    .from('submissions')
+    .select('*')
+    .eq('data_env', dataEnv)
+    .in('candidate_id', candidateIds)
 
   if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Submission[]
 }
 
 /** 人材に対するマッチング履歴を取得（スコア降順） */
-export async function fetchSubmissionsByCandidate(candidateId: string): Promise<Submission[]> {
+export async function fetchSubmissionsByCandidate(candidateId: string, dataEnv: DataEnv): Promise<Submission[]> {
   const { data, error } = await supabase
     .from('submissions')
     .select('*')
+    .eq('data_env', dataEnv)
     .eq('candidate_id', candidateId)
     .order('match_score', { ascending: false })
 
@@ -121,10 +138,11 @@ export interface SubmissionWithProject {
 /** 人材のマッチング一覧（案件マスタを結合。削除済み等は project が null） */
 export async function fetchSubmissionsByCandidateWithProjects(
   candidateId: string,
+  dataEnv: DataEnv,
 ): Promise<SubmissionWithProject[]> {
-  const submissions = await fetchSubmissionsByCandidate(candidateId)
+  const submissions = await fetchSubmissionsByCandidate(candidateId, dataEnv)
   const ids = [...new Set(submissions.map((s) => s.project_id))]
-  const projects = await fetchProjectsByIds(ids)
+  const projects = await fetchProjectsByIds(ids, dataEnv)
   const map = new Map(projects.map((p) => [p.id, p]))
   return submissions.map((submission) => ({
     submission,
@@ -141,14 +159,19 @@ export interface SubmissionListPreviewRow {
   candidate_name: string | null
 }
 
-export async function fetchSubmissionsListPreview(): Promise<SubmissionListPreviewRow[]> {
-  const { data, error } = await supabase.from('submissions').select(`
+export async function fetchSubmissionsListPreview(dataEnv: DataEnv): Promise<SubmissionListPreviewRow[]> {
+  const { data, error } = await supabase
+    .from('submissions')
+    .select(
+      `
     project_id,
     candidate_id,
     match_score,
     projects ( title ),
     candidates ( name )
-  `)
+  `,
+    )
+    .eq('data_env', dataEnv)
 
   if (error) throw new Error(`マッチング一覧プレビューの取得に失敗しました: ${error.message}`)
 

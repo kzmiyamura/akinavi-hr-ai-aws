@@ -35,6 +35,7 @@ const baseAnalyzed: AnalyzeCandidateResponse = {
 
 const mockCandidate = {
   id: 'uuid-1',
+  data_env: 'prod',
   name: '山田 太郎',
   email: 'yamada@example.com',
   phone: '090-1234-5678',
@@ -70,7 +71,7 @@ describe('upsertCandidate', () => {
     })
 
     expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ email: 'yamada@example.com' }),
+      expect.objectContaining({ email: 'yamada@example.com', data_env: 'prod' }),
       { onConflict: 'email' },
     )
     expect(result.id).toBe('uuid-1')
@@ -89,7 +90,7 @@ describe('upsertCandidate', () => {
     })
 
     expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ email: 'yamada@example.com' }),
+      expect.objectContaining({ email: 'yamada@example.com', data_env: 'prod' }),
       { onConflict: 'email' },
     )
     expect(result.skills).toContain('Kubernetes')

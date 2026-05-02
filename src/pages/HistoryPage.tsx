@@ -8,30 +8,37 @@ import { useState } from 'react'
 import type { Project } from '../lib/db/projects'
 import type { Candidate } from '../lib/db/candidates'
 import type { Submission } from '../lib/db/submissions'
+import type { DataEnv } from '../lib/dataEnv'
 
 function formatDate(iso: string) {
   const d = new Date(iso)
   return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-export function HistoryPage() {
+export function HistoryPage({ dataEnv }: { dataEnv: DataEnv }) {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
   const queryClient = useQueryClient()
 
-  const { data: projects = [] } = useQuery({ queryKey: projectsQueryKeys.all, queryFn: fetchAllProjects })
-  const { data: candidates = [] } = useQuery({ queryKey: ['candidates'], queryFn: fetchCandidates })
+  const { data: projects = [] } = useQuery({
+    queryKey: projectsQueryKeys.all(dataEnv),
+    queryFn: () => fetchAllProjects(dataEnv),
+  })
+  const { data: candidates = [] } = useQuery({
+    queryKey: ['candidates', dataEnv],
+    queryFn: () => fetchCandidates(dataEnv),
+  })
   const { data: submissions = [], isLoading } = useQuery({
-    queryKey: ['submissions', selectedProjectId],
-    queryFn: () => fetchSubmissionsByProject(selectedProjectId),
+    queryKey: ['submissions', dataEnv, selectedProjectId],
+    queryFn: () => fetchSubmissionsByProject(selectedProjectId, dataEnv),
     enabled: !!selectedProjectId,
   })
 
   const statusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: Submission['status'] }) => {
-      const { error } = await supabase.from('submissions').update({ status }).eq('id', id)
+      const { error } = await supabase.from('submissions').update({ status }).eq('id', id).eq('data_env', dataEnv)
       if (error) throw new Error(error.message)
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['submissions', selectedProjectId] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['submissions', dataEnv, selectedProjectId] }),
   })
 
   const statusLabel: Record<Submission['status'], string> = {

@@ -26,6 +26,7 @@ const mockMatchResult: MatchResponse = {
 
 const mockSubmission = {
   id: 'sub-uuid-1',
+  data_env: 'prod',
   candidate_id: 'cand-uuid-1',
   project_id: 'proj-uuid-1',
   match_score: 85,
@@ -59,6 +60,7 @@ describe('upsertSubmission', () => {
 
     expect(mockUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
+        data_env: 'prod',
         candidate_id: 'cand-uuid-1',
         project_id: 'proj-uuid-1',
         match_score: 85,

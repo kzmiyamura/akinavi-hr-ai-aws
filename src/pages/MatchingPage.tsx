@@ -19,9 +19,11 @@ import { supabase } from '../lib/supabase'
 import type { Candidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
+import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
   nickname: string
+  dataEnv: DataEnv
   onOpenCandidateDetail?: (candidateId: string) => void
   onOpenProjectDetail?: (projectId: string) => void
 }
@@ -389,6 +391,7 @@ function CandidateModeRankCard({
 
 export function MatchingPage({
   nickname,
+  dataEnv,
   onOpenCandidateDetail,
   onOpenProjectDetail,
 }: Props) {
@@ -410,11 +413,17 @@ export function MatchingPage({
     } catch { /* ignore */ }
   }, [matchingRunMode])
 
-  const { data: projects = [] } = useQuery({ queryKey: projectsQueryKeys.open, queryFn: fetchOpenProjects })
-  const { data: candidates = [] } = useQuery({ queryKey: ['candidates'], queryFn: fetchCandidates })
+  const { data: projects = [] } = useQuery({
+    queryKey: projectsQueryKeys.open(dataEnv),
+    queryFn: () => fetchOpenProjects(dataEnv),
+  })
+  const { data: candidates = [] } = useQuery({
+    queryKey: ['candidates', dataEnv],
+    queryFn: () => fetchCandidates(dataEnv),
+  })
   const { data: stats, isLoading: isLoadingStats } = useQuery({
-    queryKey: ['submission-stats'],
-    queryFn: fetchSubmissionStats,
+    queryKey: ['submission-stats', dataEnv],
+    queryFn: () => fetchSubmissionStats(dataEnv),
   })
 
   const projectList = projects as Project[]
@@ -430,14 +439,14 @@ export function MatchingPage({
   )
 
   const { data: submissionsForProjects = [], isLoading: isLoadingProjectSubs } = useQuery({
-    queryKey: ['matching-submissions-by-projects', projectIdsSorted],
-    queryFn: () => fetchSubmissionsByProjectIds(projectList.map((p) => p.id)),
+    queryKey: ['matching-submissions-by-projects', dataEnv, projectIdsSorted],
+    queryFn: () => fetchSubmissionsByProjectIds(projectList.map((p) => p.id), dataEnv),
     enabled: mode === 'project' && projectList.length > 0,
   })
 
   const { data: submissionsForCandidates = [], isLoading: isLoadingCandidateSubs } = useQuery({
-    queryKey: ['matching-submissions-by-candidates', candidateIdsSorted],
-    queryFn: () => fetchSubmissionsByCandidateIds(candidateList.map((c) => c.id)),
+    queryKey: ['matching-submissions-by-candidates', dataEnv, candidateIdsSorted],
+    queryFn: () => fetchSubmissionsByCandidateIds(candidateList.map((c) => c.id), dataEnv),
     enabled: mode === 'candidate' && candidateList.length > 0,
   })
 
@@ -458,8 +467,8 @@ export function MatchingPage({
   const uniqueProjectIdsKey = uniqueProjectIdsForCandidateView.join(',')
 
   const { data: projectsForMatching = [], isLoading: isLoadingSupportProjects } = useQuery({
-    queryKey: ['matching-support-projects', uniqueProjectIdsKey],
-    queryFn: () => fetchProjectsByIds(uniqueProjectIdsForCandidateView),
+    queryKey: ['matching-support-projects', dataEnv, uniqueProjectIdsKey],
+    queryFn: () => fetchProjectsByIds(uniqueProjectIdsForCandidateView, dataEnv),
     enabled: mode === 'candidate' && uniqueProjectIdsForCandidateView.length > 0,
   })
 
@@ -469,16 +478,22 @@ export function MatchingPage({
   )
 
   const invalidateMatchingQueries = () => {
-    queryClient.invalidateQueries({ queryKey: ['submission-stats'] })
-    queryClient.invalidateQueries({ queryKey: ['candidates'] })
-    queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-projects'] })
-    queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-candidates'] })
-    queryClient.invalidateQueries({ queryKey: ['matching-support-projects'] })
+    queryClient.invalidateQueries({ queryKey: ['submission-stats', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: projectsQueryKeys.all(dataEnv) })
+    queryClient.invalidateQueries({ queryKey: projectsQueryKeys.open(dataEnv) })
+    queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-projects', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-candidates', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: ['matching-support-projects', dataEnv] })
   }
 
   const decideMutation = useMutation({
     mutationFn: async (submission: Submission) => {
-      const { error: e1 } = await supabase.from('submissions').update({ status: 'accepted' }).eq('id', submission.id)
+      const { error: e1 } = await supabase
+        .from('submissions')
+        .update({ status: 'accepted' })
+        .eq('id', submission.id)
+        .eq('data_env', dataEnv)
       if (e1) throw new Error(e1.message)
 
       // 二重決定防止：同一人材の他案件提案は不採用にする
@@ -486,6 +501,7 @@ export function MatchingPage({
         .from('submissions')
         .update({ status: 'rejected' })
         .eq('candidate_id', submission.candidate_id)
+        .eq('data_env', dataEnv)
         .neq('id', submission.id)
       if (e2) throw new Error(e2.message)
     },
@@ -516,10 +532,16 @@ export function MatchingPage({
         const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
 
         if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-          await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id)
+          await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
         }
 
-        await upsertSubmission({ candidateId: candidate.id, projectId, matchResult, createdBy: nickname })
+        await upsertSubmission({
+          candidateId: candidate.id,
+          projectId,
+          matchResult,
+          createdBy: nickname,
+          dataEnv,
+        })
       }
     },
     onSuccess: () => {
@@ -557,7 +579,7 @@ export function MatchingPage({
         const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
 
         if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-          await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id)
+          await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
         }
 
         await upsertSubmission({
@@ -565,6 +587,7 @@ export function MatchingPage({
           projectId: project.id,
           matchResult,
           createdBy: nickname,
+          dataEnv,
         })
       }
     },
@@ -609,7 +632,7 @@ export function MatchingPage({
             const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
 
             if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id)
+              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
             }
 
             await upsertSubmission({
@@ -617,6 +640,7 @@ export function MatchingPage({
               projectId: project.id,
               matchResult,
               createdBy: nickname,
+              dataEnv,
             })
             done += 1
             setBulkProgress({ done, total })
@@ -666,7 +690,7 @@ export function MatchingPage({
             const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
 
             if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id)
+              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
             }
 
             await upsertSubmission({
@@ -674,6 +698,7 @@ export function MatchingPage({
               projectId: project.id,
               matchResult,
               createdBy: nickname,
+              dataEnv,
             })
             done += 1
             setBulkProgress({ done, total })

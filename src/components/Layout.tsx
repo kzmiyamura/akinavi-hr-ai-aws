@@ -1,4 +1,5 @@
 import { Users, Briefcase, Star, LogOut } from 'lucide-react'
+import type { DataEnv } from '../lib/dataEnv'
 
 export type Page = 'matching' | 'candidates' | 'projects'
 
@@ -8,6 +9,10 @@ interface Props {
   onNavigate: (page: Page) => void
   nickname: string
   onClearNickname: () => void
+  dataEnv: DataEnv
+  /** デモ環境（data_env=demo）のUIを出す（URLキー解除後） */
+  demoUiEnabled: boolean
+  onChangeDataEnv: (env: DataEnv) => void
   children: React.ReactNode
 }
 
@@ -17,7 +22,16 @@ const NAV_ITEMS: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'projects', label: '案件登録', icon: <Briefcase size={16} className="shrink-0" /> },
 ]
 
-export function Layout({ activeTab, onNavigate, nickname, onClearNickname, children }: Props) {
+export function Layout({
+  activeTab,
+  onNavigate,
+  nickname,
+  onClearNickname,
+  dataEnv,
+  demoUiEnabled,
+  onChangeDataEnv,
+  children,
+}: Props) {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <div className="sticky top-0 z-50 bg-white shadow-sm">
@@ -27,6 +41,25 @@ export function Layout({ activeTab, onNavigate, nickname, onClearNickname, child
               AkiNavi HR-AI
             </h1>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:text-sm text-gray-500">
+              <label className="flex items-center gap-1.5 shrink-0">
+                <span className="text-gray-400">データ</span>
+                <select
+                  value={dataEnv}
+                  onChange={(e) => onChangeDataEnv(e.target.value as DataEnv)}
+                  disabled={!demoUiEnabled}
+                  title={
+                    demoUiEnabled
+                      ? '参照する data_env（demo はデモ解除後のみ）'
+                      : 'デモ環境を見るには URL に demoKey を付与してください'
+                  }
+                  className="border border-gray-200 rounded-lg px-2 py-1 text-xs sm:text-sm bg-white text-gray-700 disabled:opacity-60"
+                >
+                  <option value="prod">本番相当（prod）</option>
+                  <option value="demo" disabled={!demoUiEnabled}>
+                    デモ（demo）
+                  </option>
+                </select>
+              </label>
               <span className="min-w-0 break-all">
                 利用者: <strong className="text-gray-700">{nickname}</strong>
               </span>

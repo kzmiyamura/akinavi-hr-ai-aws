@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useNickname } from './hooks/useNickname'
 import { NicknameModal } from './components/NicknameModal'
@@ -9,6 +9,13 @@ import { ProjectPage } from './pages/ProjectPage'
 import { MatchingPage } from './pages/MatchingPage'
 import { CandidateDetailPage } from './pages/CandidateDetailPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
+import type { DataEnv } from './lib/dataEnv'
+import {
+  applyDemoKeyFromUrlOnce,
+  getDemoUiEnabled,
+  readStoredDataEnv,
+  writeStoredDataEnv,
+} from './lib/dataEnv'
 
 const queryClient = new QueryClient()
 
@@ -16,10 +23,52 @@ type DetailView =
   | { kind: 'candidate'; id: string }
   | { kind: 'project'; id: string }
 
+function stripDemoKeyQueryParams() {
+  try {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('demoKey') && !url.searchParams.has('demo_key')) return
+    url.searchParams.delete('demoKey')
+    url.searchParams.delete('demo_key')
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  } catch {
+    /* ignore */
+  }
+}
+
 function AppInner() {
   const { nickname, saveNickname, clearNickname } = useNickname()
   const [tabPage, setTabPage] = useState<Page>('matching')
   const [detail, setDetail] = useState<DetailView | null>(null)
+
+  const demoUnlockInitially = useMemo(() => getDemoUiEnabled(), [])
+  const [demoUiEnabled, setDemoUiEnabled] = useState(demoUnlockInitially)
+
+  const [dataEnv, setDataEnv] = useState<DataEnv>(() => {
+    const stored = readStoredDataEnv()
+    if (demoUnlockInitially) return stored ?? 'demo'
+    return stored === 'demo' ? 'prod' : (stored ?? 'prod')
+  })
+
+  useEffect(() => {
+    const unlockedNow = applyDemoKeyFromUrlOnce()
+    if (unlockedNow) {
+      setDemoUiEnabled(true)
+      setDataEnv('demo')
+      writeStoredDataEnv('demo')
+      stripDemoKeyQueryParams()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!demoUiEnabled && dataEnv === 'demo') {
+      setDataEnv('prod')
+      writeStoredDataEnv('prod')
+    }
+  }, [demoUiEnabled, dataEnv])
+
+  useEffect(() => {
+    writeStoredDataEnv(dataEnv)
+  }, [dataEnv])
 
   if (!nickname) {
     return <NicknameModal onSave={saveNickname} />
@@ -46,15 +95,21 @@ function AppInner() {
         <div className={tabPage === 'matching' ? 'block' : 'hidden'}>
           <MatchingPage
             nickname={nickname}
+            dataEnv={dataEnv}
             onOpenCandidateDetail={openCandidateDetail}
             onOpenProjectDetail={openProjectDetail}
           />
         </div>
         <div className={tabPage === 'candidates' ? 'block' : 'hidden'}>
-          <CandidatePage nickname={nickname} onOpenCandidateDetail={openCandidateDetail} />
+          <CandidatePage
+            nickname={nickname}
+            dataEnv={dataEnv}
+            demoUiEnabled={demoUiEnabled}
+            onOpenCandidateDetail={openCandidateDetail}
+          />
         </div>
         <div className={tabPage === 'projects' ? 'block' : 'hidden'}>
-          <ProjectPage nickname={nickname} onOpenProjectDetail={openProjectDetail} />
+          <ProjectPage nickname={nickname} dataEnv={dataEnv} demoUiEnabled={demoUiEnabled} onOpenProjectDetail={openProjectDetail} />
         </div>
       </>
     )
@@ -66,15 +121,19 @@ function AppInner() {
       onNavigate={handleNavigate}
       nickname={nickname}
       onClearNickname={clearNickname}
+      dataEnv={dataEnv}
+      demoUiEnabled={demoUiEnabled}
+      onChangeDataEnv={setDataEnv}
     >
       {detail?.kind === 'candidate' ? (
         <CandidateDetailPage
           candidateId={detail.id}
           nickname={nickname}
+          dataEnv={dataEnv}
           onBack={() => setDetail(null)}
         />
       ) : detail?.kind === 'project' ? (
-        <ProjectDetailPage projectId={detail.id} nickname={nickname} onBack={() => setDetail(null)} />
+        <ProjectDetailPage projectId={detail.id} nickname={nickname} dataEnv={dataEnv} onBack={() => setDetail(null)} />
       ) : (
         renderMain()
       )}

@@ -3,25 +3,27 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Pencil, Loader2 } from 'lucide-react'
 import { fetchCandidateById } from '../lib/db/candidates'
 import { CandidateProfileFields, CandidateEditModal } from './CandidatePage'
+import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
   candidateId: string
   nickname: string
+  dataEnv: DataEnv
   onBack: () => void
 }
 
-export function CandidateDetailPage({ candidateId, nickname, onBack }: Props) {
+export function CandidateDetailPage({ candidateId, nickname, dataEnv, onBack }: Props) {
   const queryClient = useQueryClient()
   const [editingOpen, setEditingOpen] = useState(false)
 
   const { data: candidate, isLoading, error, isError } = useQuery({
-    queryKey: ['candidates', candidateId],
-    queryFn: () => fetchCandidateById(candidateId),
+    queryKey: ['candidates', dataEnv, candidateId],
+    queryFn: () => fetchCandidateById(candidateId, dataEnv),
   })
 
   function handleSaved() {
-    queryClient.invalidateQueries({ queryKey: ['candidates', candidateId] })
-    queryClient.invalidateQueries({ queryKey: ['candidates'] })
+    queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv, candidateId] })
+    queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
     setEditingOpen(false)
   }
 
@@ -31,6 +33,7 @@ export function CandidateDetailPage({ candidateId, nickname, onBack }: Props) {
         <CandidateEditModal
           candidate={candidate}
           nickname={nickname}
+          dataEnv={dataEnv}
           onClose={() => setEditingOpen(false)}
           onSaved={handleSaved}
         />

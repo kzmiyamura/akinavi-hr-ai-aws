@@ -11,9 +11,13 @@ import {
   invalidateProjectLists,
 } from '../lib/db/projects'
 import type { Project } from '../lib/db/projects'
+import type { DataEnv } from '../lib/dataEnv'
+import { DemoSeedPanel } from '../components/DemoSeedPanel'
 
 interface Props {
   nickname: string
+  dataEnv: DataEnv
+  demoUiEnabled?: boolean
   onOpenProjectDetail?: (projectId: string) => void
 }
 
@@ -236,11 +240,12 @@ export function ProjectProfileFields({
 interface EditModalProps {
   project: Project
   nickname: string
+  dataEnv: DataEnv
   onClose: () => void
   onSaved: () => void
 }
 
-export function ProjectEditModal({ project, nickname, onClose, onSaved }: EditModalProps) {
+export function ProjectEditModal({ project, nickname, dataEnv, onClose, onSaved }: EditModalProps) {
   const [form, setForm] = useState<EditForm>(() => toEditForm(project))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -256,6 +261,7 @@ export function ProjectEditModal({ project, nickname, onClose, onSaved }: EditMo
       const niceToHaveSkills = splitComma(form.niceToHaveSkills)
       await updateProject({
         id: project.id,
+        dataEnv,
         title: form.title.trim() || '案件',
         client: form.client.trim() || null,
         description: form.description ?? '',
@@ -423,7 +429,7 @@ export function ProjectEditModal({ project, nickname, onClose, onSaved }: EditMo
   )
 }
 
-export function ProjectPage({ nickname, onOpenProjectDetail }: Props) {
+export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenProjectDetail }: Props) {
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -441,14 +447,14 @@ export function ProjectPage({ nickname, onOpenProjectDetail }: Props) {
   }
 
   const { data: projects = [], isLoading } = useQuery({
-    queryKey: projectsQueryKeys.all,
-    queryFn: fetchAllProjects,
+    queryKey: projectsQueryKeys.all(dataEnv),
+    queryFn: () => fetchAllProjects(dataEnv),
   })
 
   const deleteMutation = useMutation({
-    mutationFn: deleteProject,
+    mutationFn: (id: string) => deleteProject(id, dataEnv),
     onSuccess: () => {
-      invalidateProjectLists(queryClient)
+      invalidateProjectLists(queryClient, dataEnv)
       setDeletingId(null)
     },
     onError: (e) => {
@@ -466,10 +472,10 @@ export function ProjectPage({ nickname, onOpenProjectDetail }: Props) {
   const mutation = useMutation({
     mutationFn: async (rawText: string) => {
       const analyzed = await ai.analyzeProject({ rawText })
-      return insertProject({ analyzed, rawText, createdBy: nickname })
+      return insertProject({ analyzed, rawText, createdBy: nickname, dataEnv })
     },
     onSuccess: (project) => {
-      invalidateProjectLists(queryClient)
+      invalidateProjectLists(queryClient, dataEnv)
       setText('')
       setMessage({ type: 'success', text: `登録完了: ${project.title}` })
     },
@@ -506,10 +512,24 @@ export function ProjectPage({ nickname, onOpenProjectDetail }: Props) {
         <ProjectEditModal
           project={editingProject}
           nickname={nickname}
+          dataEnv={dataEnv}
           onClose={() => setEditingProject(null)}
           onSaved={() => {
             setEditingProject(null)
-            invalidateProjectLists(queryClient)
+            invalidateProjectLists(queryClient, dataEnv)
+          }}
+        />
+      )}
+      {demoUiEnabled && dataEnv === 'demo' && (
+        <DemoSeedPanel
+          nickname={nickname}
+          createdByLabel="デモ案件"
+          onDone={() => {
+            invalidateProjectLists(queryClient, dataEnv)
+            queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['submission-stats', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-projects', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-candidates', dataEnv] })
           }}
         />
       )}

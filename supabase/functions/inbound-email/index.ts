@@ -13,6 +13,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+/** メール取り込みは prod に保存（フロントの data_env=demo と分離） */
+const INBOUND_DATA_ENV = 'prod' as const
+
 interface Attachment {
   data: string
   mimeType: string
@@ -713,6 +716,7 @@ JSON:`.trim()
         : null
 
       const dbPayload = {
+        data_env: INBOUND_DATA_ENV,
         name: analyzed.name ?? '不明',
         email,
         phone: analyzed.phone ?? null,
@@ -877,6 +881,7 @@ JSON:`.trim()
         const budgetMax = parseOptionalNumber(raw.budgetMax)
 
         return {
+          data_env: INBOUND_DATA_ENV,
           title,
           client: strOrNull(raw.client),
           description,
@@ -920,6 +925,7 @@ JSON:`.trim()
           const { data: acceptedRows, error: acceptedErr } = await supabase
             .from('submissions')
             .select('candidate_id')
+            .eq('data_env', INBOUND_DATA_ENV)
             .eq('status', 'accepted')
             .limit(10000)
 
@@ -939,6 +945,7 @@ JSON:`.trim()
             let candQuery = supabase
               .from('candidates')
               .select('id, name, email, phone, skills, experience_years, raw_profile, merged_into')
+              .eq('data_env', INBOUND_DATA_ENV)
               .is('merged_into', null)
               .limit(AUTO_MATCH_MAX_CANDIDATES)
 
@@ -995,6 +1002,7 @@ JSON:`.trim()
                 .from('submissions')
                 .upsert(
                   {
+                    data_env: INBOUND_DATA_ENV,
                     candidate_id: c.id,
                     project_id: p.id,
                     match_score: mr.score,

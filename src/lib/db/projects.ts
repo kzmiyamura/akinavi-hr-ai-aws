@@ -2,16 +2,17 @@ import type { QueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import type { AnalyzeProjectResponse } from '../ai/types'
 import { normalizeProjectIntegerColumns } from './projectIntegers'
+import type { DataEnv } from '../dataEnv'
 
-/** 案件リスト用 TanStack Query キー（同一キーで fetchAll / fetchOpen を混ぜるとキャッシュが食い違う） */
+/** 案件リスト用 TanStack Query キー（data_env ごとにキャッシュを分離） */
 export const projectsQueryKeys = {
-  all: ['projects', 'all'] as const,
-  open: ['projects', 'open'] as const,
+  all: (dataEnv: DataEnv) => ['projects', 'all', dataEnv] as const,
+  open: (dataEnv: DataEnv) => ['projects', 'open', dataEnv] as const,
 }
 
-export function invalidateProjectLists(queryClient: QueryClient) {
-  queryClient.invalidateQueries({ queryKey: projectsQueryKeys.all })
-  queryClient.invalidateQueries({ queryKey: projectsQueryKeys.open })
+export function invalidateProjectLists(queryClient: QueryClient, dataEnv: DataEnv) {
+  queryClient.invalidateQueries({ queryKey: projectsQueryKeys.all(dataEnv) })
+  queryClient.invalidateQueries({ queryKey: projectsQueryKeys.open(dataEnv) })
 }
 
 /** DBの案件1件を、マッチングAI入力形式に変換 */
@@ -40,6 +41,7 @@ export function projectToMatchRequirements(project: Project): AnalyzeProjectResp
 
 export interface Project {
   id: string
+  data_env: DataEnv
   title: string
   client: string | null
   description: string
@@ -69,11 +71,12 @@ export interface InsertProjectInput {
   analyzed: AnalyzeProjectResponse
   rawText: string
   createdBy: string
+  dataEnv?: DataEnv
 }
 
 /** 案件を新規登録する */
 export async function insertProject(input: InsertProjectInput): Promise<Project> {
-  const { analyzed, rawText, createdBy } = input
+  const { analyzed, rawText, createdBy, dataEnv = 'prod' } = input
 
   const {
     budget_min: budgetMin,
@@ -93,6 +96,7 @@ export async function insertProject(input: InsertProjectInput): Promise<Project>
   const { data, error } = await supabase
     .from('projects')
     .insert({
+      data_env: dataEnv,
       title: analyzed.title,
       client: analyzed.client,
       description: analyzed.description,
@@ -125,6 +129,7 @@ export async function insertProject(input: InsertProjectInput): Promise<Project>
 
 export interface UpdateProjectInput {
   id: string
+  dataEnv: DataEnv
   title: string
   client: string | null
   description: string
@@ -149,7 +154,7 @@ export interface UpdateProjectInput {
 
 /** 案件を手動更新する（IDで直接UPDATE） */
 export async function updateProject(input: UpdateProjectInput): Promise<Project> {
-  const { id, ...rest } = input
+  const { id, dataEnv, ...rest } = input
   const {
     budget_min: budgetMin,
     budget_max: budgetMax,
@@ -176,6 +181,7 @@ export async function updateProject(input: UpdateProjectInput): Promise<Project>
       updated_at: new Date().toISOString(),
     })
     .eq('id', id)
+    .eq('data_env', dataEnv)
     .select()
     .single()
 
@@ -184,37 +190,44 @@ export async function updateProject(input: UpdateProjectInput): Promise<Project>
 }
 
 /** 案件を削除する */
-export async function deleteProject(id: string): Promise<void> {
+export async function deleteProject(id: string, dataEnv: DataEnv): Promise<void> {
   const { error } = await supabase
     .from('projects')
     .delete()
     .eq('id', id)
+    .eq('data_env', dataEnv)
 
   if (error) throw new Error(`案件の削除に失敗しました: ${error.message}`)
 }
 
 /** IDで1件取得（詳細画面用） */
-export async function fetchProjectById(id: string): Promise<Project | null> {
-  const { data, error } = await supabase.from('projects').select('*').eq('id', id).maybeSingle()
+export async function fetchProjectById(id: string, dataEnv: DataEnv): Promise<Project | null> {
+  const { data, error } = await supabase
+    .from('projects')
+    .select('*')
+    .eq('id', id)
+    .eq('data_env', dataEnv)
+    .maybeSingle()
 
   if (error) throw new Error(`案件の取得に失敗しました: ${error.message}`)
   return (data ?? null) as Project | null
 }
 
 /** ID一覧で案件を取得（マッチング履歴との突合用） */
-export async function fetchProjectsByIds(ids: string[]): Promise<Project[]> {
+export async function fetchProjectsByIds(ids: string[], dataEnv: DataEnv): Promise<Project[]> {
   if (ids.length === 0) return []
-  const { data, error } = await supabase.from('projects').select('*').in('id', ids)
+  const { data, error } = await supabase.from('projects').select('*').eq('data_env', dataEnv).in('id', ids)
 
   if (error) throw new Error(`案件の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Project[]
 }
 
 /** 全案件を取得（open のみ） */
-export async function fetchOpenProjects(): Promise<Project[]> {
+export async function fetchOpenProjects(dataEnv: DataEnv): Promise<Project[]> {
   const { data, error } = await supabase
     .from('projects')
     .select('*')
+    .eq('data_env', dataEnv)
     .eq('status', 'open')
     .order('created_at', { ascending: false })
 
@@ -223,10 +236,11 @@ export async function fetchOpenProjects(): Promise<Project[]> {
 }
 
 /** 全案件を取得（全ステータス） */
-export async function fetchAllProjects(): Promise<Project[]> {
+export async function fetchAllProjects(dataEnv: DataEnv): Promise<Project[]> {
   const { data, error } = await supabase
     .from('projects')
     .select('*')
+    .eq('data_env', dataEnv)
     .order('created_at', { ascending: false })
 
   if (error) throw new Error(`案件の取得に失敗しました: ${error.message}`)

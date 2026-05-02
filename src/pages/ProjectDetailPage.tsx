@@ -3,25 +3,27 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Pencil, Loader2 } from 'lucide-react'
 import { fetchProjectById, invalidateProjectLists } from '../lib/db/projects'
 import { ProjectProfileFields, ProjectEditModal } from './ProjectPage'
+import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
   projectId: string
   nickname: string
+  dataEnv: DataEnv
   onBack: () => void
 }
 
-export function ProjectDetailPage({ projectId, nickname, onBack }: Props) {
+export function ProjectDetailPage({ projectId, nickname, dataEnv, onBack }: Props) {
   const queryClient = useQueryClient()
   const [editingOpen, setEditingOpen] = useState(false)
 
   const { data: project, isLoading, error, isError } = useQuery({
-    queryKey: ['projects', projectId],
-    queryFn: () => fetchProjectById(projectId),
+    queryKey: ['projects', dataEnv, projectId],
+    queryFn: () => fetchProjectById(projectId, dataEnv),
   })
 
   function handleSaved() {
-    queryClient.invalidateQueries({ queryKey: ['projects', projectId] })
-    invalidateProjectLists(queryClient)
+    queryClient.invalidateQueries({ queryKey: ['projects', dataEnv, projectId] })
+    invalidateProjectLists(queryClient, dataEnv)
     setEditingOpen(false)
   }
 
@@ -31,6 +33,7 @@ export function ProjectDetailPage({ projectId, nickname, onBack }: Props) {
         <ProjectEditModal
           project={project}
           nickname={nickname}
+          dataEnv={dataEnv}
           onClose={() => setEditingOpen(false)}
           onSaved={handleSaved}
         />

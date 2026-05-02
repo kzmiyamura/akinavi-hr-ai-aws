@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mockSelectStats = vi.fn()
+const mockEqStats = vi.fn()
 
 vi.mock('../../supabase', () => ({
   supabase: {
     from: vi.fn(() => ({
-      select: mockSelectStats,
+      select: vi.fn(() => ({
+        eq: mockEqStats,
+      })),
     })),
   },
 }))
@@ -13,11 +15,11 @@ vi.mock('../../supabase', () => ({
 describe('fetchSubmissionStats', () => {
   beforeEach(() => {
     vi.resetModules()
-    mockSelectStats.mockReset()
+    mockEqStats.mockReset()
   })
 
   it('案件別・人材別に件数を集計する', async () => {
-    mockSelectStats.mockResolvedValue({
+    mockEqStats.mockResolvedValue({
       data: [
         { project_id: 'p1', candidate_id: 'c1' },
         { project_id: 'p1', candidate_id: 'c2' },
@@ -27,7 +29,7 @@ describe('fetchSubmissionStats', () => {
     })
 
     const { fetchSubmissionStats } = await import('../submissions')
-    const s = await fetchSubmissionStats()
+    const s = await fetchSubmissionStats('prod')
 
     expect(s.countByProjectId.p1).toBe(2)
     expect(s.countByProjectId.p2).toBe(1)
@@ -36,8 +38,8 @@ describe('fetchSubmissionStats', () => {
   })
 
   it('Supabase エラー時は例外', async () => {
-    mockSelectStats.mockResolvedValue({ data: null, error: { message: 'x' } })
+    mockEqStats.mockResolvedValue({ data: null, error: { message: 'x' } })
     const { fetchSubmissionStats } = await import('../submissions')
-    await expect(fetchSubmissionStats()).rejects.toThrow('提案履歴の集計に失敗しました')
+    await expect(fetchSubmissionStats('prod')).rejects.toThrow('提案履歴の集計に失敗しました')
   })
 })

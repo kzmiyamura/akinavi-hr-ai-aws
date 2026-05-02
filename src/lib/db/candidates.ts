@@ -1,5 +1,6 @@
 import { supabase } from '../supabase'
 import type { AnalyzeCandidateResponse, CandidateSkillsByCategory } from '../ai/types'
+import type { DataEnv } from '../dataEnv'
 import {
   normalizeCandidateSkillsByCategory,
   skillsByCategoryHasAny,
@@ -7,6 +8,7 @@ import {
 
 export interface Candidate {
   id: string
+  data_env: DataEnv
   name: string
   email: string | null
   phone: string | null
@@ -26,6 +28,7 @@ export interface UpsertCandidateInput {
   rawText: string
   createdBy: string
   duplicateSuspected?: boolean
+  dataEnv?: DataEnv
 }
 
 /**
@@ -58,7 +61,7 @@ function buildCandidateRawProfile(rawText: string, analyzed: AnalyzeCandidateRes
 }
 
 export async function upsertCandidate(input: UpsertCandidateInput): Promise<Candidate> {
-  const { analyzed, rawText, createdBy, duplicateSuspected = false } = input
+  const { analyzed, rawText, createdBy, duplicateSuspected = false, dataEnv = 'prod' } = input
 
   let skills = [...(analyzed.skills ?? [])].map((s) => s.trim()).filter(Boolean)
   if (skills.length === 0 && analyzed.skillsByCategory != null) {
@@ -69,6 +72,7 @@ export async function upsertCandidate(input: UpsertCandidateInput): Promise<Cand
   }
 
   const payload = {
+    data_env: dataEnv,
     name: analyzed.name,
     email: analyzed.email,
     phone: analyzed.phone,
@@ -103,11 +107,12 @@ export async function upsertCandidate(input: UpsertCandidateInput): Promise<Cand
 }
 
 /** IDで1件取得（詳細画面用） */
-export async function fetchCandidateById(id: string): Promise<Candidate | null> {
+export async function fetchCandidateById(id: string, dataEnv: DataEnv): Promise<Candidate | null> {
   const { data, error } = await supabase
     .from('candidates')
     .select('*')
     .eq('id', id)
+    .eq('data_env', dataEnv)
     .maybeSingle()
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
@@ -115,10 +120,11 @@ export async function fetchCandidateById(id: string): Promise<Candidate | null> 
 }
 
 /** 全候補者を取得（マージ済みを除外） */
-export async function fetchCandidates(): Promise<Candidate[]> {
+export async function fetchCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
   const { data, error } = await supabase
     .from('candidates')
     .select('*')
+    .eq('data_env', dataEnv)
     .is('merged_into', null)
     .order('updated_at', { ascending: false })
 
@@ -128,6 +134,7 @@ export async function fetchCandidates(): Promise<Candidate[]> {
 
 export interface UpdateCandidateInput {
   id: string
+  dataEnv: DataEnv
   name: string
   email: string | null
   phone: string | null
@@ -139,11 +146,12 @@ export interface UpdateCandidateInput {
 
 /** 候補者を手動更新する（IDで直接UPDATE） */
 export async function updateCandidate(input: UpdateCandidateInput): Promise<Candidate> {
-  const { id, ...rest } = input
+  const { id, dataEnv, ...rest } = input
   const { data, error } = await supabase
     .from('candidates')
     .update({ ...rest, updated_at: new Date().toISOString() })
     .eq('id', id)
+    .eq('data_env', dataEnv)
     .select()
     .single()
 
@@ -152,20 +160,22 @@ export async function updateCandidate(input: UpdateCandidateInput): Promise<Cand
 }
 
 /** 候補者を削除する */
-export async function deleteCandidate(id: string): Promise<void> {
+export async function deleteCandidate(id: string, dataEnv: DataEnv): Promise<void> {
   const { error } = await supabase
     .from('candidates')
     .delete()
     .eq('id', id)
+    .eq('data_env', dataEnv)
 
   if (error) throw new Error(`候補者の削除に失敗しました: ${error.message}`)
 }
 
 /** duplicate_flag=true の候補者のみ取得 */
-export async function fetchDuplicateCandidates(): Promise<Candidate[]> {
+export async function fetchDuplicateCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
   const { data, error } = await supabase
     .from('candidates')
     .select('*')
+    .eq('data_env', dataEnv)
     .eq('duplicate_flag', true)
     .is('merged_into', null)
     .order('created_at', { ascending: false })

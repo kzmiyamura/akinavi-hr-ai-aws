@@ -3,6 +3,7 @@ import { projectToMatchRequirements, type Project } from '../projects'
 
 const baseProject: Project = {
   id: 'p1',
+  data_env: 'prod',
   title: 'テスト案件',
   client: 'A社',
   description: '説明',

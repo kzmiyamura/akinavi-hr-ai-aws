@@ -4,30 +4,31 @@ import { fetchDuplicateCandidates, fetchCandidates } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { useState } from 'react'
 import type { Candidate } from '../lib/db/candidates'
+import type { DataEnv } from '../lib/dataEnv'
 
-export function DuplicatePage() {
+export function DuplicatePage({ dataEnv }: { dataEnv: DataEnv }) {
   const queryClient = useQueryClient()
   const [mergeTarget, setMergeTarget] = useState<Record<string, string>>({})
 
   const { data: duplicates = [], isLoading } = useQuery({
-    queryKey: ['duplicates'],
-    queryFn: fetchDuplicateCandidates,
+    queryKey: ['duplicates', dataEnv],
+    queryFn: () => fetchDuplicateCandidates(dataEnv),
   })
   const { data: allCandidates = [] } = useQuery({
-    queryKey: ['candidates'],
-    queryFn: fetchCandidates,
+    queryKey: ['candidates', dataEnv],
+    queryFn: () => fetchCandidates(dataEnv),
   })
 
   // フラグ解除（重複ではないと判断）
   const clearFlagMutation = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase
-        .from('candidates').update({ duplicate_flag: false }).eq('id', id)
+        .from('candidates').update({ duplicate_flag: false }).eq('id', id).eq('data_env', dataEnv)
       if (error) throw new Error(error.message)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['duplicates'] })
-      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      queryClient.invalidateQueries({ queryKey: ['duplicates', dataEnv] })
+      queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
     },
   })
 
@@ -38,11 +39,12 @@ export function DuplicatePage() {
         .from('candidates')
         .update({ merged_into: targetId, duplicate_flag: false })
         .eq('id', sourceId)
+        .eq('data_env', dataEnv)
       if (error) throw new Error(error.message)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['duplicates'] })
-      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      queryClient.invalidateQueries({ queryKey: ['duplicates', dataEnv] })
+      queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
     },
   })
 

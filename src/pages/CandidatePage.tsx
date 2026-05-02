@@ -4,6 +4,8 @@ import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, W
 import { ai } from '../lib/ai'
 import { upsertCandidate, updateCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import type { Candidate } from '../lib/db/candidates'
+import type { DataEnv } from '../lib/dataEnv'
+import { DemoSeedPanel } from '../components/DemoSeedPanel'
 
 interface SkillsByCategory {
   languages: string[]
@@ -284,11 +286,12 @@ export function CandidateProfileFields({
 interface EditModalProps {
   candidate: Candidate
   nickname: string
+  dataEnv: DataEnv
   onClose: () => void
   onSaved: () => void
 }
 
-export function CandidateEditModal({ candidate, nickname, onClose, onSaved }: EditModalProps) {
+export function CandidateEditModal({ candidate, nickname, dataEnv, onClose, onSaved }: EditModalProps) {
   const [form, setForm] = useState<EditForm>(() => toEditForm(candidate))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -313,6 +316,7 @@ export function CandidateEditModal({ candidate, nickname, onClose, onSaved }: Ed
 
       await updateCandidate({
         id: candidate.id,
+        dataEnv,
         name: form.name.trim() || candidate.name,
         email: form.email.trim() || null,
         phone: form.phone.trim() || null,
@@ -336,7 +340,7 @@ export function CandidateEditModal({ candidate, nickname, onClose, onSaved }: Ed
       })
       // skills カラムも同期
       await import('../lib/supabase').then(({ supabase }) =>
-        supabase.from('candidates').update({ skills: allSkills }).eq('id', candidate.id)
+        supabase.from('candidates').update({ skills: allSkills }).eq('id', candidate.id).eq('data_env', dataEnv),
       )
       onSaved()
     } catch (e) {
@@ -504,11 +508,13 @@ export function CandidateEditModal({ candidate, nickname, onClose, onSaved }: Ed
 // ---- メインページ ----
 interface Props {
   nickname: string
+  dataEnv: DataEnv
+  demoUiEnabled?: boolean
   /** カードクリックで人材詳細へ（未指定時は遷移なし） */
   onOpenCandidateDetail?: (candidateId: string) => void
 }
 
-export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
+export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpenCandidateDetail }: Props) {
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -526,9 +532,9 @@ export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
   }
 
   const deleteMutation = useMutation({
-    mutationFn: deleteCandidate,
+    mutationFn: (id: string) => deleteCandidate(id, dataEnv),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
       setDeletingId(null)
     },
     onError: (e) => {
@@ -544,8 +550,8 @@ export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
   }
 
   const { data: candidates = [], isLoading } = useQuery({
-    queryKey: ['candidates'],
-    queryFn: fetchCandidates,
+    queryKey: ['candidates', dataEnv],
+    queryFn: () => fetchCandidates(dataEnv),
   })
 
   const filteredCandidates = candidates.filter((c: Candidate) => {
@@ -574,10 +580,10 @@ export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
   const mutation = useMutation({
     mutationFn: async (rawText: string) => {
       const analyzed = await ai.analyzeCandidate({ rawText })
-      return upsertCandidate({ analyzed, rawText, createdBy: nickname })
+      return upsertCandidate({ analyzed, rawText, createdBy: nickname, dataEnv })
     },
     onSuccess: (candidate) => {
-      queryClient.invalidateQueries({ queryKey: ['candidates'] })
+      queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
       setText('')
       const msg = candidate.duplicate_flag
         ? `登録完了（重複の疑いフラグあり）: ${candidate.name}`
@@ -596,10 +602,26 @@ export function CandidatePage({ nickname, onOpenCandidateDetail }: Props) {
         <CandidateEditModal
           candidate={editingCandidate}
           nickname={nickname}
+          dataEnv={dataEnv}
           onClose={() => setEditingCandidate(null)}
           onSaved={() => {
             setEditingCandidate(null)
-            queryClient.invalidateQueries({ queryKey: ['candidates'] })
+            queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+          }}
+        />
+      )}
+
+      {demoUiEnabled && dataEnv === 'demo' && (
+        <DemoSeedPanel
+          nickname={nickname}
+          createdByLabel="デモ人材"
+          onDone={() => {
+            queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['projects', 'all', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['projects', 'open', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['submission-stats', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-projects', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-candidates', dataEnv] })
           }}
         />
       )}
