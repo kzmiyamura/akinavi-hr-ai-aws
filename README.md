@@ -1,36 +1,38 @@
 # AkiNavi HR-AI
 
-「案件の空き」と「人材リソース」をAIで最適マッチングするシステム。  
-ログイン不要・ニックネーム制で即日利用可能。
+「案件の空き」と「人材リソース」をAIで自動マッチングするシステム。  
+**ログイン不要・ニックネーム制・即日利用可能。**
 
 ---
 
-## 画面構成
+## できること
 
-- **マッチング結果**（初期表示）
-- **人材登録**（テキスト貼り付け・PDF・Excel・Word・画像アップロード対応）
-- **案件登録**（テキスト貼り付け・PDF・Excel・Word・画像アップロード対応）
-
-※提案履歴・重複管理・解析監視は実装済みだが、現状のナビからは非表示（運用をシンプルにするため）。
+| 機能 | 説明 |
+|---|---|
+| AI マッチング | 案件と人材の相性スコア・理由をAIが自動生成 |
+| 人材登録 | テキスト貼り付け・PDF・Excel・Word・画像をアップロードするだけで自動解析・登録 |
+| 案件登録 | 同上。メール本文や要件定義書をそのまま貼り付けてOK |
+| メール自動取り込み | 専用Outlookアドレスへの転送で自動解析・登録（5分以内） |
+| デモ環境 | 本番データとは独立したデモ用データ環境（`?demo=KEY`でトグル） |
 
 ---
 
-## システム構成
+## システム構成図
 
 ```mermaid
 flowchart TD
-    A[営業担当者\nブラウザ] -->|テキスト貼り付け| B[React フロントエンド\nVercel]
-    B -->|AI解析| C[Gemini 2.0 Flash\ngemini-2.0-flash]
+    A[営業担当者\nブラウザ] -->|テキスト・ファイル入力| B[React フロントエンド\nVercel]
+    B -->|AI解析リクエスト| C[Gemini 2.0 Flash]
     C -->|解析結果| B
     B -->|upsert / fetch| D[(Supabase\nPostgreSQL)]
 
-    E[Outlook\n専用アカウント×4] -->|未読メール| F[pg_cron\n5分ごと]
+    E[Outlook\n専用アカウント×4] -->|未読メール監視| F[pg_cron\n5分ごと起動]
     F -->|HTTP POST| G[Edge Function\npoll-email]
-    G -->|Graph API\nアクセストークン取得| M[Microsoft Graph API]
+    G -->|OAuthトークン取得| M[Microsoft Graph API]
     M -->|未読メール取得| G
     G -->|内部POST| H[Edge Function\ninbound-email]
     H -->|Drive/Sheets URL検出→fetch| I[Google Drive\n共有リンク]
-    H -->|AI解析| J[Gemini 2.5 Flash\ngemini-2.5-flash]
+    H -->|AI解析| J[Gemini 2.5 Flash]
     J -->|解析結果| H
     H -->|upsert| D
 ```
@@ -41,82 +43,75 @@ flowchart TD
 
 | レイヤー | 技術 |
 |---|---|
-| フロントエンド | React 19, Vite 8, TypeScript, Tailwind CSS v4 |
-| 状態管理 | TanStack Query v5 |
-| DB / バックエンド | Supabase (PostgreSQL, Edge Functions, pg_cron, pg_net) |
-| AI（ブラウザ） | Google Gemini（既定 `gemini-2.0-flash`、`VITE_GEMINI_MODEL` で変更可）・マルチモーダル対応（画像解析） |
-| AI（サーバー） | Google Gemini `gemini-2.5-flash` — `supabase/functions/inbound-email` |
-| メール自動受信 | Microsoft Graph API ポーリング + Supabase pg_cron（**Make.com不要・完全無料**） |
+| フロントエンド | React 19, Vite 8, TypeScript, Tailwind CSS v4, TanStack Query v5 |
+| DB / バックエンド | Supabase（PostgreSQL, Edge Functions, pg_cron, pg_net） |
+| AI（ブラウザ） | Gemini `gemini-2.0-flash`（`VITE_GEMINI_MODEL` で変更可）・マルチモーダル対応 |
+| AI（サーバー） | Gemini `gemini-2.5-flash`（Edge Function `inbound-email` 固定） |
+| ファイル解析 | `pdfjs-dist`（PDF）・`xlsx`（Excel）・`mammoth`（Word） |
+| メール自動受信 | Microsoft Graph API + Supabase pg_cron（**完全無料・Make.com不要**） |
 | デプロイ | Vercel（フロント）/ Supabase（バックエンド） |
 | テスト | Vitest, React Testing Library, MSW |
 
 ---
 
-## メール受信アドレス
-
-| 種別 | アドレス | data_env |
-|---|---|---|
-| 人材登録用（本番） | `akinavi.hr.ai.voice.human@outlook.jp` | `prod` |
-| 案件登録用（本番） | `akinavi.hr.ai.voice.project@outlook.jp` | `prod` |
-| 人材登録用（デモ） | dev用アカウント | `demo` |
-| 案件登録用（デモ） | dev用アカウント | `demo` |
-
-5分ごとに未読メールを自動取得・解析・DB保存。処理完了後に既読マーク。
-
----
-
-## ローカル開発環境の構築手順
+## ローカル開発環境のセットアップ
 
 ### 前提条件
 
-- Node.js 20 以上
-- npm 9 以上
-- Supabase CLI（`brew install supabase/tap/supabase`）
-- Git
+- [ ] Node.js 20 以上（`node -v` で確認）
+- [ ] npm 9 以上（`npm -v` で確認）
+- [ ] Git
 
-### 1. リポジトリをクローン
+### 手順
+
+**1. リポジトリをクローン**
 
 ```bash
 git clone https://github.com/kzmiyamura/akinavi-hr-ai.git
 cd akinavi-hr-ai
 ```
 
-### 2. 依存パッケージをインストール
+**2. 依存パッケージをインストール**
 
 ```bash
 npm install
 ```
 
-### 3. 環境変数を設定
+**3. 環境変数を設定**
 
 ```bash
 cp .env.example .env.local
 ```
 
-`.env.local` を編集:
+`.env.local` を以下の内容で編集:
 
 ```env
+# Supabase（Dashboard → Settings → API から取得）
 VITE_SUPABASE_URL=https://argizomylbolpqxgmvim.supabase.co
-VITE_SUPABASE_ANON_KEY=（Supabase Dashboard → Settings → API から取得）
-VITE_GEMINI_API_KEY=（Google AI Studio から取得）
+VITE_SUPABASE_ANON_KEY=（anon キーを貼り付け）
+
+# Gemini（Google AI Studio から取得）
+VITE_GEMINI_API_KEY=（APIキーを貼り付け）
 VITE_AI_PROVIDER=gemini
-VITE_DEMO_KEY=（デモ環境解除用キー。任意）
+
+# デモ環境の解除キー（任意・未設定でもOK）
+VITE_DEMO_KEY=（任意の文字列）
 ```
 
-### 4. Supabase DB を初期化
+**4. Supabase の DB を初期化**
 
-Supabase Dashboard → SQL Editor で以下を順番に実行:
+Supabase Dashboard → SQL Editor で以下を**順番に**実行:
 
 1. `supabase/schema.sql`
-2. `supabase/migrations/` 配下のSQLをファイル名順に実行
+2. `supabase/migrations/` 配下のSQLをファイル名の昇順で全て実行
 
-### 5. 開発サーバーを起動
+**5. 開発サーバーを起動**
 
 ```bash
 npm run dev
 ```
 
-`http://localhost:5173` をブラウザで開く。
+ブラウザで `http://localhost:5173` を開く。
 
 ---
 
@@ -124,95 +119,127 @@ npm run dev
 
 ### Vercel（フロントエンド）
 
-1. Vercel Dashboard → Environment Variables に設定:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
-   - `VITE_GEMINI_API_KEY`
-   - `VITE_AI_PROVIDER=gemini`
-   - `VITE_DEMO_KEY`（任意）
-2. `main` ブランチへの push で自動デプロイ
+Vercel Dashboard → Environment Variables に以下を設定してから `main` ブランチへ push:
+
+| 変数名 | 値 |
+|---|---|
+| `VITE_SUPABASE_URL` | Supabase の URL |
+| `VITE_SUPABASE_ANON_KEY` | Supabase の anon キー |
+| `VITE_GEMINI_API_KEY` | Gemini API キー |
+| `VITE_AI_PROVIDER` | `gemini` |
+| `VITE_DEMO_KEY` | デモ解除キー（任意） |
 
 ### Supabase Edge Functions
 
 ```bash
-# inbound-email（メール解析）
+# メール解析
 npx supabase functions deploy inbound-email
 
-# poll-email（Outlookポーリング）
+# Outlook ポーリング
 npx supabase functions deploy poll-email
 ```
 
-#### Edge Functions Secrets（Supabase Dashboard → Edge Functions → Secrets）
+**Edge Functions Secrets**（Supabase Dashboard → Edge Functions → Secrets）
 
-| Secret名 | 用途 |
+| Secret 名 | 用途 |
 |---|---|
 | `GEMINI_API_KEY` | Gemini API キー |
-| `GRAPH_CLIENT_ID` | Azure AD アプリのクライアントID |
+| `GRAPH_CLIENT_ID` | Azure AD アプリのクライアント ID |
 | `GRAPH_CLIENT_SECRET` | Azure AD アプリのクライアントシークレット |
-| `GRAPH_REFRESH_TOKEN_HUMAN` | human@outlook.jp のリフレッシュトークン（prod） |
-| `GRAPH_REFRESH_TOKEN_PROJECT` | project@outlook.jp のリフレッシュトークン（prod） |
-| `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 人材用リフレッシュトークン（demo） |
-| `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 案件用リフレッシュトークン（demo） |
-| `INBOUND_CALL_KEY` | poll-email → inbound-email 呼び出し用JWTキー（service_role） |
+| `GRAPH_REFRESH_TOKEN_HUMAN` | 人材用メール（prod）のリフレッシュトークン |
+| `GRAPH_REFRESH_TOKEN_PROJECT` | 案件用メール（prod）のリフレッシュトークン |
+| `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 人材用メール（demo）のリフレッシュトークン |
+| `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 案件用メール（demo）のリフレッシュトークン |
+| `INBOUND_CALL_KEY` | poll-email → inbound-email 呼び出し用 JWT（service_role キー） |
 
-#### pg_cron スケジュール設定（Supabase SQL Editor）
+**pg_cron スケジュール登録**
 
-`supabase/migrations/add_email_polling_cron.sql` の `YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を書き換えて実行。
+`supabase/migrations/add_email_polling_cron.sql` の `YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を実際の値に書き換えて SQL Editor で実行。
 
 ---
 
-## メール自動受信フロー（Graph API ポーリング）
+## テスト実行
+
+```bash
+npm run test:run   # 全テスト（CI向け）
+npm run test       # ウォッチモード（開発向け）
+```
+
+---
+
+## リファレンス
+
+### メール受信アドレス
+
+5分ごとに未読メールを自動取得・解析・DB保存。処理完了後に既読マーク。
+
+| 種別 | アドレス | data_env |
+|---|---|---|
+| 人材登録用（本番） | `akinavi.hr.ai.voice.human@outlook.jp` | `prod` |
+| 案件登録用（本番） | `akinavi.hr.ai.voice.project@outlook.jp` | `prod` |
+| 人材登録用（デモ） | dev 用アカウント | `demo` |
+| 案件登録用（デモ） | dev 用アカウント | `demo` |
+
+### メール自動受信フロー（Graph API ポーリング）
 
 ```
 pg_cron（5分ごと）
   ↓ HTTP POST
 poll-email Edge Function
-  ├─ Microsoft Graph API: リフレッシュトークン → アクセストークン取得
-  ├─ GET /me/messages?$filter=isRead eq false（未読メール取得、最大3件/アカウント）
-  ├─ 各メールを処理:
-  │   1. markAsRead（先に既読マーク・二重処理防止）
-  │   2. 添付ファイル取得（Graph API）
-  │   3. inbound-email Edge Function へ POST
-  │   4. 失敗時は markAsUnread（未読に戻して次回再試行）
-  └─ リフレッシュトークンをローテーション保存（app_config テーブル）
+  ├─ Graph API: リフレッシュトークン → アクセストークン取得（ローテーション保存）
+  ├─ GET /me/messages?$filter=isRead eq false（最大3件/アカウント）
+  ├─ 各メール処理:
+  │   1. markAsRead（二重処理防止）
+  │   2. 添付ファイル取得
+  │   3. inbound-email へ POST
+  │   4. 失敗時は markAsUnread（次回再試行）
+  └─ 4アカウントを Promise.allSettled で並列処理
   ↓ 内部POST
 inbound-email Edge Function
-  ├─ HTMLタグ除去・プレーンテキスト化
+  ├─ HTML → プレーンテキスト化
   ├─ Google Drive / Sheets / Docs URL 検出・自動取得
-  ├─ Word / Excel 添付ファイル → テキスト変換
+  ├─ Word / Excel 添付 → テキスト変換
   ├─ Gemini 2.5 Flash で AI解析（temperature=0）
   └─ DB保存（candidates / projects / candidate_skills / ai_logs）
 ```
 
----
+### ブラウザからのファイル解析フロー
 
-## AI 解析フロー（ブラウザ貼り付け）
+```
+ファイル選択（PDF / Excel / Word / 画像）
+  ├─ PDF    → pdfjs-dist でテキスト抽出 → テキストエリアへ転記
+  ├─ Excel  → xlsx (SheetJS) でCSV変換 → テキストエリアへ転記
+  ├─ Word   → mammoth で本文抽出 → テキストエリアへ転記
+  └─ 画像   → base64変換 → Gemini multimodal API（inlineData）で直接解析
+  ↓
+Gemini 2.0 Flash で解析 → Supabase に保存
+```
 
-テキスト貼り付け・PDFアップロード（テキスト抽出）・画像アップロード（マルチモーダル解析）→ フロント（Vite）から Gemini 2.0 Flash を呼び出し → Supabase に保存。
+> スキャンPDF（画像化されたもの）はテキスト抽出不可。画像ファイルとして添付してください。
 
-- **PDF**: `pdfjs-dist` でテキスト抽出 → テキストとしてGeminiに渡す（テキストベースPDFのみ）
-- **Excel（.xlsx/.xls）**: `xlsx`（SheetJS）で全シートをCSV変換 → テキストとしてGeminiに渡す
-- **Word（.docx）**: `mammoth` で本文テキスト抽出 → テキストとしてGeminiに渡す
-- **画像（JPG/PNG等）**: base64変換 → Gemini multimodal API（`inlineData`）で直接解析
+### データ環境（prod / demo）
 
----
+同一Supabase内でデータを論理分離。`data_env` カラムでフィルタリング。
 
-## DB 設計
+| 環境 | 用途 | 切替方法 |
+|---|---|---|
+| `prod` | 本番データ（実際の人材・案件） | デフォルト |
+| `demo` | 営業デモ用サンプルデータ | URLに `?demo=<VITE_DEMO_KEY>` を付加 |
 
-### テーブル一覧
+### DB テーブル一覧
 
 | テーブル | 用途 |
 |---|---|
 | `candidates` | 人材マスタ（`data_env` で prod/demo 分離） |
 | `projects` | 案件マスタ（`data_env` で prod/demo 分離） |
-| `submissions` | マッチング提案履歴（`data_env` で prod/demo 分離） |
+| `submissions` | マッチング提案履歴（スコア・AI要約） |
 | `candidate_skills` | スキルのカテゴリ別管理（14カテゴリ・CHECK制約） |
 | `ai_logs` | AI解析実行ログ（モデル・所要時間・結果・エラー） |
-| `app_config` | アプリ全体設定 / Graph APIリフレッシュトークンのローテーション保存 |
+| `app_config` | アプリ設定 / Graph API リフレッシュトークンのローテーション保存 |
 
 ### candidate_skills の14カテゴリ
 
-| カテゴリ | 内容・例 |
+| カテゴリキー | 内容・例 |
 |---|---|
 | `languages` | Python, TypeScript, SQL 等 |
 | `frameworks` | React, Laravel, Django 等 |
@@ -229,85 +256,33 @@ inbound-email Edge Function
 | `marketing` | SEO, SNS運用, Web広告 等 |
 | `others` | 上記以外 |
 
-### candidates テーブルの主要カラム
-
-| カラム | 説明 |
-|---|---|
-| `email` | UNIQUE。同じメールなら自動上書き更新 |
-| `skills` | フラットなスキル配列（jsonb） |
-| `raw_profile` | AI解析生データ・skillsByCategory・roles・industries等 |
-| `duplicate_flag` | 名前・スキルが類似と判断された場合 `true` |
-| `data_env` | `prod` または `demo`（論理環境分離） |
-| `created_by` | 登録者ニックネーム or `make-inbound`（自動登録） |
-| `updated_by` | 最終更新者ニックネーム |
-
----
-
-## データ環境（prod / demo）
-
-同一Supabase内でデータを論理分離。
-
-| 環境 | 用途 |
-|---|---|
-| `prod` | 本番データ（実際の人材・案件） |
-| `demo` | 営業デモ用サンプルデータ |
-
-デモ環境への切替: `?demo=<VITE_DEMO_KEY>` をURLに付けてアクセス（トグル式）。
-
----
-
-## AI プロバイダー
-
-| プロバイダー | 設定 | モデル |
-|---|---|---|
-| Gemini（デフォルト） | `VITE_AI_PROVIDER=gemini` | `gemini-2.0-flash`（`VITE_GEMINI_MODEL`で変更可） |
-| OpenAI | `VITE_AI_PROVIDER=openai` | 未実装（スタブ） |
-
-サーバー側（Edge Function）は Gemini `gemini-2.5-flash` 固定。
-
----
-
-## テスト実行
-
-```bash
-# 全テスト実行
-npm run test:run
-
-# ウォッチモード
-npm run test
-```
-
----
-
-## ディレクトリ構成
+### ディレクトリ構成
 
 ```
 akinavi-hr-ai/
 ├── src/
 │   ├── lib/
 │   │   ├── ai/               # AI プロバイダー抽象化
-│   │   │   ├── types.ts
-│   │   │   ├── geminiProvider.ts
-│   │   │   ├── openaiProvider.ts
-│   │   │   └── index.ts
+│   │   │   ├── types.ts      #   型定義（リクエスト・レスポンス）
+│   │   │   ├── geminiProvider.ts  #   Gemini 実装（マルチモーダル対応）
+│   │   │   ├── openaiProvider.ts  #   OpenAI スタブ（未実装）
+│   │   │   └── index.ts      #   プロバイダー切替ファクトリ
 │   │   ├── db/               # DB 操作
 │   │   │   ├── candidates.ts
 │   │   │   ├── projects.ts
 │   │   │   └── submissions.ts
 │   │   ├── inbound/          # メールペイロードパース
-│   │   ├── fileParser.ts     # PDF テキスト抽出・画像 base64 変換
+│   │   ├── fileParser.ts     # PDF・Excel・Word テキスト抽出、画像 base64 変換
 │   │   ├── dataEnv.ts        # prod/demo 環境切替
 │   │   └── supabase.ts
-│   ├── pages/                # 各画面
-│   └── components/           # 共通UI（DemoSeedPanel等）
+│   ├── pages/                # 各画面（Matching / Candidate / Project）
+│   └── components/           # 共通 UI（DemoSeedPanel 等）
 ├── supabase/
-│   ├── schema.sql            # DBテーブル定義・RLSポリシー
-│   ├── migrations/           # 追加マイグレーションSQL
+│   ├── schema.sql            # DB テーブル定義・RLS ポリシー
+│   ├── migrations/           # 追加マイグレーション SQL
 │   └── functions/
 │       ├── inbound-email/    # メール解析 Edge Function
-│       │   └── index.ts
-│       └── poll-email/       # Outlookポーリング Edge Function
-│           └── index.ts
+│       └── poll-email/       # Outlook ポーリング Edge Function
 └── docs/
     ├── Sales_Manual.md       # 営業担当者向け操作マニュアル
     └── test-reports/         # テストレポート
@@ -318,4 +293,4 @@ akinavi-hr-ai/
 ## 問い合わせ・引き継ぎ
 
 - GitHub: [kzmiyamura/akinavi-hr-ai](https://github.com/kzmiyamura/akinavi-hr-ai)
-- Supabase プロジェクト: `argizomylbolpqxgmvim`
+- Supabase プロジェクト ID: `argizomylbolpqxgmvim`
