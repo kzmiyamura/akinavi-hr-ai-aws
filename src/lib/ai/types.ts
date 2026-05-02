@@ -2,9 +2,16 @@
 // AI プロバイダー共通インターフェース
 // ============================================================
 
+/** Gemini multimodal に渡す画像データ */
+export interface ImageFileData {
+  mimeType: string
+  data: string // base64
+}
+
 /** 人材プロフィール解析のリクエスト */
 export interface AnalyzeCandidateRequest {
   rawText: string // メール本文や自由記述テキスト
+  imageFiles?: ImageFileData[] // 画像ファイル（スキャンPDF・写真等）
 }
 
 /** 人材スキル14カテゴリ（`candidate_skills` CHECK・Edge `inbound-email` と同一キー） */
@@ -84,6 +91,7 @@ export interface AnalyzeCandidateResponse {
 /** 案件情報解析のリクエスト */
 export interface AnalyzeProjectRequest {
   rawText: string
+  imageFiles?: ImageFileData[]
 }
 
 /** 案件情報解析のレスポンス */

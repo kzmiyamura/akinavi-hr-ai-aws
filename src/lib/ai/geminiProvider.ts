@@ -6,6 +6,7 @@ import {
   type AnalyzeProjectRequest,
   type AnalyzeProjectResponse,
   type CandidateSkillsByCategory,
+  type ImageFileData,
   type MatchRequest,
   type MatchResponse,
   emptySkillsByCategory,
@@ -26,9 +27,17 @@ function getClient(): GoogleGenerativeAI {
   return new GoogleGenerativeAI(key)
 }
 
-async function generate(prompt: string): Promise<string> {
+async function generate(prompt: string, imageFiles?: ImageFileData[]): Promise<string> {
   const genAI = getClient()
   const model = genAI.getGenerativeModel({ model: resolveModel() })
+  if (imageFiles && imageFiles.length > 0) {
+    const parts = [
+      { text: prompt },
+      ...imageFiles.map((img) => ({ inlineData: { mimeType: img.mimeType, data: img.data } })),
+    ]
+    const result = await model.generateContent(parts)
+    return result.response.text()
+  }
   const result = await model.generateContent(prompt)
   return result.response.text()
 }
@@ -142,7 +151,7 @@ ${req.rawText}
 
 JSON:`.trim()
 
-    const raw = await generate(prompt)
+    const raw = await generate(prompt, req.imageFiles)
     const data = parseJSON<AnalyzeCandidateResponse>(raw)
 
     const normalizedSbc =
@@ -213,7 +222,7 @@ ${req.rawText}
 
 JSON:`.trim()
 
-    const raw = await generate(prompt)
+    const raw = await generate(prompt, req.imageFiles)
     return parseJSON<AnalyzeProjectResponse>(raw)
   },
 

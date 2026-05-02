@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { upsertCandidate, updateCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import type { Candidate } from '../lib/db/candidates'
 import type { DataEnv } from '../lib/dataEnv'
+import type { ImageFileData } from '../lib/ai/types'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
+import { extractTextFromPDF, imageFileToBase64, getFileCategory } from '../lib/fileParser'
 
 interface SkillsByCategory {
   languages: string[]
@@ -521,7 +523,56 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null)
+  const [imageFiles, setImageFiles] = useState<ImageFileData[]>([])
+  const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([])
+  const [fileLoading, setFileLoading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    if (files.length === 0) return
+    setFileLoading(true)
+    setMessage(null)
+    try {
+      const newImages: ImageFileData[] = []
+      const newNames: string[] = []
+      for (const file of files) {
+        const category = getFileCategory(file)
+        if (category === 'pdf') {
+          const extracted = await extractTextFromPDF(file)
+          setText((prev) => prev ? `${prev}\n\n${extracted}` : extracted)
+          newNames.push(`${file.name}（テキスト抽出済み）`)
+        } else if (category === 'image') {
+          const imgData = await imageFileToBase64(file)
+          newImages.push(imgData)
+          newNames.push(file.name)
+        } else {
+          setMessage({ type: 'error', text: `${file.name} はPDFまたは画像ファイルを選択してください` })
+        }
+      }
+      setImageFiles((prev) => [...prev, ...newImages])
+      setUploadedFileNames((prev) => [...prev, ...newNames])
+    } catch {
+      setMessage({ type: 'error', text: 'ファイルの読み込みに失敗しました' })
+    } finally {
+      setFileLoading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  function removeFile(index: number) {
+    setUploadedFileNames((prev) => prev.filter((_, i) => i !== index))
+    // imageFiles はテキスト抽出済みPDFを含まないため、imageFiles のインデックスとずれる可能性がある
+    // 画像ファイルのみ削除対象のため、names と images を対応管理
+    setImageFiles((prev) => {
+      // uploadedFileNames のうち「テキスト抽出済み」でないものが imageFiles に対応する
+      const namesBefore = uploadedFileNames.slice(0, index)
+      const imageIndexOffset = namesBefore.filter((n) => !n.includes('テキスト抽出済み')).length
+      if (uploadedFileNames[index]?.includes('テキスト抽出済み')) return prev
+      return prev.filter((_, i) => i !== imageIndexOffset)
+    })
+  }
 
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
@@ -579,12 +630,17 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   const mutation = useMutation({
     mutationFn: async (rawText: string) => {
-      const analyzed = await ai.analyzeCandidate({ rawText })
+      const analyzed = await ai.analyzeCandidate({
+        rawText,
+        imageFiles: imageFiles.length > 0 ? imageFiles : undefined,
+      })
       return upsertCandidate({ analyzed, rawText, createdBy: nickname, dataEnv })
     },
     onSuccess: (candidate) => {
       queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
       setText('')
+      setImageFiles([])
+      setUploadedFileNames([])
       const msg = candidate.duplicate_flag
         ? `登録完了（重複の疑いフラグあり）: ${candidate.name}`
         : `登録完了: ${candidate.name}`
@@ -643,6 +699,34 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           rows={8}
           className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
         />
+        {/* ファイルアップロード */}
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf,image/*"
+            multiple
+            className="hidden"
+            onChange={handleFileChange}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={fileLoading || mutation.isPending}
+            className="flex items-center gap-1.5 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {fileLoading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
+            {fileLoading ? '読み込み中...' : 'PDF・画像を添付'}
+          </button>
+          {uploadedFileNames.map((name, i) => (
+            <span key={i} className="flex items-center gap-1 bg-blue-50 text-blue-700 text-xs rounded px-2 py-1">
+              {name}
+              <button onClick={() => removeFile(i)} className="hover:text-red-500 ml-0.5">
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
         {message && (
           <p className={`text-sm ${message.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
             {message.text}
@@ -650,7 +734,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         )}
         <button
           onClick={() => { setMessage(null); mutation.mutate(text) }}
-          disabled={!text.trim() || mutation.isPending}
+          disabled={(!text.trim() && imageFiles.length === 0) || mutation.isPending || fileLoading}
           className="flex items-center gap-2 bg-blue-600 text-white rounded-lg px-5 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {mutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <UserPlus size={16} />}
