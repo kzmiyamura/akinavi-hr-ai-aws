@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, Fragment, type ReactNode } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef, Fragment, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle } from 'lucide-react'
@@ -63,6 +63,10 @@ function formatMatchRunProgressLine(p: MatchRunProgress): string {
   }
   chunks.push(`全体 ${p.overall.done}/${p.overall.total}`)
   return chunks.join(' · ')
+}
+
+function bulkMatchInterruptMessage(done: number, total: number): string {
+  return `一括マッチングを中断しました（${done} / ${total} 件まで完了・保存済み）`
 }
 
 function normalizeSkillToken(s: string): string {
@@ -437,6 +441,8 @@ export function MatchingPage({
       setMatchRunProgress(next)
     })
   }, [])
+  /** 一括マッチング（全案件／全人材）のループを次の区切りで打ち切る */
+  const bulkCancelRequestedRef = useRef(false)
   const queryClient = useQueryClient()
 
   useEffect(() => {
@@ -668,6 +674,7 @@ export function MatchingPage({
 
   const bulkAllProjectsMutation = useMutation({
     mutationFn: async () => {
+      bulkCancelRequestedRef.current = false
       const plist = projects as Project[]
       const clist = candidates as Candidate[]
       const total =
@@ -681,11 +688,19 @@ export function MatchingPage({
       setMatchRunProgressNow({ overall: { done: 0, total } })
       try {
         for (let pi = 0; pi < plist.length; pi++) {
+          if (bulkCancelRequestedRef.current) {
+            setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, total) })
+            return
+          }
           const project = plist[pi]
           const projectReq = projectToMatchRequirements(project)
           const targets = pickCandidatesForProjectMatch(project, clist, matchingRunMode)
           const candTotal = targets.length
           for (let ci = 0; ci < targets.length; ci++) {
+            if (bulkCancelRequestedRef.current) {
+              setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, total) })
+              return
+            }
             const candidate = targets[ci]
             setMatchRunProgressNow({
               overall: { done, total },
@@ -741,6 +756,7 @@ export function MatchingPage({
               : `一括マッチング完了（全件モード：募集中 ${plist.length} 案件 × 全 ${clist.length} 名）`,
         })
       } finally {
+        bulkCancelRequestedRef.current = false
         setMatchRunProgressNow(null)
       }
     },
@@ -750,6 +766,7 @@ export function MatchingPage({
 
   const bulkAllCandidatesMutation = useMutation({
     mutationFn: async () => {
+      bulkCancelRequestedRef.current = false
       const plist = projects as Project[]
       const clist = candidates as Candidate[]
       const total =
@@ -763,6 +780,10 @@ export function MatchingPage({
       setMatchRunProgressNow({ overall: { done: 0, total } })
       try {
         for (let ci = 0; ci < clist.length; ci++) {
+          if (bulkCancelRequestedRef.current) {
+            setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, total) })
+            return
+          }
           const candidate = clist[ci]
           const candidateProfile = {
             name: candidate.name,
@@ -776,6 +797,10 @@ export function MatchingPage({
           const projTotal = targetProjects.length
 
           for (let pi = 0; pi < targetProjects.length; pi++) {
+            if (bulkCancelRequestedRef.current) {
+              setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, total) })
+              return
+            }
             const project = targetProjects[pi]
             setMatchRunProgressNow({
               overall: { done, total },
@@ -824,6 +849,7 @@ export function MatchingPage({
               : `一括マッチング完了（全件モード：全 ${clist.length} 名 × 募集中 ${plist.length} 案件）`,
         })
       } finally {
+        bulkCancelRequestedRef.current = false
         setMatchRunProgressNow(null)
       }
     },
@@ -957,7 +983,26 @@ export function MatchingPage({
 
       {matchRunProgress && (
         <div className="sticky top-0 z-20 text-sm text-blue-800 bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 space-y-2 shadow-sm">
-          <p className="font-semibold text-blue-900">マッチング実行中…</p>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <p className="font-semibold text-blue-900 min-w-0">マッチング実行中…</p>
+            {(bulkAllProjectsMutation.isPending || bulkAllCandidatesMutation.isPending) && (
+              <button
+                type="button"
+                title="実行中の1件のAI評価が終わったあと、次の組み合わせに進まず停止します"
+                onClick={() => {
+                  bulkCancelRequestedRef.current = true
+                }}
+                className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-800 hover:bg-red-50"
+              >
+                キャンセル
+              </button>
+            )}
+          </div>
+          {(bulkAllProjectsMutation.isPending || bulkAllCandidatesMutation.isPending) && (
+            <p className="text-xs text-blue-700/90">
+              キャンセルは、いま処理中の1件のAI応答を待った直後に有効になります。
+            </p>
+          )}
           <p className="text-blue-800/95 leading-snug break-words">{formatMatchRunProgressLine(matchRunProgress)}</p>
           {matchRunProgress.overall.total > 0 && (
             <div className="h-1.5 w-full bg-blue-100 rounded-full overflow-hidden">
@@ -990,21 +1035,35 @@ export function MatchingPage({
                   : '一括は全件モード（募集中の全案件 × 全人材）です。'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={runBulkAllProjects}
-              disabled={
-                (projects as Project[]).length === 0
-                || (candidates as Candidate[]).length === 0
-                || busy
-              }
-              className="inline-flex w-full sm:w-auto items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2.5 sm:py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-            >
-              {bulkAllProjectsMutation.isPending
-                ? <Loader2 size={14} className="animate-spin" />
-                : <RefreshCw size={14} />}
-              {matchingRunMode === 'fast' ? '全案件を再マッチング（高速）' : '全案件を再マッチング（全件）'}
-            </button>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto shrink-0">
+              <button
+                type="button"
+                onClick={runBulkAllProjects}
+                disabled={
+                  (projects as Project[]).length === 0
+                  || (candidates as Candidate[]).length === 0
+                  || busy
+                }
+                className="inline-flex w-full sm:w-auto items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2.5 sm:py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {bulkAllProjectsMutation.isPending
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <RefreshCw size={14} />}
+                {matchingRunMode === 'fast' ? '全案件を再マッチング（高速）' : '全案件を再マッチング（全件）'}
+              </button>
+              {bulkAllProjectsMutation.isPending && (
+                <button
+                  type="button"
+                  title="実行中の1件のAI評価が終わったあと、次の組み合わせに進まず停止します"
+                  onClick={() => {
+                    bulkCancelRequestedRef.current = true
+                  }}
+                  className="inline-flex w-full sm:w-auto items-center justify-center rounded-lg border border-red-200 bg-white px-3 py-2.5 sm:py-2 text-xs font-medium text-red-800 hover:bg-red-50"
+                >
+                  キャンセル
+                </button>
+              )}
+            </div>
           </div>
           {(projects as Project[]).length === 0 ? (
             <p className="text-sm text-gray-400 px-3 sm:px-6 py-8">募集中の案件がありません。</p>
@@ -1150,21 +1209,35 @@ export function MatchingPage({
                   : '一括は全件モード（全人材 × 募集中の全案件）です。'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={runBulkAllCandidates}
-              disabled={
-                (projects as Project[]).length === 0
-                || (candidates as Candidate[]).length === 0
-                || busy
-              }
-              className="inline-flex w-full sm:w-auto items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2.5 sm:py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-            >
-              {bulkAllCandidatesMutation.isPending
-                ? <Loader2 size={14} className="animate-spin" />
-                : <RefreshCw size={14} />}
-              {matchingRunMode === 'fast' ? '全人材を再マッチング（高速）' : '全人材を再マッチング（全件）'}
-            </button>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto shrink-0">
+              <button
+                type="button"
+                onClick={runBulkAllCandidates}
+                disabled={
+                  (projects as Project[]).length === 0
+                  || (candidates as Candidate[]).length === 0
+                  || busy
+                }
+                className="inline-flex w-full sm:w-auto items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2.5 sm:py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {bulkAllCandidatesMutation.isPending
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <RefreshCw size={14} />}
+                {matchingRunMode === 'fast' ? '全人材を再マッチング（高速）' : '全人材を再マッチング（全件）'}
+              </button>
+              {bulkAllCandidatesMutation.isPending && (
+                <button
+                  type="button"
+                  title="実行中の1件のAI評価が終わったあと、次の組み合わせに進まず停止します"
+                  onClick={() => {
+                    bulkCancelRequestedRef.current = true
+                  }}
+                  className="inline-flex w-full sm:w-auto items-center justify-center rounded-lg border border-red-200 bg-white px-3 py-2.5 sm:py-2 text-xs font-medium text-red-800 hover:bg-red-50"
+                >
+                  キャンセル
+                </button>
+              )}
+            </div>
           </div>
           {(candidates as Candidate[]).length === 0 ? (
             <p className="text-sm text-gray-400 px-3 sm:px-6 py-8">登録人材がありません。</p>
