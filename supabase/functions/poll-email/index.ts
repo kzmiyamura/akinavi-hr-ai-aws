@@ -26,20 +26,13 @@ const INBOUND_URL = `${SUPABASE_URL}/functions/v1/inbound-email`
  * inbound-email 呼び出し用の JWT を取得する
  */
 function resolveCallKey(): string {
-  // 新形式: {"default": "<jwt>"} または {"<name>": "<jwt>"}
-  const secretKeys = Deno.env.get('SUPABASE_SECRET_KEYS') ?? ''
-  if (secretKeys) {
-    try {
-      const parsed = JSON.parse(secretKeys)
-      if (typeof parsed === 'object' && parsed !== null) {
-        const first = Object.values(parsed)[0]
-        if (typeof first === 'string' && first) return first
-      }
-    } catch { /* JSON でなければ素の文字列として使用 */ }
-    if (secretKeys) return secretKeys
+  // JWT形式（eyJ...）のキーを優先して使う
+  // SUPABASE_SECRET_KEYS は sb_secret_ 形式でJWTではないためスキップ
+  for (const key of ['SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_ANON_KEY']) {
+    const val = Deno.env.get(key) ?? ''
+    if (val.startsWith('eyJ')) return val
   }
-  // 旧形式フォールバック
-  return SERVICE_ROLE_KEY || Deno.env.get('SUPABASE_ANON_KEY') || ''
+  return ''
 }
 
 const CALL_KEY = resolveCallKey()
