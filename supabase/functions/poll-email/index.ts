@@ -169,6 +169,17 @@ async function markAsRead(accessToken: string, messageId: string): Promise<void>
   })
 }
 
+async function markAsUnread(accessToken: string, messageId: string): Promise<void> {
+  await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization:  `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ isRead: false }),
+  })
+}
+
 // ---- Microsoft Graph: 添付ファイル取得 ----
 
 interface GraphAttachment {
@@ -249,9 +260,10 @@ async function pollAccount(
 
     for (const email of emails) {
       try {
-        // 先に既読マーク → 二重処理防止
+        // 1. 先に既読マーク（二重処理防止）
         await markAsRead(accessToken, email.id)
 
+        // 2. 添付取得 → inbound-email へ渡す
         const attachments = email.hasAttachments
           ? await fetchAttachments(accessToken, email.id)
           : []
@@ -260,9 +272,16 @@ async function pollAccount(
         processed++
         console.log(`[poll] 処理完了: "${email.subject}" (${config.configKey})`)
       } catch (e) {
+        // 3. 失敗したら未読に戻して次回ポーリングで再試行
         const msg = `メール処理失敗 "${email.subject}": ${String(e)}`
         console.error(`[poll] ${msg}`)
         errors.push(msg)
+        try {
+          await markAsUnread(accessToken, email.id)
+          console.log(`[poll] 未読に戻しました: "${email.subject}"`)
+        } catch (unreadErr) {
+          console.error(`[poll] 未読戻し失敗: ${String(unreadErr)}`)
+        }
       }
     }
 
