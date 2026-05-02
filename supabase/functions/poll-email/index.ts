@@ -44,6 +44,12 @@ function resolveCallKey(): string {
 
 const CALL_KEY = resolveCallKey()
 
+// デバッグ用（確認後削除）
+console.log('[poll-email] CALL_KEY 先頭10文字:', CALL_KEY.slice(0, 10) || '(空)')
+console.log('[poll-email] SUPABASE_SECRET_KEYS 存在:', !!Deno.env.get('SUPABASE_SECRET_KEYS'))
+console.log('[poll-email] SUPABASE_SERVICE_ROLE_KEY 存在:', !!Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))
+console.log('[poll-email] SUPABASE_ANON_KEY 存在:', !!Deno.env.get('SUPABASE_ANON_KEY'))
+
 // 1回のポーリングで取得するメール上限（タイムアウト対策）
 const MAX_EMAILS_PER_ACCOUNT = 3
 
