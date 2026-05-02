@@ -2,7 +2,7 @@
 // Runtime: Deno / タイムアウト: 最大150秒（Vercel Hobbyの10秒制限を回避）
 // POST body (form-urlencoded or JSON):
 //   type, from, subject, body
-//   mode: prod | demo（省略時は prod。Make からデモ取り込み時は demo）
+//   mode: prod | demo | dev（dev は demo と同じ。省略時は prod）
 //   attachment[data], attachment[mimeType], attachment[name]
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -81,10 +81,10 @@ function strOrNull(value: unknown): string | null {
   return s.length > 0 ? s : null
 }
 
-/** Make 等からの mode（prod | demo）。不正・省略は prod */
+/** Make 等からの mode（prod | demo | dev）。dev は demo の別名。不正・省略は prod */
 function resolveInboundDataEnv(modeRaw: unknown): 'prod' | 'demo' {
   const s = String(modeRaw ?? '').trim().toLowerCase()
-  if (s === 'demo') return 'demo'
+  if (s === 'demo' || s === 'dev') return 'demo'
   return 'prod'
 }
 
