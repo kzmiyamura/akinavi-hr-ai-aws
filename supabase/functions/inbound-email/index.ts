@@ -535,6 +535,12 @@ Deno.serve(async (req: Request) => {
       rawType: raw.type ?? '(unset)',
       rawMode: raw.mode ?? '(unset)',
     })
+    console.log('[STEP0 フィールド長]', {
+      raw_body_len: (raw.body ?? '').length,
+      picked_plain_len: pickEmailPlainBody(raw).length,
+      attachment_data_len: (raw['attachment[data]'] ?? '').length,
+      attachment_mime: (raw['attachment[mimeType]'] ?? '').slice(0, 80),
+    })
 
     const inboundDataEnv = resolveInboundDataEnv(raw.mode)
     console.log('[inbound] data_env=', inboundDataEnv, 'mode=', raw.mode ?? '')
