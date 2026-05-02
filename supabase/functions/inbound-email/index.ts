@@ -259,6 +259,11 @@ function isInboundRelevanceCheckEnabled(): boolean {
   return (Deno.env.get('INBOUND_RELEVANCE_CHECK') ?? 'true').toLowerCase() !== 'false'
 }
 
+/** 1 リクエストを追跡（Supabase ログで rid で検索） */
+function pipe(rid: string, phase: string, detail?: Record<string, unknown>) {
+  console.log(`[PIPE] rid=${rid} phase=${phase}`, detail ?? {})
+}
+
 /**
  * 無関係メールを本解析の前に弾く（Gemini 1 回・短文）。
  * 例外・タイムアウト・パース失敗時は true（取り込み続行）に倒す。
@@ -270,6 +275,7 @@ async function classifyInboundRelevance(input: {
   inboundType: string
   attachmentCount: number
   attachmentMimeTypes: string[]
+  traceRid?: string
 }): Promise<{ relevant: boolean; durationMs: number }> {
   const prompt = `
 あなたはメール仕分け担当です。次のメールが「この HR / 案件マッチングシステムへの取り込み対象」かだけ判定してください。
@@ -295,12 +301,15 @@ JSON のみ返す（説明・コードブロック禁止）:
 {"relevant": true または false}
 `.trim()
 
+  const rid = input.traceRid ?? '—'
+  pipe(rid, 'relevance_gemini_wait', { inboundType: input.inboundType })
+
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
   const model = genAI.getGenerativeModel({ model: AI_MODEL, generationConfig: { temperature: 0 } })
   const TIMEOUT_MS = 15_000
   const start = Date.now()
   const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`関連度判定タイムアウト (${TIMEOUT_MS}ms)`)), TIMEOUT_MS)
+    setTimeout(() => reject(new Error(`関連度判定タイムアウト (${TIMEOUT_MS}ms) rid=${rid} phase=relevance_gemini`)), TIMEOUT_MS)
   )
   const res = await Promise.race([model.generateContent(prompt), timeoutPromise])
   const durationMs = Date.now() - start
@@ -325,6 +334,8 @@ async function generateJSON(
   /** 1回目が空/失敗のとき追加で試す回数を含む総試行回数（例: 2 なら最大2回） */
   maxRetries = 2,
   timeoutMs?: number,
+  /** ログ用: どの Gemini 呼び出しか（タイムアウト時も識別） */
+  geminiTrace?: { rid: string; phase: string },
 ): Promise<{ result: unknown; durationMs: number }> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
   const model = genAI.getGenerativeModel({ model: AI_MODEL, generationConfig: { temperature: 0 } })
@@ -338,18 +349,24 @@ async function generateJSON(
   parts.push({ text: prompt })
 
   const GEMINI_TIMEOUT_MS = resolveInboundGeminiTimeoutMs(kind, timeoutMs)
+  const gt = geminiTrace
+  const logP = (msg: string, extra?: string) =>
+    gt ? `[inbound ${gt.rid}] [${gt.phase}] ${msg}${extra ?? ''}` : `[generateJSON] ${msg}${extra ?? ''}`
 
   const start = Date.now()
   let lastError: unknown
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`[generateJSON] attempt ${attempt} 開始`)
+      console.log(logP(`gemini attempt ${attempt} 開始`, ` timeoutMs=${GEMINI_TIMEOUT_MS}`))
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Gemini APIタイムアウト (${GEMINI_TIMEOUT_MS}ms)`)), GEMINI_TIMEOUT_MS)
+        setTimeout(() =>
+          reject(new Error(
+            `Gemini APIタイムアウト (${GEMINI_TIMEOUT_MS}ms) rid=${gt?.rid ?? '?'} phase=${gt?.phase ?? kind}`,
+          )), GEMINI_TIMEOUT_MS)
       )
       const res = await Promise.race([model.generateContent(parts), timeoutPromise])
       const durationMs = Date.now() - start
-      console.log(`[generateJSON] attempt ${attempt} 完了 durationMs=${durationMs}`)
+      console.log(logP(`gemini attempt ${attempt} 完了 durationMs=${durationMs}`))
       const raw = res.response.text()
       const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
       const result = JSON.parse(cleaned)
@@ -365,20 +382,20 @@ async function generateJSON(
 
       const isEmpty = isCandidateEmpty || isProjectEmpty
       if (isEmpty && attempt < maxRetries) {
-        console.warn(`[generateJSON] attempt ${attempt}: 空結果のためリトライ`)
+        console.warn(logP(`attempt ${attempt}: 空結果のためリトライ`))
         continue
       }
 
       return { result, durationMs }
     } catch (e) {
       lastError = e
-      console.warn(`[generateJSON] attempt ${attempt} 失敗 elapsed=${Date.now() - start}ms`, String(e))
+      console.warn(logP(`attempt ${attempt} 失敗 elapsed=${Date.now() - start}ms`), String(e))
       // API タイムアウトは 2 回目まで待つと Make 40s を大幅超過するためリトライしない
       if (String(e).includes('Gemini APIタイムアウト')) {
         throw e
       }
       if (attempt < maxRetries) {
-        console.warn(`[generateJSON] attempt ${attempt}: リトライします`)
+        console.warn(logP(`attempt ${attempt}: リトライします`))
       }
     }
   }
@@ -396,6 +413,7 @@ const AUTO_MATCH_MAX_CANDIDATES = 40
 async function matchCandidateToProject(
   candidateProfile: Record<string, unknown>,
   projectRequirements: Record<string, unknown>,
+  trace?: { rid: string },
 ): Promise<MatchResult> {
   const prompt = `
 あなたはマッチング判定AIです。以下の「人材」と「案件」を読み、マッチング結果を JSON だけで返してください。
@@ -414,8 +432,14 @@ ${JSON.stringify(projectRequirements, null, 2)}
 
 JSON:`.trim()
 
+  const rid = trace?.rid ?? '—'
+  pipe(rid, 'gemini_auto_match_pair')
+
   // match は軽量・高速優先（長いリトライはMakeのHTTPタイムアウトで無駄になりやすい）
-  const { result } = await generateJSON(prompt, [], 'match', 1, 25_000)
+  const { result } = await generateJSON(prompt, [], 'match', 1, 25_000, {
+    rid,
+    phase: 'gemini_auto_match',
+  })
   const r = result as Partial<MatchResult>
   const score = typeof r.score === 'number' ? r.score : Number(r.score ?? 0)
   return {
@@ -636,7 +660,15 @@ Deno.serve(async (req: Request) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  let traceRid = ''
+  /** 最後に「ここまで進んだ」状態（FATAL 時に記録） */
+  let tracePhase = 'none'
+
   try {
+    traceRid = crypto.randomUUID().slice(0, 8)
+    tracePhase = 'parse_raw'
+    pipe(traceRid, tracePhase, { method: req.method })
+
     // form-urlencoded と JSON 両対応
     const contentType = req.headers.get('content-type') ?? ''
     let raw: Record<string, string> = {}
@@ -685,6 +717,7 @@ Deno.serve(async (req: Request) => {
       queryHasMode = u.searchParams.has('mode') || u.searchParams.has('data_env')
     } catch { /* ignore */ }
     console.log('[STEP0 受信メタ]', {
+      rid: traceRid,
       method: req.method,
       contentType,
       rawKeyCount: rawKeys.length,
@@ -695,6 +728,7 @@ Deno.serve(async (req: Request) => {
       queryHasMode,
     })
     console.log('[STEP0 フィールド長]', {
+      rid: traceRid,
       raw_body_len: (raw.body ?? '').length,
       picked_plain_len: pickEmailPlainBody(raw).length,
       attachment_data_len: (raw['attachment[data]'] ?? '').length,
@@ -702,7 +736,8 @@ Deno.serve(async (req: Request) => {
     })
 
     const inboundDataEnv = resolveInboundDataEnv(pickedMode)
-    console.log('[inbound] data_env=', inboundDataEnv, 'pickedMode=', pickedMode ?? '', 'raw.mode=', raw.mode ?? '')
+    tracePhase = 'resolved_env_type'
+    console.log('[inbound] data_env=', inboundDataEnv, 'pickedMode=', pickedMode ?? '', 'raw.mode=', raw.mode ?? '', 'rid=', traceRid)
 
     const type: string = normalizeInboundType(raw.type)
     const from: string = parseFrom(raw.from ?? '')
@@ -745,7 +780,9 @@ Deno.serve(async (req: Request) => {
     const t0 = Date.now()
     const elapsed = () => `${Date.now() - t0}ms`
 
+    tracePhase = 'step1_body_normalized'
     console.log('[STEP1 受信データ]', {
+      rid: traceRid,
       type, from, subject,
       bodyLength: body.length,
       attachments: attachments.map(a => ({ name: a.name, mimeType: a.mimeType, dataLength: a.data?.length ?? 0 })),
@@ -753,6 +790,7 @@ Deno.serve(async (req: Request) => {
 
     const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
     console.log('[STEP2 添付フィルター]', {
+      rid: traceRid,
       total: attachments.length,
       supported: supportedAttachments.length,
       filtered: attachments.filter(a => !SUPPORTED_MIME.includes(a.mimeType)).map(a => a.mimeType),
@@ -778,11 +816,14 @@ Deno.serve(async (req: Request) => {
         }
       }
     }
+    tracePhase = 'step3_office_done'
     console.log(`[STEP3 Office完了] elapsed=${elapsed()}`)
 
     if (!body.trim() && attachments.length === 0) {
+      tracePhase = 'skip_empty_body_attachments'
       // Make.com は HTTP エラーでシナリオが止まるため、明らかな空メールは 200 でスキップし後続フローを継続させる
       console.warn('[EMPTY_BODY_AND_ATTACHMENTS] 取り込みスキップ（200）', {
+        rid: traceRid,
         picked_plain_len: pickedPlain.length,
         rawBody_len: rawBody.length,
         body_final_len: body.length,
@@ -810,7 +851,8 @@ Deno.serve(async (req: Request) => {
     }
 
     if (isInboundRelevanceCheckEnabled()) {
-      console.log('[RELEVANCE] 判定開始', { type, inboundDataEnv })
+      tracePhase = 'relevance_check'
+      pipe(traceRid, tracePhase, { type, inboundDataEnv })
       try {
         const { relevant, durationMs } = await classifyInboundRelevance({
           subject,
@@ -819,10 +861,17 @@ Deno.serve(async (req: Request) => {
           inboundType: type,
           attachmentCount: attachments.length,
           attachmentMimeTypes: attachments.map((a) => a.mimeType || ''),
+          traceRid,
         })
-        console.log('[RELEVANCE] 判定結果', { relevant, durationMs })
+        tracePhase = 'relevance_done'
+        console.log('[RELEVANCE] 判定結果', { rid: traceRid, relevant, durationMs })
         if (!relevant) {
-          console.warn('[RELEVANCE] 無関係のためスキップ（200）', { subject, from: from.slice(0, 120) })
+          tracePhase = 'skip_not_relevant'
+          console.warn('[RELEVANCE] 無関係のためスキップ（200）', {
+            rid: traceRid,
+            subject,
+            from: from.slice(0, 120),
+          })
           return new Response(
             JSON.stringify({
               ok: true,
@@ -843,23 +892,31 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    tracePhase = 'pre_supabase'
     // STEP4 がログに出ない場合の切り分け: createClient 前後と fetchGoogleLinks 内で止まるかを分離する
     console.log('[STEP3→4間] emptyチェック通過', {
+      rid: traceRid,
       bodyLen: body.trim().length,
       attachmentCount: attachments.length,
       type,
       inboundDataEnv,
       elapsed: elapsed(),
     })
-    console.log('[STEP3→4間] Supabase createClient 直前')
+    tracePhase = 'supabase_connect'
+    pipe(traceRid, tracePhase)
+    console.log('[STEP3→4間] Supabase createClient 直前', { rid: traceRid })
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
-    console.log('[STEP3→4間] Supabase createClient 完了')
+    console.log('[STEP3→4間] Supabase createClient 完了', { rid: traceRid })
 
+    tracePhase = 'drive_links_fetch'
+    pipe(traceRid, tracePhase)
     // Google Drive / Sheets / Docs リンクの取得
-    console.log(`[STEP4 DriveLink開始] elapsed=${elapsed()}`)
+    console.log(`[STEP4 DriveLink開始] elapsed=${elapsed()}`, { rid: traceRid })
     const { textContents: driveTexts, pdfAttachments: drivePdfs } = await fetchGoogleLinks(body)
     const allAttachments = [...supportedAttachments, ...drivePdfs]
+    tracePhase = 'drive_links_done'
     console.log('[STEP4 DriveLink完了]', {
+      rid: traceRid,
       texts: driveTexts.map(t => ({ label: t.label, length: t.content.length })),
       pdfs: drivePdfs.map(p => p.name),
       elapsed: elapsed(),
@@ -1005,9 +1062,15 @@ ${body.slice(0, 3000)}${driveTextSection}
 
 JSON:`.trim()
 
-      console.log(`[STEP5 AI呼び出し開始] elapsed=${elapsed()}`)
-      const { result, durationMs } = await generateJSON(prompt, allAttachments, 'candidate')
-      console.log(`[STEP5 AI呼び出し完了] durationMs=${durationMs} elapsed=${elapsed()}`)
+      tracePhase = 'gemini_candidate_extract'
+      pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
+      console.log(`[STEP5 AI呼び出し開始] elapsed=${elapsed()}`, { rid: traceRid })
+      const { result, durationMs } = await generateJSON(prompt, allAttachments, 'candidate', 2, undefined, {
+        rid: traceRid,
+        phase: 'gemini_candidate_extract',
+      })
+      tracePhase = 'gemini_candidate_done'
+      console.log(`[STEP5 AI呼び出し完了] durationMs=${durationMs} elapsed=${elapsed()}`, { rid: traceRid })
       const analyzed = result as {
         name: string; email: string | null; phone: string | null
         skills: string[]
@@ -1186,9 +1249,15 @@ ${body.slice(0, 3000)}${driveTextSection}
 
 JSON:`.trim()
 
-      console.log(`[STEP5 AI呼び出し開始 project] elapsed=${elapsed()}`)
-      const { result, durationMs } = await generateJSON(prompt, allAttachments, 'project')
-      console.log(`[STEP5 AI呼び出し完了 project] durationMs=${durationMs} elapsed=${elapsed()}`)
+      tracePhase = 'gemini_project_extract'
+      pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
+      console.log(`[STEP5 AI呼び出し開始 project] elapsed=${elapsed()}`, { rid: traceRid })
+      const { result, durationMs } = await generateJSON(prompt, allAttachments, 'project', 2, undefined, {
+        rid: traceRid,
+        phase: 'gemini_project_extract',
+      })
+      tracePhase = 'gemini_project_done'
+      console.log(`[STEP5 AI呼び出し完了 project] durationMs=${durationMs} elapsed=${elapsed()}`, { rid: traceRid })
 
       const projectObjects = normalizeToProjectObjects(result)
       if (projectObjects.length === 0) {
@@ -1337,7 +1406,10 @@ JSON:`.trim()
                 summary: typeof c.raw_profile?.summary === 'string' ? c.raw_profile.summary : '',
               }
 
-              const mr = await matchCandidateToProject(candidateProfile, projectRequirements)
+              tracePhase = 'gemini_auto_match_loop'
+              const mr = await matchCandidateToProject(candidateProfile, projectRequirements, {
+                rid: traceRid,
+              })
 
               const { error: upsertErr } = await supabase
                 .from('submissions')
@@ -1416,7 +1488,12 @@ JSON:`.trim()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     const stack = err instanceof Error ? err.stack : undefined
-    console.error('[inbound-email] エラー:', message, stack ?? '')
+    console.error('[inbound-email] FATAL', {
+      rid: traceRid || '(unset)',
+      phase: tracePhase,
+      error: message,
+      stack: stack ?? '',
+    })
 
     try {
       const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
