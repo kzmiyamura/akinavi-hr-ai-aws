@@ -28,7 +28,7 @@ const INBOUND_URL = `${SUPABASE_URL}/functions/v1/inbound-email`
 function resolveCallKey(): string {
   // JWT形式（eyJ...）のキーを優先して使う
   // SUPABASE_SECRET_KEYS は sb_secret_ 形式でJWTではないためスキップ
-  for (const key of ['SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_ANON_KEY']) {
+  for (const key of ['INBOUND_CALL_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_ANON_KEY']) {
     const val = Deno.env.get(key) ?? ''
     if (val.startsWith('eyJ')) return val
   }
