@@ -931,7 +931,18 @@ JSON:`.trim()
         : await supabase.from('candidates').insert(dbPayload).select().single()
 
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
+      const savedEnv = (data as { data_env?: string }).data_env
+      const savedEmail = (data as { email?: string | null }).email
       console.log(`[STEP7 DB保存完了] elapsed=${elapsed()}`)
+      // 原因究明用: リクエスト解決値 inboundDataEnv と、実際に返却された行の data_env が一致するか必ず照合する
+      console.log('[STEP7 DB確定] 人材行', {
+        candidate_id: data.id,
+        data_env_intended: inboundDataEnv,
+        data_env_in_row: savedEnv ?? '(null/undefined)',
+        match: savedEnv === inboundDataEnv,
+        email_in_row: savedEmail == null || savedEmail === '' ? 'null' : 'set',
+        upsert_path: email ? 'upsert(onConflict:email)' : 'insert',
+      })
 
       // candidate_skills に一括INSERT
       const validCategories = [
