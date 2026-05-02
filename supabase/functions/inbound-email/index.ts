@@ -98,6 +98,36 @@ function normalizeInboundType(rawType: string | undefined): string {
   return 'candidate'
 }
 
+/** Make / Outlook 連携で本文フィールド名が揃わない場合のよくある別名 */
+function pickEmailPlainBody(raw: Record<string, string>): string {
+  const keys = [
+    'body',
+    'text',
+    'plainText',
+    'bodyText',
+    'bodyPreview',
+    'body_preview',
+    'emailBody',
+    'message',
+    'content',
+    'snippet',
+  ]
+  for (const k of keys) {
+    const v = raw[k]
+    if (v != null && String(v).trim().length > 0) return String(v)
+  }
+  return ''
+}
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  const chunk = 0x8000
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunk, bytes.length)))
+  }
+  return btoa(bin)
+}
+
 /** AI の skills 配列を trim・重複除去（大文字小文字無視） */
 function dedupeTrimmedSkills(skills: unknown): string[] {
   if (!Array.isArray(skills)) return []
@@ -466,12 +496,45 @@ Deno.serve(async (req: Request) => {
       const text = await req.text()
       const params = new URLSearchParams(text)
       for (const [k, v] of params.entries()) raw[k] = v
+    } else if (contentType.includes('multipart/form-data')) {
+      const fd = await req.formData()
+      for (const [k, v] of fd.entries()) {
+        if (typeof v === 'string') {
+          raw[k] = v
+        } else if (v instanceof Blob) {
+          const ab = await v.arrayBuffer()
+          const b64 = uint8ToBase64(new Uint8Array(ab))
+          const mime = v.type || 'application/octet-stream'
+          const fileName = v instanceof File ? v.name : k
+          console.log('[multipart] file field', {
+            field: k,
+            bytes: ab.byteLength,
+            mime,
+            fileName,
+          })
+          if (!raw['attachment[data]']) {
+            raw['attachment[data]'] = b64
+            raw['attachment[mimeType]'] = mime
+            raw['attachment[name]'] = fileName || k
+          }
+        }
+      }
     } else {
       const j = (await req.json()) as Record<string, unknown>
       for (const [k, v] of Object.entries(j)) {
-        raw[k] = v == null ? '' : String(v)
+        raw[k] = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)
       }
     }
+
+    const rawKeys = Object.keys(raw).sort()
+    console.log('[STEP0 受信メタ]', {
+      method: req.method,
+      contentType,
+      rawKeyCount: rawKeys.length,
+      rawKeys,
+      rawType: raw.type ?? '(unset)',
+      rawMode: raw.mode ?? '(unset)',
+    })
 
     const inboundDataEnv = resolveInboundDataEnv(raw.mode)
     console.log('[inbound] data_env=', inboundDataEnv, 'mode=', raw.mode ?? '')
@@ -479,7 +542,7 @@ Deno.serve(async (req: Request) => {
     const type: string = normalizeInboundType(raw.type)
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
-    const rawBody: string = raw.body ?? ''
+    const rawBody: string = pickEmailPlainBody(raw)
     // HTMLタグが含まれている場合は除去してプレーンテキスト化
     const body: string = rawBody.includes('<html') || rawBody.includes('<div') || rawBody.includes('<p ')
       ? stripHtml(rawBody)
@@ -539,9 +602,22 @@ Deno.serve(async (req: Request) => {
     console.log(`[STEP3 Office完了] elapsed=${elapsed()}`)
 
     if (!body.trim() && attachments.length === 0) {
-      return new Response(JSON.stringify({ error: 'メール本文と添付ファイルが両方空です' }), {
-        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+      return new Response(
+        JSON.stringify({
+          error: 'メール本文と添付ファイルが両方空です',
+          code: 'EMPTY_BODY_AND_ATTACHMENTS',
+          hint:
+            'Make のボディに本文が入っているか確認してください。フィールド名は body / text / plainText 等。multipart のファイルは attachment[data] 形式でも可。',
+          receivedKeys: rawKeys,
+          bodyLengthAfterPick: body.trim().length,
+          type,
+          inboundDataEnv,
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      )
     }
 
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
@@ -1080,9 +1156,18 @@ JSON:`.trim()
       )
     }
 
-    return new Response(JSON.stringify({ error: `不明な type: ${type}` }), {
-      status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
+    return new Response(
+      JSON.stringify({
+        error: `不明な type: ${type}`,
+        code: 'UNKNOWN_TYPE',
+        hint: 'type は candidate / human / project のいずれか（省略時は candidate）',
+        receivedKeys: rawKeys,
+      }),
+      {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    )
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
