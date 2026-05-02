@@ -45,7 +45,7 @@ export function writeStoredDemoUnlock(on: boolean) {
 export function parseDemoKeyFromLocation(): string | null {
   try {
     const q = new URLSearchParams(window.location.search)
-    const k = q.get('demoKey') ?? q.get('demo_key')
+    const k = q.get('demo') ?? q.get('demoKey') ?? q.get('demo_key')
     const s = (k ?? '').trim()
     return s.length > 0 ? s : null
   } catch {
@@ -63,11 +63,11 @@ export function isDemoKeyValid(key: string): boolean {
   return key.trim() === expected
 }
 
-/** `?demoKey=` が無い・空 */
+/** `?demo=`（または旧 `demoKey` / `demo_key`）が無い・空 */
 export type DemoKeyUrlResult = 'absent' | 'invalid' | 'unlocked' | 'locked'
 
 /**
- * 正しい demoKey が URL にあるときだけ処理する。
+ * 正しい鍵が URL クエリにあるときだけ処理する（推奨: `?demo=鍵`）。
  * - 未解除 → 解除（デモ／本番を選べるようになる）
  * - 解除済み → ロック（本番のみ・デモは選べない）
  * トグルは同一ブラウザの localStorage と連動。

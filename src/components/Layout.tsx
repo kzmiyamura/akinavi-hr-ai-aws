@@ -10,7 +10,7 @@ interface Props {
   nickname: string
   onClearNickname: () => void
   dataEnv: DataEnv
-  /** デモ／本番の切替を出す（正しい ?demoKey= のトグルでオン・オフ） */
+  /** デモ／本番の切替を出す（正しい ?demo= のトグルでオン・オフ） */
   demoUiEnabled: boolean
   onChangeDataEnv: (env: DataEnv) => void
   children: React.ReactNode
@@ -47,7 +47,7 @@ export function Layout({
                   <select
                     value={dataEnv}
                     onChange={(e) => onChangeDataEnv(e.target.value as DataEnv)}
-                    title="参照するデータ環境。同じ ?demoKey= 付きURLでもう一度開くと、デモ切替をオフにして本番のみ表示に戻ります"
+                    title="参照するデータ環境。同じ ?demo= 付きURLでもう一度開くと、デモ切替をオフにして本番のみ表示に戻ります"
                     className="border border-gray-200 rounded-lg px-2 py-1 text-xs sm:text-sm bg-white text-gray-700"
                   >
                     <option value="prod">本番相当（prod）</option>

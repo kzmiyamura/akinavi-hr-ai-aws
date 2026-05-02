@@ -26,7 +26,14 @@ type DetailView =
 function stripDemoKeyQueryParams() {
   try {
     const url = new URL(window.location.href)
-    if (!url.searchParams.has('demoKey') && !url.searchParams.has('demo_key')) return
+    if (
+      !url.searchParams.has('demo') &&
+      !url.searchParams.has('demoKey') &&
+      !url.searchParams.has('demo_key')
+    ) {
+      return
+    }
+    url.searchParams.delete('demo')
     url.searchParams.delete('demoKey')
     url.searchParams.delete('demo_key')
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
