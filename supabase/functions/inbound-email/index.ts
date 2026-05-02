@@ -7,6 +7,8 @@
 //   ヘッダ X-Data-Env / X-Mode も補完として利用可
 //   attachment[data], attachment[mimeType], attachment[name]
 //   本文・添付とも空: HTTP 200 + skipped（Make 継続）。DB は書かない。
+//   INBOUND_RELEVANCE_CHECK: false で事前の無関係メール判定を無効化（既定は true）
+//   GEMINI_INBOUND_TIMEOUT_MS: candidate/project の1回あたり ms（未設定時 38000。長い解析は Make の HTTP タイムアウトも延長）
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
@@ -240,6 +242,82 @@ function normalizeToProjectObjects(result: unknown): Record<string, unknown>[] {
 
 const AI_MODEL = 'gemini-2.5-flash'
 
+/** candidate/project の 1 回あたり上限（ms）。Supabase Secrets: GEMINI_INBOUND_TIMEOUT_MS（例: 38000） */
+function resolveInboundGeminiTimeoutMs(kind: 'candidate' | 'project' | 'match', override?: number): number {
+  if (override != null) return override
+  if (kind === 'match') return 25_000
+  const raw = (Deno.env.get('GEMINI_INBOUND_TIMEOUT_MS') ?? '').trim()
+  if (/^\d+$/.test(raw)) {
+    const n = parseInt(raw, 10)
+    return Math.min(120_000, Math.max(15_000, n))
+  }
+  // Make.com HTTP 既定 40s 超えにくいようやや短め（長い解析は Make 側タイムアウト延長も推奨）
+  return 38_000
+}
+
+function isInboundRelevanceCheckEnabled(): boolean {
+  return (Deno.env.get('INBOUND_RELEVANCE_CHECK') ?? 'true').toLowerCase() !== 'false'
+}
+
+/**
+ * 無関係メールを本解析の前に弾く（Gemini 1 回・短文）。
+ * 例外・タイムアウト・パース失敗時は true（取り込み続行）に倒す。
+ */
+async function classifyInboundRelevance(input: {
+  subject: string
+  from: string
+  body: string
+  inboundType: string
+  attachmentCount: number
+  attachmentMimeTypes: string[]
+}): Promise<{ relevant: boolean; durationMs: number }> {
+  const prompt = `
+あなたはメール仕分け担当です。次のメールが「この HR / 案件マッチングシステムへの取り込み対象」かだけ判定してください。
+
+取り込み対象（relevant: true）の例:
+- 人材: 履歴・経歴・スキル・応募・職務経歴書・プロフィールなど
+- 案件: 業務委託・派遣・開発募集・単価・必須スキル・期間・募集要件など
+- 本文が短く、Google Drive / Sheets / Docs の共有リンクのみでも、取り込み前提で true（リンク先に資料がある想定）
+
+取り込み不要（relevant: false）の例:
+- 社内雑談、会議招集のみ、ニュースレター、一方向広告、システム自動通知・エラー通知、挨拶のみ、明らかに無関係な連絡
+
+参考: Make から渡された type は「${input.inboundType}」。内容と矛盾する場合は本文を優先。
+添付: ${input.attachmentCount} 件。MIME: ${input.attachmentMimeTypes.length ? input.attachmentMimeTypes.join(', ') : 'なし'}
+
+件名: ${input.subject}
+差出人: ${input.from}
+
+本文（冒頭・最大8000文字）:
+${input.body.slice(0, 8000)}
+
+JSON のみ返す（説明・コードブロック禁止）:
+{"relevant": true または false}
+`.trim()
+
+  const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
+  const model = genAI.getGenerativeModel({ model: AI_MODEL, generationConfig: { temperature: 0 } })
+  const TIMEOUT_MS = 15_000
+  const start = Date.now()
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`関連度判定タイムアウト (${TIMEOUT_MS}ms)`)), TIMEOUT_MS)
+  )
+  const res = await Promise.race([model.generateContent(prompt), timeoutPromise])
+  const durationMs = Date.now() - start
+  const raw = res.response.text()
+  const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+  let parsed: { relevant?: unknown }
+  try {
+    parsed = JSON.parse(cleaned) as { relevant?: unknown }
+  } catch {
+    console.warn('[RELEVANCE] JSON パース失敗、続行扱い', cleaned.slice(0, 200))
+    return { relevant: true, durationMs }
+  }
+  const r = parsed.relevant
+  const relevant = typeof r === 'boolean' ? r : true
+  return { relevant, durationMs }
+}
+
 async function generateJSON(
   prompt: string,
   attachments: Attachment[],
@@ -259,9 +337,7 @@ async function generateJSON(
   }
   parts.push({ text: prompt })
 
-  // Make.com 側の HTTP タイムアウト（デフォルト40秒）に引っかかりやすいため、
-  // match は短め、candidate/project は従来通り長めにする
-  const GEMINI_TIMEOUT_MS = timeoutMs ?? (kind === 'match' ? 25_000 : 50_000)
+  const GEMINI_TIMEOUT_MS = resolveInboundGeminiTimeoutMs(kind, timeoutMs)
 
   const start = Date.now()
   let lastError: unknown
@@ -297,6 +373,10 @@ async function generateJSON(
     } catch (e) {
       lastError = e
       console.warn(`[generateJSON] attempt ${attempt} 失敗 elapsed=${Date.now() - start}ms`, String(e))
+      // API タイムアウトは 2 回目まで待つと Make 40s を大幅超過するためリトライしない
+      if (String(e).includes('Gemini APIタイムアウト')) {
+        throw e
+      }
       if (attempt < maxRetries) {
         console.warn(`[generateJSON] attempt ${attempt}: リトライします`)
       }
@@ -727,6 +807,40 @@ Deno.serve(async (req: Request) => {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         },
       )
+    }
+
+    if (isInboundRelevanceCheckEnabled()) {
+      console.log('[RELEVANCE] 判定開始', { type, inboundDataEnv })
+      try {
+        const { relevant, durationMs } = await classifyInboundRelevance({
+          subject,
+          from,
+          body,
+          inboundType: type,
+          attachmentCount: attachments.length,
+          attachmentMimeTypes: attachments.map((a) => a.mimeType || ''),
+        })
+        console.log('[RELEVANCE] 判定結果', { relevant, durationMs })
+        if (!relevant) {
+          console.warn('[RELEVANCE] 無関係のためスキップ（200）', { subject, from: from.slice(0, 120) })
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              skipped: true,
+              reason: 'NOT_RELEVANT_CONTENT',
+              message: '無関係メールと判定したため取り込みをスキップしました（Make の後続処理は続行できます）',
+              type,
+              inboundDataEnv,
+            }),
+            {
+              status: 200,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            },
+          )
+        }
+      } catch (e) {
+        console.warn('[RELEVANCE] 判定エラー、本処理へ続行', e)
+      }
     }
 
     // STEP4 がログに出ない場合の切り分け: createClient 前後と fetchGoogleLinks 内で止まるかを分離する
