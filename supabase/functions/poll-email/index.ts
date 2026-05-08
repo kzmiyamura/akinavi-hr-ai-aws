@@ -9,16 +9,19 @@
 //   GRAPH_REFRESH_TOKEN_PROJECT    project@outlook.jp (prod)
 //   GRAPH_REFRESH_TOKEN_HUMAN_DEV  human dev account (demo)
 //   GRAPH_REFRESH_TOKEN_PROJECT_DEV project dev account (demo)
+//   GEMINI_API_KEY             Gemini API キー（AI種別判断で使用）
 //   SUPABASE_URL               （自動設定）
 //   SUPABASE_SERVICE_ROLE_KEY  （自動設定）
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
 
 const CLIENT_ID = Deno.env.get('GRAPH_CLIENT_ID') ?? ''
 const CLIENT_SECRET = Deno.env.get('GRAPH_CLIENT_SECRET') ?? ''
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 const INBOUND_URL = `${SUPABASE_URL}/functions/v1/inbound-email`
+const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? ''
 
 /**
  * SUPABASE_SECRET_KEYS（新形式・JSON辞書）または
@@ -39,6 +42,8 @@ const CALL_KEY = resolveCallKey()
 
 // 1回のポーリングで取得するメール上限（タイムアウト対策）
 const MAX_EMAILS_PER_ACCOUNT = 3
+// 全件取り込みモードでの1バッチあたりの取得上限
+const MAX_EMAILS_PER_ACCOUNT_FULL = 20
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -79,6 +84,30 @@ const POLL_CONFIGS: PollConfig[] = [
     dataEnv:    'demo',
   },
 ]
+
+// ---- app_config ヘルパー ----
+
+async function getAppConfigValue(
+  supabase: ReturnType<typeof createClient>,
+  key: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('app_config')
+    .select('value')
+    .eq('key', key)
+    .maybeSingle()
+  return data?.value ?? null
+}
+
+async function setAppConfigValue(
+  supabase: ReturnType<typeof createClient>,
+  key: string,
+  value: string,
+): Promise<void> {
+  await supabase
+    .from('app_config')
+    .upsert({ key, value }, { onConflict: 'key' })
+}
 
 // ---- リフレッシュトークン管理 ----
 // app_config を優先（ローテーション済みトークン）、なければ Secret にフォールバック
@@ -151,16 +180,45 @@ interface GraphMessage {
   body: { content: string; contentType: string }
   hasAttachments: boolean
   receivedDateTime: string
+  isRead?: boolean
 }
 
-async function fetchUnreadEmails(accessToken: string): Promise<GraphMessage[]> {
-  const url = [
-    'https://graph.microsoft.com/v1.0/me/messages',
-    '?$filter=isRead eq false',
-    `&$top=${MAX_EMAILS_PER_ACCOUNT}`,
-    '&$select=id,subject,from,body,hasAttachments,receivedDateTime',
-    '&$orderby=receivedDateTime asc',
-  ].join('')
+interface FetchEmailPageResult {
+  emails: GraphMessage[]
+  nextLink: string | null
+}
+
+async function fetchEmailPage(
+  accessToken: string,
+  mode: 'incremental' | 'full',
+  since: string,
+  nextLink?: string | null,
+): Promise<FetchEmailPageResult> {
+  let url: string
+
+  if (mode === 'incremental') {
+    // 既存の未読メール取得（変更なし）
+    url = [
+      'https://graph.microsoft.com/v1.0/me/messages',
+      '?$filter=isRead eq false',
+      `&$top=${MAX_EMAILS_PER_ACCOUNT}`,
+      '&$select=id,subject,from,body,hasAttachments,receivedDateTime,isRead',
+      '&$orderby=receivedDateTime asc',
+    ].join('')
+  } else if (nextLink) {
+    // 全件モード: 続きのページ
+    url = nextLink
+  } else {
+    // 全件モード: 最初のページ（isRead フィルターなし）
+    const sinceDate = since || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+    url = [
+      'https://graph.microsoft.com/v1.0/me/messages',
+      `?$top=${MAX_EMAILS_PER_ACCOUNT_FULL}`,
+      `&$filter=receivedDateTime ge '${sinceDate}T00:00:00Z'`,
+      '&$select=id,subject,from,body,hasAttachments,receivedDateTime,isRead',
+      '&$orderby=receivedDateTime asc',
+    ].join('')
+  }
 
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -172,7 +230,10 @@ async function fetchUnreadEmails(accessToken: string): Promise<GraphMessage[]> {
   }
 
   const json = await res.json()
-  return (json.value ?? []) as GraphMessage[]
+  const emails = (json.value ?? []) as GraphMessage[]
+  const returnedNextLink = mode === 'full' ? (json['@odata.nextLink'] ?? null) : null
+
+  return { emails, nextLink: returnedNextLink }
 }
 
 async function markAsRead(accessToken: string, messageId: string): Promise<void> {
@@ -221,6 +282,55 @@ async function fetchAttachments(
   )
 }
 
+// ---- AI 種別判断（Gemini） ----
+
+async function classifyEmailType(
+  email: GraphMessage,
+): Promise<'candidate' | 'project' | 'other'> {
+  if (!GEMINI_API_KEY) {
+    console.warn('[poll] GEMINI_API_KEY 未設定のため AI 分類をスキップ。candidate にフォールバック')
+    return 'candidate'
+  }
+
+  try {
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+
+    const prompt = [
+      'このメールの種別を判断してください。',
+      '以下の3種別から1つだけ返してください（他の文字列は不要）:',
+      '  candidate  - 人材・エンジニア・求職者の情報（スキルシート・経歴書・自己紹介など）',
+      '  project    - 案件・プロジェクト・仕事依頼（要件定義・募集要項・単価など）',
+      '  other      - 上記どちらでもない（広告・通知・スパムなど）',
+      '',
+      `件名: ${email.subject ?? ''}`,
+      `本文（先頭500文字）: ${(email.body?.content ?? '').slice(0, 500)}`,
+    ].join('\n')
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10_000)
+
+    const resultPromise = model.generateContent(prompt)
+    const result = await Promise.race([
+      resultPromise,
+      new Promise<never>((_, reject) =>
+        controller.signal.addEventListener('abort', () => reject(new Error('timeout')))
+      ),
+    ])
+    clearTimeout(timer)
+
+    const text = (result as Awaited<typeof resultPromise>)
+      .response.text().trim().toLowerCase()
+
+    if (text === 'project') return 'project'
+    if (text === 'other') return 'other'
+    return 'candidate'
+  } catch (e) {
+    console.error(`[poll] AI 分類失敗: ${String(e)}。candidate にフォールバック`)
+    return 'candidate'
+  }
+}
+
 // ---- inbound-email を呼び出し ----
 
 async function callInboundEmail(
@@ -257,13 +367,24 @@ async function callInboundEmail(
 
 // ---- アカウント1件のポーリング処理 ----
 
+interface PollAccountResult {
+  processed: number
+  skipped: number
+  errors: string[]
+  fullImportDone: boolean
+}
+
 async function pollAccount(
   supabase: ReturnType<typeof createClient>,
   config: PollConfig,
-): Promise<{ processed: number; skipped: number; errors: string[] }> {
+  mode: 'incremental' | 'full',
+  useAiClassification: boolean,
+  since: string,
+): Promise<PollAccountResult> {
   let processed = 0
   let skipped = 0
   const errors: string[] = []
+  let fullImportDone = false
 
   try {
     const refreshToken = await getRefreshToken(supabase, config)
@@ -272,24 +393,55 @@ async function pollAccount(
     // リフレッシュトークンをローテーション保存
     await saveRefreshToken(supabase, config.configKey, newRefreshToken)
 
-    const emails = await fetchUnreadEmails(accessToken)
-    console.log(`[poll] ${config.configKey}: 未読 ${emails.length}件`)
+    // 全件モードの場合は保存済みの nextLink を取得
+    let storedNextLink: string | null = null
+    if (mode === 'full') {
+      const nextLinkKey = `email_full_import_nextlink_${config.configKey}`
+      const stored = await getAppConfigValue(supabase, nextLinkKey)
+      if (stored === 'DONE') {
+        // このアカウントは既に完了済み
+        console.log(`[poll] ${config.configKey}: 全件取り込み完了済み`)
+        fullImportDone = true
+        return { processed, skipped, errors, fullImportDone }
+      }
+      storedNextLink = stored
+    }
+
+    const { emails, nextLink } = await fetchEmailPage(accessToken, mode, since, storedNextLink)
+    console.log(`[poll] ${config.configKey}: ${emails.length}件取得 (mode=${mode})`)
 
     for (const email of emails) {
       try {
-        // 1. 先に既読マーク（二重処理防止）
+        // AI 種別判断
+        let emailType: 'candidate' | 'project' = config.type
+        if (useAiClassification) {
+          const aiType = await classifyEmailType(email)
+          if (aiType === 'other') {
+            // 'other' はスキップ（既読にして次へ）
+            if (mode === 'incremental') {
+              await markAsRead(accessToken, email.id)
+            }
+            console.log(`[poll] スキップ (other): "${email.subject}" (${config.configKey})`)
+            skipped++
+            continue
+          }
+          emailType = aiType
+          console.log(`[poll] AI 分類: "${email.subject}" → ${aiType}`)
+        }
+
+        // 既読マーク（incremental: 二重処理防止 / full: 処理済みマーク）
         await markAsRead(accessToken, email.id)
 
-        // 2. 添付取得 → inbound-email へ渡す
+        // 添付取得 → inbound-email へ渡す
         const attachments = email.hasAttachments
           ? await fetchAttachments(accessToken, email.id)
           : []
 
-        await callInboundEmail(email, attachments, config.type, config.dataEnv)
+        await callInboundEmail(email, attachments, emailType, config.dataEnv)
         processed++
         console.log(`[poll] 処理完了: "${email.subject}" (${config.configKey})`)
       } catch (e) {
-        // 3. 失敗したら未読に戻して次回ポーリングで再試行
+        // 失敗したら未読に戻して次回ポーリングで再試行
         const msg = `メール処理失敗 "${email.subject}": ${String(e)}`
         console.error(`[poll] ${msg}`)
         errors.push(msg)
@@ -302,6 +454,21 @@ async function pollAccount(
       }
     }
 
+    // 全件モードの nextLink 管理
+    if (mode === 'full') {
+      const nextLinkKey = `email_full_import_nextlink_${config.configKey}`
+      if (nextLink) {
+        // 次のページあり → 保存して次回継続
+        await setAppConfigValue(supabase, nextLinkKey, nextLink)
+        console.log(`[poll] ${config.configKey}: 次ページあり、nextLink 保存`)
+      } else {
+        // 最終ページ → 完了
+        await setAppConfigValue(supabase, nextLinkKey, 'DONE')
+        fullImportDone = true
+        console.log(`[poll] ${config.configKey}: 全件取り込み完了`)
+      }
+    }
+
     if (emails.length === 0) skipped++
   } catch (e) {
     const msg = `アカウント処理失敗 (${config.configKey}): ${String(e)}`
@@ -309,7 +476,7 @@ async function pollAccount(
     errors.push(msg)
   }
 
-  return { processed, skipped, errors }
+  return { processed, skipped, errors, fullImportDone }
 }
 
 // ---- エントリーポイント ----
@@ -328,27 +495,60 @@ Deno.serve(async (req: Request) => {
 
     console.log('[poll-email] 開始')
 
-    // 4アカウントを並列処理
+    // app_config からメール設定を読み込む
+    const pollModeRaw = await getAppConfigValue(supabase, 'email_poll_mode')
+    const mode: 'incremental' | 'full' =
+      pollModeRaw === 'full' ? 'full' : 'incremental'
+
+    const useAiClassificationRaw = await getAppConfigValue(supabase, 'email_use_ai_classification')
+    const useAiClassification = useAiClassificationRaw === 'true'
+
+    const since = (await getAppConfigValue(supabase, 'email_full_import_since')) ?? ''
+
+    console.log(`[poll-email] mode=${mode}, useAiClassification=${useAiClassification}`)
+
+    // AI 種別判断有効時は candidate エントリーのみ（同一受信箱を2回処理しない）
+    const targetConfigs = useAiClassification
+      ? POLL_CONFIGS.filter(c => c.type === 'candidate')
+      : POLL_CONFIGS
+
+    // アカウントを並列処理
     const results = await Promise.allSettled(
-      POLL_CONFIGS.map(config => pollAccount(supabase, config)),
+      targetConfigs.map(config =>
+        pollAccount(supabase, config, mode, useAiClassification, since)
+      ),
     )
 
     const summary = results.map((r, i) => ({
-      account:   POLL_CONFIGS[i].configKey,
-      dataEnv:   POLL_CONFIGS[i].dataEnv,
-      type:      POLL_CONFIGS[i].type,
+      account:   targetConfigs[i].configKey,
+      dataEnv:   targetConfigs[i].dataEnv,
+      type:      targetConfigs[i].type,
       ...(r.status === 'fulfilled'
         ? r.value
-        : { processed: 0, skipped: 0, errors: [String(r.reason)] }),
+        : { processed: 0, skipped: 0, errors: [String(r.reason)], fullImportDone: false }),
     }))
 
     const totalProcessed = summary.reduce((s, r) => s + r.processed, 0)
     const totalErrors    = summary.flatMap(r => r.errors)
 
+    // 全件モード完了チェック: 全アカウントが fullImportDone なら incremental に戻す
+    if (mode === 'full') {
+      const allDone = summary.every(r => r.fullImportDone)
+      if (allDone) {
+        await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
+        // 全 nextLink キーをクリア
+        for (const config of POLL_CONFIGS) {
+          const nextLinkKey = `email_full_import_nextlink_${config.configKey}`
+          await setAppConfigValue(supabase, nextLinkKey, '')
+        }
+        console.log('[poll-email] 全件取り込み完了 → incremental モードに戻しました')
+      }
+    }
+
     console.log(`[poll-email] 完了: ${totalProcessed}件処理, エラー ${totalErrors.length}件`)
 
     return new Response(
-      JSON.stringify({ ok: true, totalProcessed, totalErrors, summary }),
+      JSON.stringify({ ok: true, mode, useAiClassification, totalProcessed, totalErrors, summary }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     )
   } catch (e) {

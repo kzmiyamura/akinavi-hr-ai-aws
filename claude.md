@@ -200,6 +200,25 @@ Gemini AI 解析 → DB 保存
 - 案件用: `akinavi.hr.ai.voice.project@outlook.jp`
 - 処理済みメールは既読マークで重複取得を防止
 
+### メール設定UI（`src/pages/SettingsPage.tsx`）
+- **設定タブ** をナビゲーションに追加（`src/components/Layout.tsx`）
+- **メールアドレス設定**: 人材用・案件用アドレスを表示用に app_config へ保存（参照用。実認証情報は Supabase Secrets）
+- **AI種別判断**: 同じ受信箱に人材・案件メールが混在する場合、Gemini AI で `candidate` / `project` / `other` を自動分類
+  - 有効時は人材用アカウントのみポーリング（同一受信箱を2重処理しない）
+  - `other` と判断されたメールは既読マークしてスキップ
+  - 10秒タイムアウト、失敗時は `candidate` にフォールバック
+- **DB**: `src/lib/db/emailSettings.ts` で app_config から設定を読み書き
+- **マイグレーション**: `supabase/migrations/add_email_settings.sql`
+
+### 全件取り込みモード（`poll-email` Edge Function）
+- **通常モード（incremental）**: 未読メールのみ取得（従来通り）
+- **全件モード（full）**: `email_full_import_since` 以降の全メールを順次取得（isRead フィルターなし）
+  - 1バッチ最大20件、`@odata.nextLink` でページネーション継続
+  - バッチごとに nextLink を `app_config`（`email_full_import_nextlink_<configKey>`）に保存し、5分ごとに続きから再開
+  - 全アカウント完了時に自動で incremental モードに戻す
+- **UI**: 設定ページの「全件取り込み」セクションから開始日を指定して起動
+  - モードバッジ（緑: 新着のみ / 黄: 全件取り込み中）でステータス表示
+
 ### メール自動受信（旧方式・停止中）
 - **Make.com**: 無料枠 約1,000ops/月 → 超過により停止
 - **Pipedream**: 無料枠 10クレジット/日 → 当日中に超過・停止

@@ -9,6 +9,7 @@ import { ProjectPage } from './pages/ProjectPage'
 import { MatchingPage } from './pages/MatchingPage'
 import { CandidateDetailPage } from './pages/CandidateDetailPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
+import { SettingsPage } from './pages/SettingsPage'
 import type { DataEnv } from './lib/dataEnv'
 import {
   applyDemoKeyFromUrlToggle,
@@ -128,6 +129,9 @@ function AppInner() {
         </div>
         <div className={tabPage === 'projects' ? 'block' : 'hidden'}>
           <ProjectPage nickname={nickname} dataEnv={dataEnv} demoUiEnabled={demoUiEnabled} onOpenProjectDetail={openProjectDetail} />
+        </div>
+        <div className={tabPage === 'settings' ? 'block' : 'hidden'}>
+          <SettingsPage />
         </div>
       </>
     )
