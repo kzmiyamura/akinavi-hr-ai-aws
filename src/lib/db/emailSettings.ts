@@ -72,6 +72,19 @@ export async function saveEmailAddressSettings(
   if (error) throw new Error(`メール設定の保存に失敗しました: ${error.message}`)
 }
 
+/** Microsoft アカウントごとの接続状態を取得する */
+export async function getConnectionStatuses(): Promise<Record<string, boolean>> {
+  const accounts = ['human_prod', 'project_prod', 'human_dev', 'project_dev']
+  const keys = accounts.map(a => `graph_connected_${a}`)
+  const { data } = await supabase.from('app_config').select('key, value').in('key', keys)
+  const result: Record<string, boolean> = {}
+  for (const account of accounts) {
+    const row = (data ?? []).find(r => r.key === `graph_connected_${account}`)
+    result[account] = row?.value === true || row?.value === 'true' || row?.value === '"true"'
+  }
+  return result
+}
+
 /** 全件取り込みモードを開始する（poll_mode を 'full' にして since 日付を設定） */
 export async function startFullImport(since: string): Promise<void> {
   const rows = [

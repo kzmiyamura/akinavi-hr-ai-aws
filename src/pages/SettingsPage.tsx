@@ -5,6 +5,7 @@ import {
   getEmailSettings,
   saveEmailAddressSettings,
   startFullImport,
+  getConnectionStatuses,
 } from '../lib/db/emailSettings'
 
 function formatDateInput(date: Date): string {
@@ -17,6 +18,13 @@ function defaultSinceDate(): string {
   return formatDateInput(d)
 }
 
+const ACCOUNT_LIST = [
+  { account: 'human_prod', label: '人材用（本番）' },
+  { account: 'project_prod', label: '案件用（本番）' },
+  { account: 'human_dev', label: '人材用（デモ）' },
+  { account: 'project_dev', label: '案件用（デモ）' },
+]
+
 export function SettingsPage() {
   const queryClient = useQueryClient()
 
@@ -24,6 +32,45 @@ export function SettingsPage() {
     queryKey: ['emailSettings'],
     queryFn: getEmailSettings,
   })
+
+  const {
+    data: connectionStatuses,
+    isLoading: isConnectionLoading,
+    refetch: refetchConnections,
+  } = useQuery({
+    queryKey: ['connectionStatuses'],
+    queryFn: getConnectionStatuses,
+  })
+
+  const [connectingAccount, setConnectingAccount] = useState<string | null>(null)
+  const [connectError, setConnectError] = useState<string | null>(null)
+
+  async function handleConnect(account: string) {
+    setConnectingAccount(account)
+    setConnectError(null)
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
+      const redirectUri = encodeURIComponent(window.location.origin + '/auth/callback')
+      const res = await fetch(
+        `${supabaseUrl}/functions/v1/microsoft-oauth?step=start&account=${account}&redirect_uri=${redirectUri}`,
+        {
+          headers: {
+            Authorization: `Bearer ${supabaseAnonKey}`,
+          },
+        },
+      )
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData?.error ?? `HTTP ${res.status}`)
+      }
+      const { authorizeUrl } = await res.json()
+      window.location.href = authorizeUrl
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : String(err))
+      setConnectingAccount(null)
+    }
+  }
 
   // フォーム状態
   const [humanAddress, setHumanAddress] = useState('')
@@ -85,6 +132,83 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-6">
+      {/* ---- Microsoft アカウント連携 ---- */}
+      <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-semibold text-gray-800">Microsoft アカウント連携</h2>
+          <button
+            type="button"
+            onClick={() => refetchConnections()}
+            disabled={isConnectionLoading}
+            className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw size={12} className={isConnectionLoading ? 'animate-spin' : ''} />
+            接続状態を再確認
+          </button>
+        </div>
+
+        <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
+          ⚠️ 事前に Azure アプリのリダイレクト URI に{' '}
+          <code className="font-mono bg-amber-100 px-1 rounded">
+            {window.location.origin}/auth/callback
+          </code>{' '}
+          を追加してください
+        </p>
+
+        <div className="divide-y divide-gray-100">
+          {ACCOUNT_LIST.map(({ account, label }) => {
+            const connected = connectionStatuses?.[account] ?? false
+            const isConnecting = connectingAccount === account
+            return (
+              <div key={account} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-gray-700">{label}</span>
+                  {isConnectionLoading ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-400">
+                      <Loader2 size={10} className="animate-spin" />
+                      確認中
+                    </span>
+                  ) : connected ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
+                      <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                      連携済み
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-500">
+                      <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+                      未連携
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleConnect(account)}
+                  disabled={isConnecting || connectingAccount !== null}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition-colors"
+                >
+                  {isConnecting ? (
+                    <>
+                      <Loader2 size={12} className="animate-spin" />
+                      リダイレクト中...
+                    </>
+                  ) : connected ? (
+                    '再連携'
+                  ) : (
+                    '連携する'
+                  )}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+
+        {connectError && (
+          <p className="mt-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            連携の開始に失敗しました: {connectError}
+          </p>
+        )}
+      </section>
+
       {/* ---- メール設定 ---- */}
       <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
         <h2 className="text-base font-semibold text-gray-800 mb-4">メール設定</h2>

@@ -10,6 +10,7 @@ import { MatchingPage } from './pages/MatchingPage'
 import { CandidateDetailPage } from './pages/CandidateDetailPage'
 import { ProjectDetailPage } from './pages/ProjectDetailPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { AuthCallbackPage } from './pages/AuthCallbackPage'
 import type { DataEnv } from './lib/dataEnv'
 import {
   applyDemoKeyFromUrlToggle,
@@ -44,6 +45,11 @@ function stripDemoKeyQueryParams() {
 }
 
 function AppInner() {
+  // /auth/callback ルートは認証コールバック専用ページ
+  if (window.location.pathname === '/auth/callback') {
+    return <AuthCallbackPage />
+  }
+
   const { nickname, saveNickname, clearNickname } = useNickname()
   const [tabPage, setTabPage] = useState<Page>('matching')
   const [detail, setDetail] = useState<DetailView | null>(null)
