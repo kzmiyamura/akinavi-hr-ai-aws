@@ -560,7 +560,7 @@ Deno.serve(async (req: Request) => {
     console.log(`[poll-email] 完了: ${totalProcessed}件処理, エラー ${totalErrors.length}件`)
 
     return new Response(
-      JSON.stringify({ ok: true, mode, useAiClassification, totalProcessed, totalErrors, summary }),
+      JSON.stringify({ ok: true, mode, useAiClassificationProd, useAiClassificationDev, totalProcessed, totalErrors, summary }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     )
   } catch (e) {
