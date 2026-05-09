@@ -497,8 +497,17 @@ Deno.serve(async (req: Request) => {
 
     // app_config からメール設定を読み込む
     const pollModeRaw = await getAppConfigValue(supabase, 'email_poll_mode')
-    const mode: 'incremental' | 'full' =
-      pollModeRaw === 'full' ? 'full' : 'incremental'
+    const mode: 'incremental' | 'full' | 'paused' =
+      pollModeRaw === 'full' ? 'full' : pollModeRaw === 'paused' ? 'paused' : 'incremental'
+
+    // 一時停止中はスキップ
+    if (mode === 'paused') {
+      console.log('[poll-email] 一時停止中のためスキップ')
+      return new Response(
+        JSON.stringify({ ok: true, mode: 'paused', totalProcessed: 0, totalErrors: [], summary: [] }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
 
     const useAiClassificationRaw = await getAppConfigValue(supabase, 'email_use_ai_classification')
     const useAiClassification = useAiClassificationRaw === 'true'

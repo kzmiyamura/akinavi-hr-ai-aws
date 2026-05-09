@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Save, RefreshCw } from 'lucide-react'
+import { Loader2, Save, RefreshCw, Pause, Play } from 'lucide-react'
 import {
   getEmailSettings,
   saveEmailAddressSettings,
   startFullImport,
+  pauseFullImport,
+  resumeFullImport,
+  getImportProgress,
   getConnectionStatuses,
 } from '../lib/db/emailSettings'
 
@@ -31,6 +34,11 @@ export function SettingsPage() {
   const { data: settings, isLoading, error } = useQuery({
     queryKey: ['emailSettings'],
     queryFn: getEmailSettings,
+    // 全件取り込み中・一時停止中は15秒ごとに自動更新
+    refetchInterval: (query) => {
+      const mode = query.state.data?.email_poll_mode
+      return mode === 'full' || mode === 'paused' ? 15_000 : false
+    },
   })
 
   const {
@@ -110,6 +118,26 @@ export function SettingsPage() {
     },
   })
 
+  // 一時停止
+  const pauseMutation = useMutation({
+    mutationFn: pauseFullImport,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['emailSettings'] }),
+  })
+
+  // 再開
+  const resumeMutation = useMutation({
+    mutationFn: resumeFullImport,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['emailSettings'] }),
+  })
+
+  // 進捗カウント（全件モード中・一時停止中のみ取得）
+  const { data: progressCount = 0 } = useQuery({
+    queryKey: ['importProgress', settings?.email_full_import_since],
+    queryFn: () => getImportProgress(settings?.email_full_import_since ?? ''),
+    enabled: settings?.email_poll_mode === 'full' || settings?.email_poll_mode === 'paused',
+    refetchInterval: settings?.email_poll_mode === 'full' ? 15_000 : false,
+  })
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16 text-gray-400">
@@ -129,6 +157,8 @@ export function SettingsPage() {
 
   const pollMode = settings?.email_poll_mode ?? 'incremental'
   const isFullMode = pollMode === 'full'
+  const isPaused = pollMode === 'paused'
+  const isImportActive = isFullMode || isPaused
 
   return (
     <div className="space-y-6">
@@ -300,9 +330,14 @@ export function SettingsPage() {
         <div className="flex items-center gap-3 mb-4">
           <h2 className="text-base font-semibold text-gray-800">全件取り込み</h2>
           {isFullMode ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">
-              <span className="h-1.5 w-1.5 rounded-full bg-yellow-400" />
-              全件取り込み中
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">
+              <Loader2 size={10} className="animate-spin" />
+              取り込み中
+            </span>
+          ) : isPaused ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
+              <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+              一時停止中
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
@@ -311,6 +346,19 @@ export function SettingsPage() {
             </span>
           )}
         </div>
+
+        {/* 進捗表示 */}
+        {isImportActive && (
+          <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+            <div className="flex items-center justify-between">
+              <span>{settings?.email_full_import_since} 以降を取り込み中</span>
+              <span className="font-semibold">{progressCount} 件処理済み</span>
+            </div>
+            <p className="mt-1 text-xs text-blue-600">
+              5分ごとにバックグラウンドで処理が進みます。解析済みデータは人材・案件タブに随時反映されます。
+            </p>
+          </div>
+        )}
 
         <div className="space-y-4">
           {/* 開始日 */}
@@ -322,44 +370,77 @@ export function SettingsPage() {
               type="date"
               value={sinceDate}
               onChange={e => setSinceDate(e.target.value)}
-              disabled={isFullMode}
+              disabled={isImportActive}
               className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-400"
             />
           </div>
 
-          <p className="text-xs text-gray-500">
-            大量メールがある場合、取り込みには時間がかかります。5分ごとに処理が進みます。
-          </p>
+          {/* ボタン群 */}
+          <div className="flex flex-wrap items-center gap-3">
+            {/* 全件取り込み開始 */}
+            {!isImportActive && (
+              <button
+                type="button"
+                onClick={() => fullImportMutation.mutate()}
+                disabled={fullImportMutation.isPending || !sinceDate}
+                className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-60 transition-colors"
+              >
+                {fullImportMutation.isPending ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <RefreshCw size={14} />
+                )}
+                全件取り込み開始
+              </button>
+            )}
 
-          {/* 全件取り込み開始ボタン */}
-          <div>
-            <button
-              type="button"
-              onClick={() => fullImportMutation.mutate()}
-              disabled={isFullMode || fullImportMutation.isPending || !sinceDate}
-              className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-60 transition-colors"
-            >
-              {fullImportMutation.isPending ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <RefreshCw size={14} />
-              )}
-              全件取り込み開始
-            </button>
+            {/* 一時停止 */}
             {isFullMode && (
-              <p className="mt-2 text-xs text-yellow-700">
-                全件取り込み中です。完了すると自動的に新着のみモードに戻ります。
-              </p>
+              <button
+                type="button"
+                onClick={() => pauseMutation.mutate()}
+                disabled={pauseMutation.isPending}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+              >
+                {pauseMutation.isPending ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Pause size={14} />
+                )}
+                一時停止
+              </button>
             )}
-            {fullImportMutation.isSuccess && !isFullMode && (
-              <span className="ml-3 text-sm text-green-600">取り込みを開始しました</span>
-            )}
-            {fullImportMutation.isError && (
-              <span className="ml-3 text-sm text-red-600">
-                開始に失敗しました: {String(fullImportMutation.error)}
-              </span>
+
+            {/* 再開 */}
+            {isPaused && (
+              <button
+                type="button"
+                onClick={() => resumeMutation.mutate()}
+                disabled={resumeMutation.isPending}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              >
+                {resumeMutation.isPending ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Play size={14} />
+                )}
+                再開
+              </button>
             )}
           </div>
+
+          {fullImportMutation.isSuccess && !isImportActive && (
+            <p className="text-sm text-green-600">取り込みを開始しました</p>
+          )}
+          {fullImportMutation.isError && (
+            <p className="text-sm text-red-600">開始に失敗しました: {String(fullImportMutation.error)}</p>
+          )}
+          {pauseMutation.isError && (
+            <p className="text-sm text-red-600">一時停止に失敗しました: {String(pauseMutation.error)}</p>
+          )}
+          {resumeMutation.isError && (
+            <p className="text-sm text-red-600">再開に失敗しました: {String(resumeMutation.error)}</p>
+          )}
         </div>
       </section>
     </div>

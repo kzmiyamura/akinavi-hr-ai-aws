@@ -15,6 +15,7 @@ import type { DataEnv } from '../lib/dataEnv'
 import type { ImageFileData } from '../lib/ai/types'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
 import { extractTextFromPDF, extractTextFromExcel, extractTextFromWord, imageFileToBase64, getFileCategory } from '../lib/fileParser'
+import { getIsImportActive } from '../lib/db/emailSettings'
 
 interface Props {
   nickname: string
@@ -502,9 +503,16 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
     })
   }
 
+  const { data: isImportActive } = useQuery({
+    queryKey: ['importActive'],
+    queryFn: getIsImportActive,
+    refetchInterval: 30_000,
+  })
+
   const { data: projects = [], isLoading } = useQuery({
     queryKey: projectsQueryKeys.all(dataEnv),
     queryFn: () => fetchAllProjects(dataEnv),
+    refetchInterval: isImportActive ? 30_000 : false,
   })
 
   const deleteMutation = useMutation({

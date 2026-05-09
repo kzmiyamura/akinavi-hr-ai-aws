@@ -4,7 +4,7 @@ export interface EmailSettings {
   email_human_address: string
   email_project_address: string
   email_use_ai_classification: boolean
-  email_poll_mode: 'incremental' | 'full'
+  email_poll_mode: 'incremental' | 'full' | 'paused'
   email_full_import_since: string
 }
 
@@ -44,7 +44,11 @@ export async function getEmailSettings(): Promise<EmailSettings> {
     email_use_ai_classification:
       (map['email_use_ai_classification'] ?? 'false') === 'true',
     email_poll_mode:
-      map['email_poll_mode'] === 'full' ? 'full' : 'incremental',
+      map['email_poll_mode'] === 'full'
+        ? 'full'
+        : map['email_poll_mode'] === 'paused'
+          ? 'paused'
+          : 'incremental',
     email_full_import_since: map['email_full_import_since'] ?? DEFAULTS.email_full_import_since,
   }
 }
@@ -97,4 +101,45 @@ export async function startFullImport(since: string): Promise<void> {
     .upsert(rows, { onConflict: 'key' })
 
   if (error) throw new Error(`全件取り込みの開始に失敗しました: ${error.message}`)
+}
+
+/** 全件取り込みを一時停止する（poll_mode を 'paused' にする） */
+export async function pauseFullImport(): Promise<void> {
+  const { error } = await supabase
+    .from('app_config')
+    .upsert({ key: 'email_poll_mode', value: 'paused' }, { onConflict: 'key' })
+
+  if (error) throw new Error(`一時停止に失敗しました: ${error.message}`)
+}
+
+/** 全件取り込みを再開する（poll_mode を 'full' に戻す） */
+export async function resumeFullImport(): Promise<void> {
+  const { error } = await supabase
+    .from('app_config')
+    .upsert({ key: 'email_poll_mode', value: 'full' }, { onConflict: 'key' })
+
+  if (error) throw new Error(`再開に失敗しました: ${error.message}`)
+}
+
+/** 全件取り込みの進捗を取得する（since以降のai_logs成功件数） */
+export async function getImportProgress(since: string): Promise<number> {
+  if (!since) return 0
+  const { count, error } = await supabase
+    .from('ai_logs')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'success')
+    .gte('created_at', `${since}T00:00:00Z`)
+
+  if (error) return 0
+  return count ?? 0
+}
+
+/** 全件取り込みまたは一時停止中か（UIの自動更新判定用） */
+export async function getIsImportActive(): Promise<boolean> {
+  const { data } = await supabase
+    .from('app_config')
+    .select('value')
+    .eq('key', 'email_poll_mode')
+    .maybeSingle()
+  return data?.value === 'full' || data?.value === 'paused'
 }

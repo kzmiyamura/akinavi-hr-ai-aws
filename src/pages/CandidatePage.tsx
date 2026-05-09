@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { upsertCandidate, updateCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
+import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
 import type { DataEnv } from '../lib/dataEnv'
 import type { ImageFileData } from '../lib/ai/types'
@@ -605,9 +606,16 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     deleteMutation.mutate(c.id)
   }
 
+  const { data: isImportActive } = useQuery({
+    queryKey: ['importActive'],
+    queryFn: getIsImportActive,
+    refetchInterval: 30_000,
+  })
+
   const { data: candidates = [], isLoading } = useQuery({
     queryKey: ['candidates', dataEnv],
     queryFn: () => fetchCandidates(dataEnv),
+    refetchInterval: isImportActive ? 30_000 : false,
   })
 
   const filteredCandidates = candidates.filter((c: Candidate) => {
