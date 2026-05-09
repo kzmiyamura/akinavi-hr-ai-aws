@@ -233,6 +233,9 @@ async function fetchEmailPage(
   const emails = (json.value ?? []) as GraphMessage[]
   const returnedNextLink = mode === 'full' ? (json['@odata.nextLink'] ?? null) : null
 
+  // デバッグ: Graph APIの生レスポンス情報
+  console.log(`[poll] fetchEmailPage: status=${res.status} value件数=${emails.length} error=${JSON.stringify(json.error ?? null)}`)
+
   return { emails, nextLink: returnedNextLink }
 }
 
@@ -406,6 +409,13 @@ async function pollAccount(
       }
       storedNextLink = stored
     }
+
+    // デバッグ: どのMicrosoftアカウントを見ているか確認
+    const meRes = await fetch('https://graph.microsoft.com/v1.0/me', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    })
+    const meJson = meRes.ok ? await meRes.json() : { _error: await meRes.text() }
+    console.log(`[poll] ${config.configKey}: /me レスポンス =`, JSON.stringify(meJson))
 
     const { emails, nextLink } = await fetchEmailPage(accessToken, mode, since, storedNextLink)
     console.log(`[poll] ${config.configKey}: ${emails.length}件取得 (mode=${mode})`)

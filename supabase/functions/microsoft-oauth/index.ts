@@ -21,7 +21,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 
 const TENANT = 'consumers'
-const SCOPE = 'offline_access Mail.Read Mail.ReadWrite'
+const SCOPE = 'offline_access Mail.Read Mail.ReadWrite User.Read'
 const TOKEN_ENDPOINT = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`
 const AUTHORIZE_ENDPOINT = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize`
 
