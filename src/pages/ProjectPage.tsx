@@ -433,6 +433,7 @@ export function ProjectEditModal({ project, nickname, dataEnv, onClose, onSaved 
 }
 
 export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenProjectDetail: _onOpenProjectDetail }: Props) {
+  const [showRegisterModal, setShowRegisterModal] = useState(false)
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -538,6 +539,7 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
       setText('')
       setImageFiles([])
       setUploadedFileNames([])
+      setShowRegisterModal(false)
       setMessage({ type: 'success', text: `登録完了: ${project.title}` })
       setSelectedId(project.id)
     },
@@ -597,64 +599,87 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
           }}
         />
       )}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 space-y-4 min-w-0">
-        <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
-          <Briefcase size={18} className="text-blue-600" />
-          案件を登録
-        </h2>
-        <p className="text-sm text-gray-500">
-          案件概要・要件定義書・メール本文などのテキストを貼り付けてください。
-          AI が自動解析して登録します。
-        </p>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="テキストをここに貼り付け..."
-          rows={8}
-          className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
-        />
-        {/* ファイルアップロード */}
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,.xlsx,.xls,.docx"
-            multiple
-            className="hidden"
-            onChange={handleFileChange}
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={fileLoading || mutation.isPending}
-            className="flex items-center gap-1.5 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {fileLoading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
-            {fileLoading ? '読み込み中...' : 'PDF・Excel・Word・画像を添付'}
-          </button>
-          {uploadedFileNames.map((name, i) => (
-            <span key={i} className="flex items-center gap-1 bg-blue-50 text-blue-700 text-xs rounded px-2 py-1">
-              {name}
-              <button onClick={() => removeFile(i)} className="hover:text-red-500 ml-0.5">
-                <X size={11} />
+      {/* 登録モーダル */}
+      {showRegisterModal && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
+                <Briefcase size={18} className="text-blue-600" />
+                案件を登録
+              </h2>
+              <button
+                onClick={() => { setShowRegisterModal(false); setMessage(null) }}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X size={20} />
               </button>
-            </span>
-          ))}
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-sm text-gray-500">
+                案件概要・要件定義書・メール本文などのテキストを貼り付けてください。
+                AI が自動解析して登録します。
+              </p>
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="テキストをここに貼り付け..."
+                rows={10}
+                className="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+                autoFocus
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*,.xlsx,.xls,.docx"
+                  multiple
+                  className="hidden"
+                  onChange={handleFileChange}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={fileLoading || mutation.isPending}
+                  className="flex items-center gap-1.5 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {fileLoading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
+                  {fileLoading ? '読み込み中...' : 'PDF・Excel・Word・画像を添付'}
+                </button>
+                {uploadedFileNames.map((name, i) => (
+                  <span key={i} className="flex items-center gap-1 bg-blue-50 text-blue-700 text-xs rounded px-2 py-1">
+                    {name}
+                    <button onClick={() => removeFile(i)} className="hover:text-red-500 ml-0.5">
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              {message && (
+                <p className={`text-sm ${message.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+                  {message.text}
+                </p>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200">
+              <button
+                onClick={() => { setShowRegisterModal(false); setMessage(null) }}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => { setMessage(null); mutation.mutate(text) }}
+                disabled={(!text.trim() && imageFiles.length === 0) || mutation.isPending || fileLoading}
+                className="flex items-center gap-2 bg-blue-600 text-white rounded-lg px-5 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {mutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Briefcase size={16} />}
+                {mutation.isPending ? 'AI解析中...' : '解析して登録'}
+              </button>
+            </div>
+          </div>
         </div>
-        {message && (
-          <p className={`text-sm ${message.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
-            {message.text}
-          </p>
-        )}
-        <button
-          onClick={() => { setMessage(null); mutation.mutate(text) }}
-          disabled={(!text.trim() && imageFiles.length === 0) || mutation.isPending || fileLoading}
-          className="flex items-center gap-2 bg-blue-600 text-white rounded-lg px-5 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {mutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Briefcase size={16} />}
-          {mutation.isPending ? 'AI解析中...' : '解析して登録'}
-        </button>
-      </div>
+      )}
 
       {/* 案件一覧 - Split layout */}
       <div className="bg-white rounded-xl border border-gray-200 min-w-0">
@@ -663,6 +688,14 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
             <RefreshCw size={18} className="text-gray-500" />
             登録済み案件（{searchQuery.trim() ? `${filteredProjects.length} / ${projects.length}` : projects.length}件）
           </h2>
+          <button
+            type="button"
+            onClick={() => { setMessage(null); setShowRegisterModal(true) }}
+            className="flex items-center gap-1.5 bg-blue-600 text-white rounded-lg px-3 py-1.5 text-sm font-medium hover:bg-blue-700 transition-colors shrink-0"
+          >
+            <Briefcase size={15} />
+            新規登録
+          </button>
           <div className="relative flex-1 min-w-48">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
@@ -682,6 +715,12 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
             )}
           </div>
         </div>
+
+        {message && (
+          <div className={`mx-4 mt-3 text-sm rounded-lg px-3 py-2 ${message.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+            {message.text}
+          </div>
+        )}
 
         {isLoading ? (
           <p className="text-sm text-gray-400 p-4">読み込み中...</p>
