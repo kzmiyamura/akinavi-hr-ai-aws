@@ -299,15 +299,25 @@ async function classifyEmailType(
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' })
 
+    // HTMLタグを除去してプレーンテキスト化
+    const rawBody = email.body?.content ?? ''
+    const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+
     const prompt = [
       'このメールの種別を判断してください。',
       '以下の3種別から1つだけ返してください（他の文字列は不要）:',
-      '  candidate  - 人材・エンジニア・求職者の情報（スキルシート・経歴書・自己紹介など）',
-      '  project    - 案件・プロジェクト・仕事依頼（要件定義・募集要項・単価など）',
-      '  other      - 上記どちらでもない（広告・通知・スパムなど）',
+      '  candidate  - 人材・エンジニア・求職者・フリーランスの情報（スキルシート・経歴書・自己紹介・稼働確認など）',
+      '  project    - 案件・プロジェクト・仕事依頼の情報（要件定義・募集要項・単価・参画依頼など）',
+      '  other      - 明らかに上記どちらでもない（広告メール・サービス通知・請求書・宣伝など）',
       '',
-      `件名: ${email.subject ?? ''}`,
-      `本文（先頭500文字）: ${(email.body?.content ?? '').slice(0, 500)}`,
+      '【重要ルール】',
+      '- 件名や添付ファイルが人材・案件に関連していれば candidate または project と判断すること',
+      '- 本文が空でも件名から判断できる場合は candidate または project と判断すること',
+      '- 「テスト」という言葉が含まれていても内容が人材・案件なら candidate または project と判断すること',
+      '- other は本当に無関係なメール（広告・通知・スパム）のみに使うこと',
+      '',
+      `件名: ${email.subject ?? '（なし）'}`,
+      `本文（先頭500文字）: ${plainBody.slice(0, 500) || '（本文なし・添付ファイルのみ）'}`,
     ].join('\n')
 
     const controller = new AbortController()
@@ -446,6 +456,8 @@ async function pollAccount(
         const attachments = email.hasAttachments
           ? await fetchAttachments(accessToken, email.id)
           : []
+
+        console.log(`[poll] 添付: hasAttachments=${email.hasAttachments} 取得件数=${attachments.length}`, attachments.map(a => ({ name: a.name, type: a.contentType, bytesLen: a.contentBytes?.length ?? 0 })))
 
         await callInboundEmail(email, attachments, emailType, config.dataEnv)
         processed++
