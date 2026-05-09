@@ -234,7 +234,7 @@ async function fetchEmailPage(
   const returnedNextLink = mode === 'full' ? (json['@odata.nextLink'] ?? null) : null
 
   // デバッグ: Graph APIの生レスポンス情報
-  console.log(`[poll] fetchEmailPage: status=${res.status} value件数=${emails.length} error=${JSON.stringify(json.error ?? null)}`)
+  console.log(`[poll] fetchEmailPage: status=${res.status} value件数=${emails.length} error=${JSON.stringify(json.error ?? null)} url=${url.slice(0, 120)}`)
 
   return { emails, nextLink: returnedNextLink }
 }
@@ -297,7 +297,7 @@ async function classifyEmailType(
 
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' })
 
     const prompt = [
       'このメールの種別を判断してください。',
