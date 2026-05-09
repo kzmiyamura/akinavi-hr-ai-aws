@@ -137,7 +137,7 @@ function AppInner() {
           <ProjectPage nickname={nickname} dataEnv={dataEnv} demoUiEnabled={demoUiEnabled} onOpenProjectDetail={openProjectDetail} />
         </div>
         <div className={tabPage === 'settings' ? 'block' : 'hidden'}>
-          <SettingsPage />
+          <SettingsPage demoUiEnabled={demoUiEnabled} />
         </div>
       </>
     )

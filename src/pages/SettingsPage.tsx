@@ -21,14 +21,21 @@ function defaultSinceDate(): string {
   return formatDateInput(d)
 }
 
-const ACCOUNT_LIST = [
+const ACCOUNT_LIST_PROD = [
   { account: 'human_prod', label: '人材用（本番）' },
   { account: 'project_prod', label: '案件用（本番）' },
+]
+
+const ACCOUNT_LIST_DEMO = [
   { account: 'human_dev', label: '人材用（デモ）' },
   { account: 'project_dev', label: '案件用（デモ）' },
 ]
 
-export function SettingsPage() {
+interface SettingsPageProps {
+  demoUiEnabled: boolean
+}
+
+export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   const queryClient = useQueryClient()
 
   const { data: settings, isLoading, error } = useQuery({
@@ -186,7 +193,7 @@ export function SettingsPage() {
         </p>
 
         <div className="divide-y divide-gray-100">
-          {ACCOUNT_LIST.map(({ account, label }) => {
+          {[...ACCOUNT_LIST_PROD, ...(demoUiEnabled ? ACCOUNT_LIST_DEMO : [])].map(({ account, label }) => {
             const connected = connectionStatuses?.[account] ?? false
             const isConnecting = connectingAccount === account
             return (
