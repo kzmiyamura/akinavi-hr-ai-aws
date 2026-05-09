@@ -1,7 +1,7 @@
-import { useState, useMemo, useEffect, useCallback, useRef, Fragment, type ReactNode } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle } from 'lucide-react'
+import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { fetchCandidates } from '../lib/db/candidates'
 import {
@@ -425,6 +425,8 @@ export function MatchingPage({
   onOpenProjectDetail,
 }: Props) {
   const [mode, setMode] = useState<MatchMode>('project')
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
   const [matchingRunMode, setMatchingRunMode] = useState<MatchingRunMode>(() => {
     try {
       const raw = localStorage.getItem(MATCHING_RUN_MODE_KEY)
@@ -873,10 +875,22 @@ export function MatchingPage({
   const switchMode = (next: MatchMode) => {
     setMode(next)
     setMessage(null)
+    setSelectedProjectId(null)
+    setSelectedCandidateId(null)
   }
 
   const countByProject = stats?.countByProjectId ?? {}
   const countByCandidate = stats?.countByCandidateId ?? {}
+
+  const selectedProject = projectList.find((p) => p.id === selectedProjectId) ?? null
+  const selectedCandidate = candidateList.find((c) => c.id === selectedCandidateId) ?? null
+
+  const selectedProjectRanked = selectedProject
+    ? toRankedForProject(submissionsByProject.get(selectedProject.id) ?? [], candidateList)
+    : []
+  const selectedCandidateSubs = selectedCandidate
+    ? (submissionsByCandidate.get(selectedCandidate.id) ?? [])
+    : []
 
   const busy =
     matchByProjectMutation.isPending ||
@@ -1032,173 +1046,168 @@ export function MatchingPage({
 
       {mode === 'project' && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden min-w-0">
-          <div className="px-3 sm:px-6 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:flex-wrap sm:items-start sm:justify-between gap-3">
+          <div className="px-4 py-3 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-gray-800">募集中の案件</h2>
-              <p className="text-sm text-gray-500 mt-0.5 break-words">
-                各案件の下に、保存済みのスコア順ランキングを表示します。
+              <p className="text-xs text-gray-500 mt-0.5">
                 {matchingRunMode === 'fast'
-                  ? `一括は高速モード（各案件 最大${fastMaxCandidates}名をAI評価）です。`
-                  : '一括は全件モード（募集中の全案件 × 全人材）です。'}
+                  ? `一括：各案件 最大${fastMaxCandidates}名をAI評価`
+                  : '一括：募集中の全案件 × 全人材'}
               </p>
             </div>
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={runBulkAllProjects}
-                disabled={
-                  (projects as Project[]).length === 0
-                  || (candidates as Candidate[]).length === 0
-                  || busy
-                }
-                className="inline-flex w-full sm:w-auto items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2.5 sm:py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={projectList.length === 0 || candidateList.length === 0 || busy}
+                className="inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {bulkAllProjectsMutation.isPending
-                  ? <Loader2 size={14} className="animate-spin" />
-                  : <RefreshCw size={14} />}
+                {bulkAllProjectsMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                 {matchingRunMode === 'fast' ? '全案件を再マッチング（高速）' : '全案件を再マッチング（全件）'}
               </button>
               {bulkAllProjectsMutation.isPending && (
                 <button
                   type="button"
-                  title="実行中の1件のAI評価が終わったあと、次の組み合わせに進まず停止します"
-                  onClick={() => {
-                    bulkCancelRequestedRef.current = true
-                  }}
-                  className="inline-flex w-full sm:w-auto items-center justify-center rounded-lg border border-red-200 bg-white px-3 py-2.5 sm:py-2 text-xs font-medium text-red-800 hover:bg-red-50"
+                  onClick={() => { bulkCancelRequestedRef.current = true }}
+                  className="inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-800 hover:bg-red-50"
                 >
                   キャンセル
                 </button>
               )}
             </div>
           </div>
-          {(projects as Project[]).length === 0 ? (
-            <p className="text-sm text-gray-400 px-3 sm:px-6 py-8">募集中の案件がありません。</p>
+
+          {projectList.length === 0 ? (
+            <p className="text-sm text-gray-400 px-4 py-8">募集中の案件がありません。</p>
           ) : (
-            <div className="overflow-x-auto -mx-0 sm:mx-0 touch-pan-x">
-              <table className="min-w-[20rem] w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-100 text-left text-gray-500 bg-gray-50/80">
-                    <th className="py-3 px-3 sm:px-6 font-medium">案件</th>
-                    <th className="py-3 pr-3 sm:pr-4 font-medium whitespace-nowrap hidden md:table-cell">クライアント</th>
-                    <th className="py-3 px-3 sm:px-6 font-medium text-right whitespace-nowrap">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(projects as Project[]).map((p) => {
-                    const n = isLoadingStats ? null : (countByProject[p.id] ?? 0)
-                    const rowSpin =
-                      matchByProjectMutation.isPending && matchByProjectMutation.variables === p.id
-                    const showRanking = !isLoadingStats && n !== null && n > 0
-                    const ranked = showRanking
-                      ? toRankedForProject(submissionsByProject.get(p.id) ?? [], candidateList)
-                      : []
-                    return (
-                      <Fragment key={p.id}>
-                        <tr className="border-b border-gray-50">
-                          <td className="py-3 px-3 sm:px-6 font-medium text-gray-900 max-w-[12rem] sm:max-w-none">
-                            <div className="space-y-1">
-                              {onOpenProjectDetail ? (
-                                <button
-                                  type="button"
-                                  onClick={() => onOpenProjectDetail(p.id)}
-                                  className="text-left text-blue-700 hover:text-blue-900 hover:underline font-medium break-words w-full"
-                                >
-                                  {p.title}
-                                </button>
-                              ) : (
-                                <span className="break-words">{p.title}</span>
-                              )}
-                              {!isLoadingStats && n === 0 && (
-                                <span className="inline-flex text-amber-700 bg-amber-50 rounded px-2 py-0.5 text-xs font-medium">
-                                  マッチング未実施
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-3 pr-3 sm:pr-4 text-gray-600 hidden md:table-cell whitespace-nowrap">
-                            {p.client ?? '—'}
-                          </td>
-                          <td className="py-3 px-3 sm:px-6 text-right align-top">
-                            <div className="flex flex-col items-end gap-1">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setMessage(null)
-                                  matchByProjectMutation.mutate(p.id)
-                                }}
-                                disabled={(candidates as Candidate[]).length === 0 || busy}
-                                className="inline-flex items-center justify-center gap-1 bg-blue-600 text-white rounded-lg px-2.5 sm:px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                              >
-                                {rowSpin
-                                  ? <Loader2 size={14} className="animate-spin" />
-                                  : <RefreshCw size={14} />}
-                                再実行
-                              </button>
-                              {rowSpin && (
-                                <p className="text-[11px] text-blue-800 font-medium leading-snug max-w-[min(100%,16rem)] text-right break-words">
-                                  {matchRunProgress
-                                    ? formatMatchRunProgressLine(matchRunProgress)
-                                    : 'AI 評価を準備しています…'}
-                                </p>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                        {showRanking && (
-                          <tr className="bg-slate-50/80 border-b border-gray-100">
-                            <td colSpan={3} className="px-3 sm:px-6 py-4 min-w-0">
-                              {isLoadingProjectSubs ? (
-                                <p className="text-sm text-gray-400">読み込み中...</p>
-                              ) : ranked.length === 0 ? (
-                                <p className="text-sm text-gray-500">
-                                  データを表示できません。一覧を更新するか「再実行」で算出してください。
-                                </p>
-                              ) : (
-                                <div className="space-y-3">
-                                  <p className="text-xs font-medium text-gray-500">
-                                    マッチングランキング（全 {ranked.length} 名）— スコアと理由は AI 判定です
-                                    {ranked.length > RANK_HEAD && (
-                                      <span className="text-gray-400">（先頭 {RANK_HEAD} 名を常時表示）</span>
-                                    )}
-                                  </p>
-                                  <div className="space-y-3">
-                                    {ranked.slice(0, RANK_HEAD).map((s, i) => (
-                                      <ProjectModeRankCard
-                                        key={s.id}
-                                        s={s}
-                                        rankIndex={i}
-                                        onOpenCandidateDetail={onOpenCandidateDetail}
-                                        scoreColor={scoreColor}
-                                        onDecide={(sub) => decideMutation.mutate(sub)}
-                                      />
-                                    ))}
-                                    <RankingRestAccordion
-                                      count={ranked.length - RANK_HEAD}
-                                      unitLabel="名"
-                                    >
-                                      {ranked.slice(RANK_HEAD).map((s, idx) => (
-                                        <ProjectModeRankCard
-                                          key={s.id}
-                                          s={s}
-                                          rankIndex={RANK_HEAD + idx}
-                                          onOpenCandidateDetail={onOpenCandidateDetail}
-                                          scoreColor={scoreColor}
-                                          onDecide={(sub) => decideMutation.mutate(sub)}
-                                        />
-                                      ))}
-                                    </RankingRestAccordion>
-                                  </div>
-                                </div>
-                              )}
-                            </td>
-                          </tr>
+            <div className="flex flex-col md:flex-row">
+              {/* Left: project list */}
+              <div className="w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px]">
+                {projectList.map((p) => {
+                  const n = isLoadingStats ? null : (countByProject[p.id] ?? 0)
+                  const isSelected = selectedProjectId === p.id
+                  const isBusy = matchByProjectMutation.isPending && matchByProjectMutation.variables === p.id
+                  return (
+                    <div
+                      key={p.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedProjectId(isSelected ? null : p.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          setSelectedProjectId(isSelected ? null : p.id)
+                        }
+                      }}
+                      className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer border-b border-gray-50 last:border-0 transition-colors ${
+                        isSelected ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-gray-800 truncate">{p.title}</div>
+                        <div className="flex items-center gap-2 text-xs mt-0.5 flex-wrap">
+                          {p.client && <span className="text-gray-400 truncate">{p.client}</span>}
+                          {isBusy ? (
+                            <span className="flex items-center gap-1 text-blue-600">
+                              <Loader2 size={11} className="animate-spin" />実行中
+                            </span>
+                          ) : n === 0 ? (
+                            <span className="text-amber-600">未実施</span>
+                          ) : n !== null ? (
+                            <span className="text-gray-400">{n}件のマッチング</span>
+                          ) : null}
+                        </div>
+                      </div>
+                      {isSelected && <ChevronRight size={14} className="text-blue-400 shrink-0" />}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Right: ranking panel */}
+              <div className="flex-1 overflow-y-auto md:max-h-[640px]">
+                {selectedProject ? (
+                  <div className="p-4 space-y-4">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <h3 className="text-base font-semibold text-gray-800 break-words">{selectedProject.title}</h3>
+                        {selectedProject.client && (
+                          <p className="text-xs text-gray-500 mt-0.5">{selectedProject.client}</p>
                         )}
-                      </Fragment>
-                    )
-                  })}
-                </tbody>
-              </table>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {onOpenProjectDetail && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenProjectDetail(selectedProject.id)}
+                            className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                          >
+                            詳細ページ
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMessage(null)
+                            matchByProjectMutation.mutate(selectedProject.id)
+                          }}
+                          disabled={candidateList.length === 0 || busy}
+                          className="inline-flex items-center gap-1.5 bg-blue-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {matchByProjectMutation.isPending && matchByProjectMutation.variables === selectedProject.id
+                            ? <Loader2 size={13} className="animate-spin" />
+                            : <RefreshCw size={13} />}
+                          再実行
+                        </button>
+                      </div>
+                    </div>
+                    {matchByProjectMutation.isPending && matchByProjectMutation.variables === selectedProject.id && matchRunProgress && (
+                      <p className="text-xs text-blue-700 bg-blue-50 rounded px-3 py-2">
+                        {formatMatchRunProgressLine(matchRunProgress)}
+                      </p>
+                    )}
+                    {isLoadingProjectSubs ? (
+                      <p className="text-sm text-gray-400">読み込み中...</p>
+                    ) : selectedProjectRanked.length === 0 ? (
+                      <p className="text-sm text-gray-500">マッチング未実施、または「再実行」で算出してください。</p>
+                    ) : (
+                      <div className="space-y-3">
+                        <p className="text-xs font-medium text-gray-500">
+                          マッチングランキング（全 {selectedProjectRanked.length} 名）— スコアと理由は AI 判定です
+                        </p>
+                        <div className="space-y-3">
+                          {selectedProjectRanked.slice(0, RANK_HEAD).map((s, i) => (
+                            <ProjectModeRankCard
+                              key={s.id}
+                              s={s}
+                              rankIndex={i}
+                              onOpenCandidateDetail={onOpenCandidateDetail}
+                              scoreColor={scoreColor}
+                              onDecide={(sub) => decideMutation.mutate(sub)}
+                            />
+                          ))}
+                          <RankingRestAccordion count={selectedProjectRanked.length - RANK_HEAD} unitLabel="名">
+                            {selectedProjectRanked.slice(RANK_HEAD).map((s, idx) => (
+                              <ProjectModeRankCard
+                                key={s.id}
+                                s={s}
+                                rankIndex={RANK_HEAD + idx}
+                                onOpenCandidateDetail={onOpenCandidateDetail}
+                                scoreColor={scoreColor}
+                                onDecide={(sub) => decideMutation.mutate(sub)}
+                              />
+                            ))}
+                          </RankingRestAccordion>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-32 md:h-full text-sm text-gray-400 p-8 text-center">
+                    ← 案件を選択するとマッチングランキングが表示されます
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -1206,179 +1215,176 @@ export function MatchingPage({
 
       {mode === 'candidate' && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden min-w-0">
-          <div className="px-3 sm:px-6 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:flex-wrap sm:items-start sm:justify-between gap-3">
+          <div className="px-4 py-3 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-gray-800">登録人材</h2>
-              <p className="text-sm text-gray-500 mt-0.5 break-words">
-                各人材の下に、保存済みのスコア順ランキングを表示します。
+              <p className="text-xs text-gray-500 mt-0.5">
                 {matchingRunMode === 'fast'
-                  ? `一括は高速モード（各人材 最大${fastMaxProjects}案件をAI評価）です。`
-                  : '一括は全件モード（全人材 × 募集中の全案件）です。'}
+                  ? `一括：各人材 最大${fastMaxProjects}案件をAI評価`
+                  : '一括：全人材 × 募集中の全案件'}
               </p>
             </div>
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={runBulkAllCandidates}
-                disabled={
-                  (projects as Project[]).length === 0
-                  || (candidates as Candidate[]).length === 0
-                  || busy
-                }
-                className="inline-flex w-full sm:w-auto items-center justify-center gap-2 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-2.5 sm:py-2 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={projectList.length === 0 || candidateList.length === 0 || busy}
+                className="inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {bulkAllCandidatesMutation.isPending
-                  ? <Loader2 size={14} className="animate-spin" />
-                  : <RefreshCw size={14} />}
+                {bulkAllCandidatesMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                 {matchingRunMode === 'fast' ? '全人材を再マッチング（高速）' : '全人材を再マッチング（全件）'}
               </button>
               {bulkAllCandidatesMutation.isPending && (
                 <button
                   type="button"
-                  title="実行中の1件のAI評価が終わったあと、次の組み合わせに進まず停止します"
-                  onClick={() => {
-                    bulkCancelRequestedRef.current = true
-                  }}
-                  className="inline-flex w-full sm:w-auto items-center justify-center rounded-lg border border-red-200 bg-white px-3 py-2.5 sm:py-2 text-xs font-medium text-red-800 hover:bg-red-50"
+                  onClick={() => { bulkCancelRequestedRef.current = true }}
+                  className="inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-800 hover:bg-red-50"
                 >
                   キャンセル
                 </button>
               )}
             </div>
           </div>
-          {(candidates as Candidate[]).length === 0 ? (
-            <p className="text-sm text-gray-400 px-3 sm:px-6 py-8">登録人材がありません。</p>
+
+          {candidateList.length === 0 ? (
+            <p className="text-sm text-gray-400 px-4 py-8">登録人材がありません。</p>
           ) : (
-            <div className="overflow-x-auto touch-pan-x">
-              <table className="min-w-[18rem] w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-100 text-left text-gray-500 bg-gray-50/80">
-                    <th className="py-3 px-3 sm:px-6 font-medium">人材</th>
-                    <th className="py-3 px-3 sm:px-6 font-medium text-right whitespace-nowrap">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(candidates as Candidate[]).map((c) => {
-                    const n = isLoadingStats ? null : (countByCandidate[c.id] ?? 0)
-                    const rowSpin =
-                      matchByCandidateMutation.isPending && matchByCandidateMutation.variables === c.id
-                    const showRanking = !isLoadingStats && n !== null && n > 0
-                    const subs = submissionsByCandidate.get(c.id) ?? []
-                    const subsLoading = isLoadingCandidateSubs || (showRanking && isLoadingSupportProjects)
-                    return (
-                      <Fragment key={c.id}>
-                        <tr className="border-b border-gray-50">
-                          <td className="py-3 px-3 sm:px-6 max-w-[11rem] sm:max-w-none min-w-0">
-                            <div className="space-y-1">
-                              {onOpenCandidateDetail ? (
-                                <button
-                                  type="button"
-                                  onClick={() => onOpenCandidateDetail(c.id)}
-                                  className="font-medium text-gray-900 text-left hover:text-blue-700 hover:underline block w-full break-words"
-                                >
-                                  {c.name}
-                                </button>
-                              ) : (
-                                <div className="font-medium text-gray-900 break-words">{c.name}</div>
-                              )}
-                              {!isLoadingStats && n === 0 && (
-                                <span className="inline-flex text-amber-700 bg-amber-50 rounded px-2 py-0.5 text-xs font-medium">
-                                  マッチング未実施
-                                </span>
-                              )}
-                            </div>
-                            {c.email && (
-                              <div className="text-xs text-gray-500 mt-0.5 break-all">{c.email}</div>
-                            )}
-                          </td>
-                          <td className="py-3 px-3 sm:px-6 text-right align-top">
-                            <div className="flex flex-col items-end gap-1">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setMessage(null)
-                                  matchByCandidateMutation.mutate(c.id)
-                                }}
-                                disabled={(projects as Project[]).length === 0 || busy}
-                                className="inline-flex items-center justify-center gap-1 bg-blue-600 text-white rounded-lg px-2.5 sm:px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                              >
-                                {rowSpin
-                                  ? <Loader2 size={14} className="animate-spin" />
-                                  : <RefreshCw size={14} />}
-                                再実行
-                              </button>
-                              {rowSpin && (
-                                <p className="text-[11px] text-blue-800 font-medium leading-snug max-w-[min(100%,16rem)] text-right break-words">
-                                  {matchRunProgress
-                                    ? formatMatchRunProgressLine(matchRunProgress)
-                                    : 'AI 評価を準備しています…'}
-                                </p>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                        {showRanking && (
-                          <tr className="bg-slate-50/80 border-b border-gray-100">
-                            <td colSpan={2} className="px-3 sm:px-6 py-4 min-w-0">
-                              {subsLoading ? (
-                                <p className="text-sm text-gray-400">読み込み中...</p>
-                              ) : subs.length === 0 ? (
-                                <p className="text-sm text-gray-500">
-                                  データを表示できません。一覧を更新するか「再実行」で算出してください。
-                                </p>
-                              ) : (
-                                <div className="space-y-3">
-                                  <p className="text-xs font-medium text-gray-500">
-                                    おすすめ案件（スコア順・全 {subs.length} 件）— スコアと理由は AI 判定です
-                                    {subs.length > RANK_HEAD && (
-                                      <span className="text-gray-400">（先頭 {RANK_HEAD} 件を常時表示）</span>
-                                    )}
-                                  </p>
-                                  <div className="space-y-3">
-                                    {subs.slice(0, RANK_HEAD).map((s, i) => {
-                                      const p = projectById.get(s.project_id) ?? null
-                                      return (
-                                        <CandidateModeRankCard
-                                          key={s.id}
-                                          s={s}
-                                          rankIndex={i}
-                                          p={p}
-                                          onOpenProjectDetail={onOpenProjectDetail}
-                                          scoreColor={scoreColor}
-                                          onDecide={(sub) => decideMutation.mutate(sub)}
-                                        />
-                                      )
-                                    })}
-                                    <RankingRestAccordion
-                                      count={subs.length - RANK_HEAD}
-                                      unitLabel="件"
-                                    >
-                                      {subs.slice(RANK_HEAD).map((s, idx) => {
-                                        const p = projectById.get(s.project_id) ?? null
-                                        return (
-                                          <CandidateModeRankCard
-                                            key={s.id}
-                                            s={s}
-                                            rankIndex={RANK_HEAD + idx}
-                                            p={p}
-                                            onOpenProjectDetail={onOpenProjectDetail}
-                                            scoreColor={scoreColor}
-                                            onDecide={(sub) => decideMutation.mutate(sub)}
-                                          />
-                                        )
-                                      })}
-                                    </RankingRestAccordion>
-                                  </div>
-                                </div>
-                              )}
-                            </td>
-                          </tr>
+            <div className="flex flex-col md:flex-row">
+              {/* Left: candidate list */}
+              <div className="w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px]">
+                {candidateList.map((c) => {
+                  const n = isLoadingStats ? null : (countByCandidate[c.id] ?? 0)
+                  const isSelected = selectedCandidateId === c.id
+                  const isBusy = matchByCandidateMutation.isPending && matchByCandidateMutation.variables === c.id
+                  return (
+                    <div
+                      key={c.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedCandidateId(isSelected ? null : c.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          setSelectedCandidateId(isSelected ? null : c.id)
+                        }
+                      }}
+                      className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer border-b border-gray-50 last:border-0 transition-colors ${
+                        isSelected ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-gray-800 truncate">{c.name}</div>
+                        <div className="flex items-center gap-2 text-xs mt-0.5">
+                          {c.email && <span className="text-gray-400 truncate">{c.email}</span>}
+                          {isBusy ? (
+                            <span className="flex items-center gap-1 text-blue-600">
+                              <Loader2 size={11} className="animate-spin" />実行中
+                            </span>
+                          ) : n === 0 ? (
+                            <span className="text-amber-600">未実施</span>
+                          ) : n !== null ? (
+                            <span className="text-gray-400">{n}件のマッチング</span>
+                          ) : null}
+                        </div>
+                      </div>
+                      {isSelected && <ChevronRight size={14} className="text-blue-400 shrink-0" />}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Right: ranking panel */}
+              <div className="flex-1 overflow-y-auto md:max-h-[640px]">
+                {selectedCandidate ? (
+                  <div className="p-4 space-y-4">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <h3 className="text-base font-semibold text-gray-800 break-words">{selectedCandidate.name}</h3>
+                        {selectedCandidate.email && (
+                          <p className="text-xs text-gray-500 mt-0.5 break-all">{selectedCandidate.email}</p>
                         )}
-                      </Fragment>
-                    )
-                  })}
-                </tbody>
-              </table>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {onOpenCandidateDetail && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenCandidateDetail(selectedCandidate.id)}
+                            className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                          >
+                            詳細ページ
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMessage(null)
+                            matchByCandidateMutation.mutate(selectedCandidate.id)
+                          }}
+                          disabled={projectList.length === 0 || busy}
+                          className="inline-flex items-center gap-1.5 bg-blue-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {matchByCandidateMutation.isPending && matchByCandidateMutation.variables === selectedCandidate.id
+                            ? <Loader2 size={13} className="animate-spin" />
+                            : <RefreshCw size={13} />}
+                          再実行
+                        </button>
+                      </div>
+                    </div>
+                    {matchByCandidateMutation.isPending && matchByCandidateMutation.variables === selectedCandidate.id && matchRunProgress && (
+                      <p className="text-xs text-blue-700 bg-blue-50 rounded px-3 py-2">
+                        {formatMatchRunProgressLine(matchRunProgress)}
+                      </p>
+                    )}
+                    {isLoadingCandidateSubs || isLoadingSupportProjects ? (
+                      <p className="text-sm text-gray-400">読み込み中...</p>
+                    ) : selectedCandidateSubs.length === 0 ? (
+                      <p className="text-sm text-gray-500">マッチング未実施、または「再実行」で算出してください。</p>
+                    ) : (
+                      <div className="space-y-3">
+                        <p className="text-xs font-medium text-gray-500">
+                          おすすめ案件（スコア順・全 {selectedCandidateSubs.length} 件）— スコアと理由は AI 判定です
+                        </p>
+                        <div className="space-y-3">
+                          {selectedCandidateSubs.slice(0, RANK_HEAD).map((s, i) => {
+                            const p = projectById.get(s.project_id) ?? null
+                            return (
+                              <CandidateModeRankCard
+                                key={s.id}
+                                s={s}
+                                rankIndex={i}
+                                p={p}
+                                onOpenProjectDetail={onOpenProjectDetail}
+                                scoreColor={scoreColor}
+                                onDecide={(sub) => decideMutation.mutate(sub)}
+                              />
+                            )
+                          })}
+                          <RankingRestAccordion count={selectedCandidateSubs.length - RANK_HEAD} unitLabel="件">
+                            {selectedCandidateSubs.slice(RANK_HEAD).map((s, idx) => {
+                              const p = projectById.get(s.project_id) ?? null
+                              return (
+                                <CandidateModeRankCard
+                                  key={s.id}
+                                  s={s}
+                                  rankIndex={RANK_HEAD + idx}
+                                  p={p}
+                                  onOpenProjectDetail={onOpenProjectDetail}
+                                  scoreColor={scoreColor}
+                                  onDecide={(sub) => decideMutation.mutate(sub)}
+                                />
+                              )
+                            })}
+                          </RankingRestAccordion>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-32 md:h-full text-sm text-gray-400 p-8 text-center">
+                    ← 人材を選択するとおすすめ案件のランキングが表示されます
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

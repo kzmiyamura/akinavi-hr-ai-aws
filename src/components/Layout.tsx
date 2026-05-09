@@ -37,7 +37,7 @@ export function Layout({
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <div className="sticky top-0 z-50 bg-white shadow-sm">
         <header className="border-b border-gray-100 px-3 sm:px-4 py-2.5 sm:py-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between max-w-4xl mx-auto w-full">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between max-w-6xl mx-auto w-full">
             <h1 className="text-base sm:text-lg font-bold text-blue-700 truncate min-w-0">
               AkiNavi HR-AI
             </h1>
@@ -72,7 +72,7 @@ export function Layout({
           </div>
         </header>
 
-        <nav className="border-b border-gray-200 bg-white max-w-4xl mx-auto w-full px-1 sm:px-4">
+        <nav className="border-b border-gray-200 bg-white max-w-6xl mx-auto w-full px-1 sm:px-4">
           <div className="flex w-full">
             {NAV_ITEMS.map(({ page, label, icon }) => (
               <button
@@ -93,7 +93,7 @@ export function Layout({
         </nav>
       </div>
 
-      <main className="flex-1 w-full max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 min-w-0">
+      <main className="flex-1 w-full max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-6 min-w-0">
         {children}
       </main>
     </div>

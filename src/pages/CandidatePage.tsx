@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { upsertCandidate, updateCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import { getIsImportActive } from '../lib/db/emailSettings'
@@ -517,11 +517,11 @@ interface Props {
   onOpenCandidateDetail?: (candidateId: string) => void
 }
 
-export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpenCandidateDetail }: Props) {
+export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpenCandidateDetail: _onOpenCandidateDetail }: Props) {
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null)
   const [imageFiles, setImageFiles] = useState<ImageFileData[]>([])
@@ -577,14 +577,6 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
       const imageIndexOffset = namesBefore.filter((n) => !n.includes('テキスト抽出済み')).length
       if (uploadedFileNames[index]?.includes('テキスト抽出済み')) return prev
       return prev.filter((_, i) => i !== imageIndexOffset)
-    })
-  }
-
-  function toggleExpand(id: string) {
-    setExpandedIds((prev) => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
     })
   }
 
@@ -658,11 +650,14 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         ? `登録完了（重複の疑いフラグあり）: ${candidate.name}`
         : `登録完了: ${candidate.name}`
       setMessage({ type: 'success', text: msg })
+      setSelectedId(candidate.id)
     },
     onError: (e) => {
       setMessage({ type: 'error', text: String(e) })
     },
   })
+
+  const selectedCandidate = candidates.find((c: Candidate) => c.id === selectedId) ?? null
 
   return (
     <div className="space-y-6">
@@ -755,9 +750,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         </button>
       </div>
 
-      {/* 候補者一覧 */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 min-w-0">
-        <div className="flex items-center gap-3 mb-4 flex-wrap">
+      {/* 候補者一覧 - Split layout */}
+      <div className="bg-white rounded-xl border border-gray-200 min-w-0">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 flex-wrap">
           <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
             <RefreshCw size={18} className="text-gray-500" />
             登録済み人材（{searchQuery.trim() ? `${filteredCandidates.length} / ${candidates.length}` : candidates.length}件）
@@ -781,74 +776,99 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
             )}
           </div>
         </div>
-        {isLoading ? (
-          <p className="text-sm text-gray-400">読み込み中...</p>
-        ) : candidates.length === 0 ? (
-          <p className="text-sm text-gray-400">まだ登録されていません</p>
-        ) : filteredCandidates.length === 0 ? (
-          <p className="text-sm text-gray-400">「{searchQuery}」に一致する人材が見つかりません</p>
-        ) : (
-          <div className="space-y-3">
-            {filteredCandidates.map((c: Candidate) => {
-              const isExpanded = expandedIds.has(c.id)
-              const openDetail = onOpenCandidateDetail
-              return (
-                <div
-                  key={c.id}
-                  role={openDetail ? 'button' : undefined}
-                  tabIndex={openDetail ? 0 : undefined}
-                  onClick={openDetail ? () => openDetail(c.id) : undefined}
-                  onKeyDown={
-                    openDetail
-                      ? (e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault()
-                            openDetail(c.id)
-                          }
-                        }
-                      : undefined
-                  }
-                  className={`border border-gray-100 rounded-lg p-3 sm:p-4 ${openDetail ? 'cursor-pointer hover:border-blue-200 hover:bg-blue-50/30 transition-colors' : ''}`}
-                >
-                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 md:gap-3 min-w-0">
-                    <CandidateProfileFields
-                      c={c}
-                      isExpanded={isExpanded}
-                      onToggleExpand={() => toggleExpand(c.id)}
-                    />
 
-                    <div className="flex items-center justify-end gap-2 md:ml-4 shrink-0">
-                      <span className="text-[11px] text-gray-300 hidden md:inline">{c.created_by}</span>
+        {isLoading ? (
+          <p className="text-sm text-gray-400 p-4">読み込み中...</p>
+        ) : candidates.length === 0 ? (
+          <p className="text-sm text-gray-400 p-4">まだ登録されていません</p>
+        ) : filteredCandidates.length === 0 ? (
+          <p className="text-sm text-gray-400 p-4">「{searchQuery}」に一致する人材が見つかりません</p>
+        ) : (
+          <div className="flex flex-col md:flex-row">
+            {/* Left: candidate list */}
+            <div className="w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px]">
+              {filteredCandidates.map((c: Candidate) => {
+                const raw = getRaw(c)
+                const sbc = raw.skillsByCategory
+                const skillCount = sbc
+                  ? Object.values(sbc).reduce((s, a) => s + (a?.length ?? 0), 0)
+                  : (c.skills as string[]).length
+                const isSelected = selectedId === c.id
+                return (
+                  <div
+                    key={c.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedId(isSelected ? null : c.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setSelectedId(isSelected ? null : c.id)
+                      }
+                    }}
+                    className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer border-b border-gray-50 last:border-0 transition-colors ${
+                      isSelected
+                        ? 'bg-blue-50 border-l-2 border-l-blue-500'
+                        : 'hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-800 truncate flex items-center gap-1">
+                        {c.name}
+                        {c.duplicate_flag && (
+                          <span className="text-[10px] bg-yellow-100 text-yellow-700 rounded px-1 shrink-0">重複</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
+                        <span>経験{c.experience_years ?? '?'}年</span>
+                        <span>·</span>
+                        <span>{skillCount}スキル</span>
+                      </div>
+                    </div>
+                    {isSelected && <ChevronRight size={14} className="text-blue-400 shrink-0" />}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Right: detail panel */}
+            <div className="flex-1 overflow-y-auto md:max-h-[640px]">
+              {selectedCandidate ? (
+                <div className="p-4 space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="text-base font-semibold text-gray-800">{selectedCandidate.name}</h3>
+                    <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setEditingCandidate(c)
-                        }}
-                        className="p-1.5 rounded hover:bg-gray-50 text-gray-400 hover:text-blue-600 transition-colors"
+                        onClick={() => setEditingCandidate(selectedCandidate)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
                         title="編集"
                       >
-                        <Pencil size={15} />
+                        <Pencil size={14} />
+                        編集
                       </button>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleDelete(c)
-                        }}
-                        disabled={deletingId === c.id}
-                        className="p-1.5 rounded hover:bg-gray-50 text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50"
+                        onClick={() => handleDelete(selectedCandidate)}
+                        disabled={deletingId === selectedCandidate.id}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-red-600 hover:border-red-300 transition-colors disabled:opacity-50"
                         title="削除"
                       >
-                        {deletingId === c.id
-                          ? <Loader2 size={15} className="animate-spin" />
-                          : <Trash2 size={15} />}
+                        {deletingId === selectedCandidate.id
+                          ? <Loader2 size={14} className="animate-spin" />
+                          : <Trash2 size={14} />}
+                        削除
                       </button>
                     </div>
                   </div>
+                  <CandidateProfileFields c={selectedCandidate} isExpanded detailMode />
                 </div>
-              )
-            })}
+              ) : (
+                <div className="flex items-center justify-center h-32 md:h-full text-sm text-gray-400 p-8 text-center">
+                  ← 左のリストから人材を選択すると詳細が表示されます
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Briefcase, RefreshCw, Search, ChevronDown, ChevronUp, Pencil, Trash2, X, MapPin, Wifi, Mail, Paperclip } from 'lucide-react'
+import { Loader2, Briefcase, RefreshCw, Search, ChevronDown, ChevronUp, Pencil, Trash2, X, MapPin, Wifi, Mail, Paperclip, ChevronRight } from 'lucide-react'
 import { ai } from '../lib/ai'
 import {
   insertProject,
@@ -432,11 +432,11 @@ export function ProjectEditModal({ project, nickname, dataEnv, onClose, onSaved 
   )
 }
 
-export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenProjectDetail }: Props) {
+export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenProjectDetail: _onOpenProjectDetail }: Props) {
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [imageFiles, setImageFiles] = useState<ImageFileData[]>([])
@@ -495,14 +495,6 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
     })
   }
 
-  function toggleExpand(id: string) {
-    setExpandedIds((prev) => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
-  }
-
   const { data: isImportActive } = useQuery({
     queryKey: ['importActive'],
     queryFn: getIsImportActive,
@@ -547,11 +539,14 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
       setImageFiles([])
       setUploadedFileNames([])
       setMessage({ type: 'success', text: `登録完了: ${project.title}` })
+      setSelectedId(project.id)
     },
     onError: (e) => {
       setMessage({ type: 'error', text: String(e) })
     },
   })
+
+  const selectedProject = projects.find((p: Project) => p.id === selectedId) ?? null
 
   const filteredProjects = projects.filter((p: Project) => {
     if (!searchQuery.trim()) return true
@@ -661,8 +656,9 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
         </button>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 min-w-0">
-        <div className="flex items-center gap-3 mb-4 flex-wrap">
+      {/* 案件一覧 - Split layout */}
+      <div className="bg-white rounded-xl border border-gray-200 min-w-0">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 flex-wrap">
           <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
             <RefreshCw size={18} className="text-gray-500" />
             登録済み案件（{searchQuery.trim() ? `${filteredProjects.length} / ${projects.length}` : projects.length}件）
@@ -686,71 +682,102 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
             )}
           </div>
         </div>
-        {isLoading ? (
-          <p className="text-sm text-gray-400">読み込み中...</p>
-        ) : projects.length === 0 ? (
-          <p className="text-sm text-gray-400">まだ登録されていません</p>
-        ) : filteredProjects.length === 0 ? (
-          <p className="text-sm text-gray-400">「{searchQuery}」に一致する案件が見つかりません</p>
-        ) : (
-          <div className="space-y-3">
-            {filteredProjects.map((p: Project) => {
-              const isExpanded = expandedIds.has(p.id)
-              const openDetail = onOpenProjectDetail
-              return (
-                <div
-                  key={p.id}
-                  role={openDetail ? 'button' : undefined}
-                  tabIndex={openDetail ? 0 : undefined}
-                  onClick={openDetail ? () => openDetail(p.id) : undefined}
-                  onKeyDown={
-                    openDetail
-                      ? (e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault()
-                            openDetail(p.id)
-                          }
-                        }
-                      : undefined
-                  }
-                  className={`border border-gray-100 rounded-lg p-3 sm:p-4 space-y-2 ${openDetail ? 'cursor-pointer hover:border-blue-200 hover:bg-blue-50/30 transition-colors' : ''}`}
-                >
-                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 md:gap-3 min-w-0">
-                    <ProjectProfileFields
-                      p={p}
-                      isExpanded={isExpanded}
-                      onToggleExpand={() => toggleExpand(p.id)}
-                    />
 
-                    <div className="flex items-center justify-end gap-2 shrink-0">
+        {isLoading ? (
+          <p className="text-sm text-gray-400 p-4">読み込み中...</p>
+        ) : projects.length === 0 ? (
+          <p className="text-sm text-gray-400 p-4">まだ登録されていません</p>
+        ) : filteredProjects.length === 0 ? (
+          <p className="text-sm text-gray-400 p-4">「{searchQuery}」に一致する案件が見つかりません</p>
+        ) : (
+          <div className="flex flex-col md:flex-row">
+            {/* Left: project list */}
+            <div className="w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px]">
+              {filteredProjects.map((p: Project) => {
+                const statusLabel: Record<Project['status'], string> = {
+                  open: '募集中',
+                  filled: '充足',
+                  closed: 'クローズ',
+                }
+                const statusColor: Record<Project['status'], string> = {
+                  open: 'bg-green-100 text-green-700',
+                  filled: 'bg-gray-100 text-gray-500',
+                  closed: 'bg-red-100 text-red-500',
+                }
+                const isSelected = selectedId === p.id
+                return (
+                  <div
+                    key={p.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedId(isSelected ? null : p.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setSelectedId(isSelected ? null : p.id)
+                      }
+                    }}
+                    className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer border-b border-gray-50 last:border-0 transition-colors ${
+                      isSelected
+                        ? 'bg-blue-50 border-l-2 border-l-blue-500'
+                        : 'hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-800 truncate">{p.title}</div>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        <span className={`text-[10px] rounded px-1.5 py-0.5 ${statusColor[p.status]}`}>
+                          {statusLabel[p.status]}
+                        </span>
+                        {p.client && (
+                          <span className="text-xs text-gray-400 truncate">{p.client}</span>
+                        )}
+                      </div>
+                    </div>
+                    {isSelected && <ChevronRight size={14} className="text-blue-400 shrink-0" />}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Right: detail panel */}
+            <div className="flex-1 overflow-y-auto md:max-h-[640px]">
+              {selectedProject ? (
+                <div className="p-4 space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="text-base font-semibold text-gray-800">{selectedProject.title}</h3>
+                    <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setEditingProject(p)
-                        }}
-                        className="p-1.5 rounded hover:bg-gray-50 text-gray-400 hover:text-blue-600 transition-colors"
+                        onClick={() => setEditingProject(selectedProject)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
                         title="編集"
                       >
-                        <Pencil size={15} />
+                        <Pencil size={14} />
+                        編集
                       </button>
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleDelete(p)
-                        }}
-                        disabled={deletingId === p.id}
-                        className="p-1.5 rounded hover:bg-gray-50 text-gray-400 hover:text-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={() => handleDelete(selectedProject)}
+                        disabled={deletingId === selectedProject.id}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-red-600 hover:border-red-300 transition-colors disabled:opacity-50"
                         title="削除"
                       >
-                        <Trash2 size={15} />
+                        {deletingId === selectedProject.id
+                          ? <Loader2 size={14} className="animate-spin" />
+                          : <Trash2 size={14} />}
+                        削除
                       </button>
                     </div>
                   </div>
+                  <ProjectProfileFields p={selectedProject} isExpanded detailMode />
                 </div>
-              )
-            })}
+              ) : (
+                <div className="flex items-center justify-center h-32 md:h-full text-sm text-gray-400 p-8 text-center">
+                  ← 左のリストから案件を選択すると詳細が表示されます
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
