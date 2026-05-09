@@ -99,6 +99,7 @@ function handleStart(req: Request): Response {
     redirect_uri: redirectUri,
     scope: SCOPE,
     state: account,
+    prompt: 'select_account', // 必ずアカウント選択画面を表示（キャッシュセッションをスキップ）
   })
 
   const authorizeUrl = `${AUTHORIZE_ENDPOINT}?${params.toString()}`
