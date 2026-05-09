@@ -671,22 +671,51 @@ async function fetchGoogleLinks(body: string): Promise<{
     } catch (e) { console.warn(`[DriveLink] Docs fetch error: ${id}`, e) }
   }
 
-  // Google Drive ファイル → PDF or テキスト
+  // Google Drive ファイル → PDF / テキスト / Excel / Word
   const driveMatches = driveMatchesPreview
   for (const match of driveMatches) {
     const id = match[1]
     const downloadUrl = `https://drive.google.com/uc?export=download&id=${id}`
     try {
-      const res = await fetchWithTimeout(downloadUrl)
+      // ファイルサイズが大きい場合があるので 20 秒に延長
+      const res = await fetchWithTimeout(downloadUrl, 20000)
       if (res.ok) {
-        const ct = res.headers.get('content-type') ?? ''
+        const ct = (res.headers.get('content-type') ?? '').split(';')[0].trim()
+        // content-disposition からファイル名を取得（ログ・ラベル用）
+        const cd = res.headers.get('content-disposition') ?? ''
+        const filenameMatch = cd.match(/filename[^;=\n]*=\s*["']?([^"';\n]+)["']?/)
+        const filename = filenameMatch ? decodeURIComponent(filenameMatch[1].trim()) : `drive_${id}`
+
+        const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xlsx?|ods)$/i.test(filename)
+        const isWord  = WORD_MIME.includes(ct)  || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(docx?)$/i.test(filename)
+
         if (ct.includes('pdf')) {
           const b64 = arrayBufferToBase64(await res.arrayBuffer())
-          pdfAttachments.push({ data: b64, mimeType: 'application/pdf', name: `drive_${id}.pdf` })
-          console.log(`[DriveLink] Drive PDF取得成功: ${id}`)
+          pdfAttachments.push({ data: b64, mimeType: 'application/pdf', name: filename })
+          console.log(`[DriveLink] Drive PDF取得成功: ${id} (${filename})`)
         } else if (ct.includes('text') || ct.includes('csv')) {
-          textContents.push({ label: `Driveファイル(${id})`, content: await res.text() })
-          console.log(`[DriveLink] Drive text取得成功: ${id}`)
+          textContents.push({ label: `Driveファイル(${filename})`, content: await res.text() })
+          console.log(`[DriveLink] Drive text取得成功: ${id} (${filename})`)
+        } else if (isExcel) {
+          const b64 = arrayBufferToBase64(await res.arrayBuffer())
+          const text = await extractExcelText(b64)
+          if (text.trim()) {
+            textContents.push({ label: `Drive Excel(${filename})`, content: text })
+            console.log(`[DriveLink] Drive Excel取得成功: ${id} (${filename}) ${text.length}文字`)
+          } else {
+            console.warn(`[DriveLink] Drive Excel テキスト抽出結果が空: ${id}`)
+          }
+        } else if (isWord) {
+          const b64 = arrayBufferToBase64(await res.arrayBuffer())
+          const text = await extractWordText(b64)
+          if (text.trim()) {
+            textContents.push({ label: `Drive Word(${filename})`, content: text })
+            console.log(`[DriveLink] Drive Word取得成功: ${id} (${filename}) ${text.length}文字`)
+          } else {
+            console.warn(`[DriveLink] Drive Word テキスト抽出結果が空: ${id}`)
+          }
+        } else {
+          console.warn(`[DriveLink] Drive 未対応タイプ(${ct}) ファイル名(${filename}): ${id}`)
         }
       } else {
         console.warn(`[DriveLink] Drive取得失敗(${res.status}): ${id}`)
