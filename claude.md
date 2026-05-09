@@ -139,6 +139,50 @@ Gemini AI 解析 → DB 保存
 
 3. ✅ **動作確認**: 4アカウント全て正常稼働（未読メール → 解析 → DB保存 → 既読マーク）
 
+### 【Phase 4.6】Microsoft OAuth UI連携機能の追加 ✅（完了）
+
+Supabase Secrets への手動リフレッシュトークン登録を廃止し、設定画面からワンクリックで Microsoft アカウントを連携できる OAuth フローを実装した。
+
+#### フロー
+```
+設定画面で「連携する」をクリック
+  ↓
+Edge Function microsoft-oauth (step=start) → authorize URL 生成
+  ↓
+ブラウザが Microsoft ログインページへリダイレクト
+  ↓
+ユーザーがログイン・権限承認
+  ↓
+Microsoft が <origin>/auth/callback?code=...&state=<account> にリダイレクト
+  ↓
+AuthCallbackPage が code を受け取り Edge Function microsoft-oauth (step=callback) を呼び出す
+  ↓
+Edge Function が code → refresh_token を交換し app_config に保存
+  ↓
+成功メッセージ表示・設定ページへ誘導
+```
+
+#### 追加・変更ファイル
+| ファイル | 変更内容 |
+|---|---|
+| `supabase/functions/microsoft-oauth/index.ts` | 新規作成：authorize URL 生成 & code 交換 Edge Function |
+| `src/pages/AuthCallbackPage.tsx` | 新規作成：OAuth コールバック専用ページ |
+| `src/pages/SettingsPage.tsx` | 変更：Microsoft アカウント連携セクション追加 |
+| `src/App.tsx` | 変更：`/auth/callback` パスで AuthCallbackPage を表示 |
+| `src/lib/db/emailSettings.ts` | 変更：`getConnectionStatuses()` 関数追加 |
+
+#### app_config キー
+| キー | 内容 |
+|---|---|
+| `graph_rt_human_prod` | human@outlook.jp (prod) のリフレッシュトークン |
+| `graph_rt_project_prod` | project@outlook.jp (prod) のリフレッシュトークン |
+| `graph_rt_human_dev` | human dev (demo) のリフレッシュトークン |
+| `graph_rt_project_dev` | project dev (demo) のリフレッシュトークン |
+| `graph_connected_<account>` | 連携済みフラグ（`"true"` / 未設定） |
+
+#### Azure アプリへの追加設定（手動）
+- Azure ポータル → アプリ登録 → 認証 → リダイレクト URI に `<origin>/auth/callback` を追加すること
+
 ### 【Phase 5】最終納品ドキュメント作成（未着手）
 1. **[Claude] 作業**: システム構成図のメンテナンス（README.md に Mermaid 図あり）
 2. **[Claude] 作業**: 操作マニュアルのメンテナンス（`docs/Sales_Manual.md` / `docs/Sales_Manual.pdf`・営業担当者向け）
@@ -193,6 +237,28 @@ Gemini AI 解析 → DB 保存
 ## 6. 実装済み機能の詳細
 
 ### メール自動受信（現行・ポーリング方式）
+
+#### poll-email と inbound-email の役割分担
+
+```
+pg_cron（5分ごと）
+  ↓
+【poll-email】メール取得係
+  - Microsoft Graph API で Outlook の未読メールを取得
+  - AI種別判断（有効時）: candidate / project / other を判定
+  - 処理済みメールを既読マーク（重複防止）
+  - メール内容を inbound-email に HTTP POST で渡す（1件ずつ）
+  ↓
+【inbound-email】解析・保存係（Make.com時代から存在）
+  - STEP0-2: メタ情報・本文・添付の受け取りと検証
+  - STEP3:   Word/Excel 添付をテキスト変換
+  - STEP4:   メール本文中の Google Drive リンクを取得
+  - STEP5:   Gemini AI（gemini-2.5-flash）で人材/案件情報を解析
+  - STEP6-7: 解析結果を candidates / projects テーブルに DB 保存
+```
+
+**ポイント**: `inbound-email` は今も現役。`poll-email` は「Outlookからメールを取ってきて `inbound-email` に渡す橋渡し役」。Make.com が廃止された後も `inbound-email` の解析ロジックはそのまま流用している。
+
 - **Edge Function**: `supabase/functions/poll-email/index.ts`（Phase 4.5 で実装）
 - **スケジューラ**: Supabase pg_cron（5分ごとに起動）
 - **認証**: Microsoft Graph API（OAuthリフレッシュトークン方式）
