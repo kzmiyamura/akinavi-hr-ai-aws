@@ -10,6 +10,11 @@ import {
   getImportProgress,
   getConnectionStatuses,
 } from '../lib/db/emailSettings'
+import {
+  getMatchingSettings,
+  saveMatchingSettings,
+  MATCHING_DEFAULTS,
+} from '../lib/db/matchingSettings'
 
 function formatDateInput(date: Date): string {
   return date.toISOString().split('T')[0]
@@ -50,6 +55,30 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   } = useQuery({
     queryKey: ['connectionStatuses'],
     queryFn: getConnectionStatuses,
+  })
+
+  // マッチング設定
+  const { data: matchingSettings } = useQuery({
+    queryKey: ['matchingSettings'],
+    queryFn: getMatchingSettings,
+  })
+  const [fastMaxCandidates, setFastMaxCandidates] = useState(MATCHING_DEFAULTS.fast_max_candidates_per_project)
+  const [fastMaxProjects, setFastMaxProjects] = useState(MATCHING_DEFAULTS.fast_max_projects_per_candidate)
+
+  useEffect(() => {
+    if (!matchingSettings) return
+    setFastMaxCandidates(matchingSettings.fast_max_candidates_per_project)
+    setFastMaxProjects(matchingSettings.fast_max_projects_per_candidate)
+  }, [matchingSettings])
+
+  const saveMatchingMutation = useMutation({
+    mutationFn: () => saveMatchingSettings({
+      fast_max_candidates_per_project: fastMaxCandidates,
+      fast_max_projects_per_candidate: fastMaxProjects,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['matchingSettings'] })
+    },
   })
 
   // フォーム状態
@@ -550,6 +579,68 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
             {resumeMutation.isError && (
               <p className="text-sm text-red-600">再開に失敗しました: {String(resumeMutation.error)}</p>
             )}
+          </div>
+        </section>
+
+        {/* ---- マッチング設定 ---- */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">マッチング設定</h2>
+          <p className="text-xs text-gray-400 mb-4">高速モード時の上限件数を設定します。</p>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                案件ごとの候補者上限（高速モード）
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={fastMaxCandidates}
+                  onChange={e => setFastMaxCandidates(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-24 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-500">名（デフォルト: {MATCHING_DEFAULTS.fast_max_candidates_per_project}名）</span>
+              </div>
+              <p className="mt-1 text-xs text-gray-400">1案件につき、必須スキル重複が多い順に上位N名のみAI採点します</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                人材ごとの案件上限（高速モード）
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={fastMaxProjects}
+                  onChange={e => setFastMaxProjects(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-24 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-500">件（デフォルト: {MATCHING_DEFAULTS.fast_max_projects_per_candidate}件）</span>
+              </div>
+              <p className="mt-1 text-xs text-gray-400">1人材につき、必須スキル重複が多い順に上位N件のみAI採点します</p>
+            </div>
+
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => saveMatchingMutation.mutate()}
+                disabled={saveMatchingMutation.isPending}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+              >
+                {saveMatchingMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                保存する
+              </button>
+              {saveMatchingMutation.isSuccess && (
+                <span className="ml-3 text-sm text-green-600">保存しました</span>
+              )}
+              {saveMatchingMutation.isError && (
+                <span className="ml-3 text-sm text-red-600">保存に失敗しました: {String(saveMatchingMutation.error)}</span>
+              )}
+            </div>
           </div>
         </section>
       </div>

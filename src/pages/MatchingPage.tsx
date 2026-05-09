@@ -17,6 +17,7 @@ import {
   fetchSubmissionStats,
 } from '../lib/db/submissions'
 import { supabase } from '../lib/supabase'
+import { getMatchingSettings, MATCHING_DEFAULTS } from '../lib/db/matchingSettings'
 import type { Candidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
@@ -37,8 +38,6 @@ type MatchMode = 'project' | 'candidate'
 
 type MatchingRunMode = 'fast' | 'full'
 const MATCHING_RUN_MODE_KEY = 'akinavi.matchingRunMode.v1'
-const FAST_MAX_CANDIDATES_PER_PROJECT = 20
-const FAST_MAX_PROJECTS_PER_CANDIDATE = 10
 
 /** マッチング実行中の進捗（一括・単体の「再実行」共通） */
 type MatchRunProgress = {
@@ -90,7 +89,7 @@ function countRequiredOverlap(candidate: Candidate, required: string[]): number 
   return n
 }
 
-function pickCandidatesForProjectMatch(project: Project, allCandidates: Candidate[], mode: MatchingRunMode): Candidate[] {
+function pickCandidatesForProjectMatch(project: Project, allCandidates: Candidate[], mode: MatchingRunMode, maxCandidates = MATCHING_DEFAULTS.fast_max_candidates_per_project): Candidate[] {
   const required = (project.required_skills as string[] | undefined) ?? []
   if (mode === 'full') return allCandidates
 
@@ -106,18 +105,18 @@ function pickCandidatesForProjectMatch(project: Project, allCandidates: Candidat
       return a.c.name.localeCompare(b.c.name, 'ja')
     })
 
-  // 必須スキルが空の案件は“絞り”の根拠が弱いので、経験年数が多い順に上限人数へ
+  // 必須スキルが空の案件は”絞り”の根拠が弱いので、経験年数が多い順に上限人数へ
   if (required.length === 0) {
     return scored
       .map((x) => x.c)
       .sort((a, b) => (b.experience_years ?? -1) - (a.experience_years ?? -1) || a.name.localeCompare(b.name, 'ja'))
-      .slice(0, FAST_MAX_CANDIDATES_PER_PROJECT)
+      .slice(0, maxCandidates)
   }
 
-  return scored.slice(0, FAST_MAX_CANDIDATES_PER_PROJECT).map((x) => x.c)
+  return scored.slice(0, maxCandidates).map((x) => x.c)
 }
 
-function pickProjectsForCandidateMatch(candidate: Candidate, openProjects: Project[], mode: MatchingRunMode): Project[] {
+function pickProjectsForCandidateMatch(candidate: Candidate, openProjects: Project[], mode: MatchingRunMode, maxProjects = MATCHING_DEFAULTS.fast_max_projects_per_candidate): Project[] {
   if (mode === 'full') return openProjects
 
   const cSkills = candidateSkillSet(candidate)
@@ -137,7 +136,7 @@ function pickProjectsForCandidateMatch(candidate: Candidate, openProjects: Proje
       return a.p.title.localeCompare(b.p.title, 'ja')
     })
 
-  return scored.slice(0, FAST_MAX_PROJECTS_PER_CANDIDATE).map((x) => x.p)
+  return scored.slice(0, maxProjects).map((x) => x.p)
 }
 
 function groupSubmissionsByProject(rows: Submission[]): Map<string, Submission[]> {
@@ -433,6 +432,14 @@ export function MatchingPage({
     } catch { /* ignore */ }
     return 'fast'
   })
+  const { data: matchingSettings } = useQuery({
+    queryKey: ['matchingSettings'],
+    queryFn: getMatchingSettings,
+    staleTime: 60_000,
+  })
+  const fastMaxCandidates = matchingSettings?.fast_max_candidates_per_project ?? MATCHING_DEFAULTS.fast_max_candidates_per_project
+  const fastMaxProjects = matchingSettings?.fast_max_projects_per_candidate ?? MATCHING_DEFAULTS.fast_max_projects_per_candidate
+
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [matchRunProgress, setMatchRunProgress] = useState<MatchRunProgress | null>(null)
   /** 非同期ループ内でも進捗が確実に1件ずつ描画されるよう同期コミットする */
@@ -556,7 +563,7 @@ export function MatchingPage({
       if (!project) throw new Error('案件が見つかりません')
 
       const projectReq = projectToMatchRequirements(project)
-      const targets = pickCandidatesForProjectMatch(project, candidates as Candidate[], matchingRunMode)
+      const targets = pickCandidatesForProjectMatch(project, candidates as Candidate[], matchingRunMode, fastMaxCandidates)
       const total = targets.length
       if (total === 0) return
 
@@ -603,7 +610,7 @@ export function MatchingPage({
         type: 'success',
         text:
           matchingRunMode === 'fast'
-            ? `マッチングを更新しました（高速：最大${FAST_MAX_CANDIDATES_PER_PROJECT}名）`
+            ? `マッチングを更新しました（高速：最大${fastMaxCandidates}名）`
             : 'マッチングを更新しました（全件）',
       })
     },
@@ -625,7 +632,7 @@ export function MatchingPage({
         summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
       }
 
-      const targetProjects = pickProjectsForCandidateMatch(candidate, projects as Project[], matchingRunMode)
+      const targetProjects = pickProjectsForCandidateMatch(candidate, projects as Project[], matchingRunMode, fastMaxProjects)
       const total = targetProjects.length
       if (total === 0) return
 
@@ -665,7 +672,7 @@ export function MatchingPage({
         type: 'success',
         text:
           matchingRunMode === 'fast'
-            ? `マッチングを更新しました（高速：最大${FAST_MAX_PROJECTS_PER_CANDIDATE}案件）`
+            ? `マッチングを更新しました（高速：最大${fastMaxProjects}案件）`
             : 'マッチングを更新しました（この人材 × 募集中の全案件）',
       })
     },
@@ -680,7 +687,7 @@ export function MatchingPage({
       const total =
         matchingRunMode === 'full'
           ? plist.length * clist.length
-          : plist.reduce((sum, p) => sum + pickCandidatesForProjectMatch(p, clist, 'fast').length, 0)
+          : plist.reduce((sum, p) => sum + pickCandidatesForProjectMatch(p, clist, 'fast', fastMaxCandidates).length, 0)
       if (total === 0) return
 
       let done = 0
@@ -694,7 +701,7 @@ export function MatchingPage({
           }
           const project = plist[pi]
           const projectReq = projectToMatchRequirements(project)
-          const targets = pickCandidatesForProjectMatch(project, clist, matchingRunMode)
+          const targets = pickCandidatesForProjectMatch(project, clist, matchingRunMode, fastMaxCandidates)
           const candTotal = targets.length
           for (let ci = 0; ci < targets.length; ci++) {
             if (bulkCancelRequestedRef.current) {
@@ -752,7 +759,7 @@ export function MatchingPage({
           type: 'success',
           text:
             matchingRunMode === 'fast'
-              ? `一括マッチング完了（高速モード：各案件 最大${FAST_MAX_CANDIDATES_PER_PROJECT}名をAI評価）`
+              ? `一括マッチング完了（高速モード：各案件 最大${fastMaxCandidates}名をAI評価）`
               : `一括マッチング完了（全件モード：募集中 ${plist.length} 案件 × 全 ${clist.length} 名）`,
         })
       } finally {
@@ -772,7 +779,7 @@ export function MatchingPage({
       const total =
         matchingRunMode === 'full'
           ? plist.length * clist.length
-          : clist.reduce((sum, c) => sum + pickProjectsForCandidateMatch(c, plist, 'fast').length, 0)
+          : clist.reduce((sum, c) => sum + pickProjectsForCandidateMatch(c, plist, 'fast', fastMaxProjects).length, 0)
       if (total === 0) return
 
       let done = 0
@@ -793,7 +800,7 @@ export function MatchingPage({
             experienceYears: candidate.experience_years,
             summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
           }
-          const targetProjects = pickProjectsForCandidateMatch(candidate, plist, matchingRunMode)
+          const targetProjects = pickProjectsForCandidateMatch(candidate, plist, matchingRunMode, fastMaxProjects)
           const projTotal = targetProjects.length
 
           for (let pi = 0; pi < targetProjects.length; pi++) {
@@ -845,7 +852,7 @@ export function MatchingPage({
           type: 'success',
           text:
             matchingRunMode === 'fast'
-              ? `一括マッチング完了（高速モード：各人材 最大${FAST_MAX_PROJECTS_PER_CANDIDATE}案件をAI評価）`
+              ? `一括マッチング完了（高速モード：各人材 最大${fastMaxProjects}案件をAI評価）`
               : `一括マッチング完了（全件モード：全 ${clist.length} 名 × 募集中 ${plist.length} 案件）`,
         })
       } finally {
@@ -884,12 +891,12 @@ export function MatchingPage({
     const maxCalls =
       matchingRunMode === 'full'
         ? plist.length * clist.length
-        : plist.reduce((sum, p) => sum + pickCandidatesForProjectMatch(p, clist, 'fast').length, 0)
+        : plist.reduce((sum, p) => sum + pickCandidatesForProjectMatch(p, clist, 'fast', fastMaxCandidates).length, 0)
     if (
       !window.confirm(
         matchingRunMode === 'full'
           ? `募集中の全 ${plist.length} 案件について、登録済みの全 ${clist.length} 名と AI マッチングを再実行します。\nAPI 呼び出しは最大 ${maxCalls} 回です。よろしいですか？`
-          : `高速モード：各案件につき「必須スキル重複が多い順」に並べ、最大 ${FAST_MAX_CANDIDATES_PER_PROJECT} 名だけ AI マッチングします。\nAPI 呼び出しは最大 ${maxCalls} 回です（未評価の人材がいます）。よろしいですか？`,
+          : `高速モード：各案件につき「必須スキル重複が多い順」に並べ、最大 ${fastMaxCandidates} 名だけ AI マッチングします。\nAPI 呼び出しは最大 ${maxCalls} 回です（未評価の人材がいます）。よろしいですか？`,
       )
     ) {
       return
@@ -905,12 +912,12 @@ export function MatchingPage({
     const maxCalls =
       matchingRunMode === 'full'
         ? plist.length * clist.length
-        : clist.reduce((sum, c) => sum + pickProjectsForCandidateMatch(c, plist, 'fast').length, 0)
+        : clist.reduce((sum, c) => sum + pickProjectsForCandidateMatch(c, plist, 'fast', fastMaxProjects).length, 0)
     if (
       !window.confirm(
         matchingRunMode === 'full'
           ? `全 ${clist.length} 名の人材について、募集中の全 ${plist.length} 案件と AI マッチングを再実行します。\nAPI 呼び出しは最大 ${maxCalls} 回です。よろしいですか？`
-          : `高速モード：各人材について「必須スキル重複が多い順」に並べ、最大 ${FAST_MAX_PROJECTS_PER_CANDIDATE} 案件だけ AI マッチングします。\nAPI 呼び出しは最大 ${maxCalls} 回です（未評価の案件があります）。よろしいですか？`,
+          : `高速モード：各人材について「必須スキル重複が多い順」に並べ、最大 ${fastMaxProjects} 案件だけ AI マッチングします。\nAPI 呼び出しは最大 ${maxCalls} 回です（未評価の案件があります）。よろしいですか？`,
       )
     ) {
       return
@@ -977,7 +984,7 @@ export function MatchingPage({
           </select>
         </div>
         <p className="text-xs text-gray-400">
-          高速モード上限：案件ごと最大 {FAST_MAX_CANDIDATES_PER_PROJECT} 名／人材ごと最大 {FAST_MAX_PROJECTS_PER_CANDIDATE} 案件（必須スキル重複が多い順）
+          高速モード上限：案件ごと最大 {fastMaxCandidates} 名／人材ごと最大 {fastMaxProjects} 案件（必須スキル重複が多い順）
         </p>
       </div>
 
@@ -1031,7 +1038,7 @@ export function MatchingPage({
               <p className="text-sm text-gray-500 mt-0.5 break-words">
                 各案件の下に、保存済みのスコア順ランキングを表示します。
                 {matchingRunMode === 'fast'
-                  ? `一括は高速モード（各案件 最大${FAST_MAX_CANDIDATES_PER_PROJECT}名をAI評価）です。`
+                  ? `一括は高速モード（各案件 最大${fastMaxCandidates}名をAI評価）です。`
                   : '一括は全件モード（募集中の全案件 × 全人材）です。'}
               </p>
             </div>
@@ -1205,7 +1212,7 @@ export function MatchingPage({
               <p className="text-sm text-gray-500 mt-0.5 break-words">
                 各人材の下に、保存済みのスコア順ランキングを表示します。
                 {matchingRunMode === 'fast'
-                  ? `一括は高速モード（各人材 最大${FAST_MAX_PROJECTS_PER_CANDIDATE}案件をAI評価）です。`
+                  ? `一括は高速モード（各人材 最大${fastMaxProjects}案件をAI評価）です。`
                   : '一括は全件モード（全人材 × 募集中の全案件）です。'}
               </p>
             </div>
