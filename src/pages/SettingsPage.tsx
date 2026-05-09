@@ -201,14 +201,26 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
           を追加してください
         </p>
 
+        <p className="text-xs text-gray-500 mb-3">
+          「連携する」を押すと、そのメールアドレスの <strong>Microsoftアカウントでログインする画面</strong> が開きます。メール受信に使うOutlookのアカウントを選択してください。
+        </p>
+
         <div className="divide-y divide-gray-100">
           {[...ACCOUNT_LIST_PROD, ...(demoUiEnabled ? ACCOUNT_LIST_DEMO : [])].map(({ account, label }) => {
             const connected = connectionStatuses?.[account] ?? false
             const isConnecting = connectingAccount === account
+            const addressMap: Record<string, string> = {
+              human_prod: humanAddress,
+              project_prod: projectAddress,
+              human_dev: humanDevAddress,
+              project_dev: projectDevAddress,
+            }
+            const displayAddress = addressMap[account]
             return (
               <div key={account} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-700">{label}</span>
+                <div className="flex flex-col gap-0.5 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-700">{label}</span>
                   {isConnectionLoading ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-400">
                       <Loader2 size={10} className="animate-spin" />
@@ -224,6 +236,10 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
                       <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
                       未連携
                     </span>
+                  )}
+                  </div>
+                  {displayAddress && (
+                    <span className="text-xs text-gray-400 truncate">{displayAddress}</span>
                   )}
                 </div>
                 <button
