@@ -6,6 +6,7 @@ export interface EmailSettings {
   email_human_dev_address: string
   email_project_dev_address: string
   email_use_ai_classification: boolean
+  email_use_ai_classification_dev: boolean
   email_poll_mode: 'incremental' | 'full' | 'paused'
   email_full_import_since: string
 }
@@ -16,6 +17,7 @@ const SETTING_KEYS = [
   'email_human_dev_address',
   'email_project_dev_address',
   'email_use_ai_classification',
+  'email_use_ai_classification_dev',
   'email_poll_mode',
   'email_full_import_since',
 ]
@@ -26,6 +28,7 @@ const DEFAULTS: EmailSettings = {
   email_human_dev_address: '',
   email_project_dev_address: '',
   email_use_ai_classification: false,
+  email_use_ai_classification_dev: false,
   email_poll_mode: 'incremental',
   email_full_import_since: '',
 }
@@ -51,6 +54,8 @@ export async function getEmailSettings(): Promise<EmailSettings> {
     email_project_dev_address: map['email_project_dev_address'] ?? DEFAULTS.email_project_dev_address,
     email_use_ai_classification:
       (map['email_use_ai_classification'] ?? 'false') === 'true',
+    email_use_ai_classification_dev:
+      (map['email_use_ai_classification_dev'] ?? 'false') === 'true',
     email_poll_mode:
       map['email_poll_mode'] === 'full'
         ? 'full'
@@ -70,6 +75,7 @@ export async function saveEmailAddressSettings(
     | 'email_human_dev_address'
     | 'email_project_dev_address'
     | 'email_use_ai_classification'
+    | 'email_use_ai_classification_dev'
   >,
 ): Promise<void> {
   const rows = [
@@ -77,10 +83,8 @@ export async function saveEmailAddressSettings(
     { key: 'email_project_address', value: settings.email_project_address },
     { key: 'email_human_dev_address', value: settings.email_human_dev_address },
     { key: 'email_project_dev_address', value: settings.email_project_dev_address },
-    {
-      key: 'email_use_ai_classification',
-      value: settings.email_use_ai_classification ? 'true' : 'false',
-    },
+    { key: 'email_use_ai_classification', value: settings.email_use_ai_classification ? 'true' : 'false' },
+    { key: 'email_use_ai_classification_dev', value: settings.email_use_ai_classification_dev ? 'true' : 'false' },
   ]
 
   const { error } = await supabase

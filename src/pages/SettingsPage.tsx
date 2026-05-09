@@ -93,6 +93,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   const [humanDevAddress, setHumanDevAddress] = useState('')
   const [projectDevAddress, setProjectDevAddress] = useState('')
   const [useAiClassification, setUseAiClassification] = useState(false)
+  const [useAiClassificationDev, setUseAiClassificationDev] = useState(false)
   const [sinceDate, setSinceDate] = useState(defaultSinceDate)
 
   // settings が取得できたらフォームに反映
@@ -103,6 +104,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
     setHumanDevAddress(settings.email_human_dev_address)
     setProjectDevAddress(settings.email_project_dev_address)
     setUseAiClassification(settings.email_use_ai_classification)
+    setUseAiClassificationDev(settings.email_use_ai_classification_dev)
     if (settings.email_full_import_since) {
       setSinceDate(settings.email_full_import_since)
     }
@@ -117,6 +119,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
         email_human_dev_address: humanDevAddress,
         email_project_dev_address: projectDevAddress,
         email_use_ai_classification: useAiClassification,
+        email_use_ai_classification_dev: useAiClassificationDev,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emailSettings'] })
@@ -319,7 +322,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
             </>
           )}
 
-          {/* AI種別判断 */}
+          {/* AI種別判断（本番） */}
           <div className="flex items-start gap-3 pt-1">
             <input
               id="useAiClassification"
@@ -330,11 +333,11 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
             />
             <div>
               <label htmlFor="useAiClassification" className="text-sm font-medium text-gray-700 cursor-pointer">
-                同じメールアドレスをAIで種別判断する
+                同じメールアドレスをAIで種別判断する（本番）
               </label>
               {useAiClassification && (
                 <p className="mt-0.5 text-xs text-blue-600">
-                  有効時は人材用メールアドレスのアカウントのみポーリングします
+                  有効時は人材用アカウント（本番）のみポーリングします
                 </p>
               )}
               <p className="mt-0.5 text-xs text-gray-400">
@@ -342,6 +345,32 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
               </p>
             </div>
           </div>
+
+          {/* AI種別判断（デモ）— デモモード有効時のみ表示 */}
+          {demoUiEnabled && (
+            <div className="flex items-start gap-3 pt-1">
+              <input
+                id="useAiClassificationDev"
+                type="checkbox"
+                checked={useAiClassificationDev}
+                onChange={e => setUseAiClassificationDev(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <div>
+                <label htmlFor="useAiClassificationDev" className="text-sm font-medium text-gray-700 cursor-pointer">
+                  同じメールアドレスをAIで種別判断する（デモ）
+                </label>
+                {useAiClassificationDev && (
+                  <p className="mt-0.5 text-xs text-blue-600">
+                    有効時は人材用アカウント（デモ）のみポーリングします
+                  </p>
+                )}
+                <p className="mt-0.5 text-xs text-gray-400">
+                  デモ環境で人材・案件が同じ受信箱に届く場合、Gemini AIで自動分類します
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* 保存ボタン */}
           <div className="pt-2">

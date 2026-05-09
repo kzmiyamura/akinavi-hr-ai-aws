@@ -509,23 +509,26 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    const useAiClassificationRaw = await getAppConfigValue(supabase, 'email_use_ai_classification')
-    const useAiClassification = useAiClassificationRaw === 'true'
+    const useAiClassificationProd = (await getAppConfigValue(supabase, 'email_use_ai_classification')) === 'true'
+    const useAiClassificationDev  = (await getAppConfigValue(supabase, 'email_use_ai_classification_dev')) === 'true'
 
     const since = (await getAppConfigValue(supabase, 'email_full_import_since')) ?? ''
 
-    console.log(`[poll-email] mode=${mode}, useAiClassification=${useAiClassification}`)
+    console.log(`[poll-email] mode=${mode}, useAiClassification prod=${useAiClassificationProd} dev=${useAiClassificationDev}`)
 
     // AI 種別判断有効時は candidate エントリーのみ（同一受信箱を2回処理しない）
-    const targetConfigs = useAiClassification
-      ? POLL_CONFIGS.filter(c => c.type === 'candidate')
-      : POLL_CONFIGS
+    // prod・dev それぞれ独立して判断
+    const targetConfigs = POLL_CONFIGS.filter(c => {
+      const useAi = c.dataEnv === 'prod' ? useAiClassificationProd : useAiClassificationDev
+      return !useAi || c.type === 'candidate'
+    })
 
     // アカウントを並列処理
     const results = await Promise.allSettled(
-      targetConfigs.map(config =>
-        pollAccount(supabase, config, mode, useAiClassification, since)
-      ),
+      targetConfigs.map(config => {
+        const useAiClassification = config.dataEnv === 'prod' ? useAiClassificationProd : useAiClassificationDev
+        return pollAccount(supabase, config, mode, useAiClassification, since)
+      }),
     )
 
     const summary = results.map((r, i) => ({
