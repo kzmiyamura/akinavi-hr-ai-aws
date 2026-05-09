@@ -232,6 +232,17 @@ function uint8ToBase64(bytes: Uint8Array): string {
 }
 
 /** AI の skills 配列を trim・重複除去（大文字小文字無視） */
+/** "27年9ヶ月" や "5" など様々な形式の経験年数を整数に変換する */
+function toExperienceYears(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : null
+  const s = String(value)
+  // 先頭の数字部分を取り出す（"27年9ヶ月" → 27、"5.5" → 5）
+  const m = s.match(/^(\d+)/)
+  if (!m) return null
+  return parseInt(m[1], 10)
+}
+
 function dedupeTrimmedSkills(skills: unknown): string[] {
   if (!Array.isArray(skills)) return []
   return Array.from(
@@ -1202,7 +1213,7 @@ JSON:`.trim()
         email,
         phone: analyzed.phone ?? null,
         skills,
-        experience_years: analyzed.experienceYears ?? null,
+        experience_years: toExperienceYears(analyzed.experienceYears),
         raw_profile: {
           text: body.slice(0, 5000),
           summary: analyzed.summary ?? '',
