@@ -3,14 +3,18 @@ import { supabase } from '../supabase'
 export interface EmailSettings {
   email_human_address: string
   email_project_address: string
+  email_human_dev_address: string
+  email_project_dev_address: string
   email_use_ai_classification: boolean
   email_poll_mode: 'incremental' | 'full' | 'paused'
   email_full_import_since: string
 }
 
-const SETTING_KEYS: (keyof EmailSettings)[] = [
+const SETTING_KEYS = [
   'email_human_address',
   'email_project_address',
+  'email_human_dev_address',
+  'email_project_dev_address',
   'email_use_ai_classification',
   'email_poll_mode',
   'email_full_import_since',
@@ -19,6 +23,8 @@ const SETTING_KEYS: (keyof EmailSettings)[] = [
 const DEFAULTS: EmailSettings = {
   email_human_address: '',
   email_project_address: '',
+  email_human_dev_address: '',
+  email_project_dev_address: '',
   email_use_ai_classification: false,
   email_poll_mode: 'incremental',
   email_full_import_since: '',
@@ -41,6 +47,8 @@ export async function getEmailSettings(): Promise<EmailSettings> {
   return {
     email_human_address: map['email_human_address'] ?? DEFAULTS.email_human_address,
     email_project_address: map['email_project_address'] ?? DEFAULTS.email_project_address,
+    email_human_dev_address: map['email_human_dev_address'] ?? DEFAULTS.email_human_dev_address,
+    email_project_dev_address: map['email_project_dev_address'] ?? DEFAULTS.email_project_dev_address,
     email_use_ai_classification:
       (map['email_use_ai_classification'] ?? 'false') === 'true',
     email_poll_mode:
@@ -57,12 +65,18 @@ export async function getEmailSettings(): Promise<EmailSettings> {
 export async function saveEmailAddressSettings(
   settings: Pick<
     EmailSettings,
-    'email_human_address' | 'email_project_address' | 'email_use_ai_classification'
+    | 'email_human_address'
+    | 'email_project_address'
+    | 'email_human_dev_address'
+    | 'email_project_dev_address'
+    | 'email_use_ai_classification'
   >,
 ): Promise<void> {
   const rows = [
     { key: 'email_human_address', value: settings.email_human_address },
     { key: 'email_project_address', value: settings.email_project_address },
+    { key: 'email_human_dev_address', value: settings.email_human_dev_address },
+    { key: 'email_project_dev_address', value: settings.email_project_dev_address },
     {
       key: 'email_use_ai_classification',
       value: settings.email_use_ai_classification ? 'true' : 'false',

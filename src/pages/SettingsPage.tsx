@@ -90,6 +90,8 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   // フォーム状態
   const [humanAddress, setHumanAddress] = useState('')
   const [projectAddress, setProjectAddress] = useState('')
+  const [humanDevAddress, setHumanDevAddress] = useState('')
+  const [projectDevAddress, setProjectDevAddress] = useState('')
   const [useAiClassification, setUseAiClassification] = useState(false)
   const [sinceDate, setSinceDate] = useState(defaultSinceDate)
 
@@ -98,6 +100,8 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
     if (!settings) return
     setHumanAddress(settings.email_human_address)
     setProjectAddress(settings.email_project_address)
+    setHumanDevAddress(settings.email_human_dev_address)
+    setProjectDevAddress(settings.email_project_dev_address)
     setUseAiClassification(settings.email_use_ai_classification)
     if (settings.email_full_import_since) {
       setSinceDate(settings.email_full_import_since)
@@ -110,6 +114,8 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
       saveEmailAddressSettings({
         email_human_address: humanAddress,
         email_project_address: projectAddress,
+        email_human_dev_address: humanDevAddress,
+        email_project_dev_address: projectDevAddress,
         email_use_ai_classification: useAiClassification,
       }),
     onSuccess: () => {
@@ -280,6 +286,38 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
             />
             <p className="mt-1 text-xs text-gray-400">表示用・参照用です。実際の認証情報は Supabase Secrets で管理します。</p>
           </div>
+
+          {/* デモ用メールアドレス（デモモード有効時のみ表示） */}
+          {demoUiEnabled && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  人材用メールアドレス（デモ）
+                </label>
+                <input
+                  type="email"
+                  value={humanDevAddress}
+                  onChange={e => setHumanDevAddress(e.target.value)}
+                  placeholder="demo.human@outlook.jp"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="mt-1 text-xs text-gray-400">表示用・参照用です。実際の認証情報は Supabase Secrets で管理します。</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  案件用メールアドレス（デモ）
+                </label>
+                <input
+                  type="email"
+                  value={projectDevAddress}
+                  onChange={e => setProjectDevAddress(e.target.value)}
+                  placeholder="demo.project@outlook.jp"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <p className="mt-1 text-xs text-gray-400">表示用・参照用です。実際の認証情報は Supabase Secrets で管理します。</p>
+              </div>
+            </>
+          )}
 
           {/* AI種別判断 */}
           <div className="flex items-start gap-3 pt-1">
