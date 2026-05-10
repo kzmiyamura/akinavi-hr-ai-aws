@@ -233,7 +233,7 @@ Deno.serve(async (req: Request) => {
           }
         }
 
-        totalSkipped += (candidates ?? []).length - targets.length
+        totalSkipped += (allCandidates ?? []).length - targets.length
       } catch (projErr) {
         const msg = `案件処理失敗 project=${project.id}: ${String(projErr)}`
         console.error(`[auto-match] ${msg}`)
