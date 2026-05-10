@@ -746,6 +746,108 @@ function stripHtml(html: string): string {
     .trim()
 }
 
+// ── Box URL 連携 ──────────────────────────────────────────────────────────
+
+/** メール本文から Box 共有URLを抽出する */
+function extractBoxUrls(body: string): string[] {
+  const matches = body.matchAll(/https?:\/\/(?:[\w-]+\.)?box\.com\/s\/[\w-]+/g)
+  return [...new Set([...matches].map(m => m[0]))]
+}
+
+/**
+ * Google サービスアカウント JSON から OAuth2 アクセストークンを取得する（RS256 JWT）
+ * Deno の crypto.subtle を使用するため Node.js の crypto 不要
+ */
+async function getGoogleAccessToken(
+  sa: { client_email: string; private_key: string },
+  scope: string,
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000)
+  const encodeBase64Url = (obj: object) =>
+    btoa(JSON.stringify(obj)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  const headerB64 = encodeBase64Url({ alg: 'RS256', typ: 'JWT' })
+  const payloadB64 = encodeBase64Url({
+    iss: sa.client_email,
+    scope,
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: now + 3600,
+    iat: now,
+  })
+  const signingInput = `${headerB64}.${payloadB64}`
+
+  // PEM → DER 変換
+  const pemBody = sa.private_key
+    .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+    .replace(/-----END PRIVATE KEY-----/g, '')
+    .replace(/\s/g, '')
+  const derBuffer = Uint8Array.from(atob(pemBody), (c) => c.charCodeAt(0))
+
+  const privateKey = await crypto.subtle.importKey(
+    'pkcs8',
+    derBuffer,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    privateKey,
+    new TextEncoder().encode(signingInput),
+  )
+  const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+
+  const jwt = `${signingInput}.${signatureB64}`
+
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth2:grant_type:jwt-bearer',
+      assertion: jwt,
+    }),
+  })
+  if (!tokenRes.ok) {
+    throw new Error(`Google OAuthトークン取得失敗: ${tokenRes.status} ${await tokenRes.text()}`)
+  }
+  const tokenData = (await tokenRes.json()) as { access_token: string }
+  return tokenData.access_token
+}
+
+/**
+ * Box URL を Googleスプレッドシートの boxurl 列（A列）に追記する
+ * 失敗してもメイン処理には影響させない（try/catch で握りつぶす）
+ */
+async function appendToBoxSpreadsheet(boxUrls: string[]): Promise<void> {
+  if (boxUrls.length === 0) return
+  const spreadsheetId = Deno.env.get('BOX_SPREADSHEET_ID')
+  const saJson = Deno.env.get('GOOGLE_SERVICE_ACCOUNT_JSON')
+  if (!spreadsheetId || !saJson) {
+    console.warn('[BoxSheet] BOX_SPREADSHEET_ID または GOOGLE_SERVICE_ACCOUNT_JSON が未設定のためスキップ')
+    return
+  }
+  try {
+    const sa = JSON.parse(saJson) as { client_email: string; private_key: string }
+    const accessToken = await getGoogleAccessToken(sa, 'https://www.googleapis.com/auth/spreadsheets')
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/A:A:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ values: boxUrls.map((u) => [u]) }),
+    })
+    if (!res.ok) {
+      console.error('[BoxSheet] スプレッドシート書き込みエラー', res.status, await res.text())
+    } else {
+      console.log('[BoxSheet] スプレッドシート書き込み成功:', boxUrls)
+    }
+  } catch (e) {
+    console.error('[BoxSheet] スプレッドシート書き込み例外:', e)
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -1015,6 +1117,12 @@ Deno.serve(async (req: Request) => {
       elapsed: elapsed(),
     })
 
+    // Box URL の検出（人材登録時にスプレッドシートへ書き込み・DB保存するため事前に抽出）
+    const boxUrls = type === 'candidate' || type === 'human' ? extractBoxUrls(body) : []
+    if (boxUrls.length > 0) {
+      console.log('[Box] Box URL検出:', boxUrls)
+    }
+
     // Drive取得テキスト + Officeテキストを統合してプロンプトに追記
     const allTextContents = [...driveTexts, ...officeTextContents]
     const driveTextSection = allTextContents.length > 0
@@ -1271,6 +1379,8 @@ JSON:`.trim()
         },
         duplicate_flag: false,
         created_by: 'make-inbound',
+        box_url: boxUrls[0] ?? null,
+        box_status: boxUrls.length > 0 ? 'pending' : null,
       }
 
       console.log(`[STEP7 DB保存開始] elapsed=${elapsed()}`)
@@ -1327,6 +1437,11 @@ JSON:`.trim()
       })
       if (logError) console.error('[ai_logs INSERT error]', logError)
 
+      // Box URLがあればスプレッドシートに書き込む（失敗してもメイン処理は継続）
+      if (boxUrls.length > 0) {
+        await appendToBoxSpreadsheet(boxUrls)
+      }
+
       console.log(`[inbound] 人材登録完了: ${data.name}`)
       return new Response(
         JSON.stringify({
@@ -1335,6 +1450,7 @@ JSON:`.trim()
           id: data.id,
           name: data.name,
           geminiParseFallback: parseFallback,
+          boxUrls: boxUrls.length > 0 ? boxUrls : undefined,
         }),
         {
           status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },

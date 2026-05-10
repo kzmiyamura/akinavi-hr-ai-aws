@@ -183,6 +183,94 @@ Edge Function が code → refresh_token を交換し app_config に保存
 #### Azure アプリへの追加設定（手動）
 - Azure ポータル → アプリ登録 → 認証 → リダイレクト URI に `<origin>/auth/callback` を追加すること
 
+### 【Phase 4.7】Box連携 ✅（実装完了・人間手作業待ち）
+
+BoxはOAuth2なしで機械的なファイル取得ができないため、古いWindows PCをデータ取得専用機とした**box-downloaderバッチ**を別プロジェクトで作成し、Googleスプレッドシートをキューとして本アプリと連携する設計。
+
+#### 全体フロー
+
+```
+① メール受信（inbound-email 改修済み）
+   - メール本文中の Box URL（app.box.com/s/xxx）を検出
+   - candidates.box_url に保存、box_status = 'pending' で人材を仮登録
+   - Googleスプレッドシートの boxurl 列に書き込み（キュー登録）
+
+② box-downloader バッチ（別プロジェクト・Windows PC・1日1回手動 or タスクスケジューラ）
+   - スプレッドシートの「実施=空欄」行を読み込む
+   - Playwright（Chromium）で Box 共有URLへアクセスしファイルをダウンロード
+   - Google Drive の指定フォルダへアップロード
+   - スプレッドシートの driveurl 列・実施列（成功/失敗）を更新
+
+③ enrich-candidate バッチ（Supabase Edge Function・毎日 JST 3:00 自動実行）
+   ※ box-downloader の実行（②）が完了した後に走るよう時刻設定
+   - Googleスプレッドシートを読み込む（実施=成功 & driveurl あり）
+   - candidates テーブルで box_url が一致 & box_status='pending' の人材を検索
+   - Drive URL からファイルを取得（fetchGoogleLinks の既存ロジックを流用）
+   - Gemini で再解析 → 既存レコードを UPDATE
+   - box_status = 'enriched' に更新
+```
+
+#### スプレッドシート構造（box-downloaderと共有キュー）
+
+| 列 | 名前 | 書き込み元 | 内容 |
+|---|---|---|---|
+| A | boxurl | inbound-email | Box共有URL |
+| B | driveurl | box-downloader | Google Drive URL（アップロード後） |
+| C | 実施 | box-downloader | 空欄 / 成功 / 失敗 |
+
+#### DB変更（candidatesテーブル）
+
+| カラム | 型 | 内容 |
+|---|---|---|
+| `box_url` | `text` | メールから抽出したBox共有URL |
+| `box_status` | `text` | `pending`（未処理） / `enriched`（更新済み） / `failed`（失敗） |
+
+#### 新規ファイル一覧
+
+| ファイル | 内容 |
+|---|---|
+| `supabase/migrations/add_box_columns.sql` | candidates に box_url, box_status 追加 |
+| `supabase/functions/enrich-candidate/index.ts` | スプレッドシート読み込み → Drive取得 → 再解析 → UPDATE |
+| `supabase/migrations/add_enrich_cron.sql` | enrich-candidate を毎日 JST 3:00 に起動する pg_cron |
+| `../box-downloader/` | 別プロジェクト（Node.js/TypeScript/Playwright） |
+
+#### 改修ファイル一覧
+
+| ファイル | 変更内容 |
+|---|---|
+| `supabase/functions/inbound-email/index.ts` | Box URL 検出 → スプレッドシート書き込み + candidates.box_url 保存 |
+
+#### 必要な Supabase Secrets
+
+| シークレット名 | 値 |
+|---|---|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Googleサービスアカウント JSON（1行に圧縮） |
+| `BOX_SPREADSHEET_ID` | キュー用スプレッドシートのID |
+
+#### 【人間】手作業
+
+1. **Googleサービスアカウント作成**（所要: 約20分）
+   - Google Cloud Console → IAM と管理 → サービスアカウント → 新規作成
+   - Google Sheets API と Google Drive API を有効化
+   - キー（JSON）をダウンロード → 1行に圧縮して Supabase Secrets の `GOOGLE_SERVICE_ACCOUNT_JSON` に登録
+   - box-downloader の `auth/service-account.json` にも同じJSONを設置
+
+2. **スプレッドシート作成・共有**（所要: 約5分）
+   - Googleスプレッドシートを新規作成
+   - 1行目にヘッダー: `boxurl` / `driveurl` / `実施`
+   - サービスアカウントのメールアドレスを「編集者」として共有
+   - スプレッドシートのIDを Supabase Secrets の `BOX_SPREADSHEET_ID` に登録
+
+3. **SupabaseでSQL実行**（所要: 約5分）
+   - `supabase/migrations/add_box_columns.sql` をSQL Editorで実行
+   - `supabase/migrations/add_enrich_cron.sql` の `YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を書き換えてから実行
+
+4. **box-downloaderのセットアップ**（所要: 約15分）
+   - `setup.bat` を実行して依存パッケージをインストール
+   - `setup-drive-auth.bat` を実行してGoogleドライブOAuth2認証を完了
+   - `config.json` にスプレッドシートURL・ドライブフォルダIDを設定
+   - `run.bat` で動作確認
+
 ### 【Phase 5】最終納品ドキュメント作成（未着手）
 1. **[Claude] 作業**: システム構成図のメンテナンス（README.md に Mermaid 図あり）
 2. **[Claude] 作業**: 操作マニュアルのメンテナンス（`docs/Sales_Manual.md` / `docs/Sales_Manual.pdf`・営業担当者向け）
@@ -207,7 +295,7 @@ Edge Function が code → refresh_token を交換し app_config に保存
 ### テーブル一覧
 | テーブル | 用途 |
 |---|---|
-| `candidates` | 人材マスタ。スキル・経歴・raw_profile を保持。**`data_env`**（`prod` \| `demo`）で論理分離 |
+| `candidates` | 人材マスタ。スキル・経歴・raw_profile を保持。**`data_env`**（`prod` \| `demo`）で論理分離。`box_url` / `box_status` でBox連携状態を管理 |
 | `projects` | 案件マスタ。必要スキル・予算・raw_data を保持。**`data_env`** 同上 |
 | `submissions` | マッチング提案履歴。スコア・AI要約を保持。**`data_env`** 同上 |
 | `candidate_skills` | スキルをカテゴリ別に分解して保持（検索最適化・14カテゴリ） |
