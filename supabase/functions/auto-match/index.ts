@@ -144,25 +144,36 @@ Deno.serve(async (req: Request) => {
           ? project.required_skills.map(String).filter(Boolean)
           : []
 
-        // スキル重複フィルターで候補者を絞る
-        let candQuery = supabase
+        // 全候補者を取得してJS側でスキル重複フィルター
+        // （skills カラムが jsonb 型のため .overlaps() が使えないため JS でフィルタリング）
+        const { data: allCandidates, error: candErr } = await supabase
           .from('candidates')
           .select('id, name, email, phone, skills, experience_years, raw_profile')
           .eq('data_env', 'prod')
           .is('merged_into', null)
-          .limit(MAX_CANDIDATES_PER_PROJECT)
+          .limit(500)
 
-        if (requiredSkills.length > 0) {
-          candQuery = candQuery.overlaps('skills', requiredSkills)
-        }
-
-        const { data: candidates, error: candErr } = await candQuery
         if (candErr) throw new Error(`候補者取得エラー: ${candErr.message}`)
 
-        const targets = (candidates ?? []).filter(c =>
-          !acceptedIds.has(String(c.id)) &&
-          !existingPairs.has(`${c.id}:${project.id}`)
-        )
+        // スキル重複フィルター（大文字小文字を無視した部分一致）
+        const skillFiltered = requiredSkills.length > 0
+          ? (allCandidates ?? []).filter(c => {
+              const cSkills: string[] = Array.isArray(c.skills) ? c.skills.map(String) : []
+              return requiredSkills.some(r =>
+                cSkills.some(s =>
+                  s.toLowerCase().includes(r.toLowerCase()) ||
+                  r.toLowerCase().includes(s.toLowerCase())
+                )
+              )
+            })
+          : (allCandidates ?? [])
+
+        const targets = skillFiltered
+          .filter(c =>
+            !acceptedIds.has(String(c.id)) &&
+            !existingPairs.has(`${c.id}:${project.id}`)
+          )
+          .slice(0, MAX_CANDIDATES_PER_PROJECT)
 
         console.log(`[auto-match] 案件「${project.title}」: スキルフィルター後=${targets.length}名`)
 
