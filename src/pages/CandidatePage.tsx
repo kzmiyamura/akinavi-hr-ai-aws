@@ -910,18 +910,27 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 shrink-0">
-                      {(selectedCandidate as unknown as { resume_url?: string; drive_url?: string }).resume_url || (selectedCandidate as unknown as { resume_url?: string; drive_url?: string }).drive_url ? (
-                        <a
-                          href={(selectedCandidate as unknown as { resume_url?: string; drive_url?: string }).drive_url || (selectedCandidate as unknown as { resume_url?: string; drive_url?: string }).resume_url!}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
-                          title="経歴書を開く"
-                        >
-                          <ExternalLink size={14} />
-                          経歴書
-                        </a>
-                      ) : null}
+                      {(() => {
+                        const c2 = selectedCandidate as unknown as { resume_url?: string; drive_url?: string }
+                        // drive_url → resume_url → raw_profile.text内のDrive URL の順で探す
+                        const resumeLink = c2.drive_url || c2.resume_url || (() => {
+                          const bodyText = (selectedCandidate.raw_profile as { text?: string })?.text ?? ''
+                          const m = bodyText.match(/https:\/\/drive\.google\.com\/[^\s"'<>\]）]+/)
+                          return m ? m[0] : null
+                        })()
+                        return resumeLink ? (
+                          <a
+                            href={resumeLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
+                            title="経歴書を開く"
+                          >
+                            <ExternalLink size={14} />
+                            経歴書
+                          </a>
+                        ) : null
+                      })()}
                       {getRaw(selectedCandidate).from && (
                         <a
                           href={`mailto:${getRaw(selectedCandidate).from}?subject=Re: ${encodeURIComponent(getRaw(selectedCandidate).subject ?? '')}`}
