@@ -40,10 +40,90 @@ function resolveCallKey(): string {
 
 const CALL_KEY = resolveCallKey()
 
-// 1回のポーリングで取得するメール上限（タイムアウト対策）
-const MAX_EMAILS_PER_ACCOUNT = 3
+// 1回のポーリングで取得するメール上限
+// 2,000通/日 ÷ 288ポーリング/日 ≈ 7通/回 → 余裕を持って20に設定
+const MAX_EMAILS_PER_ACCOUNT = 20
 // 全件取り込みモードでの1バッチあたりの取得上限
 const MAX_EMAILS_PER_ACCOUNT_FULL = 20
+
+// ---- ルールベース事前フィルター ----
+// Gemini を呼ぶ前に件名・送信元で明らかなスパム/広告を除外（コスト削減）
+
+/** これらのパターンを件名に含むメールは AI 判定なしでスキップ */
+const SKIP_SUBJECT_PATTERNS = [
+  /unsubscribe/i,
+  /newsletter/i,
+  /ニュースレター/,
+  /メルマガ/,
+  /お知らせ/,
+  /ご案内/,
+  /配信停止/,
+  /登録完了/,
+  /確認メール/,
+  /noreply/i,
+  /no-reply/i,
+  /Invoice/i,
+  /receipt/i,
+  /領収書/,
+  /請求書/,
+  /支払い確認/,
+  /サービス停止/,
+  /メンテナンス/,
+  /セキュリティ通知/,
+  /password.*reset/i,
+  /アカウント.*確認/,
+]
+
+/** これらのパターンを件名に含むメールは AI 判定なしで HR メールと確定 */
+const HR_SUBJECT_PATTERNS = [
+  /スキルシート/,
+  /経歴書/,
+  /エンジニア/,
+  /フリーランス/,
+  /案件/,
+  /要件/,
+  /参画/,
+  /募集/,
+  /求人/,
+  /稼働/,
+  /単価/,
+  /常駐/,
+  /開発者/,
+  /SE[^O]/,
+  /PG[^P]/,
+  /PM[^S]/,
+  /インフラ.*エンジ/,
+  /Java.*開発/,
+  /Python.*開発/,
+  /React.*開発/,
+  /Angular.*開発/,
+  /Vue.*開発/,
+  /AWS.*開発/,
+  /Azure.*開発/,
+  /クラウド.*案件/,
+]
+
+/**
+ * ルールベースで事前フィルタリング（Gemini 不要）
+ * @returns 'skip' | 'candidate' | 'project' | 'unknown'
+ */
+function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' | 'unknown' {
+  const subject = email.subject ?? ''
+
+  // スキップ対象チェック
+  if (SKIP_SUBJECT_PATTERNS.some(p => p.test(subject))) {
+    return 'skip'
+  }
+
+  // HR確定チェック（件名だけで明らかに候補者か案件）
+  if (HR_SUBJECT_PATTERNS.some(p => p.test(subject))) {
+    // 件名に「案件」「要件」「募集」「参画」「依頼」を含む場合は project
+    if (/案件|要件|募集|参画|依頼|発注|プロジェクト/.test(subject)) return 'project'
+    return 'candidate'
+  }
+
+  return 'unknown'
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -285,43 +365,49 @@ async function fetchAttachments(
   )
 }
 
-// ---- AI 種別判断（Gemini） ----
+// ---- AI 種別判断（Gemini）バッチ版 ----
+// 複数メールをまとめて1回のGeminiコールで分類（コスト削減）
 
-async function classifyEmailType(
-  email: GraphMessage,
-): Promise<'candidate' | 'project' | 'other'> {
+const BATCH_CLASSIFY_SIZE = 20 // 1回のGeminiコールで分類するメール数上限
+
+async function classifyEmailsBatch(
+  emails: GraphMessage[],
+): Promise<Array<'candidate' | 'project' | 'other'>> {
   if (!GEMINI_API_KEY) {
     console.warn('[poll] GEMINI_API_KEY 未設定のため AI 分類をスキップ。candidate にフォールバック')
-    return 'candidate'
+    return emails.map(() => 'candidate')
   }
+  if (emails.length === 0) return []
 
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
 
-    // HTMLタグを除去してプレーンテキスト化
-    const rawBody = email.body?.content ?? ''
-    const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    // メール一覧をテキスト化（本文は先頭200文字のみ・コスト削減）
+    const emailList = emails.map((email, i) => {
+      const rawBody = email.body?.content ?? ''
+      const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+      return `[${i}] 件名: ${email.subject ?? '（なし）'}\n    本文: ${plainBody.slice(0, 200) || '（本文なし）'}`
+    }).join('\n\n')
 
     const prompt = [
-      'このメールの種別を判断してください。',
-      '以下の3種別から1つだけ返してください（他の文字列は不要）:',
+      `以下の${emails.length}件のメールを分類してください。`,
+      '各メールを candidate / project / other の3種別で判断し、JSON配列だけを返してください。',
+      '説明文・コードブロックは不要です。',
+      '',
+      '種別の定義:',
       '  candidate  - 人材・エンジニア・求職者・フリーランスの情報（スキルシート・経歴書・自己紹介・稼働確認など）',
-      '  project    - 案件・プロジェクト・仕事依頼の情報（要件定義・募集要項・単価・参画依頼など）',
-      '  other      - 明らかに上記どちらでもない（広告メール・サービス通知・請求書・宣伝など）',
+      '  project    - 案件・プロジェクト・仕事依頼（要件定義・募集要項・単価・参画依頼など）',
+      '  other      - 上記以外（広告・通知・スパム・サービス通知など）',
       '',
-      '【重要ルール】',
-      '- 件名や添付ファイルが人材・案件に関連していれば candidate または project と判断すること',
-      '- 本文が空でも件名から判断できる場合は candidate または project と判断すること',
-      '- 「テスト」という言葉が含まれていても内容が人材・案件なら candidate または project と判断すること',
-      '- other は本当に無関係なメール（広告・通知・スパム）のみに使うこと',
+      '返却形式: [{"i":0,"t":"candidate"},{"i":1,"t":"project"},...]',
       '',
-      `件名: ${email.subject ?? '（なし）'}`,
-      `本文（先頭500文字）: ${plainBody.slice(0, 500) || '（本文なし・添付ファイルのみ）'}`,
+      'メール一覧:',
+      emailList,
     ].join('\n')
 
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 10_000)
+    const timer = setTimeout(() => controller.abort(), 20_000)
 
     const resultPromise = model.generateContent(prompt)
     const result = await Promise.race([
@@ -332,15 +418,21 @@ async function classifyEmailType(
     ])
     clearTimeout(timer)
 
-    const text = (result as Awaited<typeof resultPromise>)
-      .response.text().trim().toLowerCase()
+    const text = (result as Awaited<typeof resultPromise>).response.text().trim()
+    const jsonMatch = text.match(/\[[\s\S]*\]/)
+    if (!jsonMatch) throw new Error(`Gemini応答がJSON配列でない: ${text.slice(0, 100)}`)
 
-    if (text === 'project') return 'project'
-    if (text === 'other') return 'other'
-    return 'candidate'
+    const parsed = JSON.parse(jsonMatch[0]) as Array<{ i: number; t: string }>
+    const typeMap = new Map<number, 'candidate' | 'project' | 'other'>()
+    for (const item of parsed) {
+      const t = item.t === 'project' ? 'project' : item.t === 'other' ? 'other' : 'candidate'
+      typeMap.set(item.i, t)
+    }
+
+    return emails.map((_, i) => typeMap.get(i) ?? 'candidate')
   } catch (e) {
-    console.error(`[poll] AI 分類失敗: ${String(e)}。candidate にフォールバック`)
-    return 'candidate'
+    console.error(`[poll] バッチAI分類失敗: ${String(e)}。candidate にフォールバック`)
+    return emails.map(() => 'candidate')
   }
 }
 
@@ -430,24 +522,62 @@ async function pollAccount(
     const { emails, nextLink } = await fetchEmailPage(accessToken, mode, since, storedNextLink)
     console.log(`[poll] ${config.configKey}: ${emails.length}件取得 (mode=${mode})`)
 
-    for (const email of emails) {
+    // ---- ルールベース事前フィルター ----
+    // Gemini を呼ぶ前に件名で明らかなスパムを除外
+    const preFilterResults = emails.map(email => ({
+      email,
+      preResult: preFilterEmail(email),
+    }))
+
+    const ruleSkipped  = preFilterResults.filter(r => r.preResult === 'skip')
+    const ruleResolved = preFilterResults.filter(r => r.preResult !== 'skip' && r.preResult !== 'unknown')
+    const needAi       = preFilterResults.filter(r => r.preResult === 'unknown')
+
+    // ルールでスキップ確定したものを既読にする
+    for (const { email } of ruleSkipped) {
       try {
-        // AI 種別判断
-        let emailType: 'candidate' | 'project' = config.type
-        if (useAiClassification) {
-          const aiType = await classifyEmailType(email)
-          if (aiType === 'other') {
-            // 'other' はスキップ（既読にして次へ）
-            if (mode === 'incremental') {
-              await markAsRead(accessToken, email.id)
-            }
-            console.log(`[poll] スキップ (other): "${email.subject}" (${config.configKey})`)
-            skipped++
-            continue
-          }
-          emailType = aiType
-          console.log(`[poll] AI 分類: "${email.subject}" → ${aiType}`)
+        if (mode === 'incremental') await markAsRead(accessToken, email.id)
+        console.log(`[poll] 事前フィルタースキップ: "${email.subject}"`)
+        skipped++
+      } catch { /* ignore */ }
+    }
+
+    console.log(`[poll] ${config.configKey}: 事前フィルター結果 skip=${ruleSkipped.length} resolved=${ruleResolved.length} needAi=${needAi.length}`)
+
+    // ---- バッチ AI 分類 ----
+    // ルールで判定できなかったメールをまとめて1回のGeminiコールで分類
+    const aiTypeMap = new Map<string, 'candidate' | 'project' | 'other'>()
+    if (useAiClassification && needAi.length > 0) {
+      for (let offset = 0; offset < needAi.length; offset += BATCH_CLASSIFY_SIZE) {
+        const batch = needAi.slice(offset, offset + BATCH_CLASSIFY_SIZE)
+        const types = await classifyEmailsBatch(batch.map(r => r.email))
+        batch.forEach((r, i) => aiTypeMap.set(r.email.id, types[i]))
+        console.log(`[poll] バッチ分類 ${offset}〜${offset + batch.length - 1}件完了`)
+      }
+    }
+
+    // ---- メール処理 ----
+    // ルール確定 + AI分類済みをまとめて処理
+    const toProcess = [
+      ...ruleResolved.map(r => ({ email: r.email, emailType: r.preResult as 'candidate' | 'project' })),
+      ...needAi.map(r => {
+        const aiType = aiTypeMap.get(r.email.id) ?? 'candidate'
+        return { email: r.email, emailType: aiType as 'candidate' | 'project' | 'other' }
+      }),
+    ]
+
+    for (const { email, emailType } of toProcess) {
+      try {
+        if (emailType === 'other') {
+          if (mode === 'incremental') await markAsRead(accessToken, email.id)
+          console.log(`[poll] スキップ (other): "${email.subject}" (${config.configKey})`)
+          skipped++
+          continue
         }
+
+        const finalType: 'candidate' | 'project' = useAiClassification
+          ? (emailType as 'candidate' | 'project')
+          : config.type
 
         // 既読マーク（incremental: 二重処理防止 / full: 処理済みマーク）
         await markAsRead(accessToken, email.id)
@@ -459,9 +589,9 @@ async function pollAccount(
 
         console.log(`[poll] 添付: hasAttachments=${email.hasAttachments} 取得件数=${attachments.length}`, attachments.map(a => ({ name: a.name, type: a.contentType, bytesLen: a.contentBytes?.length ?? 0 })))
 
-        await callInboundEmail(email, attachments, emailType, config.dataEnv)
+        await callInboundEmail(email, attachments, finalType, config.dataEnv)
         processed++
-        console.log(`[poll] 処理完了: "${email.subject}" (${config.configKey})`)
+        console.log(`[poll] 処理完了: "${email.subject}" type=${finalType} (${config.configKey})`)
       } catch (e) {
         // 失敗したら未読に戻して次回ポーリングで再試行
         const msg = `メール処理失敗 "${email.subject}": ${String(e)}`
