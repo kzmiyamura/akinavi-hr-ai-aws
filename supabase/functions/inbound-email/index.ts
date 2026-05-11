@@ -399,9 +399,11 @@ async function generateJSON(
   timeoutMs?: number,
   /** ログ用: どの Gemini 呼び出しか（タイムアウト時も識別） */
   geminiTrace?: { rid: string; phase: string },
+  /** 使用するモデル名（省略時は AI_MODEL = gemini-2.5-flash） */
+  geminiModel?: string,
 ): Promise<{ result: unknown; durationMs: number }> {
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
-  const model = genAI.getGenerativeModel({ model: AI_MODEL, generationConfig: { temperature: 0 } })
+  const model = genAI.getGenerativeModel({ model: geminiModel ?? AI_MODEL, generationConfig: { temperature: 0 } })
 
   const parts: object[] = []
   for (const att of attachments) {
@@ -916,6 +918,46 @@ async function appendToBoxSpreadsheet(boxUrls: string[]): Promise<void> {
   }
 }
 
+/** SHA-256 を16進文字列で返す */
+async function sha256Hex(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input))
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * 重複メール判定（from + subject + 本文先頭200文字のハッシュ）
+ * @returns true なら重複（処理済み）
+ * 非重複の場合、ハッシュを app_config に記録して次回以降の判定に使う
+ */
+async function checkAndMarkEmailDuplicate(
+  supabase: ReturnType<typeof import('https://esm.sh/@supabase/supabase-js@2').createClient>,
+  from: string,
+  subject: string,
+  body: string,
+): Promise<boolean> {
+  try {
+    const hash = await sha256Hex(`${from}|${subject}|${body.slice(0, 200)}`)
+    const configKey = `ehash_${hash.slice(0, 24)}`
+    const { data } = await supabase.from('app_config').select('value').eq('key', configKey).maybeSingle()
+    if (data?.value) {
+      const storedAt = new Date(data.value).getTime()
+      if (Date.now() - storedAt < 12 * 60 * 60 * 1000) {
+        return true // 12時間以内に同一メールを処理済み
+      }
+    }
+    // 未処理 → ハッシュを記録して続行
+    await supabase.from('app_config').upsert(
+      { key: configKey, value: new Date().toISOString() },
+      { onConflict: 'key' },
+    )
+    return false
+  } catch (e) {
+    // ハッシュ判定失敗は処理続行（false にフォールバック）
+    console.warn('[DEDUP] 重複判定失敗、続行:', String(e))
+    return false
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -1082,6 +1124,17 @@ Deno.serve(async (req: Request) => {
     tracePhase = 'step3_office_done'
     console.log(`[STEP3 Office完了] elapsed=${elapsed()}`)
 
+    // ② 本文が極端に短い（50文字未満）かつ添付なし → 自動返信・通知メール等として即スキップ
+    const plainBodyLength = body.trim().length
+    if (plainBodyLength > 0 && plainBodyLength < 50 && attachments.length === 0) {
+      tracePhase = 'skip_too_short'
+      console.warn('[SHORT_BODY] 本文が短すぎるためスキップ', { rid: traceRid, bodyLen: plainBodyLength, subject })
+      return new Response(
+        JSON.stringify({ ok: true, skipped: true, reason: 'BODY_TOO_SHORT', bodyLen: plainBodyLength }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
+
     if (!body.trim() && attachments.length === 0) {
       tracePhase = 'skip_empty_body_attachments'
       // Make.com は HTTP エラーでシナリオが止まるため、明らかな空メールは 200 でスキップし後続フローを継続させる
@@ -1171,6 +1224,17 @@ Deno.serve(async (req: Request) => {
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
     console.log('[STEP3→4間] Supabase createClient 完了', { rid: traceRid })
 
+    // ③ 重複メール判定（同一メールが複数受信箱に転送された場合の二重処理防止）
+    tracePhase = 'dedup_check'
+    const isDuplicate = await checkAndMarkEmailDuplicate(supabase, from, subject, body)
+    if (isDuplicate) {
+      console.warn('[DEDUP] 重複メールのためスキップ', { rid: traceRid, subject, from: from.slice(0, 80) })
+      return new Response(
+        JSON.stringify({ ok: true, skipped: true, reason: 'DUPLICATE_EMAIL' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
+
     tracePhase = 'drive_links_fetch'
     pipe(traceRid, tracePhase)
     // Google Drive / Sheets / Docs リンクの取得
@@ -1183,6 +1247,24 @@ Deno.serve(async (req: Request) => {
       texts: driveTexts.map(t => ({ label: t.label, length: t.content.length })),
       pdfs: drivePdfs.map(p => p.name),
       elapsed: elapsed(),
+    })
+
+    // ① 複雑度に応じてモデルを選択（コスト最適化）
+    // シンプル: 添付なし・Driveリンクなし・本文2000文字以下 → gemini-2.0-flash（安価）
+    // 複雑:    添付あり・Driveリンクあり・長文 → gemini-2.5-flash（精度重視）
+    const hasAttachments = attachments.length > 0 || drivePdfs.length > 0
+    const hasDriveLinks = driveTexts.length > 0
+    const isLongBody = body.length > 2000
+    const isComplex = hasAttachments || hasDriveLinks || isLongBody
+    const extractModel = isComplex ? AI_MODEL : AI_MODEL_FAST
+    console.log('[MODEL_SELECT]', {
+      rid: traceRid,
+      extractModel,
+      isComplex,
+      hasAttachments,
+      hasDriveLinks,
+      isLongBody,
+      bodyLen: body.length,
     })
 
     // Box URL の検出（人材登録時にスプレッドシートへ書き込み・DB保存するため事前に抽出）
@@ -1386,7 +1468,7 @@ JSON:`.trim()
         const { result, durationMs: d1 } = await generateJSON(prompt, allAttachments, 'candidate', 2, undefined, {
           rid: traceRid,
           phase: 'gemini_candidate_extract',
-        })
+        }, extractModel)
         durationMs = d1
         analyzed = result as CandAi
         tracePhase = 'gemini_candidate_done'
@@ -1407,7 +1489,7 @@ JSON:`.trim()
         const { result, durationMs: d2 } = await generateJSON(slimPrompt, [], 'candidate', 2, undefined, {
           rid: traceRid,
           phase: 'gemini_candidate_extract_body_only',
-        })
+        }, extractModel)
         durationMs = d2
         analyzed = result as CandAi
         parseFallback = 'body_only_after_attachment_timeout'
@@ -1522,7 +1604,7 @@ JSON:`.trim()
 
       const { error: logError } = await supabase.from('ai_logs').insert({
         type: 'candidate',
-        model: AI_MODEL,
+        model: extractModel,
         from_address: from,
         subject,
         ai_result: analyzed,
@@ -1605,7 +1687,7 @@ JSON:`.trim()
       const { result, durationMs } = await generateJSON(prompt, allAttachments, 'project', 2, undefined, {
         rid: traceRid,
         phase: 'gemini_project_extract',
-      })
+      }, extractModel)
       tracePhase = 'gemini_project_done'
       console.log(`[STEP5 AI呼び出し完了 project] durationMs=${durationMs} elapsed=${elapsed()}`, { rid: traceRid })
 
