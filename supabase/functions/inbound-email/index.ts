@@ -291,8 +291,8 @@ function normalizeToProjectObjects(result: unknown): Record<string, unknown>[] {
   return []
 }
 
-const AI_MODEL = 'gemini-2.0-flash'          // 人材/案件解析（コスト削減のため2.0-flashに統一）
-const AI_MODEL_FAST = 'gemini-2.0-flash'     // 関連度チェック（単純分類・低コスト）
+const AI_MODEL = 'gemini-2.0-flash-lite'      // 人材/案件解析（2.0-flash廃止のため lite に変更）
+const AI_MODEL_FAST = 'gemini-2.0-flash-lite' // 関連度チェック（単純分類・低コスト）
 
 /** candidate/project の Gemini 1 回あたり待ち上限（ms）。Secrets GEMINI_INBOUND_TIMEOUT_MS（15〜300000） */
 function resolveInboundGeminiTimeoutMs(kind: 'candidate' | 'project' | 'match', override?: number): number {
@@ -868,7 +868,13 @@ async function uploadToDrive(
     return null
   }
   try {
-    const sa = JSON.parse(saJson) as { client_email: string; private_key: string }
+    let sa: { client_email: string; private_key: string }
+    try {
+      sa = JSON.parse(saJson) as { client_email: string; private_key: string }
+    } catch {
+      console.error('[Drive Upload] GOOGLE_SERVICE_ACCOUNT_JSON が有効なJSONではありません。Supabase Secretsに正しいサービスアカウントJSONを登録してください。')
+      return null
+    }
     const accessToken = await getGoogleAccessToken(
       sa,
       'https://www.googleapis.com/auth/drive.file',
@@ -997,7 +1003,13 @@ async function appendToBoxSpreadsheet(boxUrls: string[]): Promise<void> {
     return
   }
   try {
-    const sa = JSON.parse(saJson) as { client_email: string; private_key: string }
+    let sa: { client_email: string; private_key: string }
+    try {
+      sa = JSON.parse(saJson) as { client_email: string; private_key: string }
+    } catch {
+      console.error('[BoxSheet] GOOGLE_SERVICE_ACCOUNT_JSON が有効なJSONではありません。Supabase Secretsに正しいサービスアカウントJSONを登録してください。')
+      return
+    }
     const accessToken = await getGoogleAccessToken(sa, 'https://www.googleapis.com/auth/spreadsheets')
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/A:A:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`
     const res = await fetch(url, {
