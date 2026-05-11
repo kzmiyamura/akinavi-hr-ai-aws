@@ -467,6 +467,106 @@ async function generateJSON(
   throw lastError
 }
 
+// ---- Groq API（テキスト専用・無料枠 14,400回/日） ----
+
+const GROQ_MODEL = 'llama-3.3-70b-versatile'
+
+/**
+ * Groq API でJSON抽出（テキストのみ・添付非対応）
+ * OpenAI互換APIなので fetch + JSON modeで呼び出す
+ */
+async function generateJSONWithGroq(
+  prompt: string,
+  timeoutMs = 30_000,
+  traceInfo?: string,
+): Promise<{ result: unknown; durationMs: number }> {
+  const apiKey = Deno.env.get('GROQ_API_KEY')
+  if (!apiKey) throw new Error('GROQ_API_KEY 未設定')
+
+  const start = Date.now()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+        temperature: 0,
+        max_tokens: 2048,
+      }),
+      signal: controller.signal,
+    })
+
+    clearTimeout(timer)
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`Groq APIエラー (${res.status}): ${err.slice(0, 200)}`)
+    }
+
+    const json = await res.json()
+    const content = (json.choices?.[0]?.message?.content ?? '').trim()
+    if (!content) throw new Error('Groq レスポンスが空')
+
+    const result = JSON.parse(content)
+    const durationMs = Date.now() - start
+    console.log(`[Groq] 成功 durationMs=${durationMs}${traceInfo ? ` ${traceInfo}` : ''}`)
+    return { result, durationMs }
+  } catch (e) {
+    clearTimeout(timer)
+    throw e
+  }
+}
+
+/**
+ * Groq → Gemini の順で試みるJSON生成ラッパー
+ * - 添付ファイル（画像・PDF）がある場合はGroq非対応のためGemini直行
+ * - GROQ_API_KEY 未設定時もGemini直行
+ */
+async function generateJSONSmart(
+  prompt: string,
+  attachments: Attachment[],
+  kind: 'candidate' | 'project' | 'match',
+  maxRetries = 2,
+  timeoutMs?: number,
+  geminiTrace?: { rid: string; phase: string },
+  geminiModel?: string,
+): Promise<{ result: unknown; durationMs: number; usedModel: string }> {
+  const hasImageAttachments = attachments.some(a =>
+    SUPPORTED_MIME.includes(a.mimeType)
+  )
+  const groqKey = Deno.env.get('GROQ_API_KEY')
+
+  // 画像・PDF添付あり、またはGroqキー未設定 → Gemini直行
+  if (!groqKey || hasImageAttachments) {
+    const r = await generateJSON(prompt, attachments, kind, maxRetries, timeoutMs, geminiTrace, geminiModel)
+    return { ...r, usedModel: geminiModel ?? AI_MODEL }
+  }
+
+  // Groq を試みる
+  try {
+    const r = await generateJSONWithGroq(
+      prompt,
+      timeoutMs ?? 30_000,
+      geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined,
+    )
+    return { ...r, usedModel: GROQ_MODEL }
+  } catch (e) {
+    console.warn(`[Groq] 失敗、Geminiにフォールバック: ${String(e)}`)
+  }
+
+  // Gemini フォールバック
+  const r = await generateJSON(prompt, attachments, kind, maxRetries, timeoutMs, geminiTrace, geminiModel)
+  return { ...r, usedModel: geminiModel ?? AI_MODEL }
+}
+
 type MatchResult = { score: number; summary: string; duplicateSuspected: boolean }
 
 // 初回リリースは手動運用しやすいように、環境変数で自動マッチを切替可能にする
@@ -1467,10 +1567,11 @@ JSON:`.trim()
       let analyzed: CandAi
 
       try {
-        const { result, durationMs: d1 } = await generateJSON(prompt, allAttachments, 'candidate', 2, undefined, {
+        const { result, durationMs: d1, usedModel: usedModel1 } = await generateJSONSmart(prompt, allAttachments, 'candidate', 2, undefined, {
           rid: traceRid,
           phase: 'gemini_candidate_extract',
         }, extractModel)
+        console.log(`[MODEL_USED] candidate extract: ${usedModel1}`)
         durationMs = d1
         analyzed = result as CandAi
         tracePhase = 'gemini_candidate_done'
@@ -1488,10 +1589,11 @@ JSON:`.trim()
         const slimPrompt = `${prompt}
 
 【システム通知】初回解析がタイムアウトしたため、画像・PDF添付バイナリは参照していません。メール本文・Driveリンク由来テキスト・Office抽出テキストのみを根拠に抽出してください。推測はしないでください。`
-        const { result, durationMs: d2 } = await generateJSON(slimPrompt, [], 'candidate', 2, undefined, {
+        const { result, durationMs: d2, usedModel: usedModel2 } = await generateJSONSmart(slimPrompt, [], 'candidate', 2, undefined, {
           rid: traceRid,
           phase: 'gemini_candidate_extract_body_only',
         }, extractModel)
+        console.log(`[MODEL_USED] candidate body-only: ${usedModel2}`)
         durationMs = d2
         analyzed = result as CandAi
         parseFallback = 'body_only_after_attachment_timeout'
@@ -1606,7 +1708,7 @@ JSON:`.trim()
 
       const { error: logError } = await supabase.from('ai_logs').insert({
         type: 'candidate',
-        model: extractModel,
+        model: usedModel1 ?? extractModel,
         from_address: from,
         subject,
         ai_result: analyzed,
@@ -1686,10 +1788,11 @@ JSON:`.trim()
       tracePhase = 'gemini_project_extract'
       pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
       console.log(`[STEP5 AI呼び出し開始 project] elapsed=${elapsed()}`, { rid: traceRid })
-      const { result, durationMs } = await generateJSON(prompt, allAttachments, 'project', 2, undefined, {
+      const { result, durationMs, usedModel: usedModelP } = await generateJSONSmart(prompt, allAttachments, 'project', 2, undefined, {
         rid: traceRid,
         phase: 'gemini_project_extract',
       }, extractModel)
+      console.log(`[MODEL_USED] project extract: ${usedModelP}`)
       tracePhase = 'gemini_project_done'
       console.log(`[STEP5 AI呼び出し完了 project] durationMs=${durationMs} elapsed=${elapsed()}`, { rid: traceRid })
 
