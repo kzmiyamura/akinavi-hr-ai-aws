@@ -1081,8 +1081,8 @@ export function MatchingPage({
             <p className="text-sm text-gray-400 px-4 py-8">募集中の案件がありません。</p>
           ) : (
             <div className="flex flex-col md:flex-row">
-              {/* Left: project list */}
-              <div className="w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px]">
+              {/* Left: project list（モバイルで詳細表示中は非表示） */}
+              <div className={`w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px] ${selectedProjectId ? 'hidden md:block' : ''}`}>
                 {projectList.map((p) => {
                   const n = isLoadingStats ? null : (countByProject[p.id] ?? 0)
                   const isSelected = selectedProjectId === p.id
@@ -1128,6 +1128,14 @@ export function MatchingPage({
               <div className="flex-1 overflow-y-auto md:max-h-[640px]">
                 {selectedProject ? (
                   <div className="p-4 space-y-4">
+                    {/* モバイル用「一覧に戻る」ボタン */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedProjectId(null)}
+                      className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 md:hidden -mt-1 mb-1"
+                    >
+                      ← 一覧に戻る
+                    </button>
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div className="min-w-0">
                         <h3 className="text-base font-semibold text-gray-800 break-words">{selectedProject.title}</h3>
@@ -1250,8 +1258,8 @@ export function MatchingPage({
             <p className="text-sm text-gray-400 px-4 py-8">登録人材がありません。</p>
           ) : (
             <div className="flex flex-col md:flex-row">
-              {/* Left: candidate list */}
-              <div className="w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px]">
+              {/* Left: candidate list（モバイルで詳細表示中は非表示） */}
+              <div className={`w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px] ${selectedCandidateId ? 'hidden md:block' : ''}`}>
                 {candidateList.map((c) => {
                   const n = isLoadingStats ? null : (countByCandidate[c.id] ?? 0)
                   const isSelected = selectedCandidateId === c.id
@@ -1297,6 +1305,14 @@ export function MatchingPage({
               <div className="flex-1 overflow-y-auto md:max-h-[640px]">
                 {selectedCandidate ? (
                   <div className="p-4 space-y-4">
+                    {/* モバイル用「一覧に戻る」ボタン */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCandidateId(null)}
+                      className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 md:hidden -mt-1 mb-1"
+                    >
+                      ← 一覧に戻る
+                    </button>
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div className="min-w-0">
                         <h3 className="text-base font-semibold text-gray-800 break-words">{selectedCandidate.name}</h3>

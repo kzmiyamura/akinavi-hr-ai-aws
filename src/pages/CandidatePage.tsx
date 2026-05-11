@@ -823,8 +823,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           <p className="text-sm text-gray-400 p-4">「{searchQuery}」に一致する人材が見つかりません</p>
         ) : (
           <div className="flex flex-col md:flex-row">
-            {/* Left: candidate list */}
-            <div className="w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px]">
+            {/* Left: candidate list（モバイルで詳細表示中は非表示） */}
+            <div className={`w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px] ${selectedId ? 'hidden md:block' : ''}`}>
               {filteredCandidates.map((c: Candidate) => {
                 const raw = getRaw(c)
                 const sbc = raw.skillsByCategory
@@ -873,6 +873,14 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
             <div className="flex-1 overflow-y-auto md:max-h-[640px]">
               {selectedCandidate ? (
                 <div className="p-4 space-y-4">
+                  {/* モバイル用「一覧に戻る」ボタン */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(null)}
+                    className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 md:hidden -mt-1 mb-1"
+                  >
+                    ← 一覧に戻る
+                  </button>
                   <div className="flex items-start justify-between gap-3">
                     <h3 className="text-base font-semibold text-gray-800">{selectedCandidate.name}</h3>
                     <div className="flex items-center gap-2 shrink-0">
