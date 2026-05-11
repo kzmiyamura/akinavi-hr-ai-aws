@@ -381,7 +381,7 @@ async function classifyEmailsBatch(
 
   try {
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' })
 
     // メール一覧をテキスト化（本文は先頭200文字のみ・コスト削減）
     const emailList = emails.map((email, i) => {
