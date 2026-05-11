@@ -9,6 +9,8 @@ import {
   resumeFullImport,
   getImportProgress,
   getConnectionStatuses,
+  getAutoMatchEnabled,
+  saveAutoMatchEnabled,
 } from '../lib/db/emailSettings'
 import {
   getMatchingSettings,
@@ -55,6 +57,16 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   } = useQuery({
     queryKey: ['connectionStatuses'],
     queryFn: getConnectionStatuses,
+  })
+
+  // 自動マッチング ON/OFF
+  const { data: autoMatchEnabled = true } = useQuery({
+    queryKey: ['autoMatchEnabled'],
+    queryFn: getAutoMatchEnabled,
+  })
+  const autoMatchMutation = useMutation({
+    mutationFn: saveAutoMatchEnabled,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['autoMatchEnabled'] }),
   })
 
   // マッチング設定
@@ -579,6 +591,32 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
             {resumeMutation.isError && (
               <p className="text-sm text-red-600">再開に失敗しました: {String(resumeMutation.error)}</p>
             )}
+          </div>
+        </section>
+
+        {/* ---- 自動マッチング ---- */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">自動マッチング</h2>
+          <p className="text-xs text-gray-400 mb-4">毎朝 9:00 に前日登録の案件と人材を自動でマッチングします。</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-700">自動バッチ（毎日 JST 9:00）</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                {autoMatchEnabled ? '有効 — 毎朝自動でマッチングが実行されます' : '無効 — 手動マッチングのみ'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => autoMatchMutation.mutate(!autoMatchEnabled)}
+              disabled={autoMatchMutation.isPending}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                autoMatchEnabled ? 'bg-blue-600' : 'bg-gray-300'
+              } disabled:opacity-50`}
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                autoMatchEnabled ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
           </div>
         </section>
 

@@ -94,6 +94,25 @@ export async function saveEmailAddressSettings(
   if (error) throw new Error(`メール設定の保存に失敗しました: ${error.message}`)
 }
 
+/** 自動マッチングの有効/無効を取得する */
+export async function getAutoMatchEnabled(): Promise<boolean> {
+  const { data } = await supabase
+    .from('app_config')
+    .select('value')
+    .eq('key', 'auto_match_enabled')
+    .maybeSingle()
+  // 未設定の場合はデフォルト true
+  return data?.value !== 'false'
+}
+
+/** 自動マッチングの有効/無効を保存する */
+export async function saveAutoMatchEnabled(enabled: boolean): Promise<void> {
+  const { error } = await supabase
+    .from('app_config')
+    .upsert({ key: 'auto_match_enabled', value: enabled ? 'true' : 'false' }, { onConflict: 'key' })
+  if (error) throw new Error(`自動マッチング設定の保存に失敗しました: ${error.message}`)
+}
+
 /** Microsoft アカウントごとの接続状態を取得する */
 export async function getConnectionStatuses(): Promise<Record<string, boolean>> {
   const accounts = ['human_prod', 'project_prod', 'human_dev', 'project_dev']

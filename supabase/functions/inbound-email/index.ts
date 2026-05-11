@@ -291,7 +291,8 @@ function normalizeToProjectObjects(result: unknown): Record<string, unknown>[] {
   return []
 }
 
-const AI_MODEL = 'gemini-2.5-flash'
+const AI_MODEL = 'gemini-2.5-flash'          // 人材/案件解析（精度重視）
+const AI_MODEL_FAST = 'gemini-2.0-flash'     // 関連度チェック（単純分類・低コスト）
 
 /** candidate/project の Gemini 1 回あたり待ち上限（ms）。Secrets GEMINI_INBOUND_TIMEOUT_MS（15〜300000） */
 function resolveInboundGeminiTimeoutMs(kind: 'candidate' | 'project' | 'match', override?: number): number {
@@ -367,7 +368,7 @@ JSON のみ返す（説明・コードブロック禁止）:
   pipe(rid, 'relevance_gemini_wait', { inboundType: input.inboundType })
 
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
-  const model = genAI.getGenerativeModel({ model: AI_MODEL, generationConfig: { temperature: 0 } })
+  const model = genAI.getGenerativeModel({ model: AI_MODEL_FAST, generationConfig: { temperature: 0 } })
   const TIMEOUT_MS = 15_000
   const start = Date.now()
   const timeoutPromise = new Promise<never>((_, reject) =>

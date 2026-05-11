@@ -39,7 +39,7 @@ async function matchCandidateToProject(
   projectRequirements: Record<string, unknown>,
 ): Promise<MatchResult> {
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' })
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
 
   const prompt = `
 あなたはマッチング判定AIです。以下の「人材」と「案件」を読み、マッチング結果を JSON だけで返してください。
@@ -86,6 +86,20 @@ Deno.serve(async (req: Request) => {
     if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY が未設定です')
 
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
+
+    // ---- auto-match が設定画面で無効化されている場合はスキップ ----
+    const { data: configRow } = await supabase
+      .from('app_config')
+      .select('value')
+      .eq('key', 'auto_match_enabled')
+      .maybeSingle()
+    if (configRow?.value === 'false') {
+      console.log('[auto-match] auto_match_enabled=false のためスキップ')
+      return new Response(
+        JSON.stringify({ ok: true, skipped: true, reason: 'disabled' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
 
     console.log('[auto-match] 開始')
 
