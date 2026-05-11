@@ -291,7 +291,7 @@ function normalizeToProjectObjects(result: unknown): Record<string, unknown>[] {
   return []
 }
 
-const AI_MODEL = 'gemini-2.5-flash'          // 人材/案件解析（精度重視）
+const AI_MODEL = 'gemini-2.0-flash'          // 人材/案件解析（コスト削減のため2.0-flashに統一）
 const AI_MODEL_FAST = 'gemini-2.0-flash'     // 関連度チェック（単純分類・低コスト）
 
 /** candidate/project の Gemini 1 回あたり待ち上限（ms）。Secrets GEMINI_INBOUND_TIMEOUT_MS（15〜300000） */
@@ -1166,7 +1166,9 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    if (isInboundRelevanceCheckEnabled()) {
+    // poll-email から呼ばれた場合は既に分類済みのためスキップ
+    const skipRelevance = raw.skip_relevance === 'true' || raw.skip_relevance === '1'
+    if (!skipRelevance && isInboundRelevanceCheckEnabled()) {
       tracePhase = 'relevance_check'
       pipe(traceRid, tracePhase, { type, inboundDataEnv })
       try {

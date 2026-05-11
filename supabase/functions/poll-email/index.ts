@@ -450,6 +450,8 @@ async function callInboundEmail(
     from:     email.from?.emailAddress?.address ?? '',
     subject:  email.subject ?? '',
     body:     email.body?.content ?? '',
+    // poll-email 側で既に分類済みのため inbound-email の関連度チェックをスキップ
+    skip_relevance: true,
     attachments: attachments.map(a => ({
       name:     a.name,
       mimeType: a.contentType,
