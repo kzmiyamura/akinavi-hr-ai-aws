@@ -291,8 +291,8 @@ function normalizeToProjectObjects(result: unknown): Record<string, unknown>[] {
   return []
 }
 
-const AI_MODEL = 'gemini-2.0-flash-lite'      // 人材/案件解析（2.0-flash廃止のため lite に変更）
-const AI_MODEL_FAST = 'gemini-2.0-flash-lite' // 関連度チェック（単純分類・低コスト）
+const AI_MODEL = 'gemini-2.5-flash-lite'      // 人材/案件解析
+const AI_MODEL_FAST = 'gemini-2.5-flash-lite' // 関連度チェック（単純分類・低コスト）
 
 /** candidate/project の Gemini 1 回あたり待ち上限（ms）。Secrets GEMINI_INBOUND_TIMEOUT_MS（15〜300000） */
 function resolveInboundGeminiTimeoutMs(kind: 'candidate' | 'project' | 'match', override?: number): number {
@@ -469,7 +469,7 @@ async function generateJSON(
 
 // ---- Groq API（テキスト専用・無料枠 14,400回/日） ----
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile'
+const GROQ_MODEL = 'llama-3.1-8b-instant' // TPD 500,000トークン（llama-3.3-70bは100,000で不足）
 
 /**
  * Groq API でJSON抽出（テキストのみ・添付非対応）
