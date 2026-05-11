@@ -746,6 +746,73 @@ function stripHtml(html: string): string {
     .trim()
 }
 
+// ── Google Drive アップロード ─────────────────────────────────────────────
+
+const DRIVE_FOLDER_ID = '15WrWPFnc5vlxJfRDlX7f2IbGi881D77m'
+
+/**
+ * ファイルを Google Drive の指定フォルダにアップロードし、共有URLを返す
+ * サービスアカウント認証（GOOGLE_SERVICE_ACCOUNT_JSON）を使用
+ */
+async function uploadToDrive(
+  filename: string,
+  mimeType: string,
+  dataB64: string,
+): Promise<string | null> {
+  const saJson = Deno.env.get('GOOGLE_SERVICE_ACCOUNT_JSON')
+  if (!saJson) {
+    console.warn('[Drive Upload] GOOGLE_SERVICE_ACCOUNT_JSON が未設定のためスキップ')
+    return null
+  }
+  try {
+    const sa = JSON.parse(saJson) as { client_email: string; private_key: string }
+    const accessToken = await getGoogleAccessToken(
+      sa,
+      'https://www.googleapis.com/auth/drive.file',
+    )
+
+    // multipart/related でメタデータとファイル本体を同時送信
+    const boundary = `boundary_${crypto.randomUUID().replace(/-/g, '')}`
+    const metadata = JSON.stringify({ name: filename, parents: [DRIVE_FOLDER_ID] })
+    const body = [
+      `--${boundary}`,
+      'Content-Type: application/json; charset=UTF-8',
+      '',
+      metadata,
+      `--${boundary}`,
+      `Content-Type: ${mimeType}`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      dataB64,
+      `--${boundary}--`,
+    ].join('\r\n')
+
+    const res = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body,
+      },
+    )
+
+    if (!res.ok) {
+      console.error('[Drive Upload] アップロード失敗', res.status, await res.text())
+      return null
+    }
+
+    const fileData = (await res.json()) as { id: string; webViewLink: string }
+    console.log(`[Drive Upload] アップロード成功: ${filename} → ${fileData.webViewLink}`)
+    return fileData.webViewLink
+  } catch (e) {
+    console.error('[Drive Upload] 例外:', e)
+    return null
+  }
+}
+
 // ── Box URL 連携 ──────────────────────────────────────────────────────────
 
 /** メール本文から Box 共有URLを抽出する */
@@ -1123,6 +1190,27 @@ Deno.serve(async (req: Request) => {
       console.log('[Box] Box URL検出:', boxUrls)
     }
 
+    // 人材メールの添付ファイルを Google Drive にアップロード
+    // （PDF/Word/Excel。アップロード失敗してもメイン処理は継続）
+    let resumeUrl: string | null = null
+    if (type === 'candidate' || type === 'human') {
+      // メール本文中の Drive リンクを最初の resume_url として使用
+      const firstDriveMatch = body.match(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)[a-zA-Z0-9_-]{25,}[^\s]*/)
+      if (firstDriveMatch) {
+        resumeUrl = firstDriveMatch[0]
+        console.log('[Resume] Drive URL from body:', resumeUrl)
+      }
+
+      // 添付ファイルをDriveにアップロード（resume_urlが未設定の場合に優先設定）
+      for (const att of attachments) {
+        if (!att.data) continue
+        const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+        const filename = att.name ? `${ts}_${att.name}` : `${ts}_resume.${att.mimeType.split('/')[1] ?? 'bin'}`
+        const url = await uploadToDrive(filename, att.mimeType, att.data)
+        if (url && !resumeUrl) resumeUrl = url
+      }
+    }
+
     // Drive取得テキスト + Officeテキストを統合してプロンプトに追記
     const allTextContents = [...driveTexts, ...officeTextContents]
     const driveTextSection = allTextContents.length > 0
@@ -1257,6 +1345,8 @@ Deno.serve(async (req: Request) => {
 - availableRegions: string[] | null（就業可能な地域。例: ["北海道", "東京都"]。情報がなければ null）
 - currentWorkLocation: string | null（現在の拠点都道府県。例: "北海道"。情報がなければ null）
 - remoteAvailable: boolean（リモート勤務対応可否。「リモート希望」等の明記で true。記載なければ false）
+- desiredRate: string | null（希望単価・希望年収。例: "60万円/月"、"700万円/年"。記載なければ null）
+- fromCompany: string | null（紹介元・送信元の会社名。差出人のメール本文・署名から抽出。なければ null）
 
 本文:
 ${body.slice(0, 3000)}${driveTextSection}
@@ -1286,6 +1376,8 @@ JSON:`.trim()
         availableRegions: string[] | null
         currentWorkLocation: string | null
         remoteAvailable: boolean
+        desiredRate: string | null
+        fromCompany: string | null
       }
       let analyzed: CandAi
 
@@ -1381,6 +1473,9 @@ JSON:`.trim()
         created_by: 'make-inbound',
         box_url: boxUrls[0] ?? null,
         box_status: boxUrls.length > 0 ? 'pending' : null,
+        resume_url: resumeUrl,
+        desired_rate: analyzed.desiredRate ?? null,
+        from_company: analyzed.fromCompany ?? null,
       }
 
       console.log(`[STEP7 DB保存開始] elapsed=${elapsed()}`)

@@ -377,6 +377,8 @@ Deno.serve(async (req: Request) => {
             enrichedAt: new Date().toISOString(),
           },
           box_status: 'enriched',
+          drive_url: row.driveUrl,
+          resume_url: row.driveUrl,
           updated_by: 'enrich-candidate',
         }
         if (analyzed.name && analyzed.name !== '不明') {

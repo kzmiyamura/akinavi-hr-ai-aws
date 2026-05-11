@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { upsertCandidate, updateCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import { getIsImportActive } from '../lib/db/emailSettings'
@@ -857,10 +857,22 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           <span className="text-[10px] bg-yellow-100 text-yellow-700 rounded px-1 shrink-0">重複</span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
+                      <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5 flex-wrap">
                         <span>経験{c.experience_years ?? '?'}年</span>
                         <span>·</span>
                         <span>{skillCount}スキル</span>
+                        {(c as unknown as { from_company?: string }).from_company && (
+                          <>
+                            <span>·</span>
+                            <span className="truncate max-w-[80px]">{(c as unknown as { from_company?: string }).from_company}</span>
+                          </>
+                        )}
+                        {(c as unknown as { desired_rate?: string }).desired_rate && (
+                          <>
+                            <span>·</span>
+                            <span className="text-green-600 font-medium">{(c as unknown as { desired_rate?: string }).desired_rate}</span>
+                          </>
+                        )}
                       </div>
                     </div>
                     {isSelected && <ChevronRight size={14} className="text-blue-400 shrink-0" />}
@@ -881,9 +893,45 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   >
                     ← 一覧に戻る
                   </button>
-                  <div className="flex items-start justify-between gap-3">
-                    <h3 className="text-base font-semibold text-gray-800">{selectedCandidate.name}</h3>
-                    <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                      <h3 className="text-base font-semibold text-gray-800">{selectedCandidate.name}</h3>
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {(selectedCandidate as unknown as { from_company?: string }).from_company && (
+                          <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">
+                            {(selectedCandidate as unknown as { from_company?: string }).from_company}
+                          </span>
+                        )}
+                        {(selectedCandidate as unknown as { desired_rate?: string }).desired_rate && (
+                          <span className="text-xs text-green-700 bg-green-50 rounded px-2 py-0.5 font-medium">
+                            {(selectedCandidate as unknown as { desired_rate?: string }).desired_rate}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {(selectedCandidate as unknown as { resume_url?: string; drive_url?: string }).resume_url || (selectedCandidate as unknown as { resume_url?: string; drive_url?: string }).drive_url ? (
+                        <a
+                          href={(selectedCandidate as unknown as { resume_url?: string; drive_url?: string }).drive_url || (selectedCandidate as unknown as { resume_url?: string; drive_url?: string }).resume_url!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
+                          title="経歴書を開く"
+                        >
+                          <ExternalLink size={14} />
+                          経歴書
+                        </a>
+                      ) : null}
+                      {getRaw(selectedCandidate).from && (
+                        <a
+                          href={`mailto:${getRaw(selectedCandidate).from}?subject=Re: ${encodeURIComponent(getRaw(selectedCandidate).subject ?? '')}`}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                          title="返信"
+                        >
+                          <Reply size={14} />
+                          返信
+                        </a>
+                      )}
                       <button
                         type="button"
                         onClick={() => setEditingCandidate(selectedCandidate)}
