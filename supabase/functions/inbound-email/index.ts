@@ -1577,12 +1577,14 @@ JSON:`.trim()
         fromCompany: string | null
       }
       let analyzed: CandAi
+      let usedModel1: string | undefined
 
       try {
-        const { result, durationMs: d1, usedModel: usedModel1 } = await generateJSONSmart(prompt, allAttachments, 'candidate', 2, undefined, {
+        const { result, durationMs: d1, usedModel: _usedModel1 } = await generateJSONSmart(prompt, allAttachments, 'candidate', 2, undefined, {
           rid: traceRid,
           phase: 'gemini_candidate_extract',
         }, extractModel)
+        usedModel1 = _usedModel1
         console.log(`[MODEL_USED] candidate extract: ${usedModel1}`)
         durationMs = d1
         analyzed = result as CandAi
