@@ -339,7 +339,7 @@ async function classifyInboundRelevance(input: {
   attachmentCount: number
   attachmentMimeTypes: string[]
   traceRid?: string
-}): Promise<{ relevant: boolean; durationMs: number }> {
+}): Promise<{ relevant: boolean; durationMs: number; usedModel: string }> {
   const prompt = `
 あなたはメール仕分け担当です。次のメールが「この HR / 案件マッチングシステムへの取り込み対象」かだけ判定してください。
 
@@ -365,11 +365,26 @@ JSON のみ返す（説明・コードブロック禁止）:
 `.trim()
 
   const rid = input.traceRid ?? '—'
-  pipe(rid, 'relevance_gemini_wait', { inboundType: input.inboundType })
+  const TIMEOUT_MS = 15_000
 
+  // ---- Groq を試みる ----
+  const groqKey = Deno.env.get('GROQ_API_KEY')
+  if (groqKey) {
+    pipe(rid, 'relevance_groq_wait', { inboundType: input.inboundType })
+    try {
+      const r = await generateJSONWithGroq(prompt, TIMEOUT_MS, `rid=${rid} phase=relevance_check`)
+      const obj = r.result as { relevant?: unknown }
+      const relevant = typeof obj.relevant === 'boolean' ? obj.relevant : true
+      return { relevant, durationMs: r.durationMs, usedModel: GROQ_MODEL }
+    } catch (e) {
+      console.warn(`[RELEVANCE] Groq失敗、Geminiにフォールバック: ${String(e)}`)
+    }
+  }
+
+  // ---- Gemini フォールバック ----
+  pipe(rid, 'relevance_gemini_wait', { inboundType: input.inboundType })
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
   const model = genAI.getGenerativeModel({ model: AI_MODEL_FAST, generationConfig: { temperature: 0 } })
-  const TIMEOUT_MS = 15_000
   const start = Date.now()
   const timeoutPromise = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error(`関連度判定タイムアウト (${TIMEOUT_MS}ms) rid=${rid} phase=relevance_gemini`)), TIMEOUT_MS)
@@ -383,11 +398,11 @@ JSON のみ返す（説明・コードブロック禁止）:
     parsed = JSON.parse(cleaned) as { relevant?: unknown }
   } catch {
     console.warn('[RELEVANCE] JSON パース失敗、続行扱い', cleaned.slice(0, 200))
-    return { relevant: true, durationMs }
+    return { relevant: true, durationMs, usedModel: AI_MODEL_FAST }
   }
   const r = parsed.relevant
   const relevant = typeof r === 'boolean' ? r : true
-  return { relevant, durationMs }
+  return { relevant, durationMs, usedModel: AI_MODEL_FAST }
 }
 
 async function generateJSON(
@@ -1284,7 +1299,7 @@ Deno.serve(async (req: Request) => {
       tracePhase = 'relevance_check'
       pipe(traceRid, tracePhase, { type, inboundDataEnv })
       try {
-        const { relevant, durationMs } = await classifyInboundRelevance({
+        const { relevant, durationMs: relevanceDurationMs, usedModel: relevanceModel } = await classifyInboundRelevance({
           subject,
           from,
           body,
@@ -1294,7 +1309,22 @@ Deno.serve(async (req: Request) => {
           traceRid,
         })
         tracePhase = 'relevance_done'
-        console.log('[RELEVANCE] 判定結果', { rid: traceRid, relevant, durationMs })
+        console.log('[RELEVANCE] 判定結果', { rid: traceRid, relevant, durationMs: relevanceDurationMs, model: relevanceModel })
+
+        // ai_logs に記録（失敗してもメイン処理は継続）
+        supabase.from('ai_logs').insert({
+          type: 'relevance_check',
+          model: relevanceModel,
+          from_address: from,
+          subject,
+          ai_result: { relevant },
+          prompt_length: body.slice(0, 8000).length + subject.length,
+          status: 'success',
+          duration_ms: relevanceDurationMs,
+        }).then(({ error }) => {
+          if (error) console.error('[RELEVANCE] ai_logs insert失敗', error.message)
+        })
+
         if (!relevant) {
           tracePhase = 'skip_not_relevant'
           console.warn('[RELEVANCE] 無関係のためスキップ（200）', {

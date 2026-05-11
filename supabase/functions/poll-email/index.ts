@@ -22,6 +22,8 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 const INBOUND_URL = `${SUPABASE_URL}/functions/v1/inbound-email`
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? ''
+const GROQ_API_KEY = Deno.env.get('GROQ_API_KEY') ?? ''
+const GROQ_MODEL = 'llama-3.1-8b-instant'
 
 /**
  * SUPABASE_SECRET_KEYS（新形式・JSON辞書）または
@@ -368,72 +370,127 @@ async function fetchAttachments(
 // ---- AI 種別判断（Gemini）バッチ版 ----
 // 複数メールをまとめて1回のGeminiコールで分類（コスト削減）
 
-const BATCH_CLASSIFY_SIZE = 20 // 1回のGeminiコールで分類するメール数上限
+const BATCH_CLASSIFY_SIZE = 20 // 1回のAIコールで分類するメール数上限
+
+/** バッチ分類プロンプトの解析（Groq・Gemini共通） */
+function parseBatchClassifyResponse(text: string, emailCount: number): Array<'candidate' | 'project' | 'other'> {
+  const jsonMatch = text.match(/\[[\s\S]*\]/)
+  if (!jsonMatch) throw new Error(`AI応答がJSON配列でない: ${text.slice(0, 100)}`)
+  const parsed = JSON.parse(jsonMatch[0]) as Array<{ i: number; t: string }>
+  const typeMap = new Map<number, 'candidate' | 'project' | 'other'>()
+  for (const item of parsed) {
+    const t = item.t === 'project' ? 'project' : item.t === 'other' ? 'other' : 'candidate'
+    typeMap.set(item.i, t)
+  }
+  return Array.from({ length: emailCount }, (_, i) => typeMap.get(i) ?? 'candidate')
+}
 
 async function classifyEmailsBatch(
   emails: GraphMessage[],
 ): Promise<Array<'candidate' | 'project' | 'other'>> {
-  if (!GEMINI_API_KEY) {
-    console.warn('[poll] GEMINI_API_KEY 未設定のため AI 分類をスキップ。candidate にフォールバック')
-    return emails.map(() => 'candidate')
-  }
   if (emails.length === 0) return []
 
-  try {
-    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' })
+  // メール一覧をテキスト化（本文は先頭200文字のみ・コスト削減）
+  const emailList = emails.map((email, i) => {
+    const rawBody = email.body?.content ?? ''
+    const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    return `[${i}] 件名: ${email.subject ?? '（なし）'}\n    本文: ${plainBody.slice(0, 200) || '（本文なし）'}`
+  }).join('\n\n')
 
-    // メール一覧をテキスト化（本文は先頭200文字のみ・コスト削減）
-    const emailList = emails.map((email, i) => {
-      const rawBody = email.body?.content ?? ''
-      const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
-      return `[${i}] 件名: ${email.subject ?? '（なし）'}\n    本文: ${plainBody.slice(0, 200) || '（本文なし）'}`
-    }).join('\n\n')
+  const prompt = [
+    `以下の${emails.length}件のメールを分類してください。`,
+    '各メールを candidate / project / other の3種別で判断し、JSON配列だけを返してください。',
+    '説明文・コードブロックは不要です。',
+    '',
+    '種別の定義:',
+    '  candidate  - 人材・エンジニア・求職者・フリーランスの情報（スキルシート・経歴書・自己紹介・稼働確認など）',
+    '  project    - 案件・プロジェクト・仕事依頼（要件定義・募集要項・単価・参画依頼など）',
+    '  other      - 上記以外（広告・通知・スパム・サービス通知など）',
+    '',
+    '返却形式: [{"i":0,"t":"candidate"},{"i":1,"t":"project"},...]',
+    '',
+    'メール一覧:',
+    emailList,
+  ].join('\n')
 
-    const prompt = [
-      `以下の${emails.length}件のメールを分類してください。`,
-      '各メールを candidate / project / other の3種別で判断し、JSON配列だけを返してください。',
-      '説明文・コードブロックは不要です。',
-      '',
-      '種別の定義:',
-      '  candidate  - 人材・エンジニア・求職者・フリーランスの情報（スキルシート・経歴書・自己紹介・稼働確認など）',
-      '  project    - 案件・プロジェクト・仕事依頼（要件定義・募集要項・単価・参画依頼など）',
-      '  other      - 上記以外（広告・通知・スパム・サービス通知など）',
-      '',
-      '返却形式: [{"i":0,"t":"candidate"},{"i":1,"t":"project"},...]',
-      '',
-      'メール一覧:',
-      emailList,
-    ].join('\n')
+  const supabaseForLog = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
+  const start = Date.now()
+  let usedModel = 'gemini-2.5-flash-lite'
+  let classifications: Array<'candidate' | 'project' | 'other'>
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 20_000)
-
-    const resultPromise = model.generateContent(prompt)
-    const result = await Promise.race([
-      resultPromise,
-      new Promise<never>((_, reject) =>
-        controller.signal.addEventListener('abort', () => reject(new Error('timeout')))
-      ),
-    ])
-    clearTimeout(timer)
-
-    const text = (result as Awaited<typeof resultPromise>).response.text().trim()
-    const jsonMatch = text.match(/\[[\s\S]*\]/)
-    if (!jsonMatch) throw new Error(`Gemini応答がJSON配列でない: ${text.slice(0, 100)}`)
-
-    const parsed = JSON.parse(jsonMatch[0]) as Array<{ i: number; t: string }>
-    const typeMap = new Map<number, 'candidate' | 'project' | 'other'>()
-    for (const item of parsed) {
-      const t = item.t === 'project' ? 'project' : item.t === 'other' ? 'other' : 'candidate'
-      typeMap.set(item.i, t)
+  // ---- Groq を試みる ----
+  if (GROQ_API_KEY) {
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 20_000)
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: GROQ_MODEL,
+          messages: [{ role: 'user', content: prompt }],
+          response_format: { type: 'json_object' },
+          temperature: 0,
+          max_tokens: 512,
+        }),
+        signal: controller.signal,
+      })
+      clearTimeout(timer)
+      if (!res.ok) throw new Error(`Groq APIエラー (${res.status}): ${(await res.text()).slice(0, 200)}`)
+      const json = await res.json()
+      // Groqのjson_objectモードは配列を直接返せないためラップされる場合がある
+      const content = (json.choices?.[0]?.message?.content ?? '').trim()
+      classifications = parseBatchClassifyResponse(content, emails.length)
+      usedModel = GROQ_MODEL
+      console.log(`[poll] バッチ分類 Groq成功 ${emails.length}件 durationMs=${Date.now() - start}`)
+    } catch (e) {
+      console.warn(`[poll] バッチ分類 Groq失敗、Geminiにフォールバック: ${String(e)}`)
     }
-
-    return emails.map((_, i) => typeMap.get(i) ?? 'candidate')
-  } catch (e) {
-    console.error(`[poll] バッチAI分類失敗: ${String(e)}。candidate にフォールバック`)
-    return emails.map(() => 'candidate')
   }
+
+  // ---- Gemini フォールバック ----
+  if (!classifications!) {
+    if (!GEMINI_API_KEY) {
+      console.warn('[poll] GEMINI_API_KEY 未設定のため AI 分類をスキップ。candidate にフォールバック')
+      return emails.map(() => 'candidate')
+    }
+    try {
+      const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
+      const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' })
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 20_000)
+      const resultPromise = model.generateContent(prompt)
+      const result = await Promise.race([
+        resultPromise,
+        new Promise<never>((_, reject) =>
+          controller.signal.addEventListener('abort', () => reject(new Error('timeout')))
+        ),
+      ])
+      clearTimeout(timer)
+      const text = (result as Awaited<typeof resultPromise>).response.text().trim()
+      classifications = parseBatchClassifyResponse(text, emails.length)
+      usedModel = 'gemini-2.5-flash-lite'
+      console.log(`[poll] バッチ分類 Gemini成功 ${emails.length}件 durationMs=${Date.now() - start}`)
+    } catch (e) {
+      console.error(`[poll] バッチAI分類失敗: ${String(e)}。candidate にフォールバック`)
+      return emails.map(() => 'candidate')
+    }
+  }
+
+  // ---- ai_logs に記録 ----
+  const durationMs = Date.now() - start
+  supabaseForLog.from('ai_logs').insert({
+    type: 'batch_classify',
+    model: usedModel,
+    ai_result: { count: emails.length, classifications },
+    prompt_length: prompt.length,
+    status: 'success',
+    duration_ms: durationMs,
+  }).then(({ error }) => {
+    if (error) console.error('[poll] ai_logs insert失敗', error.message)
+  })
+
+  return classifications
 }
 
 // ---- inbound-email を呼び出し ----
