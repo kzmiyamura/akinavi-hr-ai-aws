@@ -418,38 +418,8 @@ async function classifyEmailsBatch(
   let usedModel = 'gemini-2.5-flash-lite'
   let classifications: Array<'candidate' | 'project' | 'other'>
 
-  // ---- Groq を試みる ----
-  if (GROQ_API_KEY) {
-    try {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 20_000)
-      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          response_format: { type: 'json_object' },
-          temperature: 0,
-          max_tokens: 512,
-        }),
-        signal: controller.signal,
-      })
-      clearTimeout(timer)
-      if (!res.ok) throw new Error(`Groq APIエラー (${res.status}): ${(await res.text()).slice(0, 200)}`)
-      const json = await res.json()
-      // Groqのjson_objectモードは配列を直接返せないためラップされる場合がある
-      const content = (json.choices?.[0]?.message?.content ?? '').trim()
-      classifications = parseBatchClassifyResponse(content, emails.length)
-      usedModel = GROQ_MODEL
-      console.log(`[poll] バッチ分類 Groq成功 ${emails.length}件 durationMs=${Date.now() - start}`)
-    } catch (e) {
-      console.warn(`[poll] バッチ分類 Groq失敗、Geminiにフォールバック: ${String(e)}`)
-    }
-  }
-
-  // ---- Gemini フォールバック ----
-  if (!classifications!) {
+  // ---- Gemini で分類（精度重視・分類プロンプトは短いので低コスト）----
+  if (true) {
     if (!GEMINI_API_KEY) {
       console.warn('[poll] GEMINI_API_KEY 未設定のため AI 分類をスキップ。candidate にフォールバック')
       return emails.map(() => 'candidate')
