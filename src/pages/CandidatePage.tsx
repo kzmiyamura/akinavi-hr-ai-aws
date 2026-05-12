@@ -911,9 +911,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     </div>
                     <div className="flex flex-wrap items-center gap-2 shrink-0">
                       {(() => {
-                        const c2 = selectedCandidate as unknown as { resume_url?: string; drive_url?: string }
                         // drive_url → resume_url → raw_profile.text内のDrive URL の順で探す
-                        const resumeLink = c2.drive_url || c2.resume_url || (() => {
+                        const resumeLink = selectedCandidate.drive_url || selectedCandidate.resume_url || (() => {
                           const bodyText = (selectedCandidate.raw_profile as { text?: string })?.text ?? ''
                           const m = bodyText.match(/https:\/\/drive\.google\.com\/[^\s"'<>\]）]+/)
                           return m ? m[0] : null
@@ -931,6 +930,18 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           </a>
                         ) : null
                       })()}
+                      {selectedCandidate.box_url && (
+                        <a
+                          href={selectedCandidate.box_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-200 rounded-lg text-orange-600 hover:bg-orange-50 transition-colors"
+                          title="Box経歴書を開く"
+                        >
+                          <ExternalLink size={14} />
+                          Box{selectedCandidate.box_status === 'pending' ? '（処理待ち）' : selectedCandidate.box_status === 'enriched' ? '' : ''}
+                        </a>
+                      )}
                       {getRaw(selectedCandidate).from && (
                         <a
                           href={`mailto:${getRaw(selectedCandidate).from}?subject=Re: ${encodeURIComponent(getRaw(selectedCandidate).subject ?? '')}`}

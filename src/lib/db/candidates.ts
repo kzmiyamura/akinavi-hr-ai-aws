@@ -21,6 +21,12 @@ export interface Candidate {
   updated_by: string | null
   created_at: string
   updated_at: string
+  resume_url: string | null
+  drive_url: string | null
+  box_url: string | null
+  box_status: string | null
+  desired_rate: string | null
+  from_company: string | null
 }
 
 export interface UpsertCandidateInput {

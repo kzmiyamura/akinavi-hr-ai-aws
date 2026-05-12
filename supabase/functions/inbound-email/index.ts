@@ -977,7 +977,11 @@ async function uploadToDrive(
     )
 
     if (!res.ok) {
-      console.error('[Drive Upload] アップロード失敗', res.status, await res.text())
+      const errBody = await res.text()
+      console.error(`[Drive Upload] アップロード失敗 status=${res.status} body=${errBody.slice(0, 300)}`)
+      if (res.status === 403) {
+        console.error('[Drive Upload] 403エラー: サービスアカウントにフォルダのアクセス権がない可能性があります。Googleドライブのフォルダをサービスアカウントのメールアドレスと共有してください。')
+      }
       return null
     }
 
