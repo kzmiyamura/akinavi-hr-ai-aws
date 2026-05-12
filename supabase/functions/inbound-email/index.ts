@@ -869,6 +869,59 @@ function stripHtml(html: string): string {
 const DRIVE_FOLDER_ID = '15WrWPFnc5vlxJfRDlX7f2IbGi881D77m'
 
 /**
+ * PDFバイナリを Gemini でテキスト抽出する（2段階処理の第1ステップ）
+ * 抽出成功したPDFはテキストに変換し、バイナリ添付から除外することで Groq 利用を可能にする
+ * - GROQ_API_KEY 未設定時はスキップ（Geminiマルチモーダルで一括処理するため不要）
+ * - 抽出失敗したPDFは remainingPdfs に残し Gemini バイナリ処理にフォールバック
+ */
+async function extractPdfTextsWithGemini(
+  pdfs: Attachment[],
+  traceRid: string,
+): Promise<{ extractedTexts: Array<{ label: string; content: string }>; remainingPdfs: Attachment[] }> {
+  const groqKey = Deno.env.get('GROQ_API_KEY')
+  if (!groqKey || pdfs.length === 0) {
+    return { extractedTexts: [], remainingPdfs: pdfs }
+  }
+
+  const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
+  const model = genAI.getGenerativeModel({ model: AI_MODEL_FAST })
+
+  const extractedTexts: Array<{ label: string; content: string }> = []
+  const remainingPdfs: Attachment[] = []
+
+  for (const pdf of pdfs) {
+    if (!pdf.data) { remainingPdfs.push(pdf); continue }
+    try {
+      const parts = [
+        { inlineData: { data: pdf.data, mimeType: pdf.mimeType } },
+        { text: 'このファイルのテキストを全て抽出してください。整形・要約不要。テキストのみ出力。' },
+      ]
+      const res = await Promise.race([
+        model.generateContent(parts),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('PDF抽出タイムアウト')), 20_000)
+        ),
+      ])
+      const text = res.response.text().trim()
+      if (text.length > 50) {
+        extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content: text.slice(0, 6000) })
+        console.log(`[PDF Extract] 成功: ${pdf.name} ${text.length}文字 rid=${traceRid}`)
+      } else {
+        // テキストが短すぎる（スキャンPDFなど） → バイナリフォールバック
+        remainingPdfs.push(pdf)
+        console.warn(`[PDF Extract] テキスト不足(${text.length}文字)、バイナリ処理へ: ${pdf.name} rid=${traceRid}`)
+      }
+    } catch (e) {
+      remainingPdfs.push(pdf)
+      console.warn(`[PDF Extract] 失敗、バイナリ処理へ: ${pdf.name} ${String(e)} rid=${traceRid}`)
+    }
+  }
+
+  console.log(`[PDF Extract] 完了: 変換=${extractedTexts.length}件 残バイナリ=${remainingPdfs.length}件 rid=${traceRid}`)
+  return { extractedTexts, remainingPdfs }
+}
+
+/**
  * ファイルを Google Drive の指定フォルダにアップロードし、共有URLを返す
  * サービスアカウント認証（GOOGLE_SERVICE_ACCOUNT_JSON）を使用
  */
@@ -1384,7 +1437,7 @@ Deno.serve(async (req: Request) => {
     // Google Drive / Sheets / Docs リンクの取得
     console.log(`[STEP4 DriveLink開始] elapsed=${elapsed()}`, { rid: traceRid })
     const { textContents: driveTexts, pdfAttachments: drivePdfs } = await fetchGoogleLinks(body)
-    const allAttachments = [...supportedAttachments, ...drivePdfs]
+    const rawAllAttachments = [...supportedAttachments, ...drivePdfs]
     tracePhase = 'drive_links_done'
     console.log('[STEP4 DriveLink完了]', {
       rid: traceRid,
@@ -1392,6 +1445,15 @@ Deno.serve(async (req: Request) => {
       pdfs: drivePdfs.map(p => p.name),
       elapsed: elapsed(),
     })
+
+    // ---- PDF テキスト抽出（2段階処理）----
+    // PDFバイナリをGeminiでテキスト化 → Groqで構造化抽出できるようにする
+    tracePhase = 'pdf_extract'
+    const pdfAttachmentsOnly = rawAllAttachments.filter(a => a.mimeType === 'application/pdf')
+    const nonPdfAttachments = rawAllAttachments.filter(a => a.mimeType !== 'application/pdf')
+    const { extractedTexts: pdfExtractedTexts, remainingPdfs } = await extractPdfTextsWithGemini(pdfAttachmentsOnly, traceRid)
+    // 変換成功PDFはテキストに、失敗PDFはバイナリのまま残す
+    const allAttachments = [...nonPdfAttachments, ...remainingPdfs]
 
     // ① 複雑度に応じてモデルを選択（コスト最適化）
     // シンプル: 添付なし・Driveリンクなし・本文2000文字以下 → gemini-2.0-flash（安価）
@@ -1438,8 +1500,8 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // Drive取得テキスト + Officeテキストを統合してプロンプトに追記
-    const allTextContents = [...driveTexts, ...officeTextContents]
+    // Drive取得テキスト + Officeテキスト + PDF抽出テキストを統合してプロンプトに追記
+    const allTextContents = [...driveTexts, ...officeTextContents, ...pdfExtractedTexts]
     const driveTextSection = allTextContents.length > 0
       ? '\n\n' + allTextContents.map(t => `--- ${t.label} ---\n${t.content.slice(0, 3000)}`).join('\n\n')
       : ''
