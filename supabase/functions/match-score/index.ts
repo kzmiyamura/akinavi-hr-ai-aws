@@ -10,13 +10,13 @@ const GROQ_MODEL = 'llama-3.3-70b-versatile'
 const GEMINI_MODEL = 'gemini-2.5-flash'
 
 function buildPrompt(candidate: unknown, project: unknown): string {
-  return `人材と案件のマッチング評価。JSONのみ返す。説明文不要。
+  return `人材と案件のマッチング評価。1行のコンパクトJSONのみ返す。改行・インデント不要。説明文不要。
 
 人材: ${JSON.stringify(candidate)}
 案件: ${JSON.stringify(project)}
 
-{"score":数値(0-100),"summary":"マッチング理由200字以内","duplicateSuspected":false}
-JSON:`.trim()
+出力形式（1行・改行なし）:
+{"score":数値0-100,"summary":"理由100字以内","duplicateSuspected":false}`.trim()
 }
 
 async function callGroq(key: string, prompt: string): Promise<string> {
@@ -30,7 +30,7 @@ async function callGroq(key: string, prompt: string): Promise<string> {
       model: GROQ_MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
-      max_tokens: 800,
+      max_tokens: 1200,
     }),
     signal: AbortSignal.timeout(15_000),
   })
@@ -53,7 +53,7 @@ async function callGemini(prompt: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 800 },
+        generationConfig: { temperature: 0.1, maxOutputTokens: 1200 },
       }),
       signal: AbortSignal.timeout(30_000),
     },
