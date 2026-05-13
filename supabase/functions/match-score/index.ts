@@ -30,7 +30,7 @@ async function callGroq(key: string, prompt: string): Promise<string> {
       model: GROQ_MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
-      max_tokens: 400,
+      max_tokens: 800,
     }),
     signal: AbortSignal.timeout(15_000),
   })
@@ -53,7 +53,7 @@ async function callGemini(prompt: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 400 },
+        generationConfig: { temperature: 0.1, maxOutputTokens: 800 },
       }),
       signal: AbortSignal.timeout(30_000),
     },
