@@ -864,9 +864,7 @@ function stripHtml(html: string): string {
     .trim()
 }
 
-// ── Google Drive アップロード ─────────────────────────────────────────────
-
-const DRIVE_FOLDER_ID = '15WrWPFnc5vlxJfRDlX7f2IbGi881D77m'
+// ── Supabase Storage アップロード ────────────────────────────────────────
 
 /**
  * PDFバイナリを Gemini でテキスト抽出する（2段階処理の第1ステップ）
@@ -922,74 +920,42 @@ async function extractPdfTextsWithGemini(
 }
 
 /**
- * ファイルを Google Drive の指定フォルダにアップロードし、共有URLを返す
- * サービスアカウント認証（GOOGLE_SERVICE_ACCOUNT_JSON）を使用
+ * ファイルを Supabase Storage の attachments バケットにアップロードし、公開URLを返す
  */
-async function uploadToDrive(
+async function uploadToStorage(
   filename: string,
   mimeType: string,
   dataB64: string,
 ): Promise<string | null> {
-  const saJson = Deno.env.get('GOOGLE_SERVICE_ACCOUNT_JSON')
-  if (!saJson) {
-    console.warn('[Drive Upload] GOOGLE_SERVICE_ACCOUNT_JSON が未設定のためスキップ')
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (!supabaseUrl || !serviceRoleKey) {
+    console.warn('[Storage Upload] SUPABASE_URL または SUPABASE_SERVICE_ROLE_KEY が未設定')
     return null
   }
   try {
-    let sa: { client_email: string; private_key: string }
-    try {
-      sa = JSON.parse(saJson) as { client_email: string; private_key: string }
-    } catch {
-      console.error('[Drive Upload] GOOGLE_SERVICE_ACCOUNT_JSON が有効なJSONではありません。Supabase Secretsに正しいサービスアカウントJSONを登録してください。')
-      return null
-    }
-    const accessToken = await getGoogleAccessToken(
-      sa,
-      'https://www.googleapis.com/auth/drive.file',
-    )
-
-    // multipart/related でメタデータとファイル本体を同時送信
-    const boundary = `boundary_${crypto.randomUUID().replace(/-/g, '')}`
-    const metadata = JSON.stringify({ name: filename, parents: [DRIVE_FOLDER_ID] })
-    const body = [
-      `--${boundary}`,
-      'Content-Type: application/json; charset=UTF-8',
-      '',
-      metadata,
-      `--${boundary}`,
-      `Content-Type: ${mimeType}`,
-      'Content-Transfer-Encoding: base64',
-      '',
-      dataB64,
-      `--${boundary}--`,
-    ].join('\r\n')
-
-    const res = await fetch(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': `multipart/related; boundary=${boundary}`,
-        },
-        body,
+    const fileBytes = Uint8Array.from(atob(dataB64), c => c.charCodeAt(0))
+    const path = `resumes/${filename}`
+    const uploadUrl = `${supabaseUrl}/storage/v1/object/attachments/${path}`
+    const res = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${serviceRoleKey}`,
+        'Content-Type': mimeType,
+        'x-upsert': 'true',
       },
-    )
-
+      body: fileBytes,
+    })
     if (!res.ok) {
       const errBody = await res.text()
-      console.error(`[Drive Upload] アップロード失敗 status=${res.status} body=${errBody.slice(0, 300)}`)
-      if (res.status === 403) {
-        console.error('[Drive Upload] 403エラー: サービスアカウントにフォルダのアクセス権がない可能性があります。Googleドライブのフォルダをサービスアカウントのメールアドレスと共有してください。')
-      }
+      console.error(`[Storage Upload] アップロード失敗 status=${res.status} body=${errBody.slice(0, 300)}`)
       return null
     }
-
-    const fileData = (await res.json()) as { id: string; webViewLink: string }
-    console.log(`[Drive Upload] アップロード成功: ${filename} → ${fileData.webViewLink}`)
-    return fileData.webViewLink
+    const publicUrl = `${supabaseUrl}/storage/v1/object/public/attachments/${path}`
+    console.log(`[Storage Upload] アップロード成功: ${filename} → ${publicUrl}`)
+    return publicUrl
   } catch (e) {
-    console.error('[Drive Upload] 例外:', e)
+    console.error('[Storage Upload] 例外:', e)
     return null
   }
 }
@@ -1508,12 +1474,12 @@ Deno.serve(async (req: Request) => {
         }
         const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
         const filename = att.name ? `${ts}_${att.name}` : `${ts}_resume.${att.mimeType.split('/')[1] ?? 'bin'}`
-        console.log(`[Drive Upload] アップロード試行: ${filename}`)
-        const url = await uploadToDrive(filename, att.mimeType, att.data)
-        console.log(`[Drive Upload] 結果: ${url ?? 'null(失敗)'}`)
+        console.log(`[Storage Upload] アップロード試行: ${filename}`)
+        const url = await uploadToStorage(filename, att.mimeType, att.data)
+        console.log(`[Storage Upload] 結果: ${url ?? 'null(失敗)'}`)
         if (url && !resumeUrl) resumeUrl = url
       }
-      console.log(`[Drive Upload] 完了 resumeUrl=${resumeUrl ?? 'null'}`)
+      console.log(`[Storage Upload] 完了 resumeUrl=${resumeUrl ?? 'null'}`)
     }
 
     // Drive取得テキスト + Officeテキスト + PDF抽出テキストを統合してプロンプトに追記
