@@ -1015,6 +1015,13 @@ async function extractPdfTextsWithGemini(
     if (!pdf.data) { remainingPdfs.push(pdf); continue }
 
     // ① pdfjs-dist で無料テキスト抽出を試みる
+    // base64長 2,000,000 ≒ 実ファイル ~1.5MB 超はメモリ超過リスクがあるためスキップ
+    const PDFJS_MAX_B64 = 2_000_000
+    if (pdf.data.length > PDFJS_MAX_B64) {
+      console.warn(`[PDF Extract] pdfjs スキップ（サイズ超過 ${pdf.data.length}文字）: ${pdf.name} rid=${traceRid}`)
+      remainingPdfs.push(pdf)
+      continue
+    }
     const freeText = await extractPdfTextWithPdfjs(pdf.data)
     if (freeText) {
       extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content: freeText.slice(0, 6000) })
