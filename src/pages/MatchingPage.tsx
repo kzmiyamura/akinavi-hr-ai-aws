@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search } from 'lucide-react'
+import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { fetchCandidates } from '../lib/db/candidates'
 import {
@@ -298,6 +298,30 @@ function ProjectModeRankCard({
             <p className="text-xs text-gray-400 mt-0.5 break-all">{s.candidate.email}</p>
           )}
           <SkillTagsWithAccordion skills={s.candidate.skills as string[]} />
+          {(s.candidate.drive_url || s.candidate.resume_url) && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {s.candidate.drive_url && (
+                <a
+                  href={s.candidate.drive_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 transition-colors"
+                >
+                  <FileText size={11} />経歴書
+                </a>
+              )}
+              {s.candidate.resume_url && s.candidate.resume_url !== s.candidate.drive_url && (
+                <a
+                  href={s.candidate.resume_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 transition-colors"
+                >
+                  <FileText size={11} />経歴書(2)
+                </a>
+              )}
+            </div>
+          )}
           <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0">
             <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
             <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words leading-relaxed">
