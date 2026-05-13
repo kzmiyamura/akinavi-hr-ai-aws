@@ -926,7 +926,9 @@ async function extractPdfTextWithPdfjs(dataB64: string): Promise<string | null> 
 
     const text = extracted.join(' ')
       .replace(/\\n/g, '\n').replace(/\\r/g, '').replace(/\\\\/g, '\\').trim()
-    return text.length > 50 ? text : null
+    if (text.length > 50) return text
+    console.warn(`[PDF Free Extract] テキスト不足(${text.length}文字) - スキャンPDFの可能性`)
+    return null
   } catch (e) {
     console.warn(`[PDF Free Extract] 失敗: ${String(e)}`)
     return null
@@ -1214,12 +1216,6 @@ Deno.serve(async (req: Request) => {
           const b64 = uint8ToBase64(new Uint8Array(ab))
           const mime = v.type || 'application/octet-stream'
           const fileName = v instanceof File ? v.name : k
-          console.log('[multipart] file field', {
-            field: k,
-            bytes: ab.byteLength,
-            mime,
-            fileName,
-          })
           if (!raw['attachment[data]']) {
             raw['attachment[data]'] = b64
             raw['attachment[mimeType]'] = mime
@@ -1243,25 +1239,6 @@ Deno.serve(async (req: Request) => {
       const u = new URL(req.url)
       queryHasMode = u.searchParams.has('mode') || u.searchParams.has('data_env')
     } catch { /* ignore */ }
-    console.log('[STEP0 受信メタ]', {
-      rid: traceRid,
-      method: req.method,
-      contentType,
-      rawKeyCount: rawKeys.length,
-      rawKeys,
-      rawType: raw.type ?? '(unset)',
-      rawMode: raw.mode ?? '(unset)',
-      pickedMode: pickedMode ?? '(unset)',
-      queryHasMode,
-    })
-    console.log('[STEP0 フィールド長]', {
-      rid: traceRid,
-      raw_body_len: (raw.body ?? '').length,
-      picked_plain_len: pickEmailPlainBody(raw).length,
-      attachment_data_len: (raw['attachment[data]'] ?? '').length,
-      attachment_mime: (raw['attachment[mimeType]'] ?? '').slice(0, 80),
-    })
-
     const inboundDataEnv = resolveInboundDataEnv(pickedMode)
     tracePhase = 'resolved_env_type'
     console.log('[inbound] data_env=', inboundDataEnv, 'pickedMode=', pickedMode ?? '', 'raw.mode=', raw.mode ?? '', 'rid=', traceRid)
@@ -1450,20 +1427,9 @@ Deno.serve(async (req: Request) => {
     }
 
     tracePhase = 'pre_supabase'
-    // STEP4 がログに出ない場合の切り分け: createClient 前後と fetchGoogleLinks 内で止まるかを分離する
-    console.log('[STEP3→4間] emptyチェック通過', {
-      rid: traceRid,
-      bodyLen: body.trim().length,
-      attachmentCount: attachments.length,
-      type,
-      inboundDataEnv,
-      elapsed: elapsed(),
-    })
     tracePhase = 'supabase_connect'
     pipe(traceRid, tracePhase)
-    console.log('[STEP3→4間] Supabase createClient 直前', { rid: traceRid })
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
-    console.log('[STEP3→4間] Supabase createClient 完了', { rid: traceRid })
 
     // ③ 重複メール判定（同一メールが複数受信箱に転送された場合の二重処理防止）
     tracePhase = 'dedup_check'
@@ -1527,33 +1493,18 @@ Deno.serve(async (req: Request) => {
     // （PDF/Word/Excel。アップロード失敗してもメイン処理は継続）
     let resumeUrl: string | null = null
     if (type === 'candidate' || type === 'human') {
-      console.log(`[Drive Upload] 開始 rid=${traceRid} attachments=${attachments.length}件`)
-      console.log(`[Drive Upload] 添付一覧: ${attachments.map(a => `${a.name ?? '無名'}(${a.mimeType},data=${!!a.data})`).join(', ') || 'なし'}`)
-
-      const saJson = Deno.env.get('GOOGLE_SERVICE_ACCOUNT_JSON') ?? ''
-      console.log(`[Drive Upload] GOOGLE_SERVICE_ACCOUNT_JSON 長さ=${saJson.length} 先頭10文字="${saJson.slice(0, 10)}"`)
-
       // メール本文中の Drive リンクを最初の resume_url として使用
       const firstDriveMatch = body.match(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)[a-zA-Z0-9_-]{25,}[^\s]*/)
-      if (firstDriveMatch) {
-        resumeUrl = firstDriveMatch[0]
-        console.log('[Resume] Drive URL from body:', resumeUrl)
-      }
+      if (firstDriveMatch) resumeUrl = firstDriveMatch[0]
 
-      // 添付ファイルをDriveにアップロード（resume_urlが未設定の場合に優先設定）
+      // 添付ファイルを Supabase Storage にアップロード（resume_urlが未設定の場合に優先設定）
       for (const att of attachments) {
-        if (!att.data) {
-          console.warn(`[Drive Upload] data なしのためスキップ: ${att.name} (${att.mimeType})`)
-          continue
-        }
+        if (!att.data) continue
         const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
         const filename = att.name ? `${ts}_${att.name}` : `${ts}_resume.${att.mimeType.split('/')[1] ?? 'bin'}`
-        console.log(`[Storage Upload] アップロード試行: ${filename}`)
         const url = await uploadToStorage(filename, att.mimeType, att.data)
-        console.log(`[Storage Upload] 結果: ${url ?? 'null(失敗)'}`)
         if (url && !resumeUrl) resumeUrl = url
       }
-      console.log(`[Storage Upload] 完了 resumeUrl=${resumeUrl ?? 'null'}`)
     }
 
     // Drive取得テキスト + Officeテキスト + PDF抽出テキストを統合してプロンプトに追記
