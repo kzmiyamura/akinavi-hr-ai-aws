@@ -577,8 +577,9 @@ function buildCandidateGroqPrompt(
   const footer = '\nJSON:'
   const dataBudget = GROQ_MAX - header.length - footer.length
 
-  // ボディ: 予算の25%まで
-  const bodyBudget = Math.min(body.length, Math.floor(dataBudget * 0.25))
+  // ボディ予算: textContentsがある場合は25%、ない場合は全体（添付なし本文のみメールを最大活用）
+  const bodyRatio = textContents.length > 0 ? 0.25 : 1.0
+  const bodyBudget = Math.min(body.length, Math.floor(dataBudget * bodyRatio))
   let dataSection = body.slice(0, bodyBudget)
 
   // テキストコンテンツ（PDF/Drive/Office）: 残り予算でスマートトランケーション
@@ -612,7 +613,8 @@ function buildProjectGroqPrompt(
   const footer = '\nJSON:'
   const dataBudget = GROQ_MAX - header.length - footer.length
 
-  const bodyBudget = Math.min(body.length, Math.floor(dataBudget * 0.4))
+  const bodyRatio = textContents.length > 0 ? 0.4 : 1.0
+  const bodyBudget = Math.min(body.length, Math.floor(dataBudget * bodyRatio))
   let dataSection = body.slice(0, bodyBudget)
 
   for (const t of textContents) {
@@ -853,12 +855,8 @@ async function fetchGoogleLinks(body: string): Promise<{
         textContents.push({ label: `Googleスプレッドシート(${id})`, content: await res.text() })
         console.log(`[DriveLink] Sheets取得成功: ${id}`)
       } else {
-        console.warn(`[DriveLink] Sheetsエクスポート失敗(${res.status}): ${id} - 通常のDrive取得へフォールバックします`)
-        const driveRes = await fetchWithTimeout(`https://drive.google.com/uc?export=download&id=${id}`)
-        if (driveRes.ok) {
-          const text = await driveRes.text()
-          textContents.push({ label: `Googleスプレッドシート(DL:${id})`, content: text })
-        }
+        // フォールバックDLは認証が必要なSheetsではHTMLゴミを返すためスキップ
+        console.warn(`[DriveLink] Sheetsエクスポート失敗(${res.status}): ${id} - スキップ（公開設定を確認してください）`)
       }
     } catch (e) { console.warn(`[DriveLink] Sheets fetch error: ${id}`, e) }
   }
@@ -1340,6 +1338,19 @@ Deno.serve(async (req: Request) => {
         rawBody_len: rawBody.length,
       })
       body = rawBody.trim()
+    }
+
+    // 転送・返信メールの引用ヘッダを除去（「取得 Outlook for Mac 差出人:...」等が先頭に追加される）
+    // 引用区切り行以降を除去して本文だけを残す
+    const QUOTE_DELIMITERS = [
+      /^[-_]{3,}[\s\S]*?差出人[:：]/m,
+      /^_{3,}\s*$/m,
+      /^From:\s+/m,
+      /^送信元：/m,
+    ]
+    for (const delim of QUOTE_DELIMITERS) {
+      const m = body.search(delim)
+      if (m > 200) { body = body.slice(0, m).trim(); break }
     }
 
     // 添付ファイルの解決（attachment[data] 形式 → Attachment オブジェクト）
