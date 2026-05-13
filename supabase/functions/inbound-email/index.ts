@@ -559,18 +559,24 @@ async function generateJSONSmart(
   )
   const groqKey = Deno.env.get('GROQ_API_KEY')
 
-  // 画像・PDF添付あり、Groqキー未設定、またはプロンプトが長すぎる → Gemini直行
-  // Groq llama-3.1-8b-instant の TPM 上限: 6,000 tokens/min ≒ 日本語4,500文字
-  const GROQ_MAX_PROMPT_CHARS = 4_500
-  if (!groqKey || hasImageAttachments || prompt.length > GROQ_MAX_PROMPT_CHARS) {
+  // 画像添付あり・Groqキー未設定 → Gemini直行
+  if (!groqKey || hasImageAttachments) {
     const r = await generateJSON(prompt, attachments, kind, maxRetries, timeoutMs, geminiTrace, geminiModel)
     return { ...r, usedModel: geminiModel ?? AI_MODEL }
   }
 
+  // Groq llama-3.1-8b-instant の TPM 上限: 6,000 tokens/min ≒ 日本語4,500文字
+  // 長いプロンプトはスマートトランケーション（先頭3500 + 末尾500）でGroqに渡す
+  // Geminiには常に元の完全プロンプトを渡す（精度優先）
+  const GROQ_MAX_PROMPT_CHARS = 4_500
+  const groqPrompt = prompt.length > GROQ_MAX_PROMPT_CHARS
+    ? prompt.slice(0, 3_500) + '\n...(中略)...\n' + prompt.slice(-500)
+    : prompt
+
   // Groq を試みる
   try {
     const r = await generateJSONWithGroq(
-      prompt,
+      groqPrompt,
       timeoutMs ?? 30_000,
       geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined,
     )
