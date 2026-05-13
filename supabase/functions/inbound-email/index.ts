@@ -874,7 +874,7 @@ function stripHtml(html: string): string {
 async function extractPdfTextWithPdfjs(dataB64: string): Promise<string | null> {
   try {
     const pdfBytes = Uint8Array.from(atob(dataB64), c => c.charCodeAt(0))
-    const latin1 = new TextDecoder('latin-1')
+    const latin1 = new TextDecoder('latin1')
     const raw = latin1.decode(pdfBytes)
 
     // FlateDecode ストリームを収集して解凍
