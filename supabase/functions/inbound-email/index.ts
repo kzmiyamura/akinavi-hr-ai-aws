@@ -545,6 +545,37 @@ async function generateJSONWithGroq(
  * - 添付ファイル（画像・PDF）がある場合はGroq非対応のためGemini直行
  * - GROQ_API_KEY 未設定時もGemini直行
  */
+/**
+ * Groq専用コンパクト候補者プロンプト（オーバーヘッド ~700文字でデータに ~3,800文字を確保）
+ */
+function buildCandidateGroqPrompt(from: string, subject: string, dataSection: string): string {
+  return `人材紹介メール解析。書かれた情報のみ抽出。推測禁止。差出人(${from})は営業担当者。
+氏名はPDF/本文から読む。見つからない場合のみ"不明"。emailは候補者本人のみ(差出人は含めない)。
+
+以下JSONのみ返す:
+{"name":string,"email":string|null,"phone":string|null,"skills":string[],"skillsByCategory":{"languages":[],"frameworks":[],"libraries":[],"os":[],"databases":[],"dwh":[],"clouds":[],"infrastructures":[],"tools":[],"methodologies":[],"certifications":[],"design":[],"marketing":[],"others":[]},"roles":string[],"industries":string[],"experienceYears":number|null,"summary":string,"nearestStation":string|null,"prefecture":string|null,"availableRegions":string[]|null,"currentWorkLocation":string|null,"remoteAvailable":boolean,"desiredRate":string|null,"fromCompany":string|null}
+
+件名:${subject}
+本文:
+${dataSection}
+JSON:`.trim()
+}
+
+/**
+ * Groq専用コンパクト案件プロンプト
+ */
+function buildProjectGroqPrompt(subject: string, dataSection: string): string {
+  return `案件メール解析。書かれた情報のみ抽出。推測禁止。複数案件は配列で返す。
+
+以下JSONのみ返す:
+[{"title":string,"requiredSkills":string[],"budgetMin":number|null,"budgetMax":number|null,"startDate":string|null,"endDate":string|null,"workLocation":string|null,"remotePolicy":string|null,"contractType":string|null,"headcount":number|null,"workload":string|null,"settlementMin":number|null,"settlementMax":number|null,"roleSummary":string|null,"industry":string|null}]
+
+件名:${subject}
+本文:
+${dataSection}
+JSON:`.trim()
+}
+
 async function generateJSONSmart(
   prompt: string,
   attachments: Attachment[],
@@ -553,6 +584,7 @@ async function generateJSONSmart(
   timeoutMs?: number,
   geminiTrace?: { rid: string; phase: string },
   geminiModel?: string,
+  groqPrompt?: string, // Groq専用コンパクトプロンプト（指定時はこちらを使用）
 ): Promise<{ result: unknown; durationMs: number; usedModel: string }> {
   const hasImageAttachments = attachments.some(a =>
     SUPPORTED_MIME.includes(a.mimeType)
@@ -565,18 +597,18 @@ async function generateJSONSmart(
     return { ...r, usedModel: geminiModel ?? AI_MODEL }
   }
 
-  // Groq llama-3.1-8b-instant の TPM 上限: 6,000 tokens/min ≒ 日本語4,500文字
-  // 長いプロンプトはスマートトランケーション（先頭3500 + 末尾500）でGroqに渡す
+  // Groq用プロンプト決定: 引数指定 > スマートトランケーション > そのまま
   // Geminiには常に元の完全プロンプトを渡す（精度優先）
   const GROQ_MAX_PROMPT_CHARS = 4_500
-  const groqPrompt = prompt.length > GROQ_MAX_PROMPT_CHARS
-    ? prompt.slice(0, 3_500) + '\n...(中略)...\n' + prompt.slice(-500)
-    : prompt
+  const resolvedGroqPrompt = groqPrompt
+    ?? (prompt.length > GROQ_MAX_PROMPT_CHARS
+      ? prompt.slice(0, 3_500) + '\n...(中略)...\n' + prompt.slice(-500)
+      : prompt)
 
   // Groq を試みる
   try {
     const r = await generateJSONWithGroq(
-      groqPrompt,
+      resolvedGroqPrompt,
       timeoutMs ?? 30_000,
       geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined,
     )
@@ -1623,10 +1655,11 @@ JSON:`.trim()
       let usedModel1: string | undefined
 
       try {
+        const candidateGroqPrompt = buildCandidateGroqPrompt(from, subject, body.slice(0, 3000) + driveTextSection)
         const { result, durationMs: d1, usedModel: _usedModel1 } = await generateJSONSmart(prompt, allAttachments, 'candidate', 2, undefined, {
           rid: traceRid,
           phase: 'gemini_candidate_extract',
-        }, extractModel)
+        }, extractModel, candidateGroqPrompt)
         usedModel1 = _usedModel1
         durationMs = d1
         analyzed = result as CandAi
@@ -1836,10 +1869,11 @@ JSON:`.trim()
 
       tracePhase = 'gemini_project_extract'
       pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
+      const projectGroqPrompt = buildProjectGroqPrompt(subject, body.slice(0, 3000) + driveTextSection)
       const { result, durationMs, usedModel: usedModelP } = await generateJSONSmart(prompt, allAttachments, 'project', 2, undefined, {
         rid: traceRid,
         phase: 'gemini_project_extract',
-      }, extractModel)
+      }, extractModel, projectGroqPrompt)
       tracePhase = 'gemini_project_done'
 
       const projectObjects = normalizeToProjectObjects(result)
