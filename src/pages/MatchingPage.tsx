@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } fro
 import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText } from 'lucide-react'
-import { ai } from '../lib/ai'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { fetchCandidates } from '../lib/db/candidates'
 import {
@@ -23,6 +22,18 @@ import type { Candidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
 import type { DataEnv } from '../lib/dataEnv'
+
+async function callMatchScore(
+  candidateProfile: unknown,
+  projectRequirements: unknown,
+): Promise<{ score: number; summary: string; duplicateSuspected: boolean }> {
+  const { data, error } = await supabase.functions.invoke('match-score', {
+    body: { candidateProfile, projectRequirements },
+  })
+  if (error) throw error
+  if (data?.error) throw new Error(data.error)
+  return data as { score: number; summary: string; duplicateSuspected: boolean }
+}
 
 interface Props {
   nickname: string
@@ -641,19 +652,23 @@ export function MatchingPage({
             experienceYears: candidate.experience_years,
             summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
           }
-          const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
+          try {
+            const matchResult = await callMatchScore(candidateProfile, projectReq)
 
-          if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-            await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+            if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
+              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+            }
+
+            await upsertSubmission({
+              candidateId: candidate.id,
+              projectId,
+              matchResult,
+              createdBy: nickname,
+              dataEnv,
+            })
+          } catch (err) {
+            console.warn(`[match] ${candidate.name} スキップ: ${err}`)
           }
-
-          await upsertSubmission({
-            candidateId: candidate.id,
-            projectId,
-            matchResult,
-            createdBy: nickname,
-            dataEnv,
-          })
           setMatchRunProgressNow({
             overall: { done: i + 1, total },
             inner: { current: i + 1, total, unit: '候補者' },
@@ -703,19 +718,23 @@ export function MatchingPage({
             inner: { current: i + 1, total, unit: '案件' },
           })
           const projectReq = projectToMatchRequirements(project)
-          const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
+          try {
+            const matchResult = await callMatchScore(candidateProfile, projectReq)
 
-          if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-            await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+            if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
+              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+            }
+
+            await upsertSubmission({
+              candidateId: candidate.id,
+              projectId: project.id,
+              matchResult,
+              createdBy: nickname,
+              dataEnv,
+            })
+          } catch (err) {
+            console.warn(`[match] ${project.title} スキップ: ${err}`)
           }
-
-          await upsertSubmission({
-            candidateId: candidate.id,
-            projectId: project.id,
-            matchResult,
-            createdBy: nickname,
-            dataEnv,
-          })
           setMatchRunProgressNow({
             overall: { done: i + 1, total },
             inner: { current: i + 1, total, unit: '案件' },
@@ -787,19 +806,23 @@ export function MatchingPage({
               experienceYears: candidate.experience_years,
               summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
             }
-            const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
+            try {
+              const matchResult = await callMatchScore(candidateProfile, projectReq)
 
-            if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+              if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
+                await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+              }
+
+              await upsertSubmission({
+                candidateId: candidate.id,
+                projectId: project.id,
+                matchResult,
+                createdBy: nickname,
+                dataEnv,
+              })
+            } catch (err) {
+              console.warn(`[bulk-match] ${candidate.name} × ${project.title} スキップ: ${err}`)
             }
-
-            await upsertSubmission({
-              candidateId: candidate.id,
-              projectId: project.id,
-              matchResult,
-              createdBy: nickname,
-              dataEnv,
-            })
             done += 1
             setMatchRunProgressNow({
               overall: { done, total },
@@ -880,19 +903,23 @@ export function MatchingPage({
                   : undefined,
             })
             const projectReq = projectToMatchRequirements(project)
-            const matchResult = await ai.matchCandidateToProject({ candidateProfile, projectRequirements: projectReq })
+            try {
+              const matchResult = await callMatchScore(candidateProfile, projectReq)
 
-            if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+              if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
+                await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+              }
+
+              await upsertSubmission({
+                candidateId: candidate.id,
+                projectId: project.id,
+                matchResult,
+                createdBy: nickname,
+                dataEnv,
+              })
+            } catch (err) {
+              console.warn(`[bulk-match] ${candidate.name} × ${project.title} スキップ: ${err}`)
             }
-
-            await upsertSubmission({
-              candidateId: candidate.id,
-              projectId: project.id,
-              matchResult,
-              createdBy: nickname,
-              dataEnv,
-            })
             done += 1
             setMatchRunProgressNow({
               overall: { done, total },

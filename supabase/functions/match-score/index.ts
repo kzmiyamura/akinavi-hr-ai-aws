@@ -1,0 +1,113 @@
+// Supabase Edge Function: match-score
+// 人材×案件のマッチングスコアをGroq（無料）またはGemini（フォールバック）で算出
+
+import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+const GROQ_MODEL = 'llama-3.3-70b-versatile'
+const GEMINI_MODEL = 'gemini-2.0-flash'
+
+function buildPrompt(candidate: unknown, project: unknown): string {
+  return `人材と案件のマッチング評価。JSONのみ返す。説明文不要。
+
+人材: ${JSON.stringify(candidate)}
+案件: ${JSON.stringify(project)}
+
+{"score":数値(0-100),"summary":"マッチング理由200字以内","duplicateSuspected":false}
+JSON:`.trim()
+}
+
+async function callGroq(key: string, prompt: string): Promise<string> {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 400,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Groq ${res.status}: ${body.slice(0, 200)}`)
+  }
+  const data = await res.json()
+  return data.choices[0].message.content as string
+}
+
+async function callGemini(prompt: string): Promise<string> {
+  const key = Deno.env.get('GEMINI_API_KEY')
+  if (!key) throw new Error('GEMINI_API_KEY not set')
+  const genAI = new GoogleGenerativeAI(key)
+  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL })
+  const result = await model.generateContent(prompt)
+  return result.response.text()
+}
+
+function parseResult(text: string): { score: number; summary: string; duplicateSuspected: boolean } {
+  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+  const m = cleaned.match(/\{[\s\S]*\}/)
+  if (!m) throw new Error(`JSONが見つかりません: ${cleaned.slice(0, 100)}`)
+  const parsed = JSON.parse(m[0])
+  return {
+    score: typeof parsed.score === 'number' ? Math.min(100, Math.max(0, Math.round(parsed.score))) : 0,
+    summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+    duplicateSuspected: parsed.duplicateSuspected === true,
+  }
+}
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders })
+  }
+
+  try {
+    const { candidateProfile, projectRequirements } = await req.json()
+    if (!candidateProfile || !projectRequirements) {
+      return new Response(JSON.stringify({ error: 'candidateProfile と projectRequirements が必要です' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    const prompt = buildPrompt(candidateProfile, projectRequirements)
+    const groqKey = Deno.env.get('GROQ_API_KEY')
+
+    let raw: string
+    let usedModel = GEMINI_MODEL
+
+    if (groqKey) {
+      try {
+        raw = await callGroq(groqKey, prompt)
+        usedModel = GROQ_MODEL
+      } catch (e) {
+        console.warn(`[match-score] Groq失敗、Geminiへ: ${e}`)
+        raw = await callGemini(prompt)
+      }
+    } else {
+      raw = await callGemini(prompt)
+    }
+
+    const result = parseResult(raw)
+    console.log(`[match-score] ${usedModel} score=${result.score}`)
+
+    return new Response(
+      JSON.stringify({ ...result, usedModel }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+    )
+  } catch (e) {
+    console.error('[match-score] エラー:', String(e))
+    return new Response(
+      JSON.stringify({ error: String(e) }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+    )
+  }
+})
