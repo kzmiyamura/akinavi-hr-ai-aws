@@ -935,7 +935,9 @@ async function uploadToStorage(
   }
   try {
     const fileBytes = Uint8Array.from(atob(dataB64), c => c.charCodeAt(0))
-    const path = `resumes/${filename}`
+    // Storage キーに使えない文字（日本語・スペース・括弧等）を除去
+    const safeFilename = filename.replace(/[^\w.\-]/g, '_').replace(/_+/g, '_')
+    const path = `resumes/${safeFilename}`
     const client = createClient(supabaseUrl, serviceRoleKey)
     const { error } = await client.storage
       .from('attachments')
