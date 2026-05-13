@@ -936,22 +936,16 @@ async function uploadToStorage(
   try {
     const fileBytes = Uint8Array.from(atob(dataB64), c => c.charCodeAt(0))
     const path = `resumes/${filename}`
-    const uploadUrl = `${supabaseUrl}/storage/v1/object/attachments/${path}`
-    const res = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        'Content-Type': mimeType,
-        'x-upsert': 'true',
-      },
-      body: fileBytes,
-    })
-    if (!res.ok) {
-      const errBody = await res.text()
-      console.error(`[Storage Upload] アップロード失敗 status=${res.status} body=${errBody.slice(0, 300)}`)
+    const client = createClient(supabaseUrl, serviceRoleKey)
+    const { error } = await client.storage
+      .from('attachments')
+      .upload(path, fileBytes, { contentType: mimeType, upsert: true })
+    if (error) {
+      console.error(`[Storage Upload] アップロード失敗: ${error.message}`)
       return null
     }
-    const publicUrl = `${supabaseUrl}/storage/v1/object/public/attachments/${path}`
+    const { data: urlData } = client.storage.from('attachments').getPublicUrl(path)
+    const publicUrl = urlData.publicUrl
     console.log(`[Storage Upload] アップロード成功: ${filename} → ${publicUrl}`)
     return publicUrl
   } catch (e) {
