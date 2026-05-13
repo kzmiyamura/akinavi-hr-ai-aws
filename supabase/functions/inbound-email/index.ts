@@ -1852,6 +1852,19 @@ JSON:`.trim()
 
     // ── 案件メール ────────────────────────────────────────────
     if (type === 'project') {
+      // app_config の inbound_project_enabled が 'true' でない場合はスキップ（デフォルト: 無効）
+      const { data: projectEnabledRow } = await supabase
+        .from('app_config')
+        .select('value')
+        .eq('key', 'inbound_project_enabled')
+        .maybeSingle()
+      if (projectEnabledRow?.value !== 'true') {
+        console.log('[inbound] 案件メール解析は無効のためスキップ', { rid: traceRid, subject })
+        return new Response(
+          JSON.stringify({ ok: true, skipped: true, reason: 'PROJECT_INBOUND_DISABLED' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
       const prompt = `
 これは営業担当者が転送・送付した業務委託・派遣・開発案件などの依頼メールです。${attachmentNote}
 差出人（${from}）は営業または元請け担当者であることがあります。本文・添付・以下の参考テキストに書かれた内容だけを根拠に抽出してください。

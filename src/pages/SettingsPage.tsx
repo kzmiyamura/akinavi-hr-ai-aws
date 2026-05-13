@@ -11,6 +11,8 @@ import {
   getConnectionStatuses,
   getAutoMatchEnabled,
   saveAutoMatchEnabled,
+  getProjectInboundEnabled,
+  saveProjectInboundEnabled,
 } from '../lib/db/emailSettings'
 import {
   getMatchingSettings,
@@ -57,6 +59,16 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   } = useQuery({
     queryKey: ['connectionStatuses'],
     queryFn: getConnectionStatuses,
+  })
+
+  // 案件メール解析 ON/OFF
+  const { data: projectInboundEnabled = false } = useQuery({
+    queryKey: ['projectInboundEnabled'],
+    queryFn: getProjectInboundEnabled,
+  })
+  const projectInboundMutation = useMutation({
+    mutationFn: saveProjectInboundEnabled,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projectInboundEnabled'] }),
   })
 
   // 自動マッチング ON/OFF
@@ -591,6 +603,32 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
             {resumeMutation.isError && (
               <p className="text-sm text-red-600">再開に失敗しました: {String(resumeMutation.error)}</p>
             )}
+          </div>
+        </section>
+
+        {/* ---- 案件メール解析 ---- */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">案件メール解析</h2>
+          <p className="text-xs text-gray-400 mb-4">受信した案件メールをAIで解析してDBに登録します。OFFの場合は案件メールをスキップします。</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-700">案件メール解析</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                {projectInboundEnabled ? '有効 — 案件メールを解析・登録します' : '無効 — 案件メールをスキップします（デフォルト）'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => projectInboundMutation.mutate(!projectInboundEnabled)}
+              disabled={projectInboundMutation.isPending}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                projectInboundEnabled ? 'bg-blue-600' : 'bg-gray-300'
+              } disabled:opacity-50`}
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                projectInboundEnabled ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
           </div>
         </section>
 

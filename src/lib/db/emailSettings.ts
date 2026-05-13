@@ -94,6 +94,24 @@ export async function saveEmailAddressSettings(
   if (error) throw new Error(`メール設定の保存に失敗しました: ${error.message}`)
 }
 
+/** 案件メール解析の有効/無効を取得する（デフォルト: false） */
+export async function getProjectInboundEnabled(): Promise<boolean> {
+  const { data } = await supabase
+    .from('app_config')
+    .select('value')
+    .eq('key', 'inbound_project_enabled')
+    .maybeSingle()
+  return data?.value === 'true'
+}
+
+/** 案件メール解析の有効/無効を保存する */
+export async function saveProjectInboundEnabled(enabled: boolean): Promise<void> {
+  const { error } = await supabase
+    .from('app_config')
+    .upsert({ key: 'inbound_project_enabled', value: enabled ? 'true' : 'false' }, { onConflict: 'key' })
+  if (error) throw new Error(`案件メール解析設定の保存に失敗しました: ${error.message}`)
+}
+
 /** 自動マッチングの有効/無効を取得する */
 export async function getAutoMatchEnabled(): Promise<boolean> {
   const { data } = await supabase
