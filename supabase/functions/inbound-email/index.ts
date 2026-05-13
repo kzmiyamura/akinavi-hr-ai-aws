@@ -867,65 +867,33 @@ function stripHtml(html: string): string {
 // ── Supabase Storage アップロード ────────────────────────────────────────
 
 /**
- * Deno 組み込み DecompressionStream を使って PDF の FlateDecode ストリームをデコードし
- * BT/ET ブロックからテキストを抽出する（外部ライブラリ不要・完全無料）
- * テキストPDF: 成功 / スキャンPDF・暗号化PDF・複雑なエンコーディング: null を返す
+ * pdfjs-dist（npm: 経由・日本語CMap対応）で PDF からテキストを抽出する
+ * - npm: プレフィックスで canvas.node をロードしない
+ * - CMap を CDN から取得して日本語フォントに対応
+ * テキストPDF: 成功 / スキャンPDF・暗号化PDF: null を返す
  */
 async function extractPdfTextWithPdfjs(dataB64: string): Promise<string | null> {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pdfjsLib = await import('npm:pdfjs-dist@3.11.174/legacy/build/pdf.js') as any
+    pdfjsLib.GlobalWorkerOptions.workerSrc = ''
     const pdfBytes = Uint8Array.from(atob(dataB64), c => c.charCodeAt(0))
-    const latin1 = new TextDecoder('latin1')
-    const raw = latin1.decode(pdfBytes)
-
-    // FlateDecode ストリームを収集して解凍
-    const decompressedContents: string[] = []
-    const streamRe = /\/FlateDecode[^\n]*\nstream\r?\n([\s\S]*?)\r?\nendstream/g
-    let m: RegExpExecArray | null
-    while ((m = streamRe.exec(raw)) !== null) {
-      const streamRaw = m[1]
-      const streamBytes = Uint8Array.from(streamRaw, c => c.charCodeAt(0))
-      for (const fmt of ['deflate-raw', 'deflate'] as CompressionFormat[]) {
-        try {
-          const ds = new DecompressionStream(fmt)
-          const writer = ds.writable.getWriter()
-          const reader = ds.readable.getReader()
-          // write / close は並列でOK
-          void writer.write(streamBytes).then(() => writer.close()).catch(() => {})
-          const chunks: Uint8Array[] = []
-          try {
-            while (true) {
-              const { done, value } = await reader.read()
-              if (done) break
-              if (value) chunks.push(value)
-            }
-          } catch { /* 読み取りエラーは無視 */ }
-          const total = chunks.reduce((s, c) => s + c.length, 0)
-          if (total === 0) continue
-          const buf = new Uint8Array(total)
-          let off = 0; for (const c of chunks) { buf.set(c, off); off += c.length }
-          decompressedContents.push(latin1.decode(buf))
-          break // 解凍成功したら次のストリームへ
-        } catch { /* 次のフォーマットを試す */ }
-      }
+    const doc = await pdfjsLib.getDocument({
+      data: pdfBytes,
+      // 日本語CMap（MS明朝・MSゴシック等）を CDN から取得
+      cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+      cMapPacked: true,
+      useWorkerFetch: false,
+      isEvalSupported: false,
+    }).promise
+    const pageTexts: string[] = []
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i)
+      const content = await page.getTextContent()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      pageTexts.push(content.items.map((item: any) => item.str ?? '').join(''))
     }
-
-    // 非圧縮ストリームも含める
-    const plainRe = /stream\r?\n([\s\S]*?)\r?\nendstream/g
-    while ((m = plainRe.exec(raw)) !== null) decompressedContents.push(m[1])
-
-    // BT/ET ブロックから Tj / TJ テキストを抽出
-    const extracted: string[] = []
-    for (const content of decompressedContents) {
-      for (const block of content.match(/BT[\s\S]*?ET/g) ?? []) {
-        for (const tj of block.matchAll(/\(([^)]*)\)\s*(?:Tj|'|")/g)) extracted.push(tj[1])
-        for (const arr of block.matchAll(/\[([^\]]*)\]\s*TJ/g)) {
-          for (const s of arr[1].matchAll(/\(([^)]*)\)/g)) extracted.push(s[1])
-        }
-      }
-    }
-
-    const text = extracted.join(' ')
-      .replace(/\\n/g, '\n').replace(/\\r/g, '').replace(/\\\\/g, '\\').trim()
+    const text = pageTexts.join('\n').trim()
     if (text.length > 50) return text
     console.warn(`[PDF Free Extract] テキスト不足(${text.length}文字) - スキャンPDFの可能性`)
     return null
