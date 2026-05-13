@@ -12,8 +12,8 @@ import {
 } from '../lib/db/projects'
 import {
   upsertSubmission,
-  fetchSubmissionsByProjectIds,
-  fetchSubmissionsByCandidateIds,
+  fetchSubmissionsByProject,
+  fetchSubmissionsByCandidate,
   fetchSubmissionStats,
 } from '../lib/db/submissions'
 import { supabase } from '../lib/supabase'
@@ -544,41 +544,32 @@ export function MatchingPage({
     })
   }, [candidateList, searchQuery, searchMode])
 
-  const projectIdsSorted = useMemo(
-    () => [...projectList.map((p) => p.id)].sort().join(','),
-    [projectList],
-  )
-  const candidateIdsSorted = useMemo(
-    () => [...candidateList.map((c) => c.id)].sort().join(','),
-    [candidateList],
-  )
-
-  const { data: submissionsForProjects = [], isLoading: isLoadingProjectSubs } = useQuery({
-    queryKey: ['matching-submissions-by-projects', dataEnv, projectIdsSorted],
-    queryFn: () => fetchSubmissionsByProjectIds(projectList.map((p) => p.id), dataEnv),
-    enabled: mode === 'project' && projectList.length > 0,
+  const { data: submissionsForSelectedProject = [], isLoading: isLoadingProjectSubs } = useQuery({
+    queryKey: ['matching-submissions-for-project', dataEnv, selectedProjectId],
+    queryFn: () => fetchSubmissionsByProject(selectedProjectId!, dataEnv),
+    enabled: mode === 'project' && !!selectedProjectId,
   })
 
-  const { data: submissionsForCandidates = [], isLoading: isLoadingCandidateSubs } = useQuery({
-    queryKey: ['matching-submissions-by-candidates', dataEnv, candidateIdsSorted],
-    queryFn: () => fetchSubmissionsByCandidateIds(candidateList.map((c) => c.id), dataEnv),
-    enabled: mode === 'candidate' && candidateList.length > 0,
+  const { data: submissionsForSelectedCandidate = [], isLoading: isLoadingCandidateSubs } = useQuery({
+    queryKey: ['matching-submissions-for-candidate', dataEnv, selectedCandidateId],
+    queryFn: () => fetchSubmissionsByCandidate(selectedCandidateId!, dataEnv),
+    enabled: mode === 'candidate' && !!selectedCandidateId,
   })
 
-  const submissionsByProject = useMemo(
-    () => groupSubmissionsByProject(submissionsForProjects),
-    [submissionsForProjects],
+  const sortedSelectedProjectSubs = useMemo(
+    () => [...submissionsForSelectedProject].sort((a, b) => b.match_score - a.match_score),
+    [submissionsForSelectedProject],
   )
-  const submissionsByCandidate = useMemo(
-    () => groupSubmissionsByCandidate(submissionsForCandidates),
-    [submissionsForCandidates],
+  const sortedSelectedCandidateSubs = useMemo(
+    () => [...submissionsForSelectedCandidate].sort((a, b) => b.match_score - a.match_score),
+    [submissionsForSelectedCandidate],
   )
 
   const uniqueProjectIdsForCandidateView = useMemo(() => {
-    const ids = [...new Set(submissionsForCandidates.map((s) => s.project_id))]
+    const ids = [...new Set(sortedSelectedCandidateSubs.map((s) => s.project_id))]
     ids.sort()
     return ids
-  }, [submissionsForCandidates])
+  }, [sortedSelectedCandidateSubs])
   const uniqueProjectIdsKey = uniqueProjectIdsForCandidateView.join(',')
 
   const { data: projectsForMatching = [], isLoading: isLoadingSupportProjects } = useQuery({
@@ -597,8 +588,8 @@ export function MatchingPage({
     queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
     queryClient.invalidateQueries({ queryKey: projectsQueryKeys.all(dataEnv) })
     queryClient.invalidateQueries({ queryKey: projectsQueryKeys.open(dataEnv) })
-    queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-projects', dataEnv] })
-    queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-candidates', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: ['matching-submissions-for-project', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: ['matching-submissions-for-candidate', dataEnv] })
     queryClient.invalidateQueries({ queryKey: ['matching-support-projects', dataEnv] })
   }
 
@@ -971,11 +962,9 @@ export function MatchingPage({
   const selectedCandidate = candidateList.find((c) => c.id === selectedCandidateId) ?? null
 
   const selectedProjectRanked = selectedProject
-    ? toRankedForProject(submissionsByProject.get(selectedProject.id) ?? [], candidateList)
+    ? toRankedForProject(sortedSelectedProjectSubs, candidateList)
     : []
-  const selectedCandidateSubs = selectedCandidate
-    ? (submissionsByCandidate.get(selectedCandidate.id) ?? [])
-    : []
+  const selectedCandidateSubs = sortedSelectedCandidateSubs
 
   const busy =
     matchByProjectMutation.isPending ||
