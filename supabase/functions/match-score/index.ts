@@ -7,7 +7,7 @@ const corsHeaders = {
 }
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile'
-const GEMINI_MODEL = 'gemini-2.0-flash'
+const GEMINI_MODEL = 'gemini-2.5-flash'
 
 function buildPrompt(candidate: unknown, project: unknown): string {
   return `人材と案件のマッチング評価。JSONのみ返す。説明文不要。
