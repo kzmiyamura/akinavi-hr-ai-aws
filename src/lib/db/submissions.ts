@@ -85,7 +85,6 @@ export async function fetchSubmissionsByProject(projectId: string, dataEnv: Data
     .select('*')
     .eq('data_env', dataEnv)
     .eq('project_id', projectId)
-    .order('match_score', { ascending: false })
 
   if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Submission[]
@@ -124,7 +123,6 @@ export async function fetchSubmissionsByCandidate(candidateId: string, dataEnv: 
     .select('*')
     .eq('data_env', dataEnv)
     .eq('candidate_id', candidateId)
-    .order('match_score', { ascending: false })
 
   if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Submission[]
