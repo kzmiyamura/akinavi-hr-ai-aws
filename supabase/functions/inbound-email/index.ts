@@ -1521,9 +1521,26 @@ Deno.serve(async (req: Request) => {
     // （PDF/Word/Excel。アップロード失敗してもメイン処理は継続）
     let resumeUrl: string | null = null
     if (type === 'candidate' || type === 'human') {
-      // メール本文中の Drive リンクを最初の resume_url として使用
-      const firstDriveMatch = body.match(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)[a-zA-Z0-9_-]{25,}[^\s]*/)
-      if (firstDriveMatch) resumeUrl = firstDriveMatch[0]
+      // メール本文中の Google URL を経歴書リンクとして抽出
+      // 優先度: ①経歴書/スキルシート関連キーワード直後のURL > ②Sheetsリンク > ③Drive fileリンク
+      const GOOGLE_URL_RE = /https:\/\/(?:drive\.google\.com\/(?:file\/d\/|open\?id=)|docs\.google\.com\/(?:spreadsheets|document)\/d\/)[^\s<>"'）\]]+/gi
+      const allGoogleUrls = [...body.matchAll(GOOGLE_URL_RE)].map(m => ({ url: m[0], index: m.index! }))
+      if (allGoogleUrls.length > 0) {
+        const RESUME_KEYWORDS = ['スキルシート', '職務経歴書', '経歴書', 'レジュメ', 'resume', 'スキル']
+        let picked: string | null = null
+        // キーワード直後200文字以内のURLを優先
+        for (const kw of RESUME_KEYWORDS) {
+          const kwIdx = body.toLowerCase().indexOf(kw.toLowerCase())
+          if (kwIdx === -1) continue
+          const nearby = allGoogleUrls.find(u => u.index >= kwIdx && u.index <= kwIdx + 200)
+          if (nearby) { picked = nearby.url; break }
+        }
+        // キーワードがなければSheetsを優先（スキルシートの可能性が高い）
+        if (!picked) {
+          picked = allGoogleUrls.find(u => u.url.includes('spreadsheets'))?.url ?? allGoogleUrls[0].url
+        }
+        resumeUrl = picked
+      }
 
       // 添付ファイルを Supabase Storage にアップロード（resume_urlが未設定の場合に優先設定）
       for (const att of attachments) {
