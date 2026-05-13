@@ -1287,43 +1287,20 @@ Deno.serve(async (req: Request) => {
     const elapsed = () => `${Date.now() - t0}ms`
 
     tracePhase = 'step1_body_normalized'
-    console.log('[STEP1 受信データ]', {
-      rid: traceRid,
-      type, from, subject,
-      bodyLength: body.length,
-      attachments: attachments.map(a => ({ name: a.name, mimeType: a.mimeType, dataLength: a.data?.length ?? 0 })),
-    })
-
     const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
-    console.log('[STEP2 添付フィルター]', {
-      rid: traceRid,
-      total: attachments.length,
-      supported: supportedAttachments.length,
-      filtered: attachments.filter(a => !SUPPORTED_MIME.includes(a.mimeType)).map(a => a.mimeType),
-      elapsed: elapsed(),
-    })
 
     // Word/Excelのテキスト抽出
     const officeTextContents: { label: string; content: string }[] = []
     for (const att of attachments) {
       if (WORD_MIME.includes(att.mimeType)) {
-        console.log(`[STEP3 Office] Word変換開始: ${att.name} elapsed=${elapsed()}`)
         const text = await extractWordText(att.data)
-        if (text.trim()) {
-          officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
-          console.log(`[STEP3 Office] Word変換成功: ${text.length}文字 elapsed=${elapsed()}`)
-        }
+        if (text.trim()) officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
       } else if (EXCEL_MIME.includes(att.mimeType)) {
-        console.log(`[STEP3 Office] Excel変換開始: ${att.name} elapsed=${elapsed()}`)
         const text = await extractExcelText(att.data)
-        if (text.trim()) {
-          officeTextContents.push({ label: `Excelファイル(${att.name ?? 'spreadsheet'})`, content: text })
-          console.log(`[STEP3 Office] Excel変換成功: ${text.length}文字 elapsed=${elapsed()}`)
-        }
+        if (text.trim()) officeTextContents.push({ label: `Excelファイル(${att.name ?? 'spreadsheet'})`, content: text })
       }
     }
     tracePhase = 'step3_office_done'
-    console.log(`[STEP3 Office完了] elapsed=${elapsed()}`)
 
     // ② 本文が極端に短い（50文字未満）かつ添付なし → 自動返信・通知メール等として即スキップ
     const plainBodyLength = body.trim().length
@@ -1473,15 +1450,6 @@ Deno.serve(async (req: Request) => {
     const isLongBody = body.length > 2000
     const isComplex = hasAttachments || hasDriveLinks || isLongBody
     const extractModel = isComplex ? AI_MODEL : AI_MODEL_FAST
-    console.log('[MODEL_SELECT]', {
-      rid: traceRid,
-      extractModel,
-      isComplex,
-      hasAttachments,
-      hasDriveLinks,
-      isLongBody,
-      bodyLen: body.length,
-    })
 
     // Box URL の検出（人材登録時にスプレッドシートへ書き込み・DB保存するため事前に抽出）
     const boxUrls = type === 'candidate' || type === 'human' ? extractBoxUrls(body) : []
@@ -1651,7 +1619,6 @@ JSON:`.trim()
 
       tracePhase = 'gemini_candidate_extract'
       pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
-      console.log(`[STEP5 AI呼び出し開始] elapsed=${elapsed()}`, { rid: traceRid })
 
       let durationMs: number
       let parseFallback: 'none' | 'body_only_after_attachment_timeout' = 'none'
@@ -1684,7 +1651,6 @@ JSON:`.trim()
           phase: 'gemini_candidate_extract',
         }, extractModel)
         usedModel1 = _usedModel1
-        console.log(`[MODEL_USED] candidate extract: ${usedModel1}`)
         durationMs = d1
         analyzed = result as CandAi
         tracePhase = 'gemini_candidate_done'
@@ -1706,19 +1672,12 @@ JSON:`.trim()
           rid: traceRid,
           phase: 'gemini_candidate_extract_body_only',
         }, extractModel)
-        console.log(`[MODEL_USED] candidate body-only: ${usedModel2}`)
         durationMs = d2
         analyzed = result as CandAi
         parseFallback = 'body_only_after_attachment_timeout'
         tracePhase = 'gemini_candidate_done_body_only'
       }
 
-      console.log(`[STEP5 AI呼び出し完了] durationMs=${durationMs} elapsed=${elapsed()}`, {
-        rid: traceRid,
-        parseFallback,
-      })
-
-      console.log(`[STEP6 AI解析結果 candidate] elapsed=${elapsed()}`, JSON.stringify(analyzed, null, 2))
 
       // スキル重複除去（trim + 大文字小文字を無視して正規化）
       const skills = Array.from(
@@ -1778,24 +1737,11 @@ JSON:`.trim()
         from_company: analyzed.fromCompany ?? null,
       }
 
-      console.log(`[STEP7 DB保存開始] elapsed=${elapsed()}`)
       const { data, error } = email
         ? await supabase.from('candidates').upsert(dbPayload, { onConflict: 'email' }).select().single()
         : await supabase.from('candidates').insert(dbPayload).select().single()
 
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
-      const savedEnv = (data as { data_env?: string }).data_env
-      const savedEmail = (data as { email?: string | null }).email
-      console.log(`[STEP7 DB保存完了] elapsed=${elapsed()}`)
-      // 原因究明用: リクエスト解決値 inboundDataEnv と、実際に返却された行の data_env が一致するか必ず照合する
-      console.log('[STEP7 DB確定] 人材行', {
-        candidate_id: data.id,
-        data_env_intended: inboundDataEnv,
-        data_env_in_row: savedEnv ?? '(null/undefined)',
-        match: savedEnv === inboundDataEnv,
-        email_in_row: savedEmail == null || savedEmail === '' ? 'null' : 'set',
-        upsert_path: email ? 'upsert(onConflict:email)' : 'insert',
-      })
 
       // candidate_skills に一括INSERT
       const validCategories = [
@@ -1816,7 +1762,7 @@ JSON:`.trim()
         await supabase.from('candidate_skills').delete().eq('candidate_id', data.id)
         const { error: skillsError } = await supabase.from('candidate_skills').insert(skillsPayload)
         if (skillsError) console.error('[candidate_skills INSERT error]', skillsError)
-        else console.log(`[inbound] スキル登録完了: ${skillsPayload.length}件`)
+        else { /* スキル登録完了 */ }
       }
 
       const { error: logError } = await supabase.from('ai_logs').insert({
@@ -1913,21 +1859,16 @@ JSON:`.trim()
 
       tracePhase = 'gemini_project_extract'
       pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
-      console.log(`[STEP5 AI呼び出し開始 project] elapsed=${elapsed()}`, { rid: traceRid })
       const { result, durationMs, usedModel: usedModelP } = await generateJSONSmart(prompt, allAttachments, 'project', 2, undefined, {
         rid: traceRid,
         phase: 'gemini_project_extract',
       }, extractModel)
-      console.log(`[MODEL_USED] project extract: ${usedModelP}`)
       tracePhase = 'gemini_project_done'
-      console.log(`[STEP5 AI呼び出し完了 project] durationMs=${durationMs} elapsed=${elapsed()}`, { rid: traceRid })
 
       const projectObjects = normalizeToProjectObjects(result)
       if (projectObjects.length === 0) {
         throw new Error('案件解析結果が空、または形式が不正です（オブジェクトまたは配列を期待）')
       }
-
-      console.log('[STEP6 AI解析結果 project]', JSON.stringify(projectObjects, null, 2))
 
       const sharedRawMeta = {
         text: body.slice(0, 5000),
