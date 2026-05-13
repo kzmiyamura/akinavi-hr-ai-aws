@@ -867,29 +867,73 @@ function stripHtml(html: string): string {
 // ── Supabase Storage アップロード ────────────────────────────────────────
 
 /**
- * PDFバイナリを Gemini でテキスト抽出する（2段階処理の第1ステップ）
+ * pdfjs-dist（無料・ライブラリ）で PDF からテキストを抽出する
+ * テキストPDF: 成功 / スキャンPDF・暗号化PDF: null を返す
+ */
+async function extractPdfTextWithPdfjs(dataB64: string): Promise<string | null> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pdfjsLib = await import('https://esm.sh/pdfjs-dist@3.11.174/build/pdf.js') as any
+    pdfjsLib.GlobalWorkerOptions.workerSrc = ''
+    const pdfBytes = Uint8Array.from(atob(dataB64), c => c.charCodeAt(0))
+    const doc = await pdfjsLib.getDocument({
+      data: pdfBytes,
+      useWorkerFetch: false,
+      isEvalSupported: false,
+      useSystemFonts: true,
+    }).promise
+    const pageTexts: string[] = []
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i)
+      const content = await page.getTextContent()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pageText = content.items.map((item: any) => item.str ?? '').join('')
+      pageTexts.push(pageText)
+    }
+    const text = pageTexts.join('\n').trim()
+    return text.length > 50 ? text : null
+  } catch (e) {
+    console.warn(`[PDF Free Extract] pdfjs失敗: ${String(e)}`)
+    return null
+  }
+}
+
+/**
+ * PDFバイナリをテキスト抽出する（2段階処理の第1ステップ）
+ * 優先順位: pdfjs-dist（無料） → Gemini（スキャンPDFのみフォールバック）
  * 抽出成功したPDFはテキストに変換し、バイナリ添付から除外することで Groq 利用を可能にする
- * - GROQ_API_KEY 未設定時はスキップ（Geminiマルチモーダルで一括処理するため不要）
- * - 抽出失敗したPDFは remainingPdfs に残し Gemini バイナリ処理にフォールバック
  */
 async function extractPdfTextsWithGemini(
   pdfs: Attachment[],
   traceRid: string,
 ): Promise<{ extractedTexts: Array<{ label: string; content: string }>; remainingPdfs: Attachment[] }> {
-  const groqKey = Deno.env.get('GROQ_API_KEY')
-  if (!groqKey || pdfs.length === 0) {
+  if (pdfs.length === 0) {
     return { extractedTexts: [], remainingPdfs: pdfs }
   }
-
-  const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
-  const model = genAI.getGenerativeModel({ model: AI_MODEL_FAST })
 
   const extractedTexts: Array<{ label: string; content: string }> = []
   const remainingPdfs: Attachment[] = []
 
   for (const pdf of pdfs) {
     if (!pdf.data) { remainingPdfs.push(pdf); continue }
+
+    // ① pdfjs-dist で無料テキスト抽出を試みる
+    const freeText = await extractPdfTextWithPdfjs(pdf.data)
+    if (freeText) {
+      extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content: freeText.slice(0, 6000) })
+      console.log(`[PDF Extract] pdfjs成功（無料）: ${pdf.name} ${freeText.length}文字 rid=${traceRid}`)
+      continue
+    }
+
+    // ② スキャンPDF等 → Gemini にフォールバック（GROQ_API_KEY 設定時のみ。未設定時はバイナリのまま渡す）
+    const groqKey = Deno.env.get('GROQ_API_KEY')
+    if (!groqKey) {
+      remainingPdfs.push(pdf)
+      continue
+    }
     try {
+      const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
+      const model = genAI.getGenerativeModel({ model: AI_MODEL_FAST })
       const parts = [
         { inlineData: { data: pdf.data, mimeType: pdf.mimeType } },
         { text: 'このファイルのテキストを全て抽出してください。整形・要約不要。テキストのみ出力。' },
@@ -903,15 +947,14 @@ async function extractPdfTextsWithGemini(
       const text = res.response.text().trim()
       if (text.length > 50) {
         extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content: text.slice(0, 6000) })
-        console.log(`[PDF Extract] 成功: ${pdf.name} ${text.length}文字 rid=${traceRid}`)
+        console.log(`[PDF Extract] Gemini成功（スキャンPDF）: ${pdf.name} ${text.length}文字 rid=${traceRid}`)
       } else {
-        // テキストが短すぎる（スキャンPDFなど） → バイナリフォールバック
         remainingPdfs.push(pdf)
-        console.warn(`[PDF Extract] テキスト不足(${text.length}文字)、バイナリ処理へ: ${pdf.name} rid=${traceRid}`)
+        console.warn(`[PDF Extract] Geminiテキスト不足(${text.length}文字)、バイナリ処理へ: ${pdf.name} rid=${traceRid}`)
       }
     } catch (e) {
       remainingPdfs.push(pdf)
-      console.warn(`[PDF Extract] 失敗、バイナリ処理へ: ${pdf.name} ${String(e)} rid=${traceRid}`)
+      console.warn(`[PDF Extract] Gemini失敗、バイナリ処理へ: ${pdf.name} ${String(e)} rid=${traceRid}`)
     }
   }
 
