@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight } from 'lucide-react'
+import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { fetchCandidates } from '../lib/db/candidates'
 import {
@@ -427,6 +427,8 @@ export function MatchingPage({
   const [mode, setMode] = useState<MatchMode>('project')
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
   const [matchingRunMode, setMatchingRunMode] = useState<MatchingRunMode>(() => {
     try {
       const raw = localStorage.getItem(MATCHING_RUN_MODE_KEY)
@@ -475,6 +477,36 @@ export function MatchingPage({
 
   const projectList = projects as Project[]
   const candidateList = candidates as Candidate[]
+
+  const filteredProjectList = useMemo(() => {
+    const tokens = searchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    if (tokens.length === 0) return projectList
+    return projectList.filter((p) => {
+      const haystack = [
+        p.title,
+        p.client ?? '',
+        ...((p.required_skills as string[] | undefined) ?? []),
+      ].join(' ').toLowerCase()
+      return searchMode === 'AND'
+        ? tokens.every((t) => haystack.includes(t))
+        : tokens.some((t) => haystack.includes(t))
+    })
+  }, [projectList, searchQuery, searchMode])
+
+  const filteredCandidateList = useMemo(() => {
+    const tokens = searchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    if (tokens.length === 0) return candidateList
+    return candidateList.filter((c) => {
+      const haystack = [
+        c.name,
+        c.email ?? '',
+        ...((c.skills as string[] | undefined) ?? []),
+      ].join(' ').toLowerCase()
+      return searchMode === 'AND'
+        ? tokens.every((t) => haystack.includes(t))
+        : tokens.some((t) => haystack.includes(t))
+    })
+  }, [candidateList, searchQuery, searchMode])
 
   const projectIdsSorted = useMemo(
     () => [...projectList.map((p) => p.id)].sort().join(','),
@@ -877,6 +909,7 @@ export function MatchingPage({
     setMessage(null)
     setSelectedProjectId(null)
     setSelectedCandidateId(null)
+    setSearchQuery('')
   }
 
   const countByProject = stats?.countByProjectId ?? {}
@@ -1082,8 +1115,38 @@ export function MatchingPage({
           ) : (
             <div className="flex flex-col md:flex-row">
               {/* Left: project list（モバイルで詳細表示中は非表示） */}
-              <div className={`w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px] ${selectedProjectId ? 'hidden md:block' : ''}`}>
-                {projectList.map((p) => {
+              <div className={`w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 flex flex-col ${selectedProjectId ? 'hidden md:flex' : ''}`}>
+                <div className="p-2 border-b border-gray-100 space-y-1.5">
+                  <div className="relative">
+                    <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => { setSearchQuery(e.target.value); setSelectedProjectId(null) }}
+                      placeholder="案件名・スキルで絞り込み"
+                      className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    />
+                  </div>
+                  <div className="flex gap-1">
+                    {(['AND', 'OR'] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setSearchMode(m)}
+                        className={`px-2.5 py-0.5 text-xs rounded font-medium transition-colors ${searchMode === m ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                    {searchQuery && (
+                      <span className="ml-auto text-xs text-gray-400 self-center">{filteredProjectList.length}件</span>
+                    )}
+                  </div>
+                </div>
+                <div className="overflow-y-auto md:max-h-[588px]">
+                {filteredProjectList.length === 0 ? (
+                  <p className="text-xs text-gray-400 px-3 py-4">該当する案件がありません。</p>
+                ) : filteredProjectList.map((p) => {
                   const n = isLoadingStats ? null : (countByProject[p.id] ?? 0)
                   const isSelected = selectedProjectId === p.id
                   const isBusy = matchByProjectMutation.isPending && matchByProjectMutation.variables === p.id
@@ -1122,6 +1185,7 @@ export function MatchingPage({
                     </div>
                   )
                 })}
+                </div>
               </div>
 
               {/* Right: ranking panel */}
@@ -1259,8 +1323,38 @@ export function MatchingPage({
           ) : (
             <div className="flex flex-col md:flex-row">
               {/* Left: candidate list（モバイルで詳細表示中は非表示） */}
-              <div className={`w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px] ${selectedCandidateId ? 'hidden md:block' : ''}`}>
-                {candidateList.map((c) => {
+              <div className={`w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 flex flex-col ${selectedCandidateId ? 'hidden md:flex' : ''}`}>
+                <div className="p-2 border-b border-gray-100 space-y-1.5">
+                  <div className="relative">
+                    <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => { setSearchQuery(e.target.value); setSelectedCandidateId(null) }}
+                      placeholder="氏名・スキルで絞り込み"
+                      className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    />
+                  </div>
+                  <div className="flex gap-1">
+                    {(['AND', 'OR'] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setSearchMode(m)}
+                        className={`px-2.5 py-0.5 text-xs rounded font-medium transition-colors ${searchMode === m ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                    {searchQuery && (
+                      <span className="ml-auto text-xs text-gray-400 self-center">{filteredCandidateList.length}件</span>
+                    )}
+                  </div>
+                </div>
+                <div className="overflow-y-auto md:max-h-[588px]">
+                {filteredCandidateList.length === 0 ? (
+                  <p className="text-xs text-gray-400 px-3 py-4">該当する人材がありません。</p>
+                ) : filteredCandidateList.map((c) => {
                   const n = isLoadingStats ? null : (countByCandidate[c.id] ?? 0)
                   const isSelected = selectedCandidateId === c.id
                   const isBusy = matchByCandidateMutation.isPending && matchByCandidateMutation.variables === c.id
@@ -1299,6 +1393,7 @@ export function MatchingPage({
                     </div>
                   )
                 })}
+                </div>
               </div>
 
               {/* Right: ranking panel */}
