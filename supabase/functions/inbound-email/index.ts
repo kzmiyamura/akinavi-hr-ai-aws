@@ -897,7 +897,8 @@ async function fetchGoogleLinks(body: string): Promise<{
         const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xlsx?|ods)$/i.test(filename)
         const isWord  = WORD_MIME.includes(ct)  || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(docx?)$/i.test(filename)
 
-        if (ct.includes('pdf')) {
+        const isPdf = ct.includes('pdf') || /\.pdf$/i.test(filename)
+        if (isPdf) {
           const b64 = arrayBufferToBase64(await res.arrayBuffer())
           pdfAttachments.push({ data: b64, mimeType: 'application/pdf', name: filename })
           console.log(`[DriveLink] Drive PDF取得成功: ${id} (${filename})`)
