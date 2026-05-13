@@ -880,9 +880,18 @@ async function fetchGoogleLinks(body: string): Promise<{
   }
 
   // Google Drive ファイル → PDF / テキスト / Excel / Word
+  // ポートフォリオ等、経歴書以外のファイルはスキップ
+  const DRIVE_SKIP_KEYWORDS = ['ポートフォリオ', '作品集', 'portfolio', 'Portfolio']
   const driveMatches = driveMatchesPreview
   for (const match of driveMatches) {
     const id = match[1]
+    const urlIndex = match.index ?? 0
+    const preceding = body.slice(Math.max(0, urlIndex - 150), urlIndex)
+    const shouldSkip = DRIVE_SKIP_KEYWORDS.some(kw => preceding.includes(kw))
+    if (shouldSkip) {
+      console.log(`[DriveLink] スキップ（ポートフォリオ等）: ${id}`)
+      continue
+    }
     const downloadUrl = `https://drive.google.com/uc?export=download&id=${id}`
     try {
       // ファイルサイズが大きい場合があるので 20 秒に延長
