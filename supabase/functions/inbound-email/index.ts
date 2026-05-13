@@ -875,8 +875,9 @@ function stripHtml(html: string): string {
 async function extractPdfTextWithPdfjs(dataB64: string): Promise<string | null> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pdfjsLib = await import('npm:pdfjs-dist@3.11.174/legacy/build/pdf.js') as any
-    pdfjsLib.GlobalWorkerOptions.workerSrc = ''
+    const mod = await import('npm:pdfjs-dist@3.11.174/legacy/build/pdf.js') as any
+    const pdfjsLib = mod.default ?? mod
+    if (pdfjsLib.GlobalWorkerOptions) pdfjsLib.GlobalWorkerOptions.workerSrc = ''
     const pdfBytes = Uint8Array.from(atob(dataB64), c => c.charCodeAt(0))
     const doc = await pdfjsLib.getDocument({
       data: pdfBytes,
