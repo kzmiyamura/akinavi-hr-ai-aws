@@ -151,31 +151,6 @@ function pickProjectsForCandidateMatch(candidate: Candidate, openProjects: Proje
   return scored.slice(0, maxProjects).map((x) => x.p)
 }
 
-function groupSubmissionsByProject(rows: Submission[]): Map<string, Submission[]> {
-  const m = new Map<string, Submission[]>()
-  for (const s of rows) {
-    const arr = m.get(s.project_id) ?? []
-    arr.push(s)
-    m.set(s.project_id, arr)
-  }
-  for (const arr of m.values()) {
-    arr.sort((a, b) => b.match_score - a.match_score)
-  }
-  return m
-}
-
-function groupSubmissionsByCandidate(rows: Submission[]): Map<string, Submission[]> {
-  const m = new Map<string, Submission[]>()
-  for (const s of rows) {
-    const arr = m.get(s.candidate_id) ?? []
-    arr.push(s)
-    m.set(s.candidate_id, arr)
-  }
-  for (const arr of m.values()) {
-    arr.sort((a, b) => b.match_score - a.match_score)
-  }
-  return m
-}
 
 function toRankedForProject(subs: Submission[], allCandidates: Candidate[]): RankedSubmission[] {
   return subs
