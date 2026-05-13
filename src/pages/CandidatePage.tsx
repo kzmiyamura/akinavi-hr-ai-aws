@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply } from 'lucide-react'
 import { ai } from '../lib/ai'
+import { toViewerUrl } from '../lib/viewerUrl'
 import { upsertCandidate, updateCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -919,7 +920,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         })()
                         return resumeLink ? (
                           <a
-                            href={resumeLink}
+                            href={toViewerUrl(resumeLink)}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"

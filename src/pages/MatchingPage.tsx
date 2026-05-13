@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText } from 'lucide-react'
 import { ai } from '../lib/ai'
+import { toViewerUrl } from '../lib/viewerUrl'
 import { fetchCandidates } from '../lib/db/candidates'
 import {
   fetchOpenProjects,
@@ -302,7 +303,7 @@ function ProjectModeRankCard({
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {s.candidate.drive_url && (
                 <a
-                  href={s.candidate.drive_url}
+                  href={toViewerUrl(s.candidate.drive_url)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 transition-colors"
@@ -312,7 +313,7 @@ function ProjectModeRankCard({
               )}
               {s.candidate.resume_url && s.candidate.resume_url !== s.candidate.drive_url && (
                 <a
-                  href={s.candidate.resume_url}
+                  href={toViewerUrl(s.candidate.resume_url)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 transition-colors"
