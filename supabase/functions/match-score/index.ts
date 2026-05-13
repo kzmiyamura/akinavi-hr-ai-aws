@@ -1,8 +1,6 @@
 // Supabase Edge Function: match-score
 // 人材×案件のマッチングスコアをGroq（無料）またはGemini（フォールバック）で算出
 
-import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -47,10 +45,25 @@ async function callGroq(key: string, prompt: string): Promise<string> {
 async function callGemini(prompt: string): Promise<string> {
   const key = Deno.env.get('GEMINI_API_KEY')
   if (!key) throw new Error('GEMINI_API_KEY not set')
-  const genAI = new GoogleGenerativeAI(key)
-  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL })
-  const result = await model.generateContent(prompt)
-  return result.response.text()
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.1, maxOutputTokens: 400 },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    },
+  )
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Gemini ${res.status}: ${body.slice(0, 200)}`)
+  }
+  const data = await res.json()
+  return data.candidates[0].content.parts[0].text as string
 }
 
 function parseResult(text: string): { score: number; summary: string; duplicateSuspected: boolean } {
