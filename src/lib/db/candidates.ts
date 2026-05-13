@@ -125,11 +125,11 @@ export async function fetchCandidateById(id: string, dataEnv: DataEnv): Promise<
   return (data ?? null) as Candidate | null
 }
 
-/** 全候補者を取得（マージ済みを除外） */
+/** 全候補者を取得（マージ済みを除外）。raw_profile は除外してペイロードを削減 */
 export async function fetchCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
   const { data, error } = await supabase
     .from('candidates')
-    .select('*')
+    .select('id,data_env,name,email,phone,skills,experience_years,duplicate_flag,merged_into,created_by,updated_by,created_at,updated_at,resume_url,drive_url,box_url,box_status,desired_rate,from_company')
     .eq('data_env', dataEnv)
     .is('merged_into', null)
     .order('updated_at', { ascending: false })

@@ -502,7 +502,7 @@ export function MatchingPage({
     queryKey: projectsQueryKeys.open(dataEnv),
     queryFn: () => fetchOpenProjects(dataEnv),
   })
-  const { data: candidates = [] } = useQuery({
+  const { data: candidates = [], isLoading: isLoadingCandidates } = useQuery({
     queryKey: ['candidates', dataEnv],
     queryFn: () => fetchCandidates(dataEnv),
   })
@@ -1279,7 +1279,7 @@ export function MatchingPage({
                         {formatMatchRunProgressLine(matchRunProgress)}
                       </p>
                     )}
-                    {isLoadingProjectSubs ? (
+                    {isLoadingProjectSubs || isLoadingCandidates ? (
                       <p className="text-sm text-gray-400">読み込み中...</p>
                     ) : selectedProjectRanked.length === 0 ? (
                       <p className="text-sm text-gray-500">マッチング未実施、または「再実行」で算出してください。</p>
@@ -1487,7 +1487,7 @@ export function MatchingPage({
                         {formatMatchRunProgressLine(matchRunProgress)}
                       </p>
                     )}
-                    {isLoadingCandidateSubs || isLoadingSupportProjects ? (
+                    {isLoadingCandidateSubs || isLoadingSupportProjects || isLoadingCandidates ? (
                       <p className="text-sm text-gray-400">読み込み中...</p>
                     ) : selectedCandidateSubs.length === 0 ? (
                       <p className="text-sm text-gray-500">マッチング未実施、または「再実行」で算出してください。</p>
