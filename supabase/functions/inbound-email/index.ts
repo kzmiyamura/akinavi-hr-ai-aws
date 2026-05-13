@@ -545,35 +545,85 @@ async function generateJSONWithGroq(
  * - 添付ファイル（画像・PDF）がある場合はGroq非対応のためGemini直行
  * - GROQ_API_KEY 未設定時もGemini直行
  */
+type TextContent = { label: string; content: string }
+
+/** Groqプロンプト用スマートトランケーション: 先頭65% + 末尾35% */
+function smartTruncateForGroq(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  const head = Math.floor(maxChars * 0.65)
+  const tail = maxChars - head
+  return text.slice(0, head) + '\n...(中略)...\n' + text.slice(-tail)
+}
+
 /**
- * Groq専用コンパクト候補者プロンプト（オーバーヘッド ~700文字でデータに ~3,800文字を確保）
+ * Groq専用コンパクト候補者プロンプト
+ * オーバーヘッド ~750文字 / データに ~3,550文字を確保 / PDFはスマートトランケーション
  */
-function buildCandidateGroqPrompt(from: string, subject: string, dataSection: string): string {
-  return `人材紹介メール解析。書かれた情報のみ抽出。推測禁止。差出人(${from})は営業担当者。
+function buildCandidateGroqPrompt(
+  from: string,
+  subject: string,
+  body: string,
+  textContents: TextContent[],
+): string {
+  const GROQ_MAX = 4_300
+  const header = `人材紹介メール解析。書かれた情報のみ抽出。推測禁止。差出人(${from})は営業担当者。
 氏名はPDF/本文から読む。見つからない場合のみ"不明"。emailは候補者本人のみ(差出人は含めない)。
 
 以下JSONのみ返す:
 {"name":string,"email":string|null,"phone":string|null,"skills":string[],"skillsByCategory":{"languages":[],"frameworks":[],"libraries":[],"os":[],"databases":[],"dwh":[],"clouds":[],"infrastructures":[],"tools":[],"methodologies":[],"certifications":[],"design":[],"marketing":[],"others":[]},"roles":string[],"industries":string[],"experienceYears":number|null,"summary":string,"nearestStation":string|null,"prefecture":string|null,"availableRegions":string[]|null,"currentWorkLocation":string|null,"remoteAvailable":boolean,"desiredRate":string|null,"fromCompany":string|null}
 
 件名:${subject}
-本文:
-${dataSection}
-JSON:`.trim()
+本文:`
+  const footer = '\nJSON:'
+  const dataBudget = GROQ_MAX - header.length - footer.length
+
+  // ボディ: 予算の25%まで
+  const bodyBudget = Math.min(body.length, Math.floor(dataBudget * 0.25))
+  let dataSection = body.slice(0, bodyBudget)
+
+  // テキストコンテンツ（PDF/Drive/Office）: 残り予算でスマートトランケーション
+  for (const t of textContents) {
+    const labelOverhead = t.label.length + 15 // "--- label ---\n"
+    const remaining = dataBudget - dataSection.length - labelOverhead
+    if (remaining <= 100) break
+    const content = smartTruncateForGroq(t.content, remaining)
+    dataSection += `\n--- ${t.label} ---\n${content}`
+  }
+
+  return `${header}\n${dataSection}${footer}`
 }
 
 /**
  * Groq専用コンパクト案件プロンプト
  */
-function buildProjectGroqPrompt(subject: string, dataSection: string): string {
-  return `案件メール解析。書かれた情報のみ抽出。推測禁止。複数案件は配列で返す。
+function buildProjectGroqPrompt(
+  subject: string,
+  body: string,
+  textContents: TextContent[],
+): string {
+  const GROQ_MAX = 4_300
+  const header = `案件メール解析。書かれた情報のみ抽出。推測禁止。複数案件は配列で返す。
 
 以下JSONのみ返す:
 [{"title":string,"requiredSkills":string[],"budgetMin":number|null,"budgetMax":number|null,"startDate":string|null,"endDate":string|null,"workLocation":string|null,"remotePolicy":string|null,"contractType":string|null,"headcount":number|null,"workload":string|null,"settlementMin":number|null,"settlementMax":number|null,"roleSummary":string|null,"industry":string|null}]
 
 件名:${subject}
-本文:
-${dataSection}
-JSON:`.trim()
+本文:`
+  const footer = '\nJSON:'
+  const dataBudget = GROQ_MAX - header.length - footer.length
+
+  const bodyBudget = Math.min(body.length, Math.floor(dataBudget * 0.4))
+  let dataSection = body.slice(0, bodyBudget)
+
+  for (const t of textContents) {
+    const labelOverhead = t.label.length + 15
+    const remaining = dataBudget - dataSection.length - labelOverhead
+    if (remaining <= 100) break
+    const content = smartTruncateForGroq(t.content, remaining)
+    dataSection += `\n--- ${t.label} ---\n${content}`
+  }
+
+  return `${header}\n${dataSection}${footer}`
 }
 
 async function generateJSONSmart(
@@ -1655,7 +1705,7 @@ JSON:`.trim()
       let usedModel1: string | undefined
 
       try {
-        const candidateGroqPrompt = buildCandidateGroqPrompt(from, subject, body.slice(0, 3000) + driveTextSection)
+        const candidateGroqPrompt = buildCandidateGroqPrompt(from, subject, body, allTextContents)
         const { result, durationMs: d1, usedModel: _usedModel1 } = await generateJSONSmart(prompt, allAttachments, 'candidate', 2, undefined, {
           rid: traceRid,
           phase: 'gemini_candidate_extract',
@@ -1869,7 +1919,7 @@ JSON:`.trim()
 
       tracePhase = 'gemini_project_extract'
       pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
-      const projectGroqPrompt = buildProjectGroqPrompt(subject, body.slice(0, 3000) + driveTextSection)
+      const projectGroqPrompt = buildProjectGroqPrompt(subject, body, allTextContents)
       const { result, durationMs, usedModel: usedModelP } = await generateJSONSmart(prompt, allAttachments, 'project', 2, undefined, {
         rid: traceRid,
         phase: 'gemini_project_extract',
