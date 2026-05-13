@@ -484,7 +484,7 @@ async function generateJSON(
 
 // ---- Groq API（テキスト専用・無料枠 14,400回/日） ----
 
-const GROQ_MODEL = 'llama-3.1-8b-instant' // TPD 500,000トークン（llama-3.3-70bは100,000で不足）
+const GROQ_MODEL = 'llama-3.3-70b-versatile' // TPD 100,000トークン（日本語精度優先）
 
 /**
  * Groq API でJSON抽出（テキストのみ・添付非対応）
