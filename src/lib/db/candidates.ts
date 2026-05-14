@@ -133,7 +133,7 @@ export async function fetchCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
     .eq('data_env', dataEnv)
     .is('merged_into', null)
     .order('updated_at', { ascending: false })
-    .limit(5000)
+    .limit(500)
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]

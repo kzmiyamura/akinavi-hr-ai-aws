@@ -19,7 +19,14 @@ import {
   writeStoredDataEnv,
 } from './lib/dataEnv'
 
-const queryClient = new QueryClient()
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 3,       // 3分間はキャッシュ利用（タブ切替で再フェッチしない）
+      refetchOnWindowFocus: false,     // ウィンドウフォーカス時の自動再フェッチ無効
+    },
+  },
+})
 
 type DetailView =
   | { kind: 'candidate'; id: string }

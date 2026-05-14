@@ -230,7 +230,7 @@ export async function fetchOpenProjects(dataEnv: DataEnv): Promise<Project[]> {
     .eq('data_env', dataEnv)
     .eq('status', 'open')
     .order('created_at', { ascending: false })
-    .limit(5000)
+    .limit(500)
 
   if (error) throw new Error(`案件の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Project[]
@@ -243,7 +243,7 @@ export async function fetchAllProjects(dataEnv: DataEnv): Promise<Project[]> {
     .select('*')
     .eq('data_env', dataEnv)
     .order('created_at', { ascending: false })
-    .limit(5000)
+    .limit(500)
 
   if (error) throw new Error(`案件の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Project[]
