@@ -727,11 +727,20 @@ async function generateJSONSmart(
   const trace = geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined
   const timeout = timeoutMs ?? 30_000
 
-  // Cerebras 70B（128K・大容量無料枠）
+  // Cerebras 8B（軽量タスク向け。候補者/案件抽出で氏名や案件名が不明の場合はGroqへ）
   if (cerebrasKey) {
     try {
       const r = await generateJSONWithCerebras(prompt, timeout, trace)
-      return { ...r, usedModel: CEREBRAS_MODEL }
+      // 抽出品質チェック：8Bモデルで氏名/案件名が取れなかった場合はGroqに任せる
+      const res = r.result as Record<string, unknown>
+      const poorQuality =
+        (kind === 'candidate' && res?.name === '不明') ||
+        (kind === 'project' && Array.isArray(res) && (res as Array<Record<string, unknown>>).every(p => !p?.title))
+      if (poorQuality && groqKey) {
+        console.warn(`[Cerebras] 抽出品質不足(${kind})、Groq 70Bにフォールバック`)
+      } else {
+        return { ...r, usedModel: CEREBRAS_MODEL }
+      }
     } catch (e) {
       console.warn(`[Cerebras] 失敗、Groq 70Bにフォールバック: ${String(e)}`)
     }
