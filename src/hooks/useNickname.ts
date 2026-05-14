@@ -17,7 +17,8 @@ function removeCookieNickname() {
 }
 
 function readNickname(): string {
-  return localStorage.getItem(STORAGE_KEY) || getCookieNickname()
+  // クッキーを優先（iOSはlocalStorageをストレージ逼迫時に削除するため）
+  return getCookieNickname() || localStorage.getItem(STORAGE_KEY) || ''
 }
 
 export function useNickname() {
