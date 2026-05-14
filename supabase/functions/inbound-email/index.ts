@@ -498,7 +498,7 @@ async function generateJSON(
 
 // ---- Cerebras API（テキスト専用・大容量無料枠） ----
 
-const CEREBRAS_MODEL = 'llama3.1-70b'
+const CEREBRAS_MODEL = 'llama-3.3-70b'
 
 async function generateJSONWithCerebras(
   prompt: string,
