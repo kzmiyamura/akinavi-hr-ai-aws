@@ -727,26 +727,11 @@ async function generateJSONSmart(
   const trace = geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined
   const timeout = timeoutMs ?? 30_000
 
-  // Cerebras 8B（軽量タスク向け。候補者/案件抽出で氏名や案件名が不明の場合はGroqへ）
-  if (cerebrasKey) {
+  // Cerebras 8B は軽量タスク（match）のみ。候補者/案件の構造化抽出は苦手なのでGroqに直行
+  if (cerebrasKey && kind === 'match') {
     try {
       const r = await generateJSONWithCerebras(prompt, timeout, trace)
-      // 抽出品質チェック：8Bモデルで氏名/スキル/案件名が取れなかった場合はGroqに任せる
-      const res = r.result as Record<string, unknown>
-      const skillsCount = Array.isArray(res?.skills) ? (res.skills as unknown[]).length : 0
-      const poorQuality =
-        (kind === 'candidate' && (!res?.name || res?.name === '不明' || skillsCount === 0)) ||
-        (kind === 'project' && Array.isArray(res) && (res as Array<Record<string, unknown>>).every(p => !p?.title))
-      console.log(`[Cerebras] 品質チェック kind=${kind}`, {
-        name: kind === 'candidate' ? res?.name : undefined,
-        skills: skillsCount,
-        poorQuality,
-      })
-      if (poorQuality && groqKey) {
-        console.warn(`[Cerebras] 抽出品質不足(${kind})、Groq 70Bにフォールバック`)
-      } else {
-        return { ...r, usedModel: CEREBRAS_MODEL }
-      }
+      return { ...r, usedModel: CEREBRAS_MODEL }
     } catch (e) {
       console.warn(`[Cerebras] 失敗、Groq 70Bにフォールバック: ${String(e)}`)
     }
