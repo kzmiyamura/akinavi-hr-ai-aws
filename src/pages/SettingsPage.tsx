@@ -814,16 +814,15 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
               { label: 'AIモデルフォールバックフロー', path: '/docs/ai_fallback_flow.pdf' },
               { label: 'マッチング候補者選定ロジック', path: '/docs/matching_candidate_selection.pdf' },
             ].map(({ label, path }) => (
-              <a
+              <button
                 key={path}
-                href={path}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 hover:border-blue-300 hover:text-blue-600 transition-colors"
+                type="button"
+                onClick={() => window.open(path, '_blank', 'noopener,noreferrer')}
+                className="flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 hover:border-blue-300 hover:text-blue-600 transition-colors w-full text-left"
               >
                 <FileText size={15} className="shrink-0 text-gray-400" />
                 {label}
-              </a>
+              </button>
             ))}
           </div>
         </section>
