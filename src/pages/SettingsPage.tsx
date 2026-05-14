@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Save, RefreshCw, Pause, Play, CheckCircle, Circle } from 'lucide-react'
+import { Loader2, Save, RefreshCw, Pause, Play, CheckCircle, Circle, FileText } from 'lucide-react'
 import {
   getEmailSettings,
   saveEmailAddressSettings,
@@ -762,6 +762,29 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
                 <span className="ml-3 text-sm text-red-600">保存に失敗しました: {String(saveMatchingMutation.error)}</span>
               )}
             </div>
+          </div>
+        </section>
+
+        {/* ---- ドキュメント ---- */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">ドキュメント</h2>
+          <p className="text-xs text-gray-400 mb-4">システムの仕様・フロー資料を閲覧できます。</p>
+          <div className="space-y-2">
+            {[
+              { label: 'AIモデルフォールバックフロー', path: '/docs/ai_fallback_flow.pdf' },
+              { label: 'マッチング候補者選定ロジック', path: '/docs/matching_candidate_selection.pdf' },
+            ].map(({ label, path }) => (
+              <a
+                key={path}
+                href={path}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 hover:border-blue-300 hover:text-blue-600 transition-colors"
+              >
+                <FileText size={15} className="shrink-0 text-gray-400" />
+                {label}
+              </a>
+            ))}
           </div>
         </section>
       </div>
