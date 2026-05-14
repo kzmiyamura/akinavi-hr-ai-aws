@@ -8,6 +8,7 @@
     }
   },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/" }
+    { "source": "/docs/(.*)", "destination": "/docs/$1" },
+    { "source": "/((?!docs/).*)", "destination": "/" }
   ]
 }
