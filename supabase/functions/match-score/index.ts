@@ -124,22 +124,16 @@ Deno.serve(async (req) => {
     let raw: string
     let usedModel = GEMINI_MODEL
 
-    try {
-      raw = await callCerebras(prompt)
-      usedModel = CEREBRAS_MODEL
-    } catch (e) {
-      console.warn(`[match-score] Cerebras失敗、Groq 70Bへ: ${e}`)
-      if (!groqKey) {
-        console.warn('[match-score] GROQ_API_KEY未設定、Geminiへ')
+    if (!groqKey) {
+      console.warn('[match-score] GROQ_API_KEY未設定、Geminiへ')
+      raw = await callGemini(prompt)
+    } else {
+      try {
+        raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
+        usedModel = GROQ_MODEL_PRIMARY
+      } catch (e) {
+        console.warn(`[match-score] Groq 70B失敗、Geminiへ: ${e}`)
         raw = await callGemini(prompt)
-      } else {
-        try {
-          raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
-          usedModel = GROQ_MODEL_PRIMARY
-        } catch (e2) {
-          console.warn(`[match-score] Groq 70B失敗、Geminiへ: ${e2}`)
-          raw = await callGemini(prompt)
-        }
       }
     }
 
