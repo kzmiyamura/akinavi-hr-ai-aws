@@ -6,7 +6,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile'
+const GROQ_MODEL_PRIMARY = 'llama-3.3-70b-versatile'  // 100,000 TPD
+const GROQ_MODEL_FALLBACK = 'llama-3.1-8b-instant'    // 500,000 TPD
 const GEMINI_MODEL = 'gemini-2.5-flash'
 
 function buildPrompt(candidate: unknown, project: unknown): string {
@@ -19,7 +20,7 @@ function buildPrompt(candidate: unknown, project: unknown): string {
 {"score":数値0-100,"summary":"理由100字以内","duplicateSuspected":false}`.trim()
 }
 
-async function callGroq(key: string, prompt: string): Promise<string> {
+async function callGroq(key: string, prompt: string, model: string): Promise<string> {
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -27,7 +28,7 @@ async function callGroq(key: string, prompt: string): Promise<string> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: GROQ_MODEL,
+      model,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
       max_tokens: 1200,
@@ -99,11 +100,17 @@ Deno.serve(async (req) => {
 
     if (groqKey) {
       try {
-        raw = await callGroq(groqKey, prompt)
-        usedModel = GROQ_MODEL
+        raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
+        usedModel = GROQ_MODEL_PRIMARY
       } catch (e) {
-        console.warn(`[match-score] Groq失敗、Geminiへ: ${e}`)
-        raw = await callGemini(prompt)
+        console.warn(`[match-score] Groq 70B失敗、8Bへ: ${e}`)
+        try {
+          raw = await callGroq(groqKey, prompt, GROQ_MODEL_FALLBACK)
+          usedModel = GROQ_MODEL_FALLBACK
+        } catch (e2) {
+          console.warn(`[match-score] Groq 8B失敗、Geminiへ: ${e2}`)
+          raw = await callGemini(prompt)
+        }
       }
     } else {
       raw = await callGemini(prompt)
