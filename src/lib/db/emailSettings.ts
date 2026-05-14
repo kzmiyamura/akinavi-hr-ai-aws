@@ -189,6 +189,25 @@ export async function getImportProgress(since: string): Promise<number> {
   return count ?? 0
 }
 
+/** 人材データ保持日数を取得（デフォルト 7 日） */
+export async function getCandidateRetentionDays(): Promise<number> {
+  const { data } = await supabase
+    .from('app_config')
+    .select('value')
+    .eq('key', 'candidate_retention_days')
+    .maybeSingle()
+  const v = parseInt(data?.value ?? '', 10)
+  return isNaN(v) || v < 1 ? 7 : v
+}
+
+/** 人材データ保持日数を保存 */
+export async function saveCandidateRetentionDays(days: number): Promise<void> {
+  const { error } = await supabase
+    .from('app_config')
+    .upsert({ key: 'candidate_retention_days', value: String(days) }, { onConflict: 'key' })
+  if (error) throw new Error(`保持日数の保存に失敗しました: ${error.message}`)
+}
+
 /** 全件取り込みまたは一時停止中か（UIの自動更新判定用） */
 export async function getIsImportActive(): Promise<boolean> {
   const { data } = await supabase

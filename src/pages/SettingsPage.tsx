@@ -13,6 +13,8 @@ import {
   saveAutoMatchEnabled,
   getProjectInboundEnabled,
   saveProjectInboundEnabled,
+  getCandidateRetentionDays,
+  saveCandidateRetentionDays,
 } from '../lib/db/emailSettings'
 import {
   getMatchingSettings,
@@ -81,6 +83,17 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['autoMatchEnabled'] }),
   })
 
+  // 人材データ保持日数
+  const { data: retentionDays = 7 } = useQuery({
+    queryKey: ['candidateRetentionDays'],
+    queryFn: getCandidateRetentionDays,
+  })
+  const [retentionDaysInput, setRetentionDaysInput] = useState<number>(7)
+  const retentionMutation = useMutation({
+    mutationFn: (days: number) => saveCandidateRetentionDays(days),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['candidateRetentionDays'] }),
+  })
+
   // マッチング設定
   const { data: matchingSettings } = useQuery({
     queryKey: ['matchingSettings'],
@@ -94,6 +107,10 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
     setFastMaxCandidates(matchingSettings.fast_max_candidates_per_project)
     setFastMaxProjects(matchingSettings.fast_max_projects_per_candidate)
   }, [matchingSettings])
+
+  useEffect(() => {
+    setRetentionDaysInput(retentionDays)
+  }, [retentionDays])
 
   const saveMatchingMutation = useMutation({
     mutationFn: () => saveMatchingSettings({
@@ -655,6 +672,34 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
                 autoMatchEnabled ? 'translate-x-6' : 'translate-x-1'
               }`} />
             </button>
+          </div>
+        </section>
+
+        {/* ---- 人材データ保持期間 ---- */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">人材データ保持期間</h2>
+          <p className="text-xs text-gray-400 mb-4">登録から指定日数を超えた人材データを毎日 JST 0:00 に自動削除します。</p>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={1}
+              max={365}
+              value={retentionDaysInput}
+              onChange={e => setRetentionDaysInput(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-24 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-600">日間保持</span>
+            <button
+              type="button"
+              onClick={() => retentionMutation.mutate(retentionDaysInput)}
+              disabled={retentionMutation.isPending || retentionDaysInput === retentionDays}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+            >
+              {retentionMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              保存
+            </button>
+            {retentionMutation.isSuccess && <span className="text-sm text-green-600">保存しました</span>}
+            {retentionMutation.isError && <span className="text-sm text-red-600">保存に失敗しました</span>}
           </div>
         </section>
 
