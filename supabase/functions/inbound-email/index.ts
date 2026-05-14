@@ -719,38 +719,48 @@ async function generateJSONSmart(
     return { ...r, usedModel: geminiModel ?? AI_MODEL }
   }
 
-  // コンパクトプロンプト決定（Cerebras/Groq共通。Geminiには常に完全プロンプトを渡す）
-  const GROQ_MAX_PROMPT_CHARS = 4_500
+  const COMPACT_MAX_CHARS = 4_500
   const resolvedCompactPrompt = groqPrompt
-    ?? (prompt.length > GROQ_MAX_PROMPT_CHARS
+    ?? (prompt.length > COMPACT_MAX_CHARS
       ? prompt.slice(0, 3_500) + '\n...(中略)...\n' + prompt.slice(-500)
       : prompt)
+  const isLongPrompt = prompt.length > COMPACT_MAX_CHARS
+  const trace = geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined
+  const timeout = timeoutMs ?? 30_000
 
-  // Cerebras を試みる
-  if (cerebrasKey) {
+  if (isLongPrompt && groqKey) {
+    // 長文: Groq 70B（フル） → Cerebras（トランケート） → Gemini
     try {
-      const r = await generateJSONWithCerebras(
-        resolvedCompactPrompt,
-        timeoutMs ?? 30_000,
-        geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined,
-      )
-      return { ...r, usedModel: CEREBRAS_MODEL }
-    } catch (e) {
-      console.warn(`[Cerebras] 失敗、Groqにフォールバック: ${String(e)}`)
-    }
-  }
-
-  // Groq を試みる
-  if (groqKey) {
-    try {
-      const r = await generateJSONWithGroq(
-        resolvedCompactPrompt,
-        timeoutMs ?? 30_000,
-        geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined,
-      )
+      const r = await generateJSONWithGroq(prompt, timeout, trace)
       return { ...r, usedModel: GROQ_MODEL }
     } catch (e) {
-      console.warn(`[Groq] 失敗、Geminiにフォールバック: ${String(e)}`)
+      console.warn(`[Groq] 長文失敗、Cerebras（トランケート）にフォールバック: ${String(e)}`)
+    }
+    if (cerebrasKey) {
+      try {
+        const r = await generateJSONWithCerebras(resolvedCompactPrompt, timeout, trace)
+        return { ...r, usedModel: CEREBRAS_MODEL }
+      } catch (e) {
+        console.warn(`[Cerebras] 失敗、Geminiにフォールバック: ${String(e)}`)
+      }
+    }
+  } else {
+    // 短文: Cerebras → Groq 70B → Gemini
+    if (cerebrasKey) {
+      try {
+        const r = await generateJSONWithCerebras(resolvedCompactPrompt, timeout, trace)
+        return { ...r, usedModel: CEREBRAS_MODEL }
+      } catch (e) {
+        console.warn(`[Cerebras] 失敗、Groq 70Bにフォールバック: ${String(e)}`)
+      }
+    }
+    if (groqKey) {
+      try {
+        const r = await generateJSONWithGroq(resolvedCompactPrompt, timeout, trace)
+        return { ...r, usedModel: GROQ_MODEL }
+      } catch (e) {
+        console.warn(`[Groq] 失敗、Geminiにフォールバック: ${String(e)}`)
+      }
     }
   }
 

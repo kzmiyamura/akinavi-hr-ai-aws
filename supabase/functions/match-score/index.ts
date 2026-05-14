@@ -7,7 +7,6 @@ const corsHeaders = {
 }
 
 const GROQ_MODEL_PRIMARY = 'llama-3.3-70b-versatile'  // 100,000 TPD
-const GROQ_MODEL_FALLBACK = 'llama-3.1-8b-instant'    // 500,000 TPD
 const CEREBRAS_MODEL = 'llama3.1-70b'                 // 無料・大容量
 const GEMINI_MODEL = 'gemini-2.5-flash'
 
@@ -128,23 +127,17 @@ Deno.serve(async (req) => {
       raw = await callCerebras(prompt)
       usedModel = CEREBRAS_MODEL
     } catch (e) {
-      console.warn(`[match-score] Cerebras失敗、Groq 8Bへ: ${e}`)
+      console.warn(`[match-score] Cerebras失敗、Groq 70Bへ: ${e}`)
       if (!groqKey) {
         console.warn('[match-score] GROQ_API_KEY未設定、Geminiへ')
         raw = await callGemini(prompt)
       } else {
         try {
-          raw = await callGroq(groqKey, prompt, GROQ_MODEL_FALLBACK)
-          usedModel = GROQ_MODEL_FALLBACK
+          raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
+          usedModel = GROQ_MODEL_PRIMARY
         } catch (e2) {
-          console.warn(`[match-score] Groq 8B失敗、Groq 70Bへ: ${e2}`)
-          try {
-            raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
-            usedModel = GROQ_MODEL_PRIMARY
-          } catch (e3) {
-            console.warn(`[match-score] Groq 70B失敗、Geminiへ: ${e3}`)
-            raw = await callGemini(prompt)
-          }
+          console.warn(`[match-score] Groq 70B失敗、Geminiへ: ${e2}`)
+          raw = await callGemini(prompt)
         }
       }
     }
