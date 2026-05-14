@@ -367,6 +367,20 @@ JSON のみ返す（説明・コードブロック禁止）:
   const rid = input.traceRid ?? '—'
   const TIMEOUT_MS = 15_000
 
+  // ---- Cerebras を試みる ----
+  const cerebrasKey = Deno.env.get('CEREBRAS_API_KEY')
+  if (cerebrasKey) {
+    pipe(rid, 'relevance_cerebras_wait', { inboundType: input.inboundType })
+    try {
+      const r = await generateJSONWithCerebras(prompt, TIMEOUT_MS, `rid=${rid} phase=relevance_check`)
+      const obj = r.result as { relevant?: unknown }
+      const relevant = typeof obj.relevant === 'boolean' ? obj.relevant : true
+      return { relevant, durationMs: r.durationMs, usedModel: CEREBRAS_MODEL }
+    } catch (e) {
+      console.warn(`[RELEVANCE] Cerebras失敗、Groqにフォールバック: ${String(e)}`)
+    }
+  }
+
   // ---- Groq を試みる ----
   const groqKey = Deno.env.get('GROQ_API_KEY')
   if (groqKey) {
@@ -480,6 +494,61 @@ async function generateJSON(
     }
   }
   throw lastError
+}
+
+// ---- Cerebras API（テキスト専用・大容量無料枠） ----
+
+const CEREBRAS_MODEL = 'llama3.1-70b'
+
+async function generateJSONWithCerebras(
+  prompt: string,
+  timeoutMs = 30_000,
+  traceInfo?: string,
+): Promise<{ result: unknown; durationMs: number }> {
+  const apiKey = Deno.env.get('CEREBRAS_API_KEY')
+  if (!apiKey) throw new Error('CEREBRAS_API_KEY 未設定')
+
+  const start = Date.now()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const res = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: CEREBRAS_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        max_tokens: 2048,
+      }),
+      signal: controller.signal,
+    })
+
+    clearTimeout(timer)
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`Cerebras APIエラー (${res.status}): ${err.slice(0, 200)}`)
+    }
+
+    const json = await res.json()
+    const content = (json.choices?.[0]?.message?.content ?? '').trim()
+    if (!content) throw new Error('Cerebras レスポンスが空')
+
+    const m = content.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim().match(/[\[{][\s\S]*[\]}]/)
+    if (!m) throw new Error(`Cerebras JSON抽出失敗: ${content.slice(0, 100)}`)
+    const result = JSON.parse(m[0])
+    const durationMs = Date.now() - start
+    console.log(`[Cerebras] 成功 durationMs=${durationMs}${traceInfo ? ` ${traceInfo}` : ''}`)
+    return { result, durationMs }
+  } catch (e) {
+    clearTimeout(timer)
+    throw e
+  }
 }
 
 // ---- Groq API（テキスト専用・無料枠 14,400回/日） ----
@@ -641,32 +710,48 @@ async function generateJSONSmart(
   const hasImageAttachments = attachments.some(a =>
     SUPPORTED_MIME.includes(a.mimeType)
   )
+  const cerebrasKey = Deno.env.get('CEREBRAS_API_KEY')
   const groqKey = Deno.env.get('GROQ_API_KEY')
 
-  // 画像添付あり・Groqキー未設定 → Gemini直行
-  if (!groqKey || hasImageAttachments) {
+  // 画像添付あり・テキスト系キー未設定 → Gemini直行
+  if (hasImageAttachments || (!cerebrasKey && !groqKey)) {
     const r = await generateJSON(prompt, attachments, kind, maxRetries, timeoutMs, geminiTrace, geminiModel)
     return { ...r, usedModel: geminiModel ?? AI_MODEL }
   }
 
-  // Groq用プロンプト決定: 引数指定 > スマートトランケーション > そのまま
-  // Geminiには常に元の完全プロンプトを渡す（精度優先）
+  // コンパクトプロンプト決定（Cerebras/Groq共通。Geminiには常に完全プロンプトを渡す）
   const GROQ_MAX_PROMPT_CHARS = 4_500
-  const resolvedGroqPrompt = groqPrompt
+  const resolvedCompactPrompt = groqPrompt
     ?? (prompt.length > GROQ_MAX_PROMPT_CHARS
       ? prompt.slice(0, 3_500) + '\n...(中略)...\n' + prompt.slice(-500)
       : prompt)
 
+  // Cerebras を試みる
+  if (cerebrasKey) {
+    try {
+      const r = await generateJSONWithCerebras(
+        resolvedCompactPrompt,
+        timeoutMs ?? 30_000,
+        geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined,
+      )
+      return { ...r, usedModel: CEREBRAS_MODEL }
+    } catch (e) {
+      console.warn(`[Cerebras] 失敗、Groqにフォールバック: ${String(e)}`)
+    }
+  }
+
   // Groq を試みる
-  try {
-    const r = await generateJSONWithGroq(
-      resolvedGroqPrompt,
-      timeoutMs ?? 30_000,
-      geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined,
-    )
-    return { ...r, usedModel: GROQ_MODEL }
-  } catch (e) {
-    console.warn(`[Groq] 失敗、Geminiにフォールバック: ${String(e)}`)
+  if (groqKey) {
+    try {
+      const r = await generateJSONWithGroq(
+        resolvedCompactPrompt,
+        timeoutMs ?? 30_000,
+        geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined,
+      )
+      return { ...r, usedModel: GROQ_MODEL }
+    } catch (e) {
+      console.warn(`[Groq] 失敗、Geminiにフォールバック: ${String(e)}`)
+    }
   }
 
   // Gemini フォールバック
