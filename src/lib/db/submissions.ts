@@ -170,6 +170,7 @@ export async function fetchSubmissionsListPreview(dataEnv: DataEnv): Promise<Sub
   `,
     )
     .eq('data_env', dataEnv)
+    .limit(5000)
 
   if (error) throw new Error(`マッチング一覧プレビューの取得に失敗しました: ${error.message}`)
 
