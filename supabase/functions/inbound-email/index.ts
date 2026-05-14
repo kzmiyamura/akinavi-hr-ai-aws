@@ -735,7 +735,7 @@ async function generateJSONSmart(
       const res = r.result as Record<string, unknown>
       const skillsCount = Array.isArray(res?.skills) ? (res.skills as unknown[]).length : 0
       const poorQuality =
-        (kind === 'candidate' && (res?.name === '不明' || skillsCount === 0)) ||
+        (kind === 'candidate' && (!res?.name || res?.name === '不明' || skillsCount === 0)) ||
         (kind === 'project' && Array.isArray(res) && (res as Array<Record<string, unknown>>).every(p => !p?.title))
       console.log(`[Cerebras] 品質チェック kind=${kind}`, {
         name: kind === 'candidate' ? res?.name : undefined,
