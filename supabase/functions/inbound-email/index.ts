@@ -731,11 +731,17 @@ async function generateJSONSmart(
   if (cerebrasKey) {
     try {
       const r = await generateJSONWithCerebras(prompt, timeout, trace)
-      // 抽出品質チェック：8Bモデルで氏名/案件名が取れなかった場合はGroqに任せる
+      // 抽出品質チェック：8Bモデルで氏名/スキル/案件名が取れなかった場合はGroqに任せる
       const res = r.result as Record<string, unknown>
+      const skillsCount = Array.isArray(res?.skills) ? (res.skills as unknown[]).length : 0
       const poorQuality =
-        (kind === 'candidate' && res?.name === '不明') ||
+        (kind === 'candidate' && (res?.name === '不明' || skillsCount === 0)) ||
         (kind === 'project' && Array.isArray(res) && (res as Array<Record<string, unknown>>).every(p => !p?.title))
+      console.log(`[Cerebras] 品質チェック kind=${kind}`, {
+        name: kind === 'candidate' ? res?.name : undefined,
+        skills: skillsCount,
+        poorQuality,
+      })
       if (poorQuality && groqKey) {
         console.warn(`[Cerebras] 抽出品質不足(${kind})、Groq 70Bにフォールバック`)
       } else {
