@@ -834,7 +834,26 @@ function npmDefault<T extends Record<string, unknown>>(mod: T): T {
   return mod
 }
 
-/** Word(.docx)をテキストに変換 */
+/**
+ * .doc（旧バイナリ形式）からテキストを抽出するフォールバック
+ * OLE2バイナリをUTF-16LEでデコードし日本語・ASCII文字列を抽出する
+ */
+function extractDocRawText(bytes: Uint8Array): string {
+  try {
+    const utf16 = new TextDecoder('utf-16le', { fatal: false }).decode(bytes)
+    const matches = utf16.match(/[\u3000-\u9FFF\uFF00-\uFFEF\u30A0-\u30FF\u3040-\u309Fa-zA-Z0-9\s\u3001\u3002\uff0c\uff0e\uff1a\uff1b\uff08\uff09\u300c\u300d\u300e\u300f\u3010\u3011\u30fb\u2015\u2212\uff0d]{3,}/g) ?? []
+    const result = matches.join(' ').replace(/\s+/g, ' ').trim()
+    if (result.length > 50) {
+      console.log(`[Doc] バイナリ raw 抽出: ${result.length}文字`)
+      return result
+    }
+    return ''
+  } catch {
+    return ''
+  }
+}
+
+/** Word(.docx/.doc)をテキストに変換 */
 async function extractWordText(base64: string): Promise<string> {
   try {
     const mammothMod = npmDefault(await import('npm:mammoth@1.8.0'))
@@ -861,8 +880,10 @@ async function extractWordText(base64: string): Promise<string> {
       return r3.value ?? ''
     }
   } catch (e) {
-    console.warn('[Word] テキスト抽出失敗', e)
-    return ''
+    console.warn('[Word] mammoth失敗、.doc バイナリ抽出へフォールバック', e)
+    // .doc（旧バイナリ形式）フォールバック
+    const bytes = base64ToUint8Array(base64)
+    return extractDocRawText(bytes)
   }
 }
 
@@ -1451,15 +1472,22 @@ Deno.serve(async (req: Request) => {
     tracePhase = 'step1_body_normalized'
     const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
 
-    // Word/Excelのテキスト抽出
+    // Word/Excelのテキスト抽出（MIMEタイプ + 拡張子の両方で判定）
     const officeTextContents: { label: string; content: string }[] = []
     for (const att of attachments) {
-      if (WORD_MIME.includes(att.mimeType)) {
+      const attNameLower = (att.name ?? '').toLowerCase()
+      const isWordByMime = WORD_MIME.includes(att.mimeType)
+      const isExcelByMime = EXCEL_MIME.includes(att.mimeType)
+      const isWordByExt = /\.(docx?|doc)$/.test(attNameLower) && !isExcelByMime
+      const isExcelByExt = /\.(xlsx?|xls|ods|csv)$/.test(attNameLower) && !isWordByMime
+      if (isWordByMime || isWordByExt) {
         const text = await extractWordText(att.data)
         if (text.trim()) officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
-      } else if (EXCEL_MIME.includes(att.mimeType)) {
+        else console.warn(`[Word] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
+      } else if (isExcelByMime || isExcelByExt) {
         const text = await extractExcelText(att.data)
         if (text.trim()) officeTextContents.push({ label: `Excelファイル(${att.name ?? 'spreadsheet'})`, content: text })
+        else console.warn(`[Excel] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
       }
     }
     tracePhase = 'step3_office_done'
