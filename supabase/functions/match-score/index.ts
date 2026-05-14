@@ -55,6 +55,7 @@ async function callCerebras(prompt: string): Promise<string> {
     body: JSON.stringify({
       model: CEREBRAS_MODEL,
       messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
       temperature: 0.1,
       max_tokens: 1200,
     }),

@@ -522,6 +522,7 @@ async function generateJSONWithCerebras(
       body: JSON.stringify({
         model: CEREBRAS_MODEL,
         messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
         temperature: 0,
         max_tokens: 2048,
       }),
