@@ -7,7 +7,7 @@ const corsHeaders = {
 }
 
 const GROQ_MODEL_PRIMARY = 'llama-3.3-70b-versatile'  // 100,000 TPD
-const CEREBRAS_MODEL = 'llama-3.3-70b'                // 無料・大容量
+const CEREBRAS_MODEL = 'gpt-oss-120b'                 // 無料・大容量・120B
 const GEMINI_MODEL = 'gemini-2.5-flash'
 
 function buildPrompt(candidate: unknown, project: unknown): string {
