@@ -719,48 +719,27 @@ async function generateJSONSmart(
     return { ...r, usedModel: geminiModel ?? AI_MODEL }
   }
 
-  const COMPACT_MAX_CHARS = 4_500
-  const resolvedCompactPrompt = groqPrompt
-    ?? (prompt.length > COMPACT_MAX_CHARS
-      ? prompt.slice(0, 3_500) + '\n...(中略)...\n' + prompt.slice(-500)
-      : prompt)
-  const isLongPrompt = prompt.length > COMPACT_MAX_CHARS
+  // Cerebras / Groq はどちらも128Kコンテキスト → フルプロンプトをそのまま渡す
   const trace = geminiTrace ? `rid=${geminiTrace.rid} phase=${geminiTrace.phase}` : undefined
   const timeout = timeoutMs ?? 30_000
 
-  if (isLongPrompt && groqKey) {
-    // 長文: Groq 70B（フル） → Cerebras（トランケート） → Gemini
+  // Cerebras 70B（128K・大容量無料枠）
+  if (cerebrasKey) {
+    try {
+      const r = await generateJSONWithCerebras(prompt, timeout, trace)
+      return { ...r, usedModel: CEREBRAS_MODEL }
+    } catch (e) {
+      console.warn(`[Cerebras] 失敗、Groq 70Bにフォールバック: ${String(e)}`)
+    }
+  }
+
+  // Groq 70B（128K）
+  if (groqKey) {
     try {
       const r = await generateJSONWithGroq(prompt, timeout, trace)
       return { ...r, usedModel: GROQ_MODEL }
     } catch (e) {
-      console.warn(`[Groq] 長文失敗、Cerebras（トランケート）にフォールバック: ${String(e)}`)
-    }
-    if (cerebrasKey) {
-      try {
-        const r = await generateJSONWithCerebras(resolvedCompactPrompt, timeout, trace)
-        return { ...r, usedModel: CEREBRAS_MODEL }
-      } catch (e) {
-        console.warn(`[Cerebras] 失敗、Geminiにフォールバック: ${String(e)}`)
-      }
-    }
-  } else {
-    // 短文: Cerebras → Groq 70B → Gemini
-    if (cerebrasKey) {
-      try {
-        const r = await generateJSONWithCerebras(resolvedCompactPrompt, timeout, trace)
-        return { ...r, usedModel: CEREBRAS_MODEL }
-      } catch (e) {
-        console.warn(`[Cerebras] 失敗、Groq 70Bにフォールバック: ${String(e)}`)
-      }
-    }
-    if (groqKey) {
-      try {
-        const r = await generateJSONWithGroq(resolvedCompactPrompt, timeout, trace)
-        return { ...r, usedModel: GROQ_MODEL }
-      } catch (e) {
-        console.warn(`[Groq] 失敗、Geminiにフォールバック: ${String(e)}`)
-      }
+      console.warn(`[Groq] 失敗、Geminiにフォールバック: ${String(e)}`)
     }
   }
 
