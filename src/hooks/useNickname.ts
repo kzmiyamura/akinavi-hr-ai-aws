@@ -1,19 +1,37 @@
 import { useState } from 'react'
 
 const STORAGE_KEY = 'akinavi_nickname'
+const COOKIE_MAX_AGE = 60 * 60 * 24 * 365 // 1年
+
+function getCookieNickname(): string {
+  const match = document.cookie.match(/(?:^|;\s*)akinavi_nickname=([^;]*)/)
+  return match ? decodeURIComponent(match[1]) : ''
+}
+
+function setCookieNickname(name: string) {
+  document.cookie = `akinavi_nickname=${encodeURIComponent(name)}; max-age=${COOKIE_MAX_AGE}; path=/; SameSite=Lax`
+}
+
+function removeCookieNickname() {
+  document.cookie = 'akinavi_nickname=; max-age=0; path=/'
+}
+
+function readNickname(): string {
+  return localStorage.getItem(STORAGE_KEY) || getCookieNickname()
+}
 
 export function useNickname() {
-  const [nickname, setNicknameState] = useState<string>(
-    () => localStorage.getItem(STORAGE_KEY) ?? '',
-  )
+  const [nickname, setNicknameState] = useState<string>(() => readNickname())
 
   function saveNickname(name: string) {
     localStorage.setItem(STORAGE_KEY, name)
+    setCookieNickname(name)
     setNicknameState(name)
   }
 
   function clearNickname() {
     localStorage.removeItem(STORAGE_KEY)
+    removeCookieNickname()
     setNicknameState('')
   }
 
