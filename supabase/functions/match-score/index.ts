@@ -100,15 +100,15 @@ Deno.serve(async (req) => {
 
     if (groqKey) {
       try {
-        raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
-        usedModel = GROQ_MODEL_PRIMARY
+        raw = await callGroq(groqKey, prompt, GROQ_MODEL_FALLBACK)
+        usedModel = GROQ_MODEL_FALLBACK
       } catch (e) {
-        console.warn(`[match-score] Groq 70B失敗、8Bへ: ${e}`)
+        console.warn(`[match-score] Groq 8B失敗、70Bへ: ${e}`)
         try {
-          raw = await callGroq(groqKey, prompt, GROQ_MODEL_FALLBACK)
-          usedModel = GROQ_MODEL_FALLBACK
+          raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
+          usedModel = GROQ_MODEL_PRIMARY
         } catch (e2) {
-          console.warn(`[match-score] Groq 8B失敗、Geminiへ: ${e2}`)
+          console.warn(`[match-score] Groq 70B失敗、Geminiへ: ${e2}`)
           raw = await callGemini(prompt)
         }
       }
