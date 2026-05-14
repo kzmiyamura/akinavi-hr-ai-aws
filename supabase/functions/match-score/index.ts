@@ -124,17 +124,20 @@ Deno.serve(async (req) => {
     let raw: string
     let usedModel = GEMINI_MODEL
 
-    if (groqKey) {
-      try {
-        raw = await callGroq(groqKey, prompt, GROQ_MODEL_FALLBACK)
-        usedModel = GROQ_MODEL_FALLBACK
-      } catch (e) {
-        console.warn(`[match-score] Groq 8B失敗、Cerebrasへ: ${e}`)
+    try {
+      raw = await callCerebras(prompt)
+      usedModel = CEREBRAS_MODEL
+    } catch (e) {
+      console.warn(`[match-score] Cerebras失敗、Groq 8Bへ: ${e}`)
+      if (!groqKey) {
+        console.warn('[match-score] GROQ_API_KEY未設定、Geminiへ')
+        raw = await callGemini(prompt)
+      } else {
         try {
-          raw = await callCerebras(prompt)
-          usedModel = CEREBRAS_MODEL
+          raw = await callGroq(groqKey, prompt, GROQ_MODEL_FALLBACK)
+          usedModel = GROQ_MODEL_FALLBACK
         } catch (e2) {
-          console.warn(`[match-score] Cerebras失敗、Groq 70Bへ: ${e2}`)
+          console.warn(`[match-score] Groq 8B失敗、Groq 70Bへ: ${e2}`)
           try {
             raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
             usedModel = GROQ_MODEL_PRIMARY
@@ -144,8 +147,6 @@ Deno.serve(async (req) => {
           }
         }
       }
-    } else {
-      raw = await callGemini(prompt)
     }
 
     const result = parseResult(raw)
