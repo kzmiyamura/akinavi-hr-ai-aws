@@ -40,7 +40,10 @@ function attachmentsFromParsedArray(parsed: unknown[]): Attachment[] {
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue
     const o = item as Record<string, unknown>
     const dataRaw = o.data ?? o.content_base64 ?? o.contentBytes
-    if (typeof dataRaw !== 'string' || !dataRaw.trim()) continue
+    if (typeof dataRaw !== 'string' || !dataRaw.trim()) {
+      console.warn('[attach] data空のためスキップ:', { name: o.name, mimeType: o.mimeType, dataType: typeof dataRaw, dataLen: typeof dataRaw === 'string' ? dataRaw.length : 0 })
+      continue
+    }
     const mimeRaw = o.mimeType ?? o.content_type ?? o.contentType ?? ''
     const nameRaw = o.name
     out.push({
@@ -895,16 +898,21 @@ async function extractExcelText(base64: string): Promise<string> {
       utils: { sheet_to_csv: (sheet: unknown) => string }
     }
     const bytes = base64ToUint8Array(base64)
+    console.log(`[Excel] read開始 bytes=${bytes.byteLength}`)
     const workbook = XLSX.read(bytes, { type: 'array' })
+    console.log(`[Excel] sheets=${workbook.SheetNames.join(',')}`)
     const texts: string[] = []
     for (const sheetName of workbook.SheetNames.slice(0, 3)) {
       const sheet = workbook.Sheets[sheetName]
       const csv = XLSX.utils.sheet_to_csv(sheet)
+      console.log(`[Excel] sheet="${sheetName}" csvLen=${csv.length}`)
       if (csv.trim()) {
         texts.push(`--- シート: ${sheetName} ---\n${csv}`)
       }
     }
-    return texts.join('\n\n')
+    const result = texts.join('\n\n')
+    console.log(`[Excel] 抽出完了 totalLen=${result.length}`)
+    return result
   } catch (e) {
     console.warn('[Excel] テキスト抽出失敗', e)
     return ''
@@ -1480,6 +1488,7 @@ Deno.serve(async (req: Request) => {
       const isExcelByMime = EXCEL_MIME.includes(att.mimeType)
       const isWordByExt = /\.(docx?|doc)$/.test(attNameLower) && !isExcelByMime
       const isExcelByExt = /\.(xlsx?|xls|ods|csv)$/.test(attNameLower) && !isWordByMime
+      console.log('[STEP3 attach]', { name: att.name, mimeType: att.mimeType, dataLen: att.data?.length ?? 0, isWordByMime, isExcelByMime, isWordByExt, isExcelByExt })
       if (isWordByMime || isWordByExt) {
         const text = await extractWordText(att.data)
         if (text.trim()) officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
@@ -1685,7 +1694,7 @@ Deno.serve(async (req: Request) => {
     // Drive取得テキスト + Officeテキスト + PDF抽出テキストを統合してプロンプトに追記
     const allTextContents = [...driveTexts, ...officeTextContents, ...pdfExtractedTexts]
     const driveTextSection = allTextContents.length > 0
-      ? '\n\n' + allTextContents.map(t => `--- ${t.label} ---\n${t.content.slice(0, 3000)}`).join('\n\n')
+      ? '\n\n' + allTextContents.map(t => `--- ${t.label} ---\n${t.content.slice(0, 6000)}`).join('\n\n')
       : ''
 
     const allAttachmentNames = [
