@@ -208,6 +208,24 @@ export async function saveCandidateRetentionDays(days: number): Promise<void> {
   if (error) throw new Error(`保持日数の保存に失敗しました: ${error.message}`)
 }
 
+/** アプリメモを取得 */
+export async function getAppMemo(): Promise<string> {
+  const { data } = await supabase
+    .from('app_config')
+    .select('value')
+    .eq('key', 'app_memo')
+    .maybeSingle()
+  return data?.value ?? ''
+}
+
+/** アプリメモを保存 */
+export async function saveAppMemo(memo: string): Promise<void> {
+  const { error } = await supabase
+    .from('app_config')
+    .upsert({ key: 'app_memo', value: memo }, { onConflict: 'key' })
+  if (error) throw new Error(`メモの保存に失敗しました: ${error.message}`)
+}
+
 /** 全件取り込みまたは一時停止中か（UIの自動更新判定用） */
 export async function getIsImportActive(): Promise<boolean> {
   const { data } = await supabase

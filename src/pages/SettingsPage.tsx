@@ -15,6 +15,8 @@ import {
   saveProjectInboundEnabled,
   getCandidateRetentionDays,
   saveCandidateRetentionDays,
+  getAppMemo,
+  saveAppMemo,
 } from '../lib/db/emailSettings'
 import {
   getMatchingSettings,
@@ -111,6 +113,18 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   useEffect(() => {
     setRetentionDaysInput(retentionDays)
   }, [retentionDays])
+
+  // アプリメモ
+  const { data: savedMemo = '' } = useQuery({
+    queryKey: ['appMemo'],
+    queryFn: getAppMemo,
+  })
+  const [memo, setMemo] = useState('')
+  useEffect(() => { setMemo(savedMemo) }, [savedMemo])
+  const memoMutation = useMutation({
+    mutationFn: (text: string) => saveAppMemo(text),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['appMemo'] }),
+  })
 
   const saveMatchingMutation = useMutation({
     mutationFn: () => saveMatchingSettings({
@@ -762,6 +776,32 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
                 <span className="ml-3 text-sm text-red-600">保存に失敗しました: {String(saveMatchingMutation.error)}</span>
               )}
             </div>
+          </div>
+        </section>
+
+        {/* ---- 改善案・バグメモ ---- */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">改善案・バグメモ</h2>
+          <p className="text-xs text-gray-400 mb-3">気づいた改善点やバグをメモしておけます。全端末で共有されます。</p>
+          <textarea
+            value={memo}
+            onChange={e => setMemo(e.target.value)}
+            rows={8}
+            placeholder={'例)\n・マッチングスコアが低い案件の原因を調査\n・モバイルで○○ボタンが押しにくい\n・スキル「React」と「React.js」が別扱いになっている'}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+          />
+          <div className="mt-2 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => memoMutation.mutate(memo)}
+              disabled={memoMutation.isPending || memo === savedMemo}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+            >
+              {memoMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              保存
+            </button>
+            {memoMutation.isSuccess && <span className="text-sm text-green-600">保存しました</span>}
+            {memoMutation.isError && <span className="text-sm text-red-600">保存に失敗しました</span>}
           </div>
         </section>
 
