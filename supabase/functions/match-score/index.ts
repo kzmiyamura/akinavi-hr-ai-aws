@@ -8,6 +8,7 @@ const corsHeaders = {
 
 const GROQ_MODEL_PRIMARY = 'llama-3.3-70b-versatile'  // 100,000 TPD
 const GROQ_MODEL_FALLBACK = 'llama-3.1-8b-instant'    // 500,000 TPD
+const CEREBRAS_MODEL = 'llama3.1-70b'                 // 無料・大容量
 const GEMINI_MODEL = 'gemini-2.5-flash'
 
 function buildPrompt(candidate: unknown, project: unknown): string {
@@ -38,6 +39,31 @@ async function callGroq(key: string, prompt: string, model: string): Promise<str
   if (!res.ok) {
     const body = await res.text().catch(() => '')
     throw new Error(`Groq ${res.status}: ${body.slice(0, 200)}`)
+  }
+  const data = await res.json()
+  return data.choices[0].message.content as string
+}
+
+async function callCerebras(prompt: string): Promise<string> {
+  const key = Deno.env.get('CEREBRAS_API_KEY')
+  if (!key) throw new Error('CEREBRAS_API_KEY not set')
+  const res = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: CEREBRAS_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 1200,
+    }),
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Cerebras ${res.status}: ${body.slice(0, 200)}`)
   }
   const data = await res.json()
   return data.choices[0].message.content as string
@@ -103,13 +129,19 @@ Deno.serve(async (req) => {
         raw = await callGroq(groqKey, prompt, GROQ_MODEL_FALLBACK)
         usedModel = GROQ_MODEL_FALLBACK
       } catch (e) {
-        console.warn(`[match-score] Groq 8B失敗、70Bへ: ${e}`)
+        console.warn(`[match-score] Groq 8B失敗、Cerebrasへ: ${e}`)
         try {
-          raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
-          usedModel = GROQ_MODEL_PRIMARY
+          raw = await callCerebras(prompt)
+          usedModel = CEREBRAS_MODEL
         } catch (e2) {
-          console.warn(`[match-score] Groq 70B失敗、Geminiへ: ${e2}`)
-          raw = await callGemini(prompt)
+          console.warn(`[match-score] Cerebras失敗、Groq 70Bへ: ${e2}`)
+          try {
+            raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
+            usedModel = GROQ_MODEL_PRIMARY
+          } catch (e3) {
+            console.warn(`[match-score] Groq 70B失敗、Geminiへ: ${e3}`)
+            raw = await callGemini(prompt)
+          }
         }
       }
     } else {
