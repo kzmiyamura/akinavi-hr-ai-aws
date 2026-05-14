@@ -7,7 +7,7 @@ const corsHeaders = {
 }
 
 const GROQ_MODEL_PRIMARY = 'llama-3.3-70b-versatile'  // 100,000 TPD
-const CEREBRAS_MODEL = 'gpt-oss-120b'                 // 無料・大容量・120B
+const CEREBRAS_MODEL = 'llama3.1-8b'                  // 確認済み・軽量タスク用
 const GEMINI_MODEL = 'gemini-2.5-flash'
 
 function buildPrompt(candidate: unknown, project: unknown): string {
@@ -120,21 +120,34 @@ Deno.serve(async (req) => {
 
     const prompt = buildPrompt(candidateProfile, projectRequirements)
     const groqKey = Deno.env.get('GROQ_API_KEY')
+    const cerebrasKey = Deno.env.get('CEREBRAS_API_KEY')
 
-    let raw: string
+    let raw: string | undefined
     let usedModel = GEMINI_MODEL
 
-    if (!groqKey) {
-      console.warn('[match-score] GROQ_API_KEY未設定、Geminiへ')
-      raw = await callGemini(prompt)
-    } else {
+    // Cerebras 8B（matchは軽量タスクなので8Bで十分）
+    if (cerebrasKey) {
+      try {
+        raw = await callCerebras(prompt)
+        usedModel = CEREBRAS_MODEL
+      } catch (e) {
+        console.warn(`[match-score] Cerebras失敗、Groqへ: ${e}`)
+      }
+    }
+
+    // Groq 70B
+    if (!raw && groqKey) {
       try {
         raw = await callGroq(groqKey, prompt, GROQ_MODEL_PRIMARY)
         usedModel = GROQ_MODEL_PRIMARY
       } catch (e) {
         console.warn(`[match-score] Groq 70B失敗、Geminiへ: ${e}`)
-        raw = await callGemini(prompt)
       }
+    }
+
+    // Gemini フォールバック
+    if (!raw) {
+      raw = await callGemini(prompt)
     }
 
     const result = parseResult(raw)

@@ -1871,6 +1871,29 @@ JSON:`.trim()
         durationMs = d1
         analyzed = result as CandAi
         tracePhase = 'gemini_candidate_done'
+
+        // 品質チェック：添付ありで名前不明 → 本文のみで再解析
+        const qualityPoor = allTextContents.length > 0 &&
+          (!analyzed.name || analyzed.name === '不明') &&
+          (analyzed.skills?.length ?? 0) === 0
+        if (qualityPoor) {
+          tracePhase = 'candidate_extract_body_only_retry'
+          console.warn('[candidate] 品質不足(添付あり)→本文のみで再解析', { rid: traceRid, name: analyzed.name })
+          const promptBodyOnly = driveTextSection.length > 0
+            ? prompt.replace(driveTextSection, '')
+            : prompt
+          const bodyOnlyGroqPrompt = buildCandidateGroqPrompt(from, subject, body, [])
+          const { result: r2, durationMs: d2, usedModel: um2 } = await generateJSONSmart(
+            promptBodyOnly, [], 'candidate', 2, undefined,
+            { rid: traceRid, phase: 'candidate_extract_body_only_retry' },
+            extractModel, bodyOnlyGroqPrompt,
+          )
+          analyzed = r2 as CandAi
+          durationMs = d2
+          usedModel1 = um2
+          parseFallback = 'body_only_after_attachment_timeout'
+          tracePhase = 'gemini_candidate_done_body_only'
+        }
       } catch (e) {
         const msg = String(e)
         const canFallback =
