@@ -1709,7 +1709,7 @@ Deno.serve(async (req: Request) => {
     // Drive取得テキスト + Officeテキスト + PDF抽出テキストを統合してプロンプトに追記
     const allTextContents = [...driveTexts, ...officeTextContents, ...pdfExtractedTexts]
     const driveTextSection = allTextContents.length > 0
-      ? '\n\n' + allTextContents.map(t => `--- ${t.label} ---\n${t.content.slice(0, 6000)}`).join('\n\n')
+      ? '\n\n' + allTextContents.map(t => `--- ${t.label} ---\n${t.content.slice(0, 3000)}`).join('\n\n')
       : ''
 
     const allAttachmentNames = [
