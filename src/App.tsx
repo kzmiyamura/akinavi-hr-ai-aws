@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState, Component } from 'react'
+import type { ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useNickname } from './hooks/useNickname'
 import { NicknameModal } from './components/NicknameModal'
@@ -19,6 +20,36 @@ import {
   readStoredDataEnv,
   writeStoredDataEnv,
 } from './lib/dataEnv'
+
+class TabErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { error: null }
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex flex-col items-center justify-center p-10 gap-4 text-center">
+          <p className="text-red-600 font-medium">ページの読み込みに失敗しました</p>
+          <p className="text-xs text-gray-400 max-w-sm break-all">{this.state.error.message}</p>
+          <button
+            onClick={() => { this.setState({ error: null }); window.location.reload() }}
+            className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+          >
+            再読み込み
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -133,22 +164,24 @@ function AppInner() {
             onOpenProjectDetail={openProjectDetail}
           />
         </div>
-        <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
-          {tabPage === 'candidates' && (
-            <CandidatePage
-              nickname={nickname}
-              dataEnv={dataEnv}
-              demoUiEnabled={demoUiEnabled}
-              onOpenCandidateDetail={openCandidateDetail}
-            />
-          )}
-          {tabPage === 'projects' && (
-            <ProjectPage nickname={nickname} dataEnv={dataEnv} demoUiEnabled={demoUiEnabled} onOpenProjectDetail={openProjectDetail} />
-          )}
-          {tabPage === 'settings' && (
-            <SettingsPage demoUiEnabled={demoUiEnabled} />
-          )}
-        </Suspense>
+        <TabErrorBoundary>
+          <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
+            {tabPage === 'candidates' && (
+              <CandidatePage
+                nickname={nickname}
+                dataEnv={dataEnv}
+                demoUiEnabled={demoUiEnabled}
+                onOpenCandidateDetail={openCandidateDetail}
+              />
+            )}
+            {tabPage === 'projects' && (
+              <ProjectPage nickname={nickname} dataEnv={dataEnv} demoUiEnabled={demoUiEnabled} onOpenProjectDetail={openProjectDetail} />
+            )}
+            {tabPage === 'settings' && (
+              <SettingsPage demoUiEnabled={demoUiEnabled} />
+            )}
+          </Suspense>
+        </TabErrorBoundary>
       </>
     )
   }
