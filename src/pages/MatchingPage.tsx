@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { fetchCandidates } from '../lib/db/candidates'
+import { fetchCandidates, findDuplicateCandidates } from '../lib/db/candidates'
 import {
   fetchOpenProjects,
   projectToMatchRequirements,
@@ -18,7 +18,7 @@ import {
 } from '../lib/db/submissions'
 import { supabase } from '../lib/supabase'
 import { getMatchingSettings, MATCHING_DEFAULTS } from '../lib/db/matchingSettings'
-import type { Candidate } from '../lib/db/candidates'
+import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
 import type { DataEnv } from '../lib/dataEnv'
@@ -82,6 +82,33 @@ function bulkMatchInterruptMessage(done: number, total: number): string {
 
 function normalizeSkillToken(s: string): string {
   return s.trim().toLowerCase()
+}
+
+/** 同一人物スコアを計算する（名前一致はDB側で保証済み→+50固定） */
+function calcDuplicateScore(dup: Omit<DuplicateCandidate, 'duplicateScore'>, ref: Candidate): number {
+  let score = 50 // 名前一致はRPCで保証済み
+
+  // 最寄り駅一致 (+30)
+  const dupStation = (dup.raw_profile?.nearestStation as string | undefined) ?? ''
+  const refStation = (ref.raw_profile?.nearestStation as string | undefined) ?? ''
+  if (dupStation && refStation && dupStation === refStation) score += 30
+
+  // メール一致 (+50)
+  if (dup.email && ref.email && dup.email.toLowerCase() === ref.email.toLowerCase()) score += 50
+
+  // スキル一致率 ≥ 50% (+10)
+  const dupSkills = (dup.skills ?? []).map(s => s.toLowerCase())
+  const refSkills = (ref.skills ?? []).map(s => s.toLowerCase())
+  if (dupSkills.length > 0 && refSkills.length > 0) {
+    const common = dupSkills.filter(s => refSkills.includes(s)).length
+    if (common / Math.min(dupSkills.length, refSkills.length) >= 0.5) score += 10
+  }
+
+  // 経験年数 ±1年以内 (+10)
+  if (dup.experience_years != null && ref.experience_years != null &&
+      Math.abs(dup.experience_years - ref.experience_years) <= 1) score += 10
+
+  return score
 }
 
 function candidateSkillSet(candidate: Candidate): Set<string> {
@@ -244,15 +271,18 @@ function ProjectModeRankCard({
   onOpenCandidateDetail,
   scoreColor,
   onDecide,
+  duplicates,
 }: {
   s: RankedSubmission
   rankIndex: number
   onOpenCandidateDetail?: (candidateId: string) => void
   scoreColor: (score: number) => string
   onDecide?: (submission: Submission) => void
+  duplicates?: DuplicateCandidate[]
 }) {
   return (
-    <div className="border border-gray-100 rounded-lg p-3 sm:p-4 flex flex-col gap-3 sm:flex-row sm:items-start bg-white min-w-0">
+    <div className="border border-gray-100 rounded-lg overflow-hidden bg-white min-w-0">
+    <div className="p-3 sm:p-4 flex flex-col gap-3 sm:flex-row sm:items-start">
       <div className="flex gap-3 min-w-0 flex-1">
         <div className="text-xl sm:text-2xl font-bold text-gray-300 w-7 sm:w-8 text-center shrink-0">
           {rankIndex + 1}
@@ -341,6 +371,25 @@ function ProjectModeRankCard({
           </button>
         ) : null}
       </div>
+    </div>
+    {duplicates && duplicates.length > 0 && (
+      <div className="border-t border-amber-100 bg-amber-50 px-3 py-2.5">
+        <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide mb-1.5">
+          別ルートの同一人物候補（{duplicates.length}件）
+        </p>
+        <div className="space-y-1.5">
+          {duplicates.map(d => (
+            <div key={d.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs bg-white rounded px-2.5 py-1.5 border border-amber-200">
+              <span className="font-medium text-gray-800">{d.name}</span>
+              {d.from_company && <span className="text-amber-700">{d.from_company}</span>}
+              {d.desired_rate && <span className="text-green-700 font-medium">{d.desired_rate}</span>}
+              {d.experience_years != null && <span className="text-gray-500">経験{d.experience_years}年</span>}
+              <span className="ml-auto text-[10px] text-amber-500">同一スコア {d.duplicateScore}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
     </div>
   )
 }
@@ -942,6 +991,32 @@ export function MatchingPage({
     : []
   const selectedCandidateSubs = sortedSelectedCandidateSubs
 
+  // 重複候補マップ: candidate_id → DuplicateCandidate[]
+  const [duplicatesMap, setDuplicatesMap] = useState<Record<string, DuplicateCandidate[]>>({})
+  useEffect(() => {
+    if (mode !== 'project' || !selectedProjectId || selectedProjectRanked.length === 0) {
+      setDuplicatesMap({})
+      return
+    }
+    let cancelled = false
+    Promise.all(
+      selectedProjectRanked.map(async (s) => {
+        const raw = await findDuplicateCandidates(s.candidate.name, s.candidate.id, dataEnv)
+        const scored: DuplicateCandidate[] = raw
+          .map(d => ({ ...d, duplicateScore: calcDuplicateScore(d, s.candidate) }))
+          .filter(d => d.duplicateScore >= 50)
+          .sort((a, b) => b.duplicateScore - a.duplicateScore)
+        return { candidateId: s.candidate.id, duplicates: scored }
+      })
+    ).then(results => {
+      if (cancelled) return
+      const map: Record<string, DuplicateCandidate[]> = {}
+      results.forEach(r => { map[r.candidateId] = r.duplicates })
+      setDuplicatesMap(map)
+    }).catch(() => { /* ignore */ })
+    return () => { cancelled = true }
+  }, [mode, selectedProjectId, dataEnv, selectedProjectRanked.length])
+
   const busy =
     matchByProjectMutation.isPending ||
     matchByCandidateMutation.isPending ||
@@ -1273,6 +1348,7 @@ export function MatchingPage({
                               onOpenCandidateDetail={onOpenCandidateDetail}
                               scoreColor={scoreColor}
                               onDecide={(sub) => decideMutation.mutate(sub)}
+                              duplicates={duplicatesMap[s.candidate.id]}
                             />
                           ))}
                           <RankingRestAccordion count={selectedProjectRanked.length - RANK_HEAD} unitLabel="名">

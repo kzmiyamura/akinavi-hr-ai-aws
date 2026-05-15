@@ -190,3 +190,48 @@ export async function fetchDuplicateCandidates(dataEnv: DataEnv): Promise<Candid
   if (error) throw new Error(`重複候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
 }
+
+/** 同一人物候補の型（スコア付き） */
+export interface DuplicateCandidate {
+  id: string
+  name: string
+  email: string | null
+  raw_profile: Record<string, unknown>
+  skills: string[]
+  experience_years: number | null
+  desired_rate: string | null
+  from_company: string | null
+  duplicate_flag: boolean
+  duplicateScore: number
+}
+
+/**
+ * 同名の別人材候補を取得する（RPC経由）
+ * 名前の表記ゆれ（ピリオド・スペース・中点等）を除去して一致するものを返す
+ */
+export async function findDuplicateCandidates(
+  name: string,
+  excludeId: string,
+  dataEnv: DataEnv
+): Promise<Array<Omit<DuplicateCandidate, 'duplicateScore'>>> {
+  const { data, error } = await supabase.rpc('find_duplicate_candidates', {
+    p_name: name,
+    p_exclude_id: excludeId,
+    p_data_env: dataEnv,
+  })
+  if (error) {
+    console.warn('[findDuplicateCandidates]', error.message)
+    return []
+  }
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    id: row.id as string,
+    name: row.name as string,
+    email: (row.email as string | null) ?? null,
+    raw_profile: (row.raw_profile as Record<string, unknown>) ?? {},
+    skills: Array.isArray(row.skills) ? (row.skills as string[]) : [],
+    experience_years: (row.experience_years as number | null) ?? null,
+    desired_rate: (row.desired_rate as string | null) ?? null,
+    from_company: (row.from_company as string | null) ?? null,
+    duplicate_flag: Boolean(row.duplicate_flag),
+  }))
+}
