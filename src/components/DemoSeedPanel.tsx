@@ -204,6 +204,20 @@ interface Props {
   onDone: () => void
 }
 
+/** 同一人材疑いテスト用データを生成する（同名・同スタック・メール違い） */
+function buildDuplicatePair(baseSeed: number): { base: AnalyzeCandidateResponse; dup: AnalyzeCandidateResponse } {
+  const { analyzedCandidate: base } = buildDemoPair(baseSeed)
+  // 同じ名前・ほぼ同じスキル、メールだけ別アカウント
+  const dup: AnalyzeCandidateResponse = {
+    ...base,
+    email: makeEmail('demo.dup'),
+    phone: base.phone ? base.phone.replace(/\d{4}$/, String(randInt(1000, 9999))) : null,
+    summary: `【重複テスト】${base.summary}`,
+    experienceYears: (base.experienceYears ?? 5) + randInt(-1, 1),
+  }
+  return { base, dup }
+}
+
 export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
   const [count, setCount] = useState(5)
   const [busy, setBusy] = useState(false)
@@ -240,6 +254,35 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
     }
   }
 
+  async function runDuplicateTest() {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const seed = randInt(1, 1000)
+      const { base, dup } = buildDuplicatePair(seed)
+      await upsertCandidate({
+        analyzed: base,
+        rawText: base.summary,
+        createdBy: nickname,
+        duplicateSuspected: false,
+        dataEnv: 'demo',
+      })
+      await upsertCandidate({
+        analyzed: dup,
+        rawText: dup.summary,
+        createdBy: nickname,
+        duplicateSuspected: true,
+        dataEnv: 'demo',
+      })
+      setMsg(`同一人材疑いテスト用データを追加しました\n氏名: ${base.name}\n（同名・別メールの人材ペアを登録）`)
+      onDone()
+    } catch (e) {
+      setMsg(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-3">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
@@ -267,15 +310,27 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
 
       {msg && <p className="text-xs text-amber-950 whitespace-pre-wrap">{msg}</p>}
 
-      <button
-        type="button"
-        onClick={run}
-        disabled={busy}
-        className="inline-flex items-center gap-2 rounded-lg bg-amber-700 text-white px-4 py-2 text-sm font-medium hover:bg-amber-800 disabled:opacity-50"
-      >
-        {busy ? <Loader2 size={16} className="animate-spin" /> : null}
-        {busy ? '追加中...' : `${label} で追加`}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={run}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-lg bg-amber-700 text-white px-4 py-2 text-sm font-medium hover:bg-amber-800 disabled:opacity-50"
+        >
+          {busy ? <Loader2 size={16} className="animate-spin" /> : null}
+          {busy ? '追加中...' : `${label} で追加`}
+        </button>
+        <button
+          type="button"
+          onClick={runDuplicateTest}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-lg bg-orange-600 text-white px-4 py-2 text-sm font-medium hover:bg-orange-700 disabled:opacity-50"
+          title="同名・別メールの人材ペアを登録して重複フラグ動作を確認"
+        >
+          {busy ? <Loader2 size={16} className="animate-spin" /> : null}
+          {busy ? '追加中...' : '重複テスト用を追加'}
+        </button>
+      </div>
     </div>
   )
 }

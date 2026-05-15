@@ -537,7 +537,11 @@ export function MatchingPage({
   })
 
   const projectList = projects as Project[]
-  const candidateList = candidates as Candidate[]
+  // 同一人材疑い（duplicate_flag=true）かつ名前が「不明」の人材はマッチング対象外
+  const candidateList = useMemo(
+    () => (candidates as Candidate[]).filter((c) => !(c.duplicate_flag && c.name === '不明')),
+    [candidates],
+  )
 
   const filteredProjectList = useMemo(() => {
     const tokens = searchQuery.trim().toLowerCase().split(/[\s\u3000]+/).filter(Boolean)
