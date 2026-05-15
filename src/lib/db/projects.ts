@@ -248,3 +248,27 @@ export async function fetchAllProjects(dataEnv: DataEnv): Promise<Project[]> {
   if (error) throw new Error(`案件の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Project[]
 }
+
+/** 案件を100件ずつページ取得（全ステータス） */
+export async function fetchProjectsPage(dataEnv: DataEnv, offset: number, limit = 100): Promise<Project[]> {
+  const { data, error } = await supabase
+    .from('projects')
+    .select('*')
+    .eq('data_env', dataEnv)
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1)
+
+  if (error) throw new Error(`案件の取得に失敗しました: ${error.message}`)
+  return (data ?? []) as Project[]
+}
+
+/** 案件の総数を取得 */
+export async function fetchProjectCount(dataEnv: DataEnv): Promise<number> {
+  const { count, error } = await supabase
+    .from('projects')
+    .select('*', { count: 'exact', head: true })
+    .eq('data_env', dataEnv)
+
+  if (error) throw new Error(`案件数の取得に失敗しました: ${error.message}`)
+  return count ?? 0
+}

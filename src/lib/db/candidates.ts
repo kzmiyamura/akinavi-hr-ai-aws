@@ -139,6 +139,32 @@ export async function fetchCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
   return (data ?? []) as Candidate[]
 }
 
+/** 人材を100件ずつページ取得 */
+export async function fetchCandidatesPage(dataEnv: DataEnv, offset: number, limit = 100): Promise<Candidate[]> {
+  const { data, error } = await supabase
+    .from('candidates')
+    .select('*')
+    .eq('data_env', dataEnv)
+    .is('merged_into', null)
+    .order('updated_at', { ascending: false })
+    .range(offset, offset + limit - 1)
+
+  if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
+  return (data ?? []) as Candidate[]
+}
+
+/** 人材の総数を取得 */
+export async function fetchCandidateCount(dataEnv: DataEnv): Promise<number> {
+  const { count, error } = await supabase
+    .from('candidates')
+    .select('*', { count: 'exact', head: true })
+    .eq('data_env', dataEnv)
+    .is('merged_into', null)
+
+  if (error) throw new Error(`候補者数の取得に失敗しました: ${error.message}`)
+  return count ?? 0
+}
+
 export interface UpdateCandidateInput {
   id: string
   dataEnv: DataEnv

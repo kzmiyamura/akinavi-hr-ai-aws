@@ -1,9 +1,9 @@
-import { useState, useRef } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useRef, useMemo } from 'react'
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { upsertCandidate, updateCandidate, fetchCandidates, deleteCandidate } from '../lib/db/candidates'
+import { upsertCandidate, updateCandidate, fetchCandidatesPage, fetchCandidateCount, deleteCandidate } from '../lib/db/candidates'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
 import type { DataEnv } from '../lib/dataEnv'
@@ -525,6 +525,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null)
   const [imageFiles, setImageFiles] = useState<ImageFileData[]>([])
   const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([])
@@ -586,6 +587,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     mutationFn: (id: string) => deleteCandidate(id, dataEnv),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+      queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
       setDeletingId(null)
     },
     onError: (e) => {
@@ -606,34 +608,54 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     refetchInterval: 30_000,
   })
 
-  const { data: candidates = [], isLoading } = useQuery({
+  const {
+    data: candidatePages,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+  } = useInfiniteQuery({
     queryKey: ['candidates', dataEnv],
-    queryFn: () => fetchCandidates(dataEnv),
+    queryFn: ({ pageParam }: { pageParam: number }) => fetchCandidatesPage(dataEnv, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage: Candidate[], _: Candidate[][], lastPageParam: number) =>
+      lastPage.length < 100 ? undefined : lastPageParam + 100,
     refetchInterval: isImportActive ? 30_000 : false,
   })
 
-  const filteredCandidates = candidates.filter((c: Candidate) => {
-    if (!searchQuery.trim()) return true
-    const q = searchQuery.toLowerCase()
-    const raw = getRaw(c)
-    const sbc = raw.skillsByCategory
-    const allSkills = sbc
-      ? Object.values(sbc).flat()
-      : (c.skills as string[])
-    const searchTargets = [
-      c.name,
-      c.email,
-      c.phone,
-      ...(raw.roles ?? []),
-      ...(raw.industries ?? []),
-      ...allSkills,
-      raw.prefecture,
-      raw.nearestStation,
-      raw.currentWorkLocation,
-      ...(raw.availableRegions ?? []),
-    ].filter(Boolean).map((s) => s!.toLowerCase())
-    return searchTargets.some((t) => t.includes(q))
+  const { data: totalCount = 0 } = useQuery({
+    queryKey: ['candidates-count', dataEnv],
+    queryFn: () => fetchCandidateCount(dataEnv),
   })
+
+  const candidates = useMemo(() => candidatePages?.pages.flat() ?? [], [candidatePages])
+
+  const filteredCandidates = useMemo(() => {
+    const tokens = searchQuery.trim()
+      ? searchQuery.trim().toLowerCase().split(/[\s\u3000]+/).filter(Boolean)
+      : []
+    if (tokens.length === 0) return candidates
+    return candidates.filter((c: Candidate) => {
+      const raw = getRaw(c)
+      const sbc = raw.skillsByCategory
+      const allSkills = sbc ? Object.values(sbc).flat() : (c.skills as string[])
+      const searchTargets = [
+        c.name, c.email, c.phone,
+        ...(raw.roles ?? []),
+        ...(raw.industries ?? []),
+        ...allSkills,
+        raw.prefecture,
+        raw.nearestStation,
+        raw.currentWorkLocation,
+        ...(raw.availableRegions ?? []),
+      ].filter(Boolean).map((s) => s!.toLowerCase())
+      if (searchMode === 'AND') {
+        return tokens.every((t) => searchTargets.some((s) => s.includes(t)))
+      } else {
+        return tokens.some((t) => searchTargets.some((s) => s.includes(t)))
+      }
+    })
+  }, [candidates, searchQuery, searchMode])
 
   const mutation = useMutation({
     mutationFn: async (rawText: string) => {
@@ -645,6 +667,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     },
     onSuccess: (candidate) => {
       queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+      queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
       setText('')
       setImageFiles([])
       setUploadedFileNames([])
@@ -684,6 +707,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           createdByLabel="デモ人材"
           onDone={() => {
             queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
             queryClient.invalidateQueries({ queryKey: ['projects', 'all', dataEnv] })
             queryClient.invalidateQueries({ queryKey: ['projects', 'open', dataEnv] })
             queryClient.invalidateQueries({ queryKey: ['submission-stats', dataEnv] })
@@ -780,7 +804,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 flex-wrap">
           <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
             <RefreshCw size={18} className="text-gray-500" />
-            登録済み人材（{searchQuery.trim() ? `${filteredCandidates.length} / ${candidates.length}` : candidates.length}件）
+            登録済み人材（{searchQuery.trim() ? `${filteredCandidates.length}件フィルター / ` : ''}全{totalCount}件）
           </h2>
           <button
             type="button"
@@ -797,7 +821,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="名前・スキル・業界・勤務地などで検索..."
-              className="w-full border border-gray-300 rounded-lg pl-8 pr-4 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-gray-300 rounded-lg pl-8 pr-16 py-1.5 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             {searchQuery && (
               <button
@@ -807,6 +831,20 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                 ✕
               </button>
             )}
+          </div>
+          <div className="flex rounded-lg border border-gray-300 overflow-hidden shrink-0">
+            {(['AND', 'OR'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setSearchMode(m)}
+                className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  searchMode === m ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                {m}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -880,6 +918,16 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   </div>
                 )
               })}
+              {hasNextPage && (
+                <button
+                  type="button"
+                  onClick={() => fetchNextPage()}
+                  disabled={isFetchingNextPage}
+                  className="w-full py-2.5 text-xs text-blue-600 hover:bg-blue-50 border-t border-gray-100 transition-colors disabled:opacity-50"
+                >
+                  {isFetchingNextPage ? '読み込み中...' : `もっと見る（全${totalCount}件中${candidates.length}件表示）`}
+                </button>
+              )}
             </div>
 
             {/* Right: detail panel */}
