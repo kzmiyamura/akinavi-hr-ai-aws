@@ -587,6 +587,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     mutationFn: (id: string) => deleteCandidate(id, dataEnv),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+      queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
       queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
       setDeletingId(null)
     },
@@ -615,7 +616,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     isFetchingNextPage,
     isLoading,
   } = useInfiniteQuery({
-    queryKey: ['candidates', dataEnv],
+    queryKey: ['candidates-paged', dataEnv],
     queryFn: ({ pageParam }: { pageParam: number }) => fetchCandidatesPage(dataEnv, pageParam),
     initialPageParam: 0,
     getNextPageParam: (lastPage: Candidate[], _: Candidate[][], lastPageParam: number) =>
@@ -667,6 +668,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     },
     onSuccess: (candidate) => {
       queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+      queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
       queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
       setText('')
       setImageFiles([])
@@ -697,6 +699,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           onSaved={() => {
             setEditingCandidate(null)
             queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
           }}
         />
       )}
@@ -707,6 +710,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           createdByLabel="デモ人材"
           onDone={() => {
             queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
             queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
             queryClient.invalidateQueries({ queryKey: ['projects', 'all', dataEnv] })
             queryClient.invalidateQueries({ queryKey: ['projects', 'open', dataEnv] })
