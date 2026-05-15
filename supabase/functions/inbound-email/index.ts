@@ -640,7 +640,7 @@ function buildCandidateGroqPrompt(
 ): string {
   const GROQ_MAX = 4_300
   const header = `人材紹介メール解析。書かれた情報のみ抽出。推測禁止。差出人(${from})は営業担当者。
-氏名はPDF/本文から読む。見つからない場合のみ"不明"。emailは候補者本人のみ(差出人は含めない)。
+氏名はPDF/本文から読む。「М・T」「A.B.」「T.Y.」などイニシャル形式も有効な氏名として採用すること。見つからない場合のみ"不明"。emailは候補者本人のみ(差出人は含めない)。experienceYearsは職歴の最初の年から現在（または最後の職歴終了年）までを計算すること。
 
 以下JSONのみ返す:
 {"name":string,"email":string|null,"phone":string|null,"skills":string[],"skillsByCategory":{"languages":[],"frameworks":[],"libraries":[],"os":[],"databases":[],"dwh":[],"clouds":[],"infrastructures":[],"tools":[],"methodologies":[],"certifications":[],"design":[],"marketing":[],"others":[]},"roles":string[],"industries":string[],"experienceYears":number|null,"summary":string,"nearestStation":string|null,"prefecture":string|null,"availableRegions":string[]|null,"currentWorkLocation":string|null,"remoteAvailable":boolean,"desiredRate":string|null,"fromCompany":string|null}
@@ -1751,7 +1751,7 @@ Deno.serve(async (req: Request) => {
 - 文字化けしている文字列（例：㻻㻴、㼃indows、㻼㻴㻼 等）は正しく読み取れていません。これらを氏名として使わないでください。
 - PDFは複数ページある場合があります。必ず全ページを確認してください。
 - 学歴/職歴ページ（最終ページ付近）に「フリガナ」「氏名」が明記されている場合、そのページの情報を最優先で使用してください。
-- イニシャル（例: O.H., T.Y.）が明記されている場合は、それを氏名として使用してください。フルネームが同じ文書内で見つからない場合でもイニシャルを有効とします。
+- イニシャル（例: O.H., T.Y.、またはМ・T や A・B のような中点区切り形式）が明記されている場合は、それを氏名としてそのまま使用してください。フルネームが同じ文書内で見つからない場合でもイニシャルを有効とします。
 - 地名・駅名・会社名を氏名と混同しないでください。
 - 氏名が本文・添付テキスト・ファイル名に一切見つからない場合のみ "不明" にしてください。
 
