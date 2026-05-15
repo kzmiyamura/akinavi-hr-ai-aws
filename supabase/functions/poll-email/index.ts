@@ -74,6 +74,31 @@ const SKIP_SUBJECT_PATTERNS = [
   /セキュリティ通知/,
   /password.*reset/i,
   /アカウント.*確認/,
+  /ホームページより/,
+  /HPより.*お問い合わせ/,
+  /問い合わせフォーム/,
+]
+
+/**
+ * 本文（HTML除去後）にこれらのパターンが含まれるメールはスキップ
+ * 件名だけでは判別しにくい営業・スパムメールを本文で検知する
+ */
+const SKIP_BODY_PATTERNS = [
+  /配信停止はこちら/,
+  /テレアポ代行/,
+  /テレアポ.*外注/,
+  /営業代行.*強み/,
+  /見込み顧客.*トスアップ/,
+  /オンライン.*MTG.*ご状況/,
+  /sales@[a-zA-Z0-9.]+\.[a-zA-Z]+/,   // 本文中に sales@xxx.com 形式の営業窓口メール
+  /BtoB.*サービス.*ご案内/,
+  /弊社.*サービス.*ご紹介/,
+  /資料請求はこちら/,
+  /日程調整URL.*https/,
+  /timerex\.net/,                        // 日程調整サービス（テレアポ系でよく使われる）
+  /ホームページより.*お客様からのお問い合わせ/,
+  /【お問い合わせ区分】/,
+  /【ご質問・ご相談内容】/,
 ]
 
 /** これらのパターンを件名に含むメールは AI 判定なしで HR メールと確定 */
@@ -107,13 +132,21 @@ const HR_SUBJECT_PATTERNS = [
 
 /**
  * ルールベースで事前フィルタリング（Gemini 不要）
+ * 件名と本文（先頭1000文字）の両方を確認する
  * @returns 'skip' | 'candidate' | 'project' | 'unknown'
  */
 function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' | 'unknown' {
   const subject = email.subject ?? ''
+  const rawBody = email.body?.content ?? ''
+  const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000)
 
-  // スキップ対象チェック
+  // 件名でスキップ確定
   if (SKIP_SUBJECT_PATTERNS.some(p => p.test(subject))) {
+    return 'skip'
+  }
+
+  // 本文でスキップ確定（営業・問い合わせフォーム通知など）
+  if (SKIP_BODY_PATTERNS.some(p => p.test(plainBody))) {
     return 'skip'
   }
 
@@ -403,9 +436,15 @@ async function classifyEmailsBatch(
     '説明文・コードブロックは不要です。',
     '',
     '種別の定義:',
-    '  candidate  - 人材・エンジニア・求職者・フリーランスの情報（スキルシート・経歴書・自己紹介・稼働確認など）',
+    '  candidate  - 人材・エンジニア・求職者・フリーランス本人の情報（スキルシート・経歴書・自己紹介・稼働確認など）',
+    '             ※ 人名・連絡先があるだけでは candidate にしない。内容がHR情報か確認すること。',
     '  project    - 案件・プロジェクト・仕事依頼（要件定義・募集要項・単価・参画依頼など）',
-    '  other      - 上記以外（広告・通知・スパム・サービス通知など）',
+    '  other      - 上記以外すべて。以下は必ず other:',
+    '             ・営業メール・BtoBサービス案内（テレアポ代行・集客支援・マーケ支援・営業代行など）',
+    '             ・ホームページ・フォームからの問い合わせ通知（「ホームページよりお問い合わせ」「【お問い合わせ区分】」等）',
+    '             ・配信停止リンクを含む広告・メルマガ',
+    '             ・サービス通知・システム通知・請求書・領収書',
+    '             ・日程調整や資料請求への誘導が目的のメール',
     '',
     '返却形式: [{"i":0,"t":"candidate"},{"i":1,"t":"project"},...]',
     '',
