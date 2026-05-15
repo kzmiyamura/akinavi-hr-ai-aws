@@ -18,7 +18,7 @@ import {
 function resolveModel(): string {
   const fromEnv = (import.meta.env.VITE_GEMINI_MODEL as string | undefined)?.trim()
   if (fromEnv) return fromEnv
-  return 'gemini-2.0-flash'
+  return 'gemini-2.5-flash-lite'
 }
 
 function getClient(): GoogleGenerativeAI {
