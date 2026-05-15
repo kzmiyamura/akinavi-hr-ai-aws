@@ -440,6 +440,7 @@ export function MatchingPage({
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
+  const [candidateDisplayLimit, setCandidateDisplayLimit] = useState(50)
   const [matchingRunMode, setMatchingRunMode] = useState<MatchingRunMode>(() => {
     try {
       const raw = localStorage.getItem(MATCHING_RUN_MODE_KEY)
@@ -490,7 +491,7 @@ export function MatchingPage({
   const candidateList = candidates as Candidate[]
 
   const filteredProjectList = useMemo(() => {
-    const tokens = searchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    const tokens = searchQuery.trim().toLowerCase().split(/[\s\u3000]+/).filter(Boolean)
     if (tokens.length === 0) return projectList
     return projectList.filter((p) => {
       const haystack = [
@@ -505,7 +506,7 @@ export function MatchingPage({
   }, [projectList, searchQuery, searchMode])
 
   const filteredCandidateList = useMemo(() => {
-    const tokens = searchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    const tokens = searchQuery.trim().toLowerCase().split(/[\s\u3000]+/).filter(Boolean)
     if (tokens.length === 0) return candidateList
     return candidateList.filter((c) => {
       const haystack = [
@@ -1140,7 +1141,7 @@ export function MatchingPage({
                       value={searchQuery}
                       onChange={(e) => { setSearchQuery(e.target.value); setSelectedProjectId(null) }}
                       placeholder="案件名・スキルで絞り込み"
-                      className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      className="w-full pl-7 pr-2 py-1.5 text-base md:text-xs border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
                     />
                   </div>
                   <div className="flex gap-1">
@@ -1149,7 +1150,7 @@ export function MatchingPage({
                         key={m}
                         type="button"
                         onClick={() => setSearchMode(m)}
-                        className={`px-2.5 py-0.5 text-xs rounded font-medium transition-colors ${searchMode === m ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                        className={`px-3 py-1.5 md:px-2.5 md:py-0.5 text-xs rounded font-medium transition-colors ${searchMode === m ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
                       >
                         {m}
                       </button>
@@ -1346,9 +1347,9 @@ export function MatchingPage({
                     <input
                       type="text"
                       value={searchQuery}
-                      onChange={(e) => { setSearchQuery(e.target.value); setSelectedCandidateId(null) }}
+                      onChange={(e) => { setSearchQuery(e.target.value); setSelectedCandidateId(null); setCandidateDisplayLimit(50) }}
                       placeholder="氏名・スキルで絞り込み"
-                      className="w-full pl-7 pr-2 py-1.5 text-xs border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      className="w-full pl-7 pr-2 py-1.5 text-base md:text-xs border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
                     />
                   </div>
                   <div className="flex gap-1">
@@ -1357,7 +1358,7 @@ export function MatchingPage({
                         key={m}
                         type="button"
                         onClick={() => setSearchMode(m)}
-                        className={`px-2.5 py-0.5 text-xs rounded font-medium transition-colors ${searchMode === m ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                        className={`px-3 py-1.5 md:px-2.5 md:py-0.5 text-xs rounded font-medium transition-colors ${searchMode === m ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
                       >
                         {m}
                       </button>
@@ -1370,7 +1371,7 @@ export function MatchingPage({
                 <div className="overflow-y-auto md:max-h-[588px]">
                 {filteredCandidateList.length === 0 ? (
                   <p className="text-xs text-gray-400 px-3 py-4">該当する人材がありません。</p>
-                ) : filteredCandidateList.map((c) => {
+                ) : filteredCandidateList.slice(0, candidateDisplayLimit).map((c) => {
                   const n = isLoadingStats ? null : (countByCandidate[c.id] ?? 0)
                   const isSelected = selectedCandidateId === c.id
                   const isBusy = matchByCandidateMutation.isPending && matchByCandidateMutation.variables === c.id
@@ -1409,6 +1410,15 @@ export function MatchingPage({
                     </div>
                   )
                 })}
+                {filteredCandidateList.length > candidateDisplayLimit && (
+                  <button
+                    type="button"
+                    onClick={() => setCandidateDisplayLimit(n => n + 50)}
+                    className="w-full py-2 text-xs text-blue-600 hover:bg-blue-50 border-t border-gray-100"
+                  >
+                    もっと見る（残り{filteredCandidateList.length - candidateDisplayLimit}件）
+                  </button>
+                )}
                 </div>
               </div>
 

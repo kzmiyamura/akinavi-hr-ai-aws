@@ -788,7 +788,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
             onChange={e => setMemo(e.target.value)}
             rows={8}
             placeholder={'例)\n・マッチングスコアが低い案件の原因を調査\n・モバイルで○○ボタンが押しにくい\n・スキル「React」と「React.js」が別扱いになっている'}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-base text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
           />
           <div className="mt-2 flex items-center gap-3">
             <button

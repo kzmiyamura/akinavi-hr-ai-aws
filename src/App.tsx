@@ -1,16 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useNickname } from './hooks/useNickname'
 import { NicknameModal } from './components/NicknameModal'
 import { Layout } from './components/Layout'
 import type { Page } from './components/Layout'
-import { CandidatePage } from './pages/CandidatePage'
-import { ProjectPage } from './pages/ProjectPage'
 import { MatchingPage } from './pages/MatchingPage'
-import { CandidateDetailPage } from './pages/CandidateDetailPage'
-import { ProjectDetailPage } from './pages/ProjectDetailPage'
-import { SettingsPage } from './pages/SettingsPage'
 import { AuthCallbackPage } from './pages/AuthCallbackPage'
+
+const CandidatePage = lazy(() => import('./pages/CandidatePage').then(m => ({ default: m.CandidatePage })))
+const ProjectPage = lazy(() => import('./pages/ProjectPage').then(m => ({ default: m.ProjectPage })))
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
+const CandidateDetailPage = lazy(() => import('./pages/CandidateDetailPage').then(m => ({ default: m.CandidateDetailPage })))
+const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage').then(m => ({ default: m.ProjectDetailPage })))
 import type { DataEnv } from './lib/dataEnv'
 import {
   applyDemoKeyFromUrlToggle,
@@ -132,20 +133,22 @@ function AppInner() {
             onOpenProjectDetail={openProjectDetail}
           />
         </div>
-        <div className={tabPage === 'candidates' ? 'block' : 'hidden'}>
-          <CandidatePage
-            nickname={nickname}
-            dataEnv={dataEnv}
-            demoUiEnabled={demoUiEnabled}
-            onOpenCandidateDetail={openCandidateDetail}
-          />
-        </div>
-        <div className={tabPage === 'projects' ? 'block' : 'hidden'}>
-          <ProjectPage nickname={nickname} dataEnv={dataEnv} demoUiEnabled={demoUiEnabled} onOpenProjectDetail={openProjectDetail} />
-        </div>
-        <div className={tabPage === 'settings' ? 'block' : 'hidden'}>
-          <SettingsPage demoUiEnabled={demoUiEnabled} />
-        </div>
+        <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
+          {tabPage === 'candidates' && (
+            <CandidatePage
+              nickname={nickname}
+              dataEnv={dataEnv}
+              demoUiEnabled={demoUiEnabled}
+              onOpenCandidateDetail={openCandidateDetail}
+            />
+          )}
+          {tabPage === 'projects' && (
+            <ProjectPage nickname={nickname} dataEnv={dataEnv} demoUiEnabled={demoUiEnabled} onOpenProjectDetail={openProjectDetail} />
+          )}
+          {tabPage === 'settings' && (
+            <SettingsPage demoUiEnabled={demoUiEnabled} />
+          )}
+        </Suspense>
       </>
     )
   }
@@ -161,14 +164,18 @@ function AppInner() {
       onChangeDataEnv={setDataEnv}
     >
       {detail?.kind === 'candidate' ? (
-        <CandidateDetailPage
-          candidateId={detail.id}
-          nickname={nickname}
-          dataEnv={dataEnv}
-          onBack={() => setDetail(null)}
-        />
+        <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
+          <CandidateDetailPage
+            candidateId={detail.id}
+            nickname={nickname}
+            dataEnv={dataEnv}
+            onBack={() => setDetail(null)}
+          />
+        </Suspense>
       ) : detail?.kind === 'project' ? (
-        <ProjectDetailPage projectId={detail.id} nickname={nickname} dataEnv={dataEnv} onBack={() => setDetail(null)} />
+        <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
+          <ProjectDetailPage projectId={detail.id} nickname={nickname} dataEnv={dataEnv} onBack={() => setDetail(null)} />
+        </Suspense>
       ) : (
         renderMain()
       )}

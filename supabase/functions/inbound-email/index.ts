@@ -1872,9 +1872,9 @@ JSON:`.trim()
         analyzed = result as CandAi
         tracePhase = 'gemini_candidate_done'
 
-        // 品質チェック：添付ありで名前不明 → 本文のみで再解析
+        // 品質チェック：添付ありでスキル0件 → 本文のみで再解析
+        // 名前が取れていてもスキルが0の場合は添付が邪魔している可能性があるため再試行する
         const qualityPoor = allTextContents.length > 0 &&
-          (!analyzed.name || analyzed.name === '不明') &&
           (analyzed.skills?.length ?? 0) === 0
         if (qualityPoor) {
           tracePhase = 'candidate_extract_body_only_retry'
