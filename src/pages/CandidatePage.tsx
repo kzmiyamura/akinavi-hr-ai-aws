@@ -1,9 +1,9 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply } from 'lucide-react'
 import { ai } from '../lib/ai'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { upsertCandidate, updateCandidate, fetchCandidatesPage, fetchCandidateCount, deleteCandidate } from '../lib/db/candidates'
+import { upsertCandidate, updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate } from '../lib/db/candidates'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
 import type { DataEnv } from '../lib/dataEnv'
@@ -609,54 +609,63 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     refetchInterval: 30_000,
   })
 
-  const {
-    data: candidatePages,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-  } = useInfiniteQuery({
+  // 400ms デバウンスしたキーワードトークン
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(searchQuery), 400)
+    return () => clearTimeout(t)
+  }, [searchQuery])
+  const searchTokens = useMemo(
+    () => debouncedQuery.trim() ? debouncedQuery.trim().toLowerCase().split(/[\s\u3000]+/).filter(Boolean) : [],
+    [debouncedQuery],
+  )
+  const isSearching = searchTokens.length > 0
+
+  // 通常ブラウズ（検索なし）
+  const browseInfiniteQuery = useInfiniteQuery({
     queryKey: ['candidates-paged', dataEnv],
     queryFn: ({ pageParam }: { pageParam: number }) => fetchCandidatesPage(dataEnv, pageParam),
     initialPageParam: 0,
     getNextPageParam: (lastPage: Candidate[], _: Candidate[][], lastPageParam: number) =>
       lastPage.length < 100 ? undefined : lastPageParam + 100,
     refetchInterval: isImportActive ? 30_000 : false,
+    enabled: !isSearching,
   })
 
+  // サーバーサイド全件検索
+  const searchInfiniteQuery = useInfiniteQuery({
+    queryKey: ['candidates-search', dataEnv, searchTokens, searchMode],
+    queryFn: ({ pageParam }: { pageParam: number }) =>
+      searchCandidates(dataEnv, searchTokens, searchMode, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage: Candidate[], _: Candidate[][], lastPageParam: number) =>
+      lastPage.length < 100 ? undefined : lastPageParam + 100,
+    enabled: isSearching,
+  })
+
+  const { fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } =
+    isSearching ? searchInfiniteQuery : browseInfiniteQuery
+
+  const candidates = useMemo(
+    () => (isSearching ? searchInfiniteQuery.data : browseInfiniteQuery.data)?.pages.flat() ?? [],
+    [isSearching, searchInfiniteQuery.data, browseInfiniteQuery.data],
+  )
+
+  // 全件数（常時）
   const { data: totalCount = 0 } = useQuery({
     queryKey: ['candidates-count', dataEnv],
     queryFn: () => fetchCandidateCount(dataEnv),
   })
 
-  const candidates = useMemo(() => candidatePages?.pages.flat() ?? [], [candidatePages])
+  // 検索結果件数（検索中のみ）
+  const { data: searchCount = 0 } = useQuery({
+    queryKey: ['candidates-search-count', dataEnv, searchTokens, searchMode],
+    queryFn: () => searchCandidateCount(dataEnv, searchTokens, searchMode),
+    enabled: isSearching,
+  })
 
-  const filteredCandidates = useMemo(() => {
-    const tokens = searchQuery.trim()
-      ? searchQuery.trim().toLowerCase().split(/[\s\u3000]+/).filter(Boolean)
-      : []
-    if (tokens.length === 0) return candidates
-    return candidates.filter((c: Candidate) => {
-      const raw = getRaw(c)
-      const sbc = raw.skillsByCategory
-      const allSkills = sbc ? Object.values(sbc).flat() : (c.skills as string[])
-      const searchTargets = [
-        c.name, c.email, c.phone,
-        ...(raw.roles ?? []),
-        ...(raw.industries ?? []),
-        ...allSkills,
-        raw.prefecture,
-        raw.nearestStation,
-        raw.currentWorkLocation,
-        ...(raw.availableRegions ?? []),
-      ].filter(Boolean).map((s) => s!.toLowerCase())
-      if (searchMode === 'AND') {
-        return tokens.every((t) => searchTargets.some((s) => s.includes(t)))
-      } else {
-        return tokens.some((t) => searchTargets.some((s) => s.includes(t)))
-      }
-    })
-  }, [candidates, searchQuery, searchMode])
+  // サーバー側で絞り込み済みなのでそのまま使う
+  const filteredCandidates = candidates
 
   const mutation = useMutation({
     mutationFn: async (rawText: string) => {
@@ -808,7 +817,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 flex-wrap">
           <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
             <RefreshCw size={18} className="text-gray-500" />
-            登録済み人材（{searchQuery.trim() ? `${filteredCandidates.length}件フィルター / ` : ''}全{totalCount}件）
+            登録済み人材（{isSearching ? `検索結果${searchCount}件 / ` : ''}全{totalCount}件）
           </h2>
           <button
             type="button"
@@ -858,11 +867,11 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           </div>
         )}
 
-        {isLoading ? (
+        {isLoading || (isSearching && searchInfiniteQuery.isLoading) ? (
           <p className="text-sm text-gray-400 p-4">読み込み中...</p>
-        ) : candidates.length === 0 ? (
+        ) : candidates.length === 0 && !isSearching ? (
           <p className="text-sm text-gray-400 p-4">まだ登録されていません</p>
-        ) : filteredCandidates.length === 0 ? (
+        ) : candidates.length === 0 && isSearching ? (
           <p className="text-sm text-gray-400 p-4">「{searchQuery}」に一致する人材が見つかりません</p>
         ) : (
           <div className="flex flex-col md:flex-row">
@@ -929,13 +938,13 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   disabled={isFetchingNextPage}
                   className="w-full py-2.5 text-xs text-blue-600 hover:bg-blue-50 border-t border-gray-100 transition-colors disabled:opacity-50"
                 >
-                  {isFetchingNextPage ? '読み込み中...' : `もっと見る（全${totalCount}件中${candidates.length}件表示）`}
+                  {isFetchingNextPage ? '読み込み中...' : `もっと見る（${isSearching ? searchCount : totalCount}件中${candidates.length}件表示）`}
                 </button>
               )}
             </div>
 
-            {/* Right: detail panel */}
-            <div className="flex-1 overflow-y-auto md:max-h-[640px]">
+            {/* Right: detail panel（モバイルで未選択時は非表示） */}
+            <div className={`flex-1 overflow-y-auto md:max-h-[640px] ${!selectedId ? 'hidden md:block' : ''}`}>
               {selectedCandidate ? (
                 <div className="p-4 space-y-4">
                   {/* モバイル用「一覧に戻る」ボタン */}

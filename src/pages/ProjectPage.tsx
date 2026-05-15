@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, Briefcase, RefreshCw, Search, ChevronDown, ChevronUp, Pencil, Trash2, X, MapPin, Wifi, Mail, Paperclip, ChevronRight } from 'lucide-react'
 import { ai } from '../lib/ai'
@@ -6,6 +6,8 @@ import {
   insertProject,
   fetchProjectsPage,
   fetchProjectCount,
+  searchProjects,
+  searchProjectCount,
   updateProject,
   deleteProject,
   projectsQueryKeys,
@@ -504,27 +506,60 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
     refetchInterval: 30_000,
   })
 
-  const {
-    data: projectPages,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-  } = useInfiniteQuery({
+  // 400ms デバウンスしたキーワードトークン
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(searchQuery), 400)
+    return () => clearTimeout(t)
+  }, [searchQuery])
+  const searchTokens = useMemo(
+    () => debouncedQuery.trim() ? debouncedQuery.trim().toLowerCase().split(/[\s\u3000]+/).filter(Boolean) : [],
+    [debouncedQuery],
+  )
+  const isSearching = searchTokens.length > 0
+
+  // 通常ブラウズ（検索なし）
+  const browseInfiniteQuery = useInfiniteQuery({
     queryKey: projectsQueryKeys.all(dataEnv),
     queryFn: ({ pageParam }: { pageParam: number }) => fetchProjectsPage(dataEnv, pageParam),
     initialPageParam: 0,
     getNextPageParam: (lastPage: Project[], _: Project[][], lastPageParam: number) =>
       lastPage.length < 100 ? undefined : lastPageParam + 100,
     refetchInterval: isImportActive ? 30_000 : false,
+    enabled: !isSearching,
   })
 
+  // サーバーサイド全件検索
+  const searchInfiniteQuery = useInfiniteQuery({
+    queryKey: ['projects-search', dataEnv, searchTokens, searchMode],
+    queryFn: ({ pageParam }: { pageParam: number }) =>
+      searchProjects(dataEnv, searchTokens, searchMode, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage: Project[], _: Project[][], lastPageParam: number) =>
+      lastPage.length < 100 ? undefined : lastPageParam + 100,
+    enabled: isSearching,
+  })
+
+  const { fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } =
+    isSearching ? searchInfiniteQuery : browseInfiniteQuery
+
+  const projects = useMemo(
+    () => (isSearching ? searchInfiniteQuery.data : browseInfiniteQuery.data)?.pages.flat() ?? [],
+    [isSearching, searchInfiniteQuery.data, browseInfiniteQuery.data],
+  )
+
+  // 全件数（常時）
   const { data: totalCount = 0 } = useQuery({
     queryKey: ['projects-count', dataEnv],
     queryFn: () => fetchProjectCount(dataEnv),
   })
 
-  const projects = useMemo(() => projectPages?.pages.flat() ?? [], [projectPages])
+  // 検索結果件数（検索中のみ）
+  const { data: searchCount = 0 } = useQuery({
+    queryKey: ['projects-search-count', dataEnv, searchTokens, searchMode],
+    queryFn: () => searchProjectCount(dataEnv, searchTokens, searchMode),
+    enabled: isSearching,
+  })
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteProject(id, dataEnv),
@@ -570,34 +605,8 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
 
   const selectedProject = projects.find((p: Project) => p.id === selectedId) ?? null
 
-  const filteredProjects = useMemo(() => {
-    const tokens = searchQuery.trim()
-      ? searchQuery.trim().toLowerCase().split(/[\s\u3000]+/).filter(Boolean)
-      : []
-    if (tokens.length === 0) return projects
-    return projects.filter((p: Project) => {
-      const rawNice = (p.raw_data as { niceToHaveSkills?: unknown })?.niceToHaveSkills
-      const nice = Array.isArray(rawNice) ? rawNice.map(String) : []
-      const targets = [
-        p.title,
-        p.client,
-        p.description,
-        ...(p.required_skills as string[]),
-        ...nice,
-        p.work_location,
-        p.remote_policy,
-        p.contract_type,
-        p.role_summary,
-        p.industry,
-        p.workload,
-      ].filter(Boolean).map((s) => String(s).toLowerCase())
-      if (searchMode === 'AND') {
-        return tokens.every((t) => targets.some((s) => s.includes(t)))
-      } else {
-        return tokens.some((t) => targets.some((s) => s.includes(t)))
-      }
-    })
-  }, [projects, searchQuery, searchMode])
+  // サーバー側で絞り込み済みなのでそのまま使う
+  const filteredProjects = projects
 
   return (
     <div className="space-y-6">
@@ -716,7 +725,7 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
         <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 flex-wrap">
           <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
             <RefreshCw size={18} className="text-gray-500" />
-            登録済み案件（{searchQuery.trim() ? `${filteredProjects.length}件フィルター / ` : ''}全{totalCount}件）
+            登録済み案件（{isSearching ? `検索結果${searchCount}件 / ` : ''}全{totalCount}件）
           </h2>
           <button
             type="button"
@@ -766,11 +775,11 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
           </div>
         )}
 
-        {isLoading ? (
+        {isLoading || (isSearching && searchInfiniteQuery.isLoading) ? (
           <p className="text-sm text-gray-400 p-4">読み込み中...</p>
-        ) : projects.length === 0 ? (
+        ) : projects.length === 0 && !isSearching ? (
           <p className="text-sm text-gray-400 p-4">まだ登録されていません</p>
-        ) : filteredProjects.length === 0 ? (
+        ) : projects.length === 0 && isSearching ? (
           <p className="text-sm text-gray-400 p-4">「{searchQuery}」に一致する案件が見つかりません</p>
         ) : (
           <div className="flex flex-col md:flex-row">
@@ -828,13 +837,13 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                   disabled={isFetchingNextPage}
                   className="w-full py-2.5 text-xs text-blue-600 hover:bg-blue-50 border-t border-gray-100 transition-colors disabled:opacity-50"
                 >
-                  {isFetchingNextPage ? '読み込み中...' : `もっと見る（全${totalCount}件中${projects.length}件表示）`}
+                  {isFetchingNextPage ? '読み込み中...' : `もっと見る（${isSearching ? searchCount : totalCount}件中${projects.length}件表示）`}
                 </button>
               )}
             </div>
 
-            {/* Right: detail panel */}
-            <div className="flex-1 overflow-y-auto md:max-h-[640px]">
+            {/* Right: detail panel（モバイルで未選択時は非表示） */}
+            <div className={`flex-1 overflow-y-auto md:max-h-[640px] ${!selectedId ? 'hidden md:block' : ''}`}>
               {selectedProject ? (
                 <div className="p-4 space-y-4">
                   {/* モバイル用「一覧に戻る」ボタン */}

@@ -165,6 +165,40 @@ export async function fetchCandidateCount(dataEnv: DataEnv): Promise<number> {
   return count ?? 0
 }
 
+/** キーワードでサーバーサイド検索（全件対象） */
+export async function searchCandidates(
+  dataEnv: DataEnv,
+  keywords: string[],
+  mode: 'AND' | 'OR',
+  offset: number,
+  limit = 100,
+): Promise<Candidate[]> {
+  const { data, error } = await supabase.rpc('search_candidates', {
+    p_data_env: dataEnv,
+    p_keywords: keywords,
+    p_mode: mode,
+    p_limit: limit,
+    p_offset: offset,
+  })
+  if (error) throw new Error(`人材の検索に失敗しました: ${error.message}`)
+  return (data ?? []) as Candidate[]
+}
+
+/** キーワード検索の件数を取得 */
+export async function searchCandidateCount(
+  dataEnv: DataEnv,
+  keywords: string[],
+  mode: 'AND' | 'OR',
+): Promise<number> {
+  const { data, error } = await supabase.rpc('count_search_candidates', {
+    p_data_env: dataEnv,
+    p_keywords: keywords,
+    p_mode: mode,
+  })
+  if (error) throw new Error(`候補者数の取得に失敗しました: ${error.message}`)
+  return (data as number) ?? 0
+}
+
 export interface UpdateCandidateInput {
   id: string
   dataEnv: DataEnv

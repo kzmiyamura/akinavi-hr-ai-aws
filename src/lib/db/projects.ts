@@ -272,3 +272,37 @@ export async function fetchProjectCount(dataEnv: DataEnv): Promise<number> {
   if (error) throw new Error(`案件数の取得に失敗しました: ${error.message}`)
   return count ?? 0
 }
+
+/** キーワードでサーバーサイド検索（全件対象） */
+export async function searchProjects(
+  dataEnv: DataEnv,
+  keywords: string[],
+  mode: 'AND' | 'OR',
+  offset: number,
+  limit = 100,
+): Promise<Project[]> {
+  const { data, error } = await supabase.rpc('search_projects', {
+    p_data_env: dataEnv,
+    p_keywords: keywords,
+    p_mode: mode,
+    p_limit: limit,
+    p_offset: offset,
+  })
+  if (error) throw new Error(`案件の検索に失敗しました: ${error.message}`)
+  return (data ?? []) as Project[]
+}
+
+/** キーワード検索の件数を取得 */
+export async function searchProjectCount(
+  dataEnv: DataEnv,
+  keywords: string[],
+  mode: 'AND' | 'OR',
+): Promise<number> {
+  const { data, error } = await supabase.rpc('count_search_projects', {
+    p_data_env: dataEnv,
+    p_keywords: keywords,
+    p_mode: mode,
+  })
+  if (error) throw new Error(`案件数の取得に失敗しました: ${error.message}`)
+  return (data as number) ?? 0
+}
