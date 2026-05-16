@@ -7,9 +7,9 @@
 ## 2. 技術スタック
 - **Frontend**: React 19 (Vite 8), TypeScript, Tailwind CSS v4, TanStack Query v5
 - **Backend/DB**: Supabase (PostgreSQL, Edge Functions, Realtime, pg_cron, pg_net)
-- **AI（ブラウザ）**: Google Gemini デフォルト `gemini-2.0-flash`（`VITE_GEMINI_MODEL` で上書き可）・マルチモーダル対応（画像解析）
+- **AI（ブラウザ）**: Google Gemini デフォルト `gemini-2.5-flash-lite`（`VITE_GEMINI_MODEL` で上書き可）・マルチモーダル対応（画像解析）
 - **ファイルパース（ブラウザ）**: `pdfjs-dist`（PDF）・`xlsx`（Excel）・`mammoth`（Word）— `src/lib/fileParser.ts`
-- **AI（サーバー・自動取り込み）**: Google Gemini `gemini-2.5-flash` — Supabase Edge Function `inbound-email` のみ
+- **AI（サーバー・自動取り込み）**: Cerebras `llama3.1-8b` → Groq `llama-3.1-8b-instant` → Gemini `gemini-2.5-flash-lite` のフォールバック順 — Supabase Edge Function `inbound-email`
 - **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は未実装スタブ
 - **メール自動取り込み（現行・稼働中）**: Microsoft Graph API ポーリング + Supabase pg_cron（Make.com不要・完全無料・5分間隔）
 - **メール自動取り込み（旧・現在停止中）**: Make.com → Pipedream（いずれも無料枠超過により運用停止）
@@ -341,7 +341,7 @@ pg_cron（5分ごと）
   - STEP0-2: メタ情報・本文・添付の受け取りと検証
   - STEP3:   Word/Excel 添付をテキスト変換
   - STEP4:   メール本文中の Google Drive リンクを取得
-  - STEP5:   Gemini AI（gemini-2.5-flash）で人材/案件情報を解析
+  - STEP5:   AI（Cerebras → Groq 8b-instant → Gemini フォールバック順）で人材/案件情報を解析
   - STEP6-7: 解析結果を candidates / projects テーブルに DB 保存
 ```
 
@@ -361,17 +361,18 @@ pg_cron（5分ごと）
   - 有効時は人材用アカウントのみポーリング（同一受信箱を2重処理しない）
   - `other` と判断されたメールは既読マークしてスキップ
   - 10秒タイムアウト、失敗時は `candidate` にフォールバック
+- **全件取り込みセクション**: 削除済み（7日以上前のデータは不要のため）
 - **DB**: `src/lib/db/emailSettings.ts` で app_config から設定を読み書き
 - **マイグレーション**: `supabase/migrations/add_email_settings.sql`
 
 ### 全件取り込みモード（`poll-email` Edge Function）
-- **通常モード（incremental）**: 未読メールのみ取得（従来通り）
+- **通常モード（incremental）**: 未読メールのみ取得（通常運用）
 - **全件モード（full）**: `email_full_import_since` 以降の全メールを順次取得（isRead フィルターなし）
   - 1バッチ最大20件、`@odata.nextLink` でページネーション継続
   - バッチごとに nextLink を `app_config`（`email_full_import_nextlink_<configKey>`）に保存し、5分ごとに続きから再開
   - 全アカウント完了時に自動で incremental モードに戻す
-- **UI**: 設定ページの「全件取り込み」セクションから開始日を指定して起動
-  - モードバッジ（緑: 新着のみ / 黄: 全件取り込み中）でステータス表示
+- **UI**: 設定ページの全件取り込みセクションは**削除済み**（7日以上前のデータは不要のため運用上使用しない）
+  - 必要な場合は Supabase SQL Editor で `app_config` の `email_poll_mode` を `full`、`email_full_import_since` を開始日付に手動設定すること
 
 ### メール自動受信（旧方式・停止中）
 - **Make.com**: 無料枠 約1,000ops/月 → 超過により停止

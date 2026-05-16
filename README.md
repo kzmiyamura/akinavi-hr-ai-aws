@@ -22,7 +22,7 @@
 ```mermaid
 flowchart TD
     A[営業担当者\nブラウザ] -->|テキスト・ファイル入力| B[React フロントエンド\nVercel]
-    B -->|AI解析リクエスト| C[Gemini 2.0 Flash]
+    B -->|AI解析リクエスト| C[Gemini 2.5 Flash Lite\nブラウザ直呼び出し]
     C -->|解析結果| B
     B -->|upsert / fetch| D[(Supabase\nPostgreSQL)]
 
@@ -32,7 +32,7 @@ flowchart TD
     M -->|未読メール取得| G
     G -->|内部POST| H[Edge Function\ninbound-email]
     H -->|Drive/Sheets URL検出→fetch| I[Google Drive\n共有リンク]
-    H -->|AI解析| J[Gemini 2.5 Flash]
+    H -->|AI解析\nCerebras→Groq→Gemini| J[Cerebras / Groq / Gemini]
     J -->|解析結果| H
     H -->|upsert| D
 ```
@@ -45,12 +45,24 @@ flowchart TD
 |---|---|
 | フロントエンド | React 19, Vite 8, TypeScript, Tailwind CSS v4, TanStack Query v5 |
 | DB / バックエンド | Supabase（PostgreSQL, Edge Functions, pg_cron, pg_net） |
-| AI（ブラウザ） | Gemini `gemini-2.0-flash`（`VITE_GEMINI_MODEL` で変更可）・マルチモーダル対応 |
-| AI（サーバー） | Gemini `gemini-2.5-flash`（Edge Function `inbound-email` 固定） |
+| AI（ブラウザ） | Gemini `gemini-2.5-flash-lite`（`VITE_GEMINI_MODEL` で変更可）・マルチモーダル対応 |
+| AI（サーバー・メール解析） | Cerebras `llama3.1-8b` → Groq `llama-3.1-8b-instant` → Gemini `gemini-2.5-flash-lite`（フォールバック順） |
 | ファイル解析 | `pdfjs-dist`（PDF）・`xlsx`（Excel）・`mammoth`（Word） |
 | メール自動受信 | Microsoft Graph API + Supabase pg_cron（**完全無料・Make.com不要**） |
 | デプロイ | Vercel（フロント）/ Supabase（バックエンド） |
 | テスト | Vitest, React Testing Library, MSW |
+
+---
+
+## 無料枠の限界（現状）
+
+| AI | 役割 | 無料上限 | メール換算 |
+|---|---|---|---|
+| Cerebras `llama3.1-8b` | 関連性チェック・マッチング | 実質無制限 | — |
+| Groq `llama-3.1-8b-instant` | 人材/案件構造化抽出（メイン） | 500K tokens/日（JST 9:00リセット） | **約125件/日** |
+| Gemini `gemini-2.5-flash-lite` | フォールバック・画像解析 | プリペイド制（要チャージ） | チャージ次第 |
+
+> Groq無料枠が天井。1日125件を超える場合はGroq有料プラン（~$4/月）またはGeminiチャージが必要。
 
 ---
 
@@ -132,25 +144,28 @@ Vercel Dashboard → Environment Variables に以下を設定してから `main`
 ### Supabase Edge Functions
 
 ```bash
-# メール解析
-npx supabase functions deploy inbound-email
-
-# Outlook ポーリング
-npx supabase functions deploy poll-email
+supabase functions deploy inbound-email
+supabase functions deploy poll-email
+supabase functions deploy auto-match
+supabase functions deploy match-score
+supabase functions deploy microsoft-oauth
+supabase functions deploy enrich-candidate
 ```
 
 **Edge Functions Secrets**（Supabase Dashboard → Edge Functions → Secrets）
 
-| Secret 名 | 用途 |
-|---|---|
-| `GEMINI_API_KEY` | Gemini API キー |
-| `GRAPH_CLIENT_ID` | Azure AD アプリのクライアント ID |
-| `GRAPH_CLIENT_SECRET` | Azure AD アプリのクライアントシークレット |
-| `GRAPH_REFRESH_TOKEN_HUMAN` | 人材用メール（prod）のリフレッシュトークン |
-| `GRAPH_REFRESH_TOKEN_PROJECT` | 案件用メール（prod）のリフレッシュトークン |
-| `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 人材用メール（demo）のリフレッシュトークン |
-| `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 案件用メール（demo）のリフレッシュトークン |
-| `INBOUND_CALL_KEY` | poll-email → inbound-email 呼び出し用 JWT（service_role キー） |
+| Secret 名 | 用途 | 必須 |
+|---|---|---|
+| `GEMINI_API_KEY` | Gemini API キー（フォールバック・画像解析） | ◎ |
+| `GROQ_API_KEY` | Groq API キー（メイン解析・無料） | ◎ |
+| `CEREBRAS_API_KEY` | Cerebras API キー（関連性チェック・無料） | 推奨 |
+| `GRAPH_CLIENT_ID` | Azure AD アプリのクライアント ID | ◎ |
+| `GRAPH_CLIENT_SECRET` | Azure AD アプリのクライアントシークレット | ◎ |
+| `GRAPH_REFRESH_TOKEN_HUMAN` | 人材用メール（prod）のリフレッシュトークン | ◎ |
+| `GRAPH_REFRESH_TOKEN_PROJECT` | 案件用メール（prod）のリフレッシュトークン | ◎ |
+| `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 人材用メール（demo）のリフレッシュトークン | 任意 |
+| `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 案件用メール（demo）のリフレッシュトークン | 任意 |
+| `INBOUND_CALL_KEY` | poll-email → inbound-email 呼び出し用 JWT（service_role キー） | ◎ |
 
 **pg_cron スケジュール登録**
 
@@ -187,7 +202,7 @@ pg_cron（5分ごと）
   ↓ HTTP POST
 poll-email Edge Function
   ├─ Graph API: リフレッシュトークン → アクセストークン取得（ローテーション保存）
-  ├─ GET /me/messages?$filter=isRead eq false（最大3件/アカウント）
+  ├─ GET /me/messages?$filter=isRead eq false（最大20件/アカウント）
   ├─ 各メール処理:
   │   1. markAsRead（二重処理防止）
   │   2. 添付ファイル取得
@@ -199,7 +214,7 @@ inbound-email Edge Function
   ├─ HTML → プレーンテキスト化
   ├─ Google Drive / Sheets / Docs URL 検出・自動取得
   ├─ Word / Excel 添付 → テキスト変換
-  ├─ Gemini 2.5 Flash で AI解析（temperature=0）
+  ├─ AI解析（Cerebras → Groq 8b → Gemini フォールバック順）
   └─ DB保存（candidates / projects / candidate_skills / ai_logs）
 ```
 
@@ -212,7 +227,7 @@ inbound-email Edge Function
   ├─ Word   → mammoth で本文抽出 → テキストエリアへ転記
   └─ 画像   → base64変換 → Gemini multimodal API（inlineData）で直接解析
   ↓
-Gemini 2.0 Flash で解析 → Supabase に保存
+Gemini 2.5 Flash Lite で解析 → Supabase に保存
 ```
 
 > スキャンPDF（画像化されたもの）はテキスト抽出不可。画像ファイルとして添付してください。
@@ -270,21 +285,29 @@ akinavi-hr-ai/
 │   │   ├── db/               # DB 操作
 │   │   │   ├── candidates.ts
 │   │   │   ├── projects.ts
-│   │   │   └── submissions.ts
-│   │   ├── inbound/          # メールペイロードパース
+│   │   │   ├── submissions.ts
+│   │   │   ├── emailSettings.ts
+│   │   │   └── matchingSettings.ts
 │   │   ├── fileParser.ts     # PDF・Excel・Word テキスト抽出、画像 base64 変換
 │   │   ├── dataEnv.ts        # prod/demo 環境切替
 │   │   └── supabase.ts
-│   ├── pages/                # 各画面（Matching / Candidate / Project）
+│   ├── pages/                # 各画面（Matching / Candidate / Project / Settings）
 │   └── components/           # 共通 UI（DemoSeedPanel 等）
 ├── supabase/
 │   ├── schema.sql            # DB テーブル定義・RLS ポリシー
 │   ├── migrations/           # 追加マイグレーション SQL
 │   └── functions/
 │       ├── inbound-email/    # メール解析 Edge Function
-│       └── poll-email/       # Outlook ポーリング Edge Function
+│       ├── poll-email/       # Outlook ポーリング Edge Function
+│       ├── auto-match/       # 自動マッチング Edge Function（毎朝 JST 9:00）
+│       ├── match-score/      # スコア計算 Edge Function（UIから呼び出し）
+│       ├── microsoft-oauth/  # Microsoft OAuth 認証 Edge Function
+│       └── enrich-candidate/ # Box連携・再解析 Edge Function（未使用）
 └── docs/
     ├── Sales_Manual.md       # 営業担当者向け操作マニュアル
+    ├── HandsOn_Setup.md      # 環境構築ガイド（後任エンジニア向け）
+    ├── ai_fallback_flow.md   # AIフォールバックフロー詳細
+    ├── matching_candidate_selection.md  # マッチング選定ロジック
     └── test-reports/         # テストレポート
 ```
 

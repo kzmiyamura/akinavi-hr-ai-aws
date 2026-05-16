@@ -258,14 +258,13 @@ cd akinavi-hr-ai
 
 ---
 
-## 第3章　AIの設定（Gemini APIキーの取得）
+## 第3章　AIの設定（APIキーの取得）
 
-このシステムはGoogle の AI（Gemini）を使ってメールや資料を自動解析します。  
-利用するには「APIキー」（AIを使うための認証コード）が必要です。
+このシステムはメール解析に複数のAIを使います。Gemini はフォールバック・画像解析用（有料）、Groq と Cerebras はメイン解析用（**無料**）です。
 
-> **取得したAPIキーは第6章のVercel設定でまとめて登録します。ここではメモするだけでOKです。**
+> **取得したAPIキーは第4章と第6章でまとめて登録します。ここではメモするだけでOKです。**
 
-### 3-1. Gemini APIキーを取得する
+### 3-1. Gemini APIキーを取得する（有料・フォールバック用）
 
 **1. `https://aistudio.google.com` をブラウザで開く**
 
@@ -281,9 +280,41 @@ Googleアカウントでログインします。
 
 表示されたキー（`AIza...` のような文字列）をメモしてください。
 
+> Gemini はプリペイド制（従量課金）です。無料枠はありません。クレジットをチャージしないとフォールバック時に失敗します。
+
+### 3-2. Groq APIキーを取得する（無料・メイン解析用）
+
+Groq はメール本文・添付ファイルのAI解析に使うメインプロバイダーです。無料枠で1日約125件処理できます。
+
+**1. `https://console.groq.com` をブラウザで開く**
+
+アカウントを作成（または Google アカウントでログイン）します。
+
+---
+
+**2. 「API Keys」→「Create API Key」でキーを発行する**
+
+表示されたキー（`gsk_...` のような文字列）をメモしてください。
+
+### 3-3. Cerebras APIキーを取得する（無料・関連性チェック用）
+
+Cerebras はスパムフィルタリング・マッチングスコア計算に使います。無料枠が非常に大きいため実質無制限です。
+
+**1. `https://cloud.cerebras.ai` をブラウザで開く**
+
+アカウントを作成（または Google アカウントでログイン）します。
+
+---
+
+**2. 「API Keys」→「Generate API Key」でキーを発行する**
+
+表示されたキーをメモしてください。
+
 ### 完了チェック
 
-- [ ] Google AI Studio で APIキーを取得し、メモした
+- [ ] Google AI Studio で Gemini APIキーを取得し、メモした
+- [ ] Groq で APIキーを取得し、メモした
+- [ ] Cerebras で APIキーを取得し、メモした
 
 ---
 
@@ -314,6 +345,10 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 ```bash
 npx supabase functions deploy inbound-email
 npx supabase functions deploy poll-email
+npx supabase functions deploy auto-match
+npx supabase functions deploy match-score
+npx supabase functions deploy microsoft-oauth
+npx supabase functions deploy enrich-candidate
 ```
 
 それぞれ「Deployed」と表示されればOKです。
@@ -325,10 +360,12 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add
 
 **今すぐ登録するもの**
 
-| Secret名 | 値 |
-|---|---|
-| `GEMINI_API_KEY` | 第3章でメモしたGemini APIキー |
-| `INBOUND_CALL_KEY` | 第2章でメモした service_role キー |
+| Secret名 | 値 | 必須 |
+|---|---|---|
+| `GEMINI_API_KEY` | 第3章でメモしたGemini APIキー | ◎ |
+| `GROQ_API_KEY` | 第3章でメモしたGroq APIキー | ◎ |
+| `CEREBRAS_API_KEY` | 第3章でメモしたCerebras APIキー | 推奨 |
+| `INBOUND_CALL_KEY` | 第2章でメモした service_role キー | ◎ |
 
 > `SUPABASE_URL` と `SUPABASE_SERVICE_ROLE_KEY` は Supabase が自動で設定するため、手動登録は不要です。もしエラーが出る場合は手動で追加してください。
 
@@ -347,9 +384,8 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add
 
 - [ ] `supabase login` が完了した
 - [ ] `supabase link` でプロジェクトに接続した
-- [ ] `inbound-email` をデプロイした
-- [ ] `poll-email` をデプロイした
-- [ ] `GEMINI_API_KEY` と `INBOUND_CALL_KEY` を Secrets に登録した
+- [ ] 全Edge Functions（6つ）をデプロイした
+- [ ] `GEMINI_API_KEY`・`GROQ_API_KEY`・`CEREBRAS_API_KEY`・`INBOUND_CALL_KEY` を Secrets に登録した
 
 ---
 
