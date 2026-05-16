@@ -11,6 +11,8 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: {
+        // /docs/ 配下はService Workerを経由せずサーバーから直接取得（PDF等の静的ファイル）
+        navigateFallbackDenylist: [/^\/docs\//],
         // JSバンドル・CSS・画像をキャッシュ（初回以降は即時表示）
         globPatterns: ['**/*.{js,css,html,ico,svg,png,woff2}'],
         // pdfjs等の大きなチャンクもキャッシュ対象
