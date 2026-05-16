@@ -1,13 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Save, RefreshCw, Pause, Play, CheckCircle, Circle, FileText } from 'lucide-react'
+import { Loader2, Save, RefreshCw, CheckCircle, Circle, FileText } from 'lucide-react'
 import {
   getEmailSettings,
   saveEmailAddressSettings,
-  startFullImport,
-  pauseFullImport,
-  resumeFullImport,
-  getImportProgress,
   getConnectionStatuses,
   getAutoMatchEnabled,
   saveAutoMatchEnabled,
@@ -23,16 +19,6 @@ import {
   saveMatchingSettings,
   MATCHING_DEFAULTS,
 } from '../lib/db/matchingSettings'
-
-function formatDateInput(date: Date): string {
-  return date.toISOString().split('T')[0]
-}
-
-function defaultSinceDate(): string {
-  const d = new Date()
-  d.setDate(d.getDate() - 30)
-  return formatDateInput(d)
-}
 
 interface SettingsPageProps {
   demoUiEnabled: boolean
@@ -143,7 +129,6 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   const [projectDevAddress, setProjectDevAddress] = useState('')
   const [useAiClassification, setUseAiClassification] = useState(false)
   const [useAiClassificationDev, setUseAiClassificationDev] = useState(false)
-  const [sinceDate, setSinceDate] = useState(defaultSinceDate)
 
   // DB に保存済みのアドレス値（変更検知に使用）
   const savedValuesRef = useRef<Record<string, string>>({})
@@ -162,9 +147,6 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
     setProjectDevAddress(settings.email_project_dev_address)
     setUseAiClassification(settings.email_use_ai_classification)
     setUseAiClassificationDev(settings.email_use_ai_classification_dev)
-    if (settings.email_full_import_since) {
-      setSinceDate(settings.email_full_import_since)
-    }
   }, [settings])
 
   // OAuth 確認ダイアログ
@@ -248,32 +230,6 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
     },
   })
 
-  // 全件取り込み開始
-  const fullImportMutation = useMutation({
-    mutationFn: () => startFullImport(sinceDate),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['emailSettings'] }),
-  })
-
-  // 一時停止
-  const pauseMutation = useMutation({
-    mutationFn: pauseFullImport,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['emailSettings'] }),
-  })
-
-  // 再開
-  const resumeMutation = useMutation({
-    mutationFn: resumeFullImport,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['emailSettings'] }),
-  })
-
-  // 進捗カウント（全件モード中・一時停止中のみ）
-  const { data: progressCount = 0 } = useQuery({
-    queryKey: ['importProgress', settings?.email_full_import_since],
-    queryFn: () => getImportProgress(settings?.email_full_import_since ?? ''),
-    enabled: settings?.email_poll_mode === 'full' || settings?.email_poll_mode === 'paused',
-    refetchInterval: settings?.email_poll_mode === 'full' ? 15_000 : false,
-  })
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16 text-gray-400">
@@ -290,11 +246,6 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
       </div>
     )
   }
-
-  const pollMode = settings?.email_poll_mode ?? 'incremental'
-  const isFullMode = pollMode === 'full'
-  const isPaused = pollMode === 'paused'
-  const isImportActive = isFullMode || isPaused
 
   // メールアドレス入力フィールドの定義
   type AddressField = {
@@ -523,119 +474,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
           </div>
         </section>
 
-        {/* ---- 全件取り込み ---- */}
-        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <h2 className="text-base font-semibold text-gray-800">全件取り込み</h2>
-            {isFullMode ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">
-                <Loader2 size={10} className="animate-spin" />
-                取り込み中
-              </span>
-            ) : isPaused ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
-                <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
-                一時停止中
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
-                <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                新着のみ
-              </span>
-            )}
-          </div>
-
-          {/* 進捗表示 */}
-          {isImportActive && (
-            <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-              <div className="flex items-center justify-between">
-                <span>{settings?.email_full_import_since} 以降を取り込み中</span>
-                <span className="font-semibold">{progressCount} 件処理済み</span>
-              </div>
-              <p className="mt-1 text-xs text-blue-600">
-                5分ごとにバックグラウンドで処理が進みます。解析済みデータは人材・案件タブに随時反映されます。
-              </p>
-            </div>
-          )}
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                取り込み開始日
-              </label>
-              <input
-                type="date"
-                value={sinceDate}
-                onChange={e => setSinceDate(e.target.value)}
-                disabled={isImportActive}
-                className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-400"
-              />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              {!isImportActive && (
-                <button
-                  type="button"
-                  onClick={() => fullImportMutation.mutate()}
-                  disabled={fullImportMutation.isPending || !sinceDate}
-                  className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-60 transition-colors"
-                >
-                  {fullImportMutation.isPending ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <RefreshCw size={14} />
-                  )}
-                  全件取り込み開始
-                </button>
-              )}
-
-              {isFullMode && (
-                <button
-                  type="button"
-                  onClick={() => pauseMutation.mutate()}
-                  disabled={pauseMutation.isPending}
-                  className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
-                >
-                  {pauseMutation.isPending ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <Pause size={14} />
-                  )}
-                  一時停止
-                </button>
-              )}
-
-              {isPaused && (
-                <button
-                  type="button"
-                  onClick={() => resumeMutation.mutate()}
-                  disabled={resumeMutation.isPending}
-                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
-                >
-                  {resumeMutation.isPending ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <Play size={14} />
-                  )}
-                  再開
-                </button>
-              )}
-            </div>
-
-            {fullImportMutation.isSuccess && !isImportActive && (
-              <p className="text-sm text-green-600">取り込みを開始しました</p>
-            )}
-            {fullImportMutation.isError && (
-              <p className="text-sm text-red-600">開始に失敗しました: {String(fullImportMutation.error)}</p>
-            )}
-            {pauseMutation.isError && (
-              <p className="text-sm text-red-600">一時停止に失敗しました: {String(pauseMutation.error)}</p>
-            )}
-            {resumeMutation.isError && (
-              <p className="text-sm text-red-600">再開に失敗しました: {String(resumeMutation.error)}</p>
-            )}
-          </div>
-        </section>
+        {/* 全件取り込みセクションは非表示（7日以上前のデータは不要のため運用上使用しない） */}
 
         {/* ---- 案件メール解析 ---- */}
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
@@ -811,6 +650,11 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
           <p className="text-xs text-gray-400 mb-4">システムの仕様・フロー資料を閲覧できます。</p>
           <div className="space-y-2">
             {[
+              { label: '操作マニュアル（営業向け）', path: '/docs/Sales_Manual.pdf' },
+              { label: '環境構築ガイド', path: '/docs/HandsOn_Setup.pdf' },
+              { label: 'システム概要（README）', path: '/docs/README.pdf' },
+              { label: 'デモ／本番環境の説明', path: '/docs/DataEnv_Demo_Prod.pdf' },
+              { label: 'Outlook自動転送設定', path: '/docs/Outlook_AutoForward_Setup.pdf' },
               { label: 'AIモデルフォールバックフロー', path: '/docs/ai_fallback_flow.pdf' },
               { label: 'マッチング候補者選定ロジック', path: '/docs/matching_candidate_selection.pdf' },
             ].map(({ label, path }) => (
