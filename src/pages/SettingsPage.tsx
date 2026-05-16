@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Save, RefreshCw, CheckCircle, Circle, FileText } from 'lucide-react'
+import { Loader2, Save, RefreshCw, CheckCircle, Circle, FileText, Trash2 } from 'lucide-react'
+import { deleteAllCandidates } from '../lib/db/candidates'
+import { deleteAllProjects } from '../lib/db/projects'
+import { deleteAllSubmissions } from '../lib/db/submissions'
 import {
   getEmailSettings,
   saveEmailAddressSettings,
@@ -28,6 +31,13 @@ interface PendingConnect {
   account: string
   label: string
   address: string
+}
+
+type DeleteTarget = 'candidates' | 'projects' | 'submissions'
+interface PendingDelete {
+  target: DeleteTarget
+  dataEnv: 'prod' | 'demo'
+  label: string
 }
 
 export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
@@ -153,6 +163,23 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   const [pendingConnect, setPendingConnect] = useState<PendingConnect | null>(null)
   const [connectError, setConnectError] = useState<string | null>(null)
   const [connectingAccount, setConnectingAccount] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
+  const [deleteResult, setDeleteResult] = useState<string | null>(null)
+
+  const deleteMutation = useMutation({
+    mutationFn: async ({ target, dataEnv }: PendingDelete) => {
+      if (target === 'candidates') return deleteAllCandidates(dataEnv)
+      if (target === 'projects') return deleteAllProjects(dataEnv)
+      return deleteAllSubmissions(dataEnv)
+    },
+    onSuccess: (count, vars) => {
+      setDeleteResult(`${vars.label}を ${count} 件削除しました`)
+      queryClient.invalidateQueries()
+    },
+    onError: (e: Error) => {
+      setDeleteResult(`エラー: ${e.message}`)
+    },
+  })
 
   // アドレス変更を検知してダイアログを表示
   function handleAddressBlur(account: string, label: string, currentValue: string) {
@@ -293,6 +320,40 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
 
   return (
     <>
+      {/* ---- 全件削除 確認ダイアログ ---- */}
+      {pendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-xl bg-white shadow-2xl p-6">
+            <h3 className="text-sm font-semibold text-red-700 mb-3">本当に削除しますか？</h3>
+            <p className="text-sm text-gray-700 mb-5">
+              <span className="font-medium">{pendingDelete.label}</span> を全件削除します。この操作は取り消せません。
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setPendingDelete(null)}
+                className="flex-1 rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                disabled={deleteMutation.isPending}
+                onClick={() => {
+                  deleteMutation.mutate(pendingDelete, {
+                    onSettled: () => setPendingDelete(null),
+                  })
+                }}
+                className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {deleteMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                削除する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ---- OAuth 確認ダイアログ ---- */}
       {pendingConnect && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -670,6 +731,37 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
               </button>
             ))}
           </div>
+        </section>
+
+        {/* ---- データ全件削除 ---- */}
+        <section className="rounded-2xl border border-red-100 bg-red-50 p-6">
+          <h2 className="text-base font-semibold text-red-700 mb-1">データ全件削除</h2>
+          <p className="text-xs text-red-500 mb-4">削除後は復元できません。実行前に確認ダイアログが表示されます。</p>
+          {deleteResult && (
+            <p className="text-sm text-gray-700 bg-white rounded-lg px-3 py-2 mb-4 border border-gray-200">{deleteResult}</p>
+          )}
+          {(
+            [
+              { target: 'candidates', label: '人材（本番）', dataEnv: 'prod' },
+              { target: 'projects',   label: '案件（本番）', dataEnv: 'prod' },
+              { target: 'submissions', label: 'マッチング結果（本番）', dataEnv: 'prod' },
+              ...(demoUiEnabled ? [
+                { target: 'candidates', label: '人材（デモ）', dataEnv: 'demo' },
+                { target: 'projects',   label: '案件（デモ）', dataEnv: 'demo' },
+                { target: 'submissions', label: 'マッチング結果（デモ）', dataEnv: 'demo' },
+              ] : []),
+            ] as Array<{ target: DeleteTarget; label: string; dataEnv: 'prod' | 'demo' }>
+          ).map(({ target, label, dataEnv }) => (
+            <button
+              key={`${target}-${dataEnv}`}
+              type="button"
+              onClick={() => { setDeleteResult(null); setPendingDelete({ target, dataEnv, label }) }}
+              className="flex items-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-2.5 text-sm text-red-700 hover:bg-red-100 transition-colors w-full text-left mb-2"
+            >
+              <Trash2 size={14} className="shrink-0" />
+              {label} を全件削除
+            </button>
+          ))}
         </section>
       </div>
     </>

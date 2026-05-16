@@ -237,6 +237,17 @@ export async function deleteCandidate(id: string, dataEnv: DataEnv): Promise<voi
   if (error) throw new Error(`候補者の削除に失敗しました: ${error.message}`)
 }
 
+/** 全候補者を削除する（data_env 単位） */
+export async function deleteAllCandidates(dataEnv: DataEnv): Promise<number> {
+  const { count, error } = await supabase
+    .from('candidates')
+    .delete({ count: 'exact' })
+    .eq('data_env', dataEnv)
+
+  if (error) throw new Error(`全候補者の削除に失敗しました: ${error.message}`)
+  return count ?? 0
+}
+
 /** duplicate_flag=true の候補者のみ取得 */
 export async function fetchDuplicateCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
   const { data, error } = await supabase
@@ -295,3 +306,4 @@ export async function findDuplicateCandidates(
     duplicate_flag: Boolean(row.duplicate_flag),
   }))
 }
+

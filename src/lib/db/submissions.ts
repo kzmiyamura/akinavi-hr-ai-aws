@@ -240,3 +240,14 @@ export function topSubmissionsPerCandidate(
   }
   return out
 }
+
+/** 全マッチング結果を削除する（data_env 単位） */
+export async function deleteAllSubmissions(dataEnv: DataEnv): Promise<number> {
+  const { count, error } = await supabase
+    .from('submissions')
+    .delete({ count: 'exact' })
+    .eq('data_env', dataEnv)
+
+  if (error) throw new Error(`全マッチング結果の削除に失敗しました: ${error.message}`)
+  return count ?? 0
+}

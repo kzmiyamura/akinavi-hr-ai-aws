@@ -200,6 +200,17 @@ export async function deleteProject(id: string, dataEnv: DataEnv): Promise<void>
   if (error) throw new Error(`案件の削除に失敗しました: ${error.message}`)
 }
 
+/** 全案件を削除する（data_env 単位） */
+export async function deleteAllProjects(dataEnv: DataEnv): Promise<number> {
+  const { count, error } = await supabase
+    .from('projects')
+    .delete({ count: 'exact' })
+    .eq('data_env', dataEnv)
+
+  if (error) throw new Error(`全案件の削除に失敗しました: ${error.message}`)
+  return count ?? 0
+}
+
 /** IDで1件取得（詳細画面用） */
 export async function fetchProjectById(id: string, dataEnv: DataEnv): Promise<Project | null> {
   const { data, error } = await supabase
