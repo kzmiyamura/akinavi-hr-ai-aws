@@ -370,6 +370,47 @@ JSON のみ返す（説明・コードブロック禁止）:
   const rid = input.traceRid ?? '—'
   const TIMEOUT_MS = 15_000
 
+  // ---- Bedrock Claude 3 Haiku 門番フィルター（Lambda 経由・最速・最安） ----
+  // LAMBDA_GATE_FILTER_URL が設定されている場合のみ実行。
+  // "0" → 即スキップ、"1" → 即通過、それ以外 or エラー → 後続モデルにフォールバック。
+  const gateLambdaUrl = Deno.env.get('LAMBDA_GATE_FILTER_URL')
+  if (gateLambdaUrl) {
+    const gateStart = Date.now()
+    try {
+      const preview = `件名: ${input.subject}\n差出人: ${input.from}\n\n${input.body.slice(0, 500)}`
+      const lambdaApiKey = Deno.env.get('LAMBDA_API_KEY') ?? ''
+      const gateRes = await Promise.race([
+        fetch(gateLambdaUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(lambdaApiKey ? { 'x-api-key': lambdaApiKey } : {}),
+          },
+          body: JSON.stringify({ text: preview }),
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('gate-filter Lambda タイムアウト (5s)')),
+            5_000,
+          ),
+        ),
+      ])
+      if (gateRes.ok) {
+        const gateJson = await gateRes.json() as { result?: string }
+        const digit = (gateJson.result ?? '').trim().slice(0, 1)
+        pipe(rid, 'gate_filter_done', { digit, durationMs: Date.now() - gateStart })
+        if (digit === '0') return { relevant: false, durationMs: Date.now() - gateStart, usedModel: 'bedrock-claude-3-haiku (gate-filter)' }
+        if (digit === '1') return { relevant: true, durationMs: Date.now() - gateStart, usedModel: 'bedrock-claude-3-haiku (gate-filter)' }
+        // 0/1 以外（異常応答）は後続フォールバックへ
+        console.warn(`[RELEVANCE] gate-filter 異常応答 digit="${digit}"、次のモデルへ`)
+      } else {
+        console.warn(`[RELEVANCE] gate-filter HTTP ${gateRes.status}、次のモデルへフォールバック`)
+      }
+    } catch (e) {
+      console.warn(`[RELEVANCE] gate-filter Lambda 失敗、次のモデルへフォールバック: ${String(e)}`)
+    }
+  }
+
   // ---- Cerebras を試みる ----
   const cerebrasKey = Deno.env.get('CEREBRAS_API_KEY')
   if (cerebrasKey) {
@@ -1134,13 +1175,87 @@ async function extractPdfTextsWithGemini(
       continue
     }
     const freeText = await extractPdfTextWithPdfjs(pdf.data)
+    // Lambda PDF Processor の URL（設定済みの場合のみ使用）
+    const pdfLambdaUrl = Deno.env.get('LAMBDA_PDF_PROCESSOR_URL')
+    const pdfLambdaKey = Deno.env.get('LAMBDA_API_KEY') ?? ''
+
     if (freeText) {
+      // ②-A テキスト抽出成功 → Lambda PDF Processor（Bedrock Haiku 要約）があれば送信
+      // Haiku が構造化要約を返すので、下流の Gemini に渡すトークン量を大幅削減できる。
+      if (pdfLambdaUrl) {
+        try {
+          const pdfRes = await Promise.race([
+            fetch(pdfLambdaUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(pdfLambdaKey ? { 'x-api-key': pdfLambdaKey } : {}),
+              },
+              body: JSON.stringify({ extractedText: freeText.slice(0, 8000) }),
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error('pdf-processor Lambda タイムアウト (20s)')),
+                20_000,
+              ),
+            ),
+          ])
+          if (pdfRes.ok) {
+            const pdfJson = await pdfRes.json() as { summary?: string; rawText?: string }
+            // summary（Haiku整形テキスト）を優先、なければ rawText、それも無ければ生テキスト
+            const content = pdfJson.summary ?? pdfJson.rawText ?? freeText.slice(0, 6000)
+            extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content })
+            console.log(`[PDF Extract] Lambda Haiku要約成功: ${pdf.name} ${content.length}文字 rid=${traceRid}`)
+            continue
+          }
+          console.warn(`[PDF Extract] pdf-processor HTTP ${pdfRes.status}、生テキストで継続`)
+        } catch (e) {
+          console.warn(`[PDF Extract] pdf-processor Lambda 失敗、生テキストで継続: ${String(e)}`)
+        }
+      }
+      // Lambda 未設定 or 失敗 → 従来通り生テキストを使用
       extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content: freeText.slice(0, 6000) })
       console.log(`[PDF Extract] pdfjs成功（無料）: ${pdf.name} ${freeText.length}文字 rid=${traceRid}`)
       continue
     }
 
-    // ② スキャンPDF等 → Gemini にフォールバック（GROQ_API_KEY 設定時のみ。未設定時はバイナリのまま渡す）
+    // ②-B スキャンPDF → Lambda PDF Processor（Textract + Haiku）を優先し、次に Gemini へフォールバック
+    if (pdfLambdaUrl) {
+      try {
+        const scanRes = await Promise.race([
+          fetch(pdfLambdaUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(pdfLambdaKey ? { 'x-api-key': pdfLambdaKey } : {}),
+            },
+            body: JSON.stringify({ pdfBase64: pdf.data }),
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error('pdf-processor scan タイムアウト (30s)')),
+              30_000,
+            ),
+          ),
+        ])
+        if (scanRes.ok) {
+          const scanJson = await scanRes.json() as { summary?: string; rawText?: string }
+          const content = scanJson.summary ?? scanJson.rawText ?? ''
+          if (content.length > 50) {
+            extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content })
+            console.log(`[PDF Extract] Lambda Textract+Haiku成功（スキャンPDF）: ${pdf.name} ${content.length}文字 rid=${traceRid}`)
+            continue
+          }
+          console.warn(`[PDF Extract] pdf-processor テキスト不足(${content.length}文字): ${pdf.name}`)
+        } else {
+          console.warn(`[PDF Extract] pdf-processor scan HTTP ${scanRes.status}: ${pdf.name}`)
+        }
+      } catch (e) {
+        console.warn(`[PDF Extract] pdf-processor scan Lambda 失敗: ${pdf.name} ${String(e)} rid=${traceRid}`)
+      }
+    }
+
+    // ③ Gemini にフォールバック（GROQ_API_KEY 設定時のみ。未設定時はバイナリのまま渡す）
     const groqKey = Deno.env.get('GROQ_API_KEY')
     if (!groqKey) {
       remainingPdfs.push(pdf)

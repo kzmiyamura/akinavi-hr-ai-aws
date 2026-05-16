@@ -1,0 +1,22 @@
+{
+  "name": "akinavi-lambda",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AWS Lambda functions for AkiNavi HR-AI: gate-filter & pdf-processor",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "build:gate-filter": "node esbuild.config.mjs gate-filter",
+    "build:pdf-processor": "node esbuild.config.mjs pdf-processor"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.758.0",
+    "@aws-sdk/client-textract": "^3.758.0",
+    "pdfjs-dist": "3.11.174"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.147",
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}
