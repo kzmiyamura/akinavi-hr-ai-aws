@@ -557,7 +557,7 @@ async function generateJSONWithCerebras(
 
 // ---- Groq API（テキスト専用・無料枠 14,400回/日） ----
 
-const GROQ_MODEL = 'llama-3.3-70b-versatile' // TPD 100,000トークン（日本語精度優先）
+const GROQ_MODEL = 'llama-3.1-8b-instant' // TPD 500,000トークン（70b比5倍・1日125件処理可）
 
 /**
  * Groq API でJSON抽出（テキストのみ・添付非対応）
@@ -1330,6 +1330,7 @@ async function sha256Hex(input: string): Promise<string> {
 
 /**
  * 重複メール判定（from + subject + 本文先頭200文字のハッシュ）
+ * @param dedupSalt 添付分割時に各呼び出しを区別するためのサフィックス（省略時は空文字）
  * @returns true なら重複（処理済み）
  * 非重複の場合、ハッシュを app_config に記録して次回以降の判定に使う
  */
@@ -1338,9 +1339,10 @@ async function checkAndMarkEmailDuplicate(
   from: string,
   subject: string,
   body: string,
+  dedupSalt = '',
 ): Promise<boolean> {
   try {
-    const hash = await sha256Hex(`${from}|${subject}|${body.slice(0, 200)}`)
+    const hash = await sha256Hex(`${from}|${subject}|${body.slice(0, 200)}|${dedupSalt}`)
     const configKey = `ehash_${hash.slice(0, 24)}`
     const { data } = await supabase.from('app_config').select('value').eq('key', configKey).maybeSingle()
     if (data?.value) {
@@ -1608,8 +1610,10 @@ Deno.serve(async (req: Request) => {
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
     // ③ 重複メール判定（同一メールが複数受信箱に転送された場合の二重処理防止）
+    // dedup_salt: poll-email が添付分割する際に添付ファイル名を渡す（分割呼び出し間の衝突を防ぐ）
+    const dedupSalt = raw.dedup_salt ?? ''
     tracePhase = 'dedup_check'
-    const isDuplicate = await checkAndMarkEmailDuplicate(supabase, from, subject, body)
+    const isDuplicate = await checkAndMarkEmailDuplicate(supabase, from, subject, body, dedupSalt)
     if (isDuplicate) {
       console.warn('[DEDUP] 重複メールのためスキップ', { rid: traceRid, subject, from: from.slice(0, 80) })
       return new Response(
