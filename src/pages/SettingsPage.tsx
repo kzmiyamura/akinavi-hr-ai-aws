@@ -655,6 +655,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
               { label: 'システム概要（README）', path: '/docs/README.pdf' },
               { label: 'デモ／本番環境の説明', path: '/docs/DataEnv_Demo_Prod.pdf' },
               { label: 'Outlook自動転送設定', path: '/docs/Outlook_AutoForward_Setup.pdf' },
+              { label: 'AI無料枠の課題と限界', path: '/docs/AI_Freetier_Challenges.pdf' },
               { label: 'AIモデルフォールバックフロー', path: '/docs/ai_fallback_flow.pdf' },
               { label: 'マッチング候補者選定ロジック', path: '/docs/matching_candidate_selection.pdf' },
             ].map(({ label, path }) => (
