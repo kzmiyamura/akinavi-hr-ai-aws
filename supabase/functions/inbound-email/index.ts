@@ -1660,6 +1660,10 @@ Deno.serve(async (req: Request) => {
       )
     }
 
+    tracePhase = 'supabase_connect'
+    pipe(traceRid, tracePhase)
+    const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
+
     // poll-email から呼ばれた場合は既に分類済みのためスキップ
     const skipRelevance = raw.skip_relevance === 'true' || raw.skip_relevance === '1'
     if (!skipRelevance && isInboundRelevanceCheckEnabled()) {
@@ -1720,9 +1724,6 @@ Deno.serve(async (req: Request) => {
     }
 
     tracePhase = 'pre_supabase'
-    tracePhase = 'supabase_connect'
-    pipe(traceRid, tracePhase)
-    const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
     // ③ 重複メール判定（同一メールが複数受信箱に転送された場合の二重処理防止）
     // dedup_salt: poll-email が添付分割する際に添付ファイル名を渡す（分割呼び出し間の衝突を防ぐ）
