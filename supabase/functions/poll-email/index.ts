@@ -521,6 +521,24 @@ async function classifyEmailsBatch(
   return classifications
 }
 
+// ---- Officeファイル添付判定 ----
+
+const OFFICE_MIME_TYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',     // .xlsx
+  'application/vnd.ms-excel',                                               // .xls
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+  'application/msword',                                                     // .doc
+])
+
+const OFFICE_EXTENSIONS = /\.(xlsx?|docx?)$/i
+
+/** ExcelまたはWordの添付ファイルか判定 */
+function isOfficeAttachment(att: GraphAttachment): boolean {
+  if (OFFICE_MIME_TYPES.has(att.contentType)) return true
+  if (OFFICE_EXTENSIONS.test(att.name ?? '')) return true
+  return false
+}
+
 // ---- inbound-email を呼び出し ----
 
 async function callInboundEmail(
@@ -528,6 +546,7 @@ async function callInboundEmail(
   attachments: GraphAttachment[],
   type: 'candidate' | 'project',
   dataEnv: 'prod' | 'demo',
+  dedupSalt = '',
 ): Promise<void> {
   const payload = {
     type,
@@ -537,6 +556,8 @@ async function callInboundEmail(
     body:     email.body?.content ?? '',
     // poll-email 側で既に分類済みのため inbound-email の関連度チェックをスキップ
     skip_relevance: true,
+    // 添付分割時に各呼び出しを区別（inbound-email のデdup判定で使用）
+    dedup_salt: dedupSalt,
     attachments: attachments.map(a => ({
       name:     a.name,
       mimeType: a.contentType,
@@ -676,7 +697,23 @@ async function pollAccount(
 
         console.log(`[poll] 添付: hasAttachments=${email.hasAttachments} 取得件数=${attachments.length}`, attachments.map(a => ({ name: a.name, type: a.contentType, bytesLen: a.contentBytes?.length ?? 0 })))
 
-        await callInboundEmail(email, attachments, finalType, config.dataEnv)
+        // 人材メールに Office 添付が複数ある場合は1ファイル=1候補者として分割処理
+        const officeAtts = attachments.filter(isOfficeAttachment)
+        if (finalType === 'candidate' && officeAtts.length >= 2) {
+          console.log(`[poll] 添付分割モード: Office添付${officeAtts.length}件 → ${officeAtts.length}回 inbound-email 呼び出し`)
+          const nonOfficeAtts = attachments.filter(a => !isOfficeAttachment(a))
+          for (let si = 0; si < officeAtts.length; si++) {
+            const officeAtt = officeAtts[si]
+            // 2件目以降は Groq/Gemini のレート制限を避けるため 5 秒待機
+            if (si > 0) await new Promise(r => setTimeout(r, 5000))
+            // 本文(email body) + 非Officeファイル（画像等）は全件に共通して渡す
+            // dedup_salt にファイル名を入れて各呼び出しのハッシュを区別する
+            await callInboundEmail(email, [...nonOfficeAtts, officeAtt], finalType, config.dataEnv, officeAtt.name ?? '')
+            console.log(`[poll] 添付分割: "${officeAtt.name}" 登録完了`)
+          }
+        } else {
+          await callInboundEmail(email, attachments, finalType, config.dataEnv)
+        }
         processed++
         console.log(`[poll] 処理完了: "${email.subject}" type=${finalType} (${config.configKey})`)
       } catch (e) {
