@@ -1,7 +1,7 @@
 /**
  * Amazon Bedrock Claude 3 Haiku 呼び出し共通モジュール
  * モデル: anthropic.claude-3-haiku-20240307-v1:0
- * リージョン: AWS_REGION 環境変数（既定: us-east-1）
+ * リージョン: Lambda が自動設定する AWS_REGION 環境変数（既定: us-east-1）
  */
 import {
   BedrockRuntimeClient,
@@ -9,7 +9,7 @@ import {
 } from '@aws-sdk/client-bedrock-runtime'
 
 const REGION = process.env.AWS_REGION ?? 'us-east-1'
-const MODEL_ID = 'anthropic.claude-3-haiku-20240307-v1:0'
+const MODEL_ID = 'us.anthropic.claude-haiku-4-5-20251001-v1:0'
 
 // Lambda 実行ロールの IAM 権限でアクセスするため明示的なキー設定は不要
 const client = new BedrockRuntimeClient({ region: REGION })

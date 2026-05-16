@@ -554,8 +554,8 @@ async function callInboundEmail(
     from:     email.from?.emailAddress?.address ?? '',
     subject:  email.subject ?? '',
     body:     email.body?.content ?? '',
-    // poll-email 側で既に分類済みのため inbound-email の関連度チェックをスキップ
-    skip_relevance: true,
+    // poll-email 側でルールフィルター・AI分類済みだが、Lambda門番（Bedrock）も通す
+    skip_relevance: false,
     // 添付分割時に各呼び出しを区別（inbound-email のデdup判定で使用）
     dedup_salt: dedupSalt,
     attachments: attachments.map(a => ({
