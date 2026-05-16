@@ -789,8 +789,46 @@ async function generateJSONSmart(
   }
 
   // Gemini フォールバック
-  const r = await generateJSON(prompt, attachments, kind, maxRetries, timeoutMs, geminiTrace, geminiModel)
-  return { ...r, usedModel: geminiModel ?? AI_MODEL }
+  try {
+    const r = await generateJSON(prompt, attachments, kind, maxRetries, timeoutMs, geminiTrace, geminiModel)
+    return { ...r, usedModel: geminiModel ?? AI_MODEL }
+  } catch (e) {
+    console.warn(`[Gemini] 失敗、Bedrock Haikuにフォールバック: ${String(e)}`)
+  }
+
+  // Bedrock Claude Haiku 最終フォールバック
+  const bedrockParseUrl = Deno.env.get('LAMBDA_BEDROCK_PARSE_URL')
+  const bedrockApiKey = Deno.env.get('LAMBDA_API_KEY') ?? ''
+  if (bedrockParseUrl) {
+    const bedrockStart = Date.now()
+    try {
+      const bedrockRes = await fetch(bedrockParseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(bedrockApiKey ? { 'x-api-key': bedrockApiKey } : {}),
+        },
+        body: JSON.stringify({ prompt }),
+      })
+      if (bedrockRes.ok) {
+        const bedrockJson = await bedrockRes.json() as { result?: string; error?: string }
+        if (bedrockJson.result) {
+          const cleaned = bedrockJson.result.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
+          const match = cleaned.match(/[\[{][\s\S]*[\]}]/)
+          if (match) {
+            const result = JSON.parse(match[0])
+            console.log(`[Bedrock] 成功 durationMs=${Date.now() - bedrockStart}`)
+            return { result, durationMs: Date.now() - bedrockStart, usedModel: 'bedrock-claude-haiku-4-5' }
+          }
+        }
+      }
+      console.warn(`[Bedrock] parse失敗 status=${bedrockRes.status}`)
+    } catch (e) {
+      console.warn(`[Bedrock] フォールバック失敗: ${String(e)}`)
+    }
+  }
+
+  throw new Error('全AIプロバイダーが失敗しました (Cerebras/Groq/Gemini/Bedrock)')
 }
 
 type MatchResult = { score: number; summary: string; duplicateSuspected: boolean }
@@ -931,7 +969,50 @@ async function extractWordText(base64: string): Promise<string> {
   }
 }
 
-/** Excel(.xlsx/.xls)をCSVテキストに変換（最初の3シートまで） */
+/**
+ * CSV文字列をAIが読みやすい形式にクレンジングする
+ * - 空セルが大半の行を除去（スキルシートの広大な空白部分を削除）
+ * - 連続する空行を1行に圧縮
+ * - 各行のセルを「値1 / 値2 / ...」形式に整形（空セルは除外）
+ * - 最大文字数を制限
+ */
+function cleanseExcelCsv(csv: string, maxChars = 6000): string {
+  const lines = csv.split('\n')
+  const cleaned: string[] = []
+  let emptyLineCount = 0
+
+  for (const line of lines) {
+    // カンマ区切りでセルを分割し、空白・空セルを除去
+    const cells = line.split(',').map(c => c.trim()).filter(c => c !== '' && c !== '""')
+
+    if (cells.length === 0) {
+      // 空行は連続2行まで許可（セクション区切りとして保持）
+      if (emptyLineCount < 1) {
+        cleaned.push('')
+        emptyLineCount++
+      }
+      continue
+    }
+
+    emptyLineCount = 0
+
+    // セルが1つしかない場合はそのまま出力（見出し行等）
+    if (cells.length === 1) {
+      cleaned.push(cells[0])
+      continue
+    }
+
+    // 複数セルは「/」で区切って出力
+    cleaned.push(cells.join(' / '))
+  }
+
+  // 末尾の空行を除去して結合
+  const result = cleaned.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  // 最大文字数に切り詰め
+  return result.length > maxChars ? result.slice(0, maxChars) + '\n...(省略)' : result
+}
+
+/** Excel(.xlsx/.xls)をCSVテキストに変換してクレンジング（最初の3シートまで） */
 async function extractExcelText(base64: string): Promise<string> {
   try {
     const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
@@ -948,7 +1029,9 @@ async function extractExcelText(base64: string): Promise<string> {
       const csv = XLSX.utils.sheet_to_csv(sheet)
       console.log(`[Excel] sheet="${sheetName}" csvLen=${csv.length}`)
       if (csv.trim()) {
-        texts.push(`--- シート: ${sheetName} ---\n${csv}`)
+        const cleansed = cleanseExcelCsv(csv)
+        console.log(`[Excel] sheet="${sheetName}" rawLen=${csv.length} cleansedLen=${cleansed.length} ratio=${Math.round(cleansed.length / csv.length * 100)}%`)
+        texts.push(`--- シート: ${sheetName} ---\n${cleansed}`)
       }
     }
     const result = texts.join('\n\n')
