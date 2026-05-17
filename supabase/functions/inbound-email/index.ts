@@ -976,17 +976,95 @@ async function extractWordText(base64: string): Promise<string> {
  * - 各行のセルを「値1 / 値2 / ...」形式に整形（空セルは除外）
  * - 最大文字数を制限
  */
+/** スキルシート関連キーワード（Excel向け行優先フィルター用） */
+const SKILL_KEYWORDS = [
+  // 技術系
+  'Java', 'Python', 'JavaScript', 'TypeScript', 'Go', 'Rust', 'Ruby', 'PHP', 'Swift', 'Kotlin',
+  'C++', 'C#', 'Scala', 'R言語', 'COBOL', 'VBA', 'SQL', 'HTML', 'CSS',
+  'React', 'Vue', 'Angular', 'Next', 'Nuxt', 'Spring', 'Django', 'Rails', 'Laravel', 'FastAPI',
+  'AWS', 'GCP', 'Azure', 'Docker', 'Kubernetes', 'Terraform', 'Linux', 'Windows', 'Mac',
+  'PostgreSQL', 'MySQL', 'Oracle', 'MongoDB', 'Redis', 'Elasticsearch', 'DynamoDB', 'BigQuery',
+  'Git', 'GitHub', 'GitLab', 'Jenkins', 'CI/CD', 'Jira', 'Confluence', 'Slack',
+  'TensorFlow', 'PyTorch', 'scikit', 'LLM', 'ChatGPT', 'Gemini', 'Bedrock',
+  'Koa', 'Express', 'Flask', 'NestJS', 'GraphQL', 'REST', 'gRPC',
+  // 業務・人材系
+  '開発', '設計', '運用', '保守', 'テスト', 'レビュー', 'アーキテクチャ', 'インフラ',
+  'プロジェクト', 'マネジメント', 'リーダー', 'スクラム', 'アジャイル', 'ウォーターフォール',
+  'スキル', '経験', '期間', '年', 'ヶ月', '担当', '業務', '職務', '資格', '得意',
+  '機械学習', '深層学習', 'データ分析', 'BI', 'ETL', 'バッチ', 'API', 'マイクロサービス',
+]
+
+/** 装飾・罫線系の記号パターン（Excelスキルシートによく含まれる） */
+const DECORATION_RE = /^[\s★■□●◆◇▼▽△▲◎○※・－—─━═＝=\-─*#~_|/\\]+$/
+
 function cleanseExcelCsv(csv: string, maxChars = 6000): string {
   const lines = csv.split('\n')
-  const cleaned: string[] = []
+  const priorityLines: string[] = []  // スキル関連キーワードを含む行
+  const otherLines: string[] = []     // その他の行
   let emptyLineCount = 0
 
   for (const line of lines) {
-    // カンマ区切りでセルを分割し、空白・空セルを除去
-    const cells = line.split(',').map(c => c.trim()).filter(c => c !== '' && c !== '""')
+    // カンマ区切りでセルを分割し、空白・空セル・装飾のみセルを除去
+    const cells = line.split(',')
+      .map(c => c.trim().replace(/^"|"$/g, ''))  // クォート除去
+      .filter(c => c !== '' && !DECORATION_RE.test(c))
 
     if (cells.length === 0) {
-      // 空行は連続2行まで許可（セクション区切りとして保持）
+      if (emptyLineCount < 1) {
+        otherLines.push('')
+        emptyLineCount++
+      }
+      continue
+    }
+
+    emptyLineCount = 0
+
+    const joined = cells.length === 1 ? cells[0] : cells.join(' / ')
+
+    // スキル関連キーワードを含む行は優先バケツへ
+    if (SKILL_KEYWORDS.some(kw => joined.includes(kw))) {
+      priorityLines.push(joined)
+    } else {
+      otherLines.push(joined)
+    }
+  }
+
+  // 優先行を先頭に、その他を後ろに結合
+  const combined = [...priorityLines, '', ...otherLines]
+  const result = combined.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  return result.length > maxChars ? result.slice(0, maxChars) + '\n...(省略)' : result
+}
+
+/**
+ * Word文書テキストをAIが読みやすい形式にクレンジング
+ * - 連続する空行・スペースを圧縮
+ * - ページ番号・ヘッダーフッターパターンを除去
+ * - 連続する重複行を除去
+ * - 最大文字数を制限
+ */
+function cleanseWordText(text: string, maxChars = 6000): string {
+  const lines = text.split('\n')
+  const cleaned: string[] = []
+  let prevLine = ''
+  let emptyLineCount = 0
+
+  for (const rawLine of lines) {
+    const line = rawLine
+      // 連続スペース・全角スペースを1スペースに圧縮
+      .replace(/[ \u3000\t]+/g, ' ')
+      .trim()
+
+    // ページ番号パターンを除去（「- 1 -」「1 / 5」「Page 1」「1ページ」等）
+    if (/^[-\s]*\d+\s*[/／]\s*\d+[-\s]*$/.test(line)) continue
+    if (/^[-\s]*\d+[-\s]*$/.test(line) && line.length <= 6) continue
+    if (/^Page\s*\d+$/i.test(line)) continue
+    if (/^\d+ページ$/.test(line)) continue
+
+    // 装飾のみの行（罫線・区切り記号）を除去
+    if (line.length > 0 && DECORATION_RE.test(line)) continue
+
+    if (line === '') {
+      // 空行は連続2行まで
       if (emptyLineCount < 1) {
         cleaned.push('')
         emptyLineCount++
@@ -996,19 +1074,14 @@ function cleanseExcelCsv(csv: string, maxChars = 6000): string {
 
     emptyLineCount = 0
 
-    // セルが1つしかない場合はそのまま出力（見出し行等）
-    if (cells.length === 1) {
-      cleaned.push(cells[0])
-      continue
-    }
+    // 直前と同じ行（繰り返し）をスキップ
+    if (line === prevLine) continue
 
-    // 複数セルは「/」で区切って出力
-    cleaned.push(cells.join(' / '))
+    cleaned.push(line)
+    prevLine = line
   }
 
-  // 末尾の空行を除去して結合
   const result = cleaned.join('\n').replace(/\n{3,}/g, '\n\n').trim()
-  // 最大文字数に切り詰め
   return result.length > maxChars ? result.slice(0, maxChars) + '\n...(省略)' : result
 }
 
@@ -1024,7 +1097,14 @@ async function extractExcelText(base64: string): Promise<string> {
     const workbook = XLSX.read(bytes, { type: 'array' })
     console.log(`[Excel] sheets=${workbook.SheetNames.join(',')}`)
     const texts: string[] = []
-    for (const sheetName of workbook.SheetNames.slice(0, 3)) {
+    // スキル・経歴関連のシートを優先、それ以外を後ろに（最大3シート）
+    const PRIORITY_SHEET_KEYWORDS = ['スキル', '経歴', '職務', 'スキルシート', 'skill', 'career', 'profile', '人材']
+    const sortedSheetNames = [...workbook.SheetNames].sort((a, b) => {
+      const aPri = PRIORITY_SHEET_KEYWORDS.some(kw => a.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
+      const bPri = PRIORITY_SHEET_KEYWORDS.some(kw => b.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
+      return aPri - bPri
+    })
+    for (const sheetName of sortedSheetNames.slice(0, 3)) {
       const sheet = workbook.Sheets[sheetName]
       const csv = XLSX.utils.sheet_to_csv(sheet)
       console.log(`[Excel] sheet="${sheetName}" csvLen=${csv.length}`)
@@ -1151,10 +1231,11 @@ async function fetchGoogleLinks(body: string): Promise<{
           }
         } else if (isWord) {
           const b64 = arrayBufferToBase64(await res.arrayBuffer())
-          const text = await extractWordText(b64)
-          if (text.trim()) {
+          const rawText = await extractWordText(b64)
+          if (rawText.trim()) {
+            const text = cleanseWordText(rawText)
+            console.log(`[DriveLink] Drive Word取得成功: ${id} (${filename}) rawLen=${rawText.length} cleansedLen=${text.length}`)
             textContents.push({ label: `Drive Word(${filename})`, content: text })
-            console.log(`[DriveLink] Drive Word取得成功: ${id} (${filename}) ${text.length}文字`)
           } else {
             console.warn(`[DriveLink] Drive Word テキスト抽出結果が空: ${id}`)
           }
@@ -1532,13 +1613,13 @@ async function sha256Hex(input: string): Promise<string> {
  * @returns true なら重複（処理済み）
  * 非重複の場合、ハッシュを app_config に記録して次回以降の判定に使う
  */
-async function checkAndMarkEmailDuplicate(
+async function checkEmailDuplicate(
   supabase: ReturnType<typeof import('https://esm.sh/@supabase/supabase-js@2').createClient>,
   from: string,
   subject: string,
   body: string,
   dedupSalt = '',
-): Promise<boolean> {
+): Promise<{ isDuplicate: boolean; configKey: string }> {
   try {
     const hash = await sha256Hex(`${from}|${subject}|${body.slice(0, 200)}|${dedupSalt}`)
     const configKey = `ehash_${hash.slice(0, 24)}`
@@ -1546,19 +1627,43 @@ async function checkAndMarkEmailDuplicate(
     if (data?.value) {
       const storedAt = new Date(data.value).getTime()
       if (Date.now() - storedAt < 12 * 60 * 60 * 1000) {
-        return true // 12時間以内に同一メールを処理済み
+        return { isDuplicate: true, configKey }
       }
     }
-    // 未処理 → ハッシュを記録して続行
+    return { isDuplicate: false, configKey }
+  } catch (e) {
+    console.warn('[DEDUP] 重複判定失敗、続行:', String(e))
+    return { isDuplicate: false, configKey: '' }
+  }
+}
+
+/** 処理成功時にDEDUPハッシュを確定記録する */
+async function markEmailProcessed(
+  supabase: ReturnType<typeof import('https://esm.sh/@supabase/supabase-js@2').createClient>,
+  configKey: string,
+): Promise<void> {
+  if (!configKey) return
+  try {
     await supabase.from('app_config').upsert(
       { key: configKey, value: new Date().toISOString() },
       { onConflict: 'key' },
     )
-    return false
   } catch (e) {
-    // ハッシュ判定失敗は処理続行（false にフォールバック）
-    console.warn('[DEDUP] 重複判定失敗、続行:', String(e))
-    return false
+    console.warn('[DEDUP] ハッシュ記録失敗:', String(e))
+  }
+}
+
+/** 処理失敗時にDEDUPハッシュを削除して次回再試行できるようにする */
+async function unmarkEmailProcessed(
+  supabase: ReturnType<typeof import('https://esm.sh/@supabase/supabase-js@2').createClient>,
+  configKey: string,
+): Promise<void> {
+  if (!configKey) return
+  try {
+    await supabase.from('app_config').delete().eq('key', configKey)
+    console.log('[DEDUP] 処理失敗のためハッシュを削除、次回再試行:', configKey)
+  } catch (e) {
+    console.warn('[DEDUP] ハッシュ削除失敗:', String(e))
   }
 }
 
@@ -1570,6 +1675,8 @@ Deno.serve(async (req: Request) => {
   let traceRid = ''
   /** 最後に「ここまで進んだ」状態（FATAL 時に記録） */
   let tracePhase = 'none'
+  /** DEDUPハッシュのapp_configキー（処理成功時に確定記録、失敗時に削除するためcatch外で保持） */
+  let dedupConfigKey = ''
 
   try {
     traceRid = crypto.randomUUID().slice(0, 8)
@@ -1690,9 +1797,12 @@ Deno.serve(async (req: Request) => {
       const isExcelByExt = /\.(xlsx?|xls|ods|csv)$/.test(attNameLower) && !isWordByMime
       console.log('[STEP3 attach]', { name: att.name, mimeType: att.mimeType, dataLen: att.data?.length ?? 0, isWordByMime, isExcelByMime, isWordByExt, isExcelByExt })
       if (isWordByMime || isWordByExt) {
-        const text = await extractWordText(att.data)
-        if (text.trim()) officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
-        else console.warn(`[Word] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
+        const rawText = await extractWordText(att.data)
+        if (rawText.trim()) {
+          const text = cleanseWordText(rawText)
+          console.log(`[Word] rawLen=${rawText.length} cleansedLen=${text.length} ratio=${Math.round(text.length / rawText.length * 100)}%`)
+          officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
+        } else console.warn(`[Word] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
       } else if (isExcelByMime || isExcelByExt) {
         const text = await extractExcelText(att.data)
         if (text.trim()) officeTextContents.push({ label: `Excelファイル(${att.name ?? 'spreadsheet'})`, content: text })
@@ -1775,6 +1885,7 @@ Deno.serve(async (req: Request) => {
           prompt_length: body.slice(0, 8000).length + subject.length,
           status: 'success',
           duration_ms: relevanceDurationMs,
+          raw_body: body.slice(0, 3000),
         }).then(({ error }) => {
           if (error) console.error('[RELEVANCE] ai_logs insert失敗', error.message)
         })
@@ -1812,7 +1923,8 @@ Deno.serve(async (req: Request) => {
     // dedup_salt: poll-email が添付分割する際に添付ファイル名を渡す（分割呼び出し間の衝突を防ぐ）
     const dedupSalt = raw.dedup_salt ?? ''
     tracePhase = 'dedup_check'
-    const isDuplicate = await checkAndMarkEmailDuplicate(supabase, from, subject, body, dedupSalt)
+    const { isDuplicate, configKey: _dedupConfigKey } = await checkEmailDuplicate(supabase, from, subject, body, dedupSalt)
+    dedupConfigKey = _dedupConfigKey
     if (isDuplicate) {
       console.warn('[DEDUP] 重複メールのためスキップ', { rid: traceRid, subject, from: from.slice(0, 80) })
       return new Response(
@@ -1820,6 +1932,7 @@ Deno.serve(async (req: Request) => {
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
     }
+    // 重複なし → ハッシュをまだ記録しない（処理成功後に記録する）
 
     tracePhase = 'drive_links_fetch'
     pipe(traceRid, tracePhase)
@@ -2218,6 +2331,7 @@ JSON:`.trim()
         status: 'success',
         duration_ms: durationMs,
         linked_id: data.id,
+        raw_body: body.slice(0, 3000),
       })
       if (logError) console.error('[ai_logs INSERT error]', logError)
 
@@ -2227,6 +2341,7 @@ JSON:`.trim()
       }
 
       console.log(`[inbound] 人材登録完了: ${data.name}`)
+      await markEmailProcessed(supabase, dedupConfigKey)
       return new Response(
         JSON.stringify({
           ok: true,
@@ -2496,6 +2611,7 @@ JSON:`.trim()
             status: 'success',
             duration_ms: durationMs,
             linked_id: row.id,
+            raw_body: body.slice(0, 3000),
           })
         ),
       )
@@ -2506,6 +2622,7 @@ JSON:`.trim()
       console.log(
         `[inbound] 案件登録完了: ${insertedRows.length}件 — ${insertedRows.map((r) => r.title).join(', ')}`,
       )
+      await markEmailProcessed(supabase, dedupConfigKey)
       return new Response(
         JSON.stringify({
           ok: true,
@@ -2545,6 +2662,8 @@ JSON:`.trim()
 
     try {
       const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
+      // 処理失敗時はDEDUPハッシュを削除して次回再試行できるようにする
+      await unmarkEmailProcessed(supabase, dedupConfigKey)
       await supabase.from('ai_logs').insert({
         type: 'unknown',
         model: AI_MODEL,
