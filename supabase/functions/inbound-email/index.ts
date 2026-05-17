@@ -243,7 +243,24 @@ function toExperienceYears(value: unknown): number | null {
   // 先頭の数字部分を取り出す（"27年9ヶ月" → 27、"5.5" → 5）
   const m = s.match(/^(\d+)/)
   if (!m) return null
-  return parseInt(m[1], 10)
+  const years = parseInt(m[1], 10)
+  // 0〜60年の範囲外はAIのハルシネーション（職歴計算ミス等）として null に落とす
+  if (years < 0 || years > 60) return null
+  return years
+}
+
+/** 自社名（受信側）として登録されてしまうことを防ぐ会社名リスト */
+const OWN_COMPANY_NAMES = ['株式会社ボイス', 'i-voice', 'アキナビ', 'akinavi', '株式会社アキナビ']
+
+function sanitizeFromCompany(value: string | null | undefined): string | null {
+  if (!value) return null
+  const trimmed = value.trim()
+  // 自社名・空文字は null に落とす
+  if (!trimmed) return null
+  for (const own of OWN_COMPANY_NAMES) {
+    if (trimmed.toLowerCase().includes(own.toLowerCase())) return null
+  }
+  return trimmed
 }
 
 function dedupeTrimmedSkills(skills: unknown): string[] {
@@ -681,7 +698,7 @@ function buildCandidateGroqPrompt(
 ): string {
   const GROQ_MAX = 4_300
   const header = `人材紹介メール解析。書かれた情報のみ抽出。推測禁止。差出人(${from})は営業担当者。
-氏名はPDF/本文から読む。「М・T」「A.B.」「T.Y.」などイニシャル形式も有効な氏名として採用すること。見つからない場合のみ"不明"。emailは候補者本人のみ(差出人は含めない)。experienceYearsは職歴の最初の年から現在（または最後の職歴終了年）までを計算すること。
+氏名はPDF/本文から読む。「М・T」「A.B.」「T.Y.」などイニシャル形式も有効な氏名として採用すること。見つからない場合のみ"不明"。emailは候補者本人のみ(差出人は含めない)。experienceYearsは職歴の最初の年から現在（または最後の職歴終了年）までを計算すること。fromCompanyは差出人の署名・所属から抽出する送信元会社名。冒頭の宛先（「〇〇御中」「〇〇様」）に書かれた会社名は絶対に入れないこと。
 
 以下JSONのみ返す:
 {"name":string,"email":string|null,"phone":string|null,"skills":string[],"skillsByCategory":{"languages":[],"frameworks":[],"libraries":[],"os":[],"databases":[],"dwh":[],"clouds":[],"infrastructures":[],"tools":[],"methodologies":[],"certifications":[],"design":[],"marketing":[],"others":[]},"roles":string[],"industries":string[],"experienceYears":number|null,"summary":string,"nearestStation":string|null,"prefecture":string|null,"availableRegions":string[]|null,"currentWorkLocation":string|null,"remoteAvailable":boolean,"desiredRate":string|null,"fromCompany":string|null}
@@ -2142,7 +2159,7 @@ Deno.serve(async (req: Request) => {
 - currentWorkLocation: string | null（現在の拠点都道府県。例: "北海道"。情報がなければ null）
 - remoteAvailable: boolean（リモート勤務対応可否。「リモート希望」等の明記で true。記載なければ false）
 - desiredRate: string | null（希望単価・希望年収。例: "60万円/月"、"700万円/年"。記載なければ null）
-- fromCompany: string | null（紹介元・送信元の会社名。差出人のメール本文・署名から抽出。なければ null）
+- fromCompany: string | null（紹介元・送信元の会社名。差出人の署名・本文末尾から抽出。メール冒頭の宛先「〇〇御中」「〇〇様」に書かれた会社名は絶対に入れないこと。なければ null）
 
 本文:
 ${body.slice(0, 3000)}${driveTextSection}
@@ -2290,7 +2307,7 @@ JSON:`.trim()
         box_status: boxUrls.length > 0 ? 'pending' : null,
         resume_url: resumeUrl,
         desired_rate: analyzed.desiredRate ?? null,
-        from_company: analyzed.fromCompany ?? null,
+        from_company: sanitizeFromCompany(analyzed.fromCompany),
       }
 
       const { data, error } = email
