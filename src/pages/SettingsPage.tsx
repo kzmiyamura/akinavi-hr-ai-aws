@@ -719,6 +719,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
               { label: 'AI無料枠の課題と限界', path: '/docs/AI_Freetier_Challenges.pdf' },
               { label: 'AIモデルフォールバックフロー', path: '/docs/ai_fallback_flow.pdf' },
               { label: 'マッチング候補者選定ロジック', path: '/docs/matching_candidate_selection.pdf' },
+              { label: 'AWSアカウント作成・管理者招待手順', path: '/docs/AWS_Account_Setup_Guide.pdf' },
             ].map(({ label, path }) => (
               <button
                 key={path}
