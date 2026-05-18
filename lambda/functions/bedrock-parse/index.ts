@@ -56,8 +56,8 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   }
 
   try {
-    // JSON抽出なので出力トークンは多めに確保（最大 2048）
-    const result = await invokeHaiku(prompt, 2048)
+    // JSON抽出なので出力トークンは多めに確保（最大 4096）
+    const result = await invokeHaiku(prompt, 4096)
     console.log(`[bedrock-parse] 成功 promptLen=${prompt.length} resultLen=${result.length}`)
     return {
       statusCode: 200,
