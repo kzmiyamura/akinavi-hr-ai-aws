@@ -719,7 +719,6 @@ function compressBodyForAI(text: string, maxChars = 3000): string {
 interface PreExtracted {
   experienceYears: number | null
   desiredRate: string | null
-  phone: string | null
   skills: string[]
 }
 
@@ -768,17 +767,13 @@ function preExtractFields(text: string): PreExtracted {
     }
   }
 
-  // 電話番号
-  const phoneM = text.match(/(?:0|\+81[-\s]?)\d{1,4}[-−]\d{2,4}[-−]\d{4}/)
-  const phone = phoneM ? phoneM[0] : null
-
   // ITスキルキーワード照合
   const lower = text.toLowerCase()
   const skills = SKILL_MASTER.filter(s =>
     new RegExp(`(?<![a-zA-Z#])${s.toLowerCase().replace(/[.+#]/g, '\\$&')}(?![a-zA-Z])`, 'i').test(lower)
   )
 
-  return { experienceYears, desiredRate, phone, skills }
+  return { experienceYears, desiredRate, skills }
 }
 
 /** 事前抽出ヒントをプロンプトに埋め込む文字列を生成 */
@@ -786,7 +781,6 @@ function buildPreExtractHint(pre: PreExtracted): string {
   const hints: string[] = []
   if (pre.experienceYears != null) hints.push(`経験年数: ${pre.experienceYears}年（本文から検出）`)
   if (pre.desiredRate) hints.push(`希望単価: ${pre.desiredRate}（本文から検出）`)
-  if (pre.phone) hints.push(`電話番号: ${pre.phone}（本文から検出）`)
   if (pre.skills.length > 0) hints.push(`検出スキルキーワード: ${pre.skills.join(', ')}（確認・追加してください）`)
   if (hints.length === 0) return ''
   return `\n【regex事前検出値（確認・補正してください）】\n${hints.map(h => `- ${h}`).join('\n')}\n`
@@ -813,13 +807,12 @@ function buildCandidateGroqPrompt(
   const GROQ_MAX = 4_300
   const header = `人材紹介メール解析。書かれた情報のみ抽出。推測禁止。差出人(${from})は営業担当者。
 氏名: メール冒頭の「田中様」「〇〇御中」は受信者の敬称であり候補者名ではない。候補者名は本文・添付・署名から探す。「М・T」「A.B.」「T.Y.」などイニシャル形式も有効。見つからない場合のみ"不明"。
-emailは候補者本人のみ(差出人は含めない)。
 experienceYears: 職歴の最初の年から現在までの年数。「経験〇年」「IT歴〇年」「エンジニア歴〇年」の明記があればその値を優先。
 desiredRate: 「〇〇万円以上」「単価〇〇万」「希望単価〇〇万」「〇〇万/月」等の金額を必ず抽出。「65万円以上」→"65万円以上"のまま返す。
 fromCompanyは差出人の署名・所属から抽出する送信元会社名。冒頭の宛先（「〇〇御中」「〇〇様」）に書かれた会社名は絶対に入れないこと。
 
 以下JSONのみ返す:
-{"name":string,"email":string|null,"phone":string|null,"skills":string[],"skillsByCategory":{"languages":[],"frameworks":[],"libraries":[],"os":[],"databases":[],"dwh":[],"clouds":[],"infrastructures":[],"tools":[],"methodologies":[],"certifications":[],"design":[],"marketing":[],"others":[]},"roles":string[],"industries":string[],"experienceYears":number|null,"summary":string,"nearestStation":string|null,"prefecture":string|null,"availableRegions":string[]|null,"currentWorkLocation":string|null,"remoteAvailable":boolean,"desiredRate":string|null,"fromCompany":string|null}
+{"name":string,"skills":string[],"skillsByCategory":{"languages":[],"frameworks":[],"libraries":[],"os":[],"databases":[],"dwh":[],"clouds":[],"infrastructures":[],"tools":[],"methodologies":[],"certifications":[],"design":[],"marketing":[],"others":[]},"roles":string[],"industries":string[],"experienceYears":number|null,"summary":string,"nearestStation":string|null,"prefecture":string|null,"availableRegions":string[]|null,"currentWorkLocation":string|null,"remoteAvailable":boolean,"desiredRate":string|null,"fromCompany":string|null}
 
 件名:${subject}
 本文:`
@@ -2218,13 +2211,7 @@ Deno.serve(async (req: Request) => {
 - 地名・駅名・会社名を氏名と混同しないでください。
 - 氏名が本文・添付テキスト・ファイル名に一切見つからない場合のみ "不明" にしてください。
 
-【メールアドレスの抽出ルール】
-- emailは候補者本人のアドレスのみです。
-- 差出人（${from}）は営業担当者のため、このアドレスは絶対に入れないでください。
-- PDFや本文に候補者のメールアドレスが書かれていなければ必ず null にしてください。
-
 【その他のルール】
-- 電話番号も明記されているものだけ。なければ null。
 - skillsはIT系に限らず、職種問わず本文・添付に明記されたスキル・ツール・知見を全て抽出してください。
   例: ITエンジニア系（PHP, Java, MySQL等）はもちろん、
   デザイン系（Illustrator, Photoshop, Figma, After Effects等）、
@@ -2260,8 +2247,6 @@ Deno.serve(async (req: Request) => {
 
 抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
 - name: string（フルネーム。メール冒頭の「田中様」「〇〇御中」は受信者への敬称であり候補者名ではない。候補者名は本文中の紹介文・添付ファイル・署名から探す。ファイル名・文字化け文字列は使わない。どうしても見つからない場合のみ "不明"）
-- email: string | null（候補者本人のみ。なければ null）
-- phone: string | null（明記されたもののみ。なければ null）
 - skills: string[]（職種問わず明記されているもののみ。重複なし。正規化済み。なければ[]）
 - skillsByCategory: object（skillsを以下の14カテゴリに分類。該当なしは[]）
   【カテゴリ厳守ルール】以下の14カテゴリキーのみ使用すること。それ以外のキーは絶対に追加しないこと。どのカテゴリにも当てはまらないスキルはすべて others に入れること。
@@ -2302,7 +2287,7 @@ JSON:`.trim()
       let durationMs: number
       let parseFallback: 'none' | 'body_only_after_attachment_timeout' = 'none'
       type CandAi = {
-        name: string; email: string | null; phone: string | null
+        name: string
         skills: string[]
         skillsByCategory: {
           languages: string[]; frameworks: string[]; libraries: string[]; os: string[]
@@ -2392,17 +2377,11 @@ JSON:`.trim()
         ).values()
       )
 
-      // 送信者メールアドレスが混入していたら除去
-      const senderEmails = from.split(/[,;]/).map((s: string) => s.trim().toLowerCase())
-      const email = analyzed.email && !senderEmails.includes(analyzed.email.toLowerCase())
-        ? analyzed.email
-        : null
-
       const dbPayload = {
         data_env: inboundDataEnv,
         name: analyzed.name ?? '不明',
-        email,
-        phone: analyzed.phone ?? null,
+        email: null as string | null,
+        phone: null as string | null,
         skills,
         experience_years: toExperienceYears(analyzed.experienceYears),
         raw_profile: {
@@ -2440,9 +2419,7 @@ JSON:`.trim()
         from_company: sanitizeFromCompany(analyzed.fromCompany),
       }
 
-      const { data, error } = email
-        ? await supabase.from('candidates').upsert(dbPayload, { onConflict: 'email' }).select().single()
-        : await supabase.from('candidates').insert(dbPayload).select().single()
+      const { data, error } = await supabase.from('candidates').insert(dbPayload).select().single()
 
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
 
