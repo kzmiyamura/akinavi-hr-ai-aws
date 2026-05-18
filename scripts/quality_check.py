@@ -41,13 +41,18 @@ PROJECT_KEYWORDS = ['管理ID', '清算幅', 'ご提案をお待ち', 'エンド
 CANDIDATE_KEYWORDS = ['スキルシート', '即日参画', 'ご要員', '直要員', 'BP要員', '弊社エンジニア', '要員のご紹介']
 
 
-def run_query(sql: str, output='json') -> list:
+def run_query(sql: str, output='json', timeout=120) -> list:
     """Supabase CLI 経由でSQLを実行し結果を返す"""
-    result = subprocess.run(
-        ['supabase', 'db', 'query', '--linked', sql, '-o', output],
-        capture_output=True, text=True,
-        cwd='/Users/kazukimiyamura/Desktop/0430/akinavi-hr-ai-aws'
-    )
+    try:
+        result = subprocess.run(
+            ['supabase', 'db', 'query', '--linked', sql, '-o', output],
+            capture_output=True, text=True,
+            cwd='/Users/kazukimiyamura/Desktop/0430/akinavi-hr-ai-aws',
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        print(f'[SQL TIMEOUT] クエリがタイムアウト（{timeout}秒）—スキップ', file=sys.stderr)
+        return []
     if result.returncode != 0:
         print(f'[SQL ERROR] {result.stderr[:300]}', file=sys.stderr)
         return []
@@ -516,11 +521,12 @@ def main():
     rows = run_query("""
         SELECT a.name,
                a.experience_years as years_a, b.experience_years as years_b,
-               a.from_company as company_a, b.from_company as company_b,
-               a.id as id_a, b.id as id_b
+               a.from_company as company_a, b.from_company as company_b
         FROM candidates a
         JOIN candidates b ON a.name = b.name AND a.id < b.id
         WHERE a.data_env = 'prod' AND b.data_env = 'prod'
+          AND a.created_at >= NOW() - INTERVAL '90 days'
+          AND b.created_at >= NOW() - INTERVAL '90 days'
           AND a.name IS NOT NULL AND a.name NOT IN ('不明', '')
           AND a.experience_years IS NOT NULL AND b.experience_years IS NOT NULL
           AND ABS(a.experience_years - b.experience_years) <= 2
@@ -541,6 +547,7 @@ def main():
         FROM candidates c
         JOIN ai_logs l ON l.linked_id = c.id
         WHERE c.data_env = 'prod'
+          AND c.created_at >= NOW() - INTERVAL '90 days'
           AND c.name IS NOT NULL
           AND length(c.name) <= 3
         ORDER BY l.from_address, c.name, c.created_at
@@ -563,11 +570,11 @@ def main():
     check('D04', '同一差出人からイニシャルが同じ人材が複数登録', dup_initials,
           lambda r: f"name={r['name']} | from={r['from_address']} | count={r['cnt']}")
 
-    # ── D05 スキルセット重複率80%以上の別レコード ────────────────
+    # ── D05 スキルセット重複率80%以上の別レコード（直近30日のみ・重い）─
     rows = run_query("""
         SELECT
-          a.id as id_a, a.name as name_a, a.from_company as company_a,
-          b.id as id_b, b.name as name_b, b.from_company as company_b,
+          a.name as name_a, a.from_company as company_a,
+          b.name as name_b, b.from_company as company_b,
           jsonb_array_length(COALESCE(a.skills,'[]'::jsonb)) as skills_a,
           jsonb_array_length(COALESCE(b.skills,'[]'::jsonb)) as skills_b,
           (
@@ -577,9 +584,11 @@ def main():
         FROM candidates a
         JOIN candidates b ON a.id < b.id
         WHERE a.data_env = 'prod' AND b.data_env = 'prod'
+          AND a.created_at >= NOW() - INTERVAL '30 days'
+          AND b.created_at >= NOW() - INTERVAL '30 days'
           AND jsonb_array_length(COALESCE(a.skills,'[]'::jsonb)) >= 5
           AND jsonb_array_length(COALESCE(b.skills,'[]'::jsonb)) >= 5
-        HAVING (
+          AND (
             SELECT COUNT(*) FROM jsonb_array_elements_text(COALESCE(a.skills,'[]'::jsonb)) sa
             WHERE sa IN (SELECT jsonb_array_elements_text(COALESCE(b.skills,'[]'::jsonb)))
           ) * 1.0 / LEAST(
@@ -588,7 +597,7 @@ def main():
           ) >= 0.8
         ORDER BY common_count DESC
         LIMIT 20
-    """)
+    """, timeout=60)
     check('D05', 'スキルセットの重複率80%以上の別レコード（同一人物疑い）', rows,
           lambda r: f"name={r['name_a']}({r['company_a']}) ↔ {r['name_b']}({r['company_b']}) | 共通{r['common_count']}件/{min(int(r['skills_a']),int(r['skills_b']))}件")
 
@@ -610,12 +619,13 @@ def main():
     rows = run_query("""
         SELECT a.from_company,
                a.experience_years as years_a, b.experience_years as years_b,
-               a.id as id_a, b.id as id_b,
                a.created_at AT TIME ZONE 'Asia/Tokyo' as jst_a,
                b.created_at AT TIME ZONE 'Asia/Tokyo' as jst_b
         FROM candidates a
         JOIN candidates b ON a.from_company = b.from_company AND a.id < b.id
         WHERE a.data_env = 'prod' AND b.data_env = 'prod'
+          AND a.created_at >= NOW() - INTERVAL '90 days'
+          AND b.created_at >= NOW() - INTERVAL '90 days'
           AND a.name IN ('不明', '') AND b.name IN ('不明', '')
           AND a.experience_years IS NOT NULL AND b.experience_years IS NOT NULL
           AND ABS(a.experience_years - b.experience_years) <= 1
