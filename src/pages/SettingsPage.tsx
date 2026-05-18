@@ -708,7 +708,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
         {/* ---- ドキュメント ---- */}
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
           <h2 className="text-base font-semibold text-gray-800 mb-1">ドキュメント</h2>
-          <p className="text-xs text-gray-400 mb-4">システムの仕様・フロー資料を閲覧できます。</p>
+          <p className="text-xs text-gray-400 mb-4">システムの仕様・フロー資料・セットアップ手順を閲覧できます。</p>
           <div className="space-y-2">
             {[
               { label: '操作マニュアル（営業向け）', path: '/docs/Sales_Manual.pdf' },
