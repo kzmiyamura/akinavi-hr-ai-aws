@@ -1979,6 +1979,7 @@ Deno.serve(async (req: Request) => {
     }
     // HTMLタグが含まれている場合は除去してプレーンテキスト化
     let body: string = rawBody.includes('<html') || rawBody.includes('<div') || rawBody.includes('<p ')
+      || rawBody.includes('<p>') || rawBody.includes('<table') || rawBody.includes('<span') || rawBody.includes('<td')
       ? stripHtml(rawBody)
       : rawBody
     // stripHtml が過剰に空になるケース（構造だけの HTML 等）は解析不能になるため raw にフォールバック
@@ -2262,16 +2263,19 @@ Deno.serve(async (req: Request) => {
 
     // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
     const masterSkills = await getSkillMasterFromDb(supabase)
-    const fullTextForSkill = [body, ...allTextContents.map(t => t.content ?? '')].join('\n')
+    // subjectも照合対象に含める（body=0の場合でもsubjectからスキルを抽出）
+    const fullTextForSkill = [subject, body, ...allTextContents.map(t => t.content ?? '')].join('\n')
     const { matched: dbMatchedSkills } = extractAndRemoveSkills(fullTextForSkill, masterSkills)
     const dbSkillNames = dbMatchedSkills.map(s => s.name)
     console.log(`[skill_master] DB照合: ${dbSkillNames.length}件マッチ テキスト長=${fullTextForSkill.length}文字`)
 
     // ── 人材メール ────────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
+      // body が空の場合はsubjectを本文代わりに使う（cy-tech等の件名のみメール対策）
+      const effectiveBody = body.trim() ? body : subject
       // ライブラリ前処理: テキスト圧縮 + regex事前抽出
-      const compressedBody = compressBodyForAI(body, 3000)
-      const preExtracted = preExtractFields(body)
+      const compressedBody = compressBodyForAI(effectiveBody, 3000)
+      const preExtracted = preExtractFields(effectiveBody)
       const preExtractHint = buildPreExtractHint(preExtracted)
       console.log(`[preExtract] compressed=${compressedBody.length}→${body.length}文字 skills=${preExtracted.skills.length}件 exp=${preExtracted.experienceYears} rate=${preExtracted.desiredRate}`)
 
@@ -2379,7 +2383,7 @@ JSON:`.trim()
       let usedModel1: string | undefined
 
       try {
-        const candidateGroqPrompt = buildCandidateGroqPrompt(from, subject, body, allTextContents)
+        const candidateGroqPrompt = buildCandidateGroqPrompt(from, subject, effectiveBody, allTextContents)
         const { result, durationMs: d1, usedModel: _usedModel1 } = await generateJSONSmart(prompt, allAttachments, 'candidate', 2, undefined, {
           rid: traceRid,
           phase: 'gemini_candidate_extract',
@@ -2399,7 +2403,7 @@ JSON:`.trim()
           const promptBodyOnly = driveTextSection.length > 0
             ? prompt.replace(driveTextSection, '')
             : prompt
-          const bodyOnlyGroqPrompt = buildCandidateGroqPrompt(from, subject, body, [])
+          const bodyOnlyGroqPrompt = buildCandidateGroqPrompt(from, subject, effectiveBody, [])
           const { result: r2, durationMs: d2, usedModel: um2 } = await generateJSONSmart(
             promptBodyOnly, [], 'candidate', 2, undefined,
             { rid: traceRid, phase: 'candidate_extract_body_only_retry' },
@@ -2447,7 +2451,7 @@ JSON:`.trim()
         skills,
         experience_years: toExperienceYears(analyzed.experienceYears),
         raw_profile: {
-          text: body.slice(0, 5000),
+          text: effectiveBody.slice(0, 5000),
           summary: analyzed.summary ?? '',
           skillsByCategory: dbMatchedSkills.reduce((acc, s) => {
             if (!acc[s.category]) acc[s.category] = []
@@ -2625,13 +2629,13 @@ JSON:`.trim()
 - industry: string | null（金融・製造・EC 等）
 
 本文:
-${body.slice(0, 3000)}${driveTextSection}
+${(body.trim() ? body : subject).slice(0, 3000)}${driveTextSection}
 
 JSON:`.trim()
 
       tracePhase = 'gemini_project_extract'
       pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
-      const projectGroqPrompt = buildProjectGroqPrompt(subject, body, allTextContents)
+      const projectGroqPrompt = buildProjectGroqPrompt(subject, body.trim() ? body : subject, allTextContents)
       const { result, durationMs, usedModel: usedModelP } = await generateJSONSmart(prompt, allAttachments, 'project', 2, undefined, {
         rid: traceRid,
         phase: 'gemini_project_extract',
