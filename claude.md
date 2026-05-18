@@ -271,6 +271,56 @@ BoxはOAuth2なしで機械的なファイル取得ができないため、古�
    - `config.json` にスプレッドシートURL・ドライブフォルダIDを設定
    - `run.bat` で動作確認
 
+### 【Phase 4.8】skill_master スキルマスター ✅（実装完了・人間手作業待ち）
+
+#### 概要
+`skill_master` テーブルにITスキルを蓄積し、`inbound-email` Edge Function で AI を使わずにスキルを照合・抽出する。AI が新スキルを発見した際は自動的に DB に登録し、毎日クリーンアップ Cron でゴミエントリを除去する。
+
+#### フロー
+
+```
+① inbound-email でメール受信
+   ↓
+② skill_master DB照合（AIなし）
+   - 全テキスト（本文+添付+Google Drive）から skill_master のスキルを照合
+   - マッチしたスキルを dbSkillNames として保持
+   ↓
+③ Gemini/Groq で残テキストを解析（既存フロー）
+   - AI が返したスキルのうち skill_master 未登録のものを source='ai' で自動登録
+   ↓
+④ DB照合スキルと AIスキルをマージして candidates.skills に保存
+   - match_count を RPC でインクリメント（fire and forget）
+   ↓
+⑤ 毎日 JST 3:00 に skill-master-cleanup が実行
+   - ルールベースでゴミエントリ（source='ai'）を削除
+   - 30日間未マッチ（match_count=0）のエントリを削除
+```
+
+#### 新規ファイル一覧
+
+| ファイル | 内容 |
+|---|---|
+| `supabase/migrations/add_skill_master.sql` | skill_master テーブル作成 + increment_skill_match_counts RPC |
+| `supabase/migrations/seed_skill_master.sql` | ~1600件のシードデータ |
+| `supabase/functions/skill-master-cleanup/index.ts` | 毎日クリーンアップ Edge Function（AIなし・ルールベース） |
+| `supabase/migrations/add_skill_cleanup_cron.sql` | クリーンアップ pg_cron スケジュール |
+| `scripts/skill_master_review.py` | **月次レビュースクリプト**（Claude Code が毎月実行） |
+
+#### 月次レビュー（Claude Code が毎月実行すること）
+
+```bash
+python3 scripts/skill_master_review.py
+```
+
+出力された要確認エントリを確認し、削除候補の SQL を Supabase SQL Editor で実行する。
+
+#### 【人間】手作業
+
+1. **SupabaseでSQL実行**（所要: 約5分）
+   - `supabase/migrations/add_skill_master.sql` を SQL Editor で実行
+   - `supabase/migrations/seed_skill_master.sql` を SQL Editor で実行
+   - `supabase/migrations/add_skill_cleanup_cron.sql` の `YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を書き換えてから実行
+
 ### 【Phase 5】最終納品ドキュメント作成（未着手）
 1. **[Claude] 作業**: システム構成図のメンテナンス（README.md に Mermaid 図あり）
 2. **[Claude] 作業**: 操作マニュアルのメンテナンス（`docs/Sales_Manual.md` / `docs/Sales_Manual.pdf`・営業担当者向け）
@@ -300,6 +350,7 @@ BoxはOAuth2なしで機械的なファイル取得ができないため、古�
 | `submissions` | マッチング提案履歴。スコア・AI要約を保持。**`data_env`** 同上 |
 | `candidate_skills` | スキルをカテゴリ別に分解して保持（検索最適化・14カテゴリ） |
 | `ai_logs` | AI解析の実行ログ（モデル・所要時間・結果・エラー） |
+| `skill_master` | ITスキルマスタ。約1600件のシードデータ + AI自動登録（source='ai'）。aliases（別名）で表記ゆれを吸収。match_count / last_matched_at でマッチ実績管理 |
 | `app_config` | アプリ全体設定 |
 
 ### candidate_skills の14カテゴリ

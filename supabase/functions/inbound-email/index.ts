@@ -737,6 +737,111 @@ const SKILL_MASTER = [
   'TensorFlow','PyTorch','Excel','VBA','PowerShell','Bash',
 ]
 
+// ── skill_master DB照合（AIなし・高速） ──────────────────────────────────
+
+/** skill_master DB エントリ */
+interface SkillMasterEntry { id: string; name: string; category: string; aliases: string[] }
+
+/** Edge Function 起動中は5分間キャッシュ */
+let _skillDbCache: SkillMasterEntry[] | null = null
+let _skillDbCacheExpiry = 0
+
+async function getSkillMasterFromDb(
+  supabase: ReturnType<typeof import('https://esm.sh/@supabase/supabase-js@2').createClient>,
+): Promise<SkillMasterEntry[]> {
+  if (_skillDbCache && Date.now() < _skillDbCacheExpiry) return _skillDbCache
+  try {
+    const { data } = await supabase.from('skill_master').select('id, name, category, aliases')
+    _skillDbCache = (data ?? []).map((s: Record<string, unknown>) => ({
+      id: s.id as string,
+      name: s.name as string,
+      category: s.category as string,
+      aliases: Array.isArray(s.aliases) ? (s.aliases as string[]) : [],
+    }))
+    _skillDbCacheExpiry = Date.now() + 5 * 60 * 1000
+  } catch (e) {
+    console.warn('[skill_master] DB取得失敗、空配列で続行:', String(e))
+    _skillDbCache = []
+    _skillDbCacheExpiry = Date.now() + 60 * 1000 // 1分後に再試行
+  }
+  return _skillDbCache!
+}
+
+/**
+ * テキストから skill_master エントリを照合してスキルを抽出する。
+ * マッチしたスキルをテキストから除去した残テキストも返す。
+ */
+function extractAndRemoveSkills(
+  text: string,
+  masterSkills: SkillMasterEntry[],
+): { matched: { name: string; category: string }[]; remaining: string } {
+  const matched: { name: string; category: string }[] = []
+  let remaining = text
+
+  for (const skill of masterSkills) {
+    const terms = [skill.name, ...skill.aliases]
+    for (const term of terms) {
+      if (!term || term.length < 2) continue
+      const escaped = term.replace(/[.+*?()[\]{}\\|^$]/g, '\\$&')
+      const regex = new RegExp(`(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_])`, 'gi')
+      if (regex.test(remaining)) {
+        matched.push({ name: skill.name, category: skill.category })
+        remaining = remaining.replace(
+          new RegExp(`(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_])`, 'gi'),
+          ' ',
+        )
+        break // このスキルはマッチ済み、次のスキルへ
+      }
+    }
+  }
+
+  return { matched, remaining: remaining.replace(/\s{2,}/g, ' ').trim() }
+}
+
+/** AI が返したスキルのうち skill_master に未登録のものを source='ai' で登録する */
+async function registerNewSkillsToDb(
+  supabase: ReturnType<typeof import('https://esm.sh/@supabase/supabase-js@2').createClient>,
+  aiSkills: string[],
+  skillsByCategory: Record<string, string[]>,
+  knownNames: Set<string>,
+): Promise<void> {
+  // 明らかに技術語でないものを除外するパターン
+  const SKIP_PATTERN = /^(経験|以上|あり|なし|可能|対応|担当|実績|設計|構築|運用|管理|提案|分析|作成|実装|習得|使用|利用|活用|業務|機能|処理|連携|統合|移行|更新|保守|改修|対象|必要|要件|希望|優遇|歓迎|必須|尚可|概要|詳細|内容|期間|場所|条件|契約|稼働|即日|その他|各種)$/
+
+  const toInsert: { name: string; category: string; source: string }[] = []
+  for (const skillName of aiSkills) {
+    const trimmed = skillName.trim()
+    const lower = trimmed.toLowerCase()
+    if (knownNames.has(lower)) continue
+    if (!trimmed || trimmed.length < 2 || trimmed.length > 60) continue
+    if (SKIP_PATTERN.test(trimmed)) continue
+    if (/^\d+$/.test(trimmed)) continue
+
+    // skillsByCategory から category を特定
+    let category = 'others'
+    for (const [cat, catSkills] of Object.entries(skillsByCategory)) {
+      if ((catSkills as string[]).some(s => s.toLowerCase() === lower)) {
+        category = cat
+        break
+      }
+    }
+    toInsert.push({ name: trimmed, category, source: 'ai' })
+    knownNames.add(lower) // 同一バッチ内の重複を防止
+  }
+
+  if (toInsert.length > 0) {
+    try {
+      await supabase.from('skill_master').insert(toInsert)
+      console.log(`[skill_master] 新規登録(ai): ${toInsert.map(s => s.name).join(', ')}`)
+      // キャッシュ無効化
+      _skillDbCache = null
+      _skillDbCacheExpiry = 0
+    } catch (e) {
+      console.warn('[skill_master] 新規登録失敗:', String(e))
+    }
+  }
+}
+
 function preExtractFields(text: string): PreExtracted {
   // 経験年数（複数パターン）
   let experienceYears: number | null = null
@@ -2155,6 +2260,13 @@ Deno.serve(async (req: Request) => {
       ? `\n※添付ファイル（${allAttachmentNames.join('、')}）も含めて解析してください。`
       : ''
 
+    // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
+    const masterSkills = await getSkillMasterFromDb(supabase)
+    const fullTextForSkill = [body, ...allTextContents.map(t => t.content ?? '')].join('\n')
+    const { matched: dbMatchedSkills } = extractAndRemoveSkills(fullTextForSkill, masterSkills)
+    const dbSkillNames = dbMatchedSkills.map(s => s.name)
+    console.log(`[skill_master] DB照合: ${dbSkillNames.length}件マッチ テキスト長=${fullTextForSkill.length}文字`)
+
     // ── 人材メール ────────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
       // ライブラリ前処理: テキスト圧縮 + regex事前抽出
@@ -2367,8 +2479,17 @@ JSON:`.trim()
       }
 
 
-      // スキル重複除去（trim + 大文字小文字を無視して正規化）
-      const skills = Array.from(
+      // skill_master に未登録のスキルを source='ai' で自動登録
+      const knownSkillNames = new Set(masterSkills.map(s => s.name.toLowerCase()))
+      await registerNewSkillsToDb(
+        supabase,
+        analyzed.skills ?? [],
+        analyzed.skillsByCategory ?? {},
+        knownSkillNames,
+      )
+
+      // DB照合スキルと AI スキルをマージして重複除去
+      const aiSkillDeduped = Array.from(
         new Map(
           (analyzed.skills ?? [])
             .map((s: string) => s.trim())
@@ -2376,6 +2497,20 @@ JSON:`.trim()
             .map((s: string) => [s.toLowerCase(), s])
         ).values()
       )
+      const mergedSkillMap = new Map<string, string>()
+      // DB照合スキルを先に入れる（正規化済みの名称を優先）
+      for (const name of dbSkillNames) {
+        mergedSkillMap.set(name.toLowerCase(), name)
+      }
+      // AIスキルで補完（DB照合にないものを追加）
+      for (const name of aiSkillDeduped) {
+        if (!mergedSkillMap.has(name.toLowerCase())) {
+          mergedSkillMap.set(name.toLowerCase(), name)
+        }
+      }
+
+      // スキル重複除去（trim + 大文字小文字を無視して正規化）
+      const skills = Array.from(mergedSkillMap.values())
 
       const dbPayload = {
         data_env: inboundDataEnv,
@@ -2468,6 +2603,18 @@ JSON:`.trim()
         const { error: skillsError } = await supabase.from('candidate_skills').insert(skillsPayload)
         if (skillsError) console.error('[candidate_skills INSERT error]', skillsError)
         else { /* スキル登録完了 */ }
+      }
+
+      // skill_master の match_count をインクリメント（fire and forget）
+      if (dbSkillNames.length > 0) {
+        const matchedIds = masterSkills
+          .filter(s => dbSkillNames.includes(s.name))
+          .map(s => s.id)
+        if (matchedIds.length > 0) {
+          supabase.rpc('increment_skill_match_counts', { skill_ids: matchedIds })
+            .then(() => {})
+            .catch(() => {}) // エラーはメイン処理に影響させない
+        }
       }
 
       const { error: logError } = await supabase.from('ai_logs').insert({
