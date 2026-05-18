@@ -680,6 +680,118 @@ async function generateJSONWithGroq(
  */
 type TextContent = { label: string; content: string }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ライブラリ前処理: AIコスト削減のためのテキスト圧縮・regex事前抽出
+// ══════════════════════════════════════════════════════════════════════════
+
+/** 定型文（挨拶・免責・区切り線）を除去してAIへのトークン数を削減 */
+function compressBodyForAI(text: string, maxChars = 3000): string {
+  const BOILERPLATE = [
+    /^いつも(大変)?お世話になっております/,
+    /^お世話になります/,
+    /^お世話になっております/,
+    /^突然のご連絡/,
+    /^突然のメール/,
+    /^このメールは(自動送信|返信不可)/,
+    /^本メールは(自動送信|返信不可)/,
+    /配信停止はこちら/,
+    /^[-=─━＝*＊]{3,}/,
+    /^Copyright|^©/i,
+    /^All rights reserved/i,
+    /^Sent from/i,
+    /^このメールへの返信はできません/,
+    /^返信いただけませんのでご了承/,
+  ]
+  const lines = text.split('\n')
+  const kept: string[] = []
+  let emptyRun = 0
+  for (const line of lines) {
+    const t = line.trim()
+    if (!t) { if (++emptyRun <= 1) kept.push(''); continue }
+    emptyRun = 0
+    if (BOILERPLATE.some(p => p.test(t))) continue
+    kept.push(line)
+  }
+  return kept.join('\n').slice(0, maxChars)
+}
+
+/** regex でフィールドを事前抽出（AI呼び出し前のヒント生成） */
+interface PreExtracted {
+  experienceYears: number | null
+  desiredRate: string | null
+  phone: string | null
+  skills: string[]
+}
+
+/** IT スキルキーワードマスター（regex照合用） */
+const SKILL_MASTER = [
+  'Java','Python','PHP','Ruby','Go','C#','C++','TypeScript','JavaScript','Kotlin','Swift','Scala','COBOL',
+  'React','Vue','Angular','Next.js','Nuxt','Spring','Laravel','Rails','Django','FastAPI','Flutter',
+  'React Native','jQuery','Node.js','Express',
+  'AWS','Azure','GCP','Firebase',
+  'Docker','Kubernetes','Terraform','Ansible','Jenkins','GitHub Actions','CircleCI',
+  'Linux','Windows Server','RHEL','Ubuntu','CentOS',
+  'MySQL','PostgreSQL','Oracle','SQL Server','MongoDB','Redis','Elasticsearch','DynamoDB',
+  'BigQuery','Snowflake','Redshift','Tableau','Power BI','dbt','Looker',
+  'Git','GitHub','GitLab','Jira','Figma','Photoshop','Illustrator',
+  'Salesforce','SAP','VMware','Nginx','Apache',
+  'TensorFlow','PyTorch','Excel','VBA','PowerShell','Bash',
+]
+
+function preExtractFields(text: string): PreExtracted {
+  // 経験年数（複数パターン）
+  let experienceYears: number | null = null
+  const expPatterns = [
+    /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)歴\s*[約]?\s*(\d+)\s*年/,
+    /経験\s*[約]?\s*(\d+)\s*年/,
+    /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
+    /(?:経験年数|開発経験)[：:]\s*(\d+)年/,
+  ]
+  for (const p of expPatterns) {
+    const m = text.match(p)
+    if (m) {
+      const y = parseInt(m[1], 10)
+      if (y > 0 && y <= 60) { experienceYears = y; break }
+    }
+  }
+
+  // 希望単価
+  let desiredRate: string | null = null
+  const rateM = text.match(/(\d{2,3})\s*万\s*円?(?:以上|\/月|程度|台|〜|~)?/)
+  if (rateM) {
+    const amount = parseInt(rateM[1], 10)
+    if (amount >= 20 && amount <= 300) {
+      const suffix = rateM[0].includes('以上') ? '万円以上'
+        : rateM[0].includes('/月') ? '万円/月'
+        : '万円'
+      desiredRate = `${amount}${suffix}`
+    }
+  }
+
+  // 電話番号
+  const phoneM = text.match(/(?:0|\+81[-\s]?)\d{1,4}[-−]\d{2,4}[-−]\d{4}/)
+  const phone = phoneM ? phoneM[0] : null
+
+  // ITスキルキーワード照合
+  const lower = text.toLowerCase()
+  const skills = SKILL_MASTER.filter(s =>
+    new RegExp(`(?<![a-zA-Z#])${s.toLowerCase().replace(/[.+#]/g, '\\$&')}(?![a-zA-Z])`, 'i').test(lower)
+  )
+
+  return { experienceYears, desiredRate, phone, skills }
+}
+
+/** 事前抽出ヒントをプロンプトに埋め込む文字列を生成 */
+function buildPreExtractHint(pre: PreExtracted): string {
+  const hints: string[] = []
+  if (pre.experienceYears != null) hints.push(`経験年数: ${pre.experienceYears}年（本文から検出）`)
+  if (pre.desiredRate) hints.push(`希望単価: ${pre.desiredRate}（本文から検出）`)
+  if (pre.phone) hints.push(`電話番号: ${pre.phone}（本文から検出）`)
+  if (pre.skills.length > 0) hints.push(`検出スキルキーワード: ${pre.skills.join(', ')}（確認・追加してください）`)
+  if (hints.length === 0) return ''
+  return `\n【regex事前検出値（確認・補正してください）】\n${hints.map(h => `- ${h}`).join('\n')}\n`
+}
+
 /** Groqプロンプト用スマートトランケーション: 先頭65% + 末尾35% */
 function smartTruncateForGroq(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text
@@ -2052,6 +2164,12 @@ Deno.serve(async (req: Request) => {
 
     // ── 人材メール ────────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
+      // ライブラリ前処理: テキスト圧縮 + regex事前抽出
+      const compressedBody = compressBodyForAI(body, 3000)
+      const preExtracted = preExtractFields(body)
+      const preExtractHint = buildPreExtractHint(preExtracted)
+      console.log(`[preExtract] compressed=${compressedBody.length}→${body.length}文字 skills=${preExtracted.skills.length}件 exp=${preExtracted.experienceYears} rate=${preExtracted.desiredRate}`)
+
       // ファイル名から氏名を推測
       const extractNameFromFilename = (filename: string): string | null => {
         if (!filename) return null
@@ -2082,7 +2200,7 @@ Deno.serve(async (req: Request) => {
         : ''
 
       const prompt = `
-これは営業担当者が転送・送付した人材紹介メールです。${attachmentNote}${filenameNote}
+これは営業担当者が転送・送付した人材紹介メールです。${attachmentNote}${filenameNote}${preExtractHint}
 差出人（${from}）は営業担当者であり、候補者本人ではありません。
 
 【重要ルール】
@@ -2174,7 +2292,7 @@ Deno.serve(async (req: Request) => {
 - fromCompany: string | null（紹介元・送信元の会社名。差出人の署名・本文末尾から抽出。メール冒頭の宛先「〇〇御中」「〇〇様」に書かれた会社名は絶対に入れないこと。なければ null）
 
 本文:
-${body.slice(0, 3000)}${driveTextSection}
+${compressedBody}${driveTextSection}
 
 JSON:`.trim()
 
@@ -2327,6 +2445,31 @@ JSON:`.trim()
         : await supabase.from('candidates').insert(dbPayload).select().single()
 
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
+
+      // ライブラリ重複判定（AI不使用・名前+スキルJaccard類似度）
+      if (analyzed.name && analyzed.name !== '不明') {
+        const { data: similar } = await supabase
+          .from('candidates')
+          .select('id, name, skills')
+          .eq('data_env', inboundDataEnv)
+          .eq('name', analyzed.name)
+          .neq('id', data.id)
+          .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
+          .limit(5)
+        if (similar && similar.length > 0) {
+          for (const s of similar) {
+            const mySkillSet = new Set(skills.map((sk: string) => sk.toLowerCase()))
+            const theirSkills = new Set(((s.skills as string[]) || []).map((sk: string) => sk.toLowerCase()))
+            const intersection = [...mySkillSet].filter(sk => theirSkills.has(sk)).length
+            const union = new Set([...mySkillSet, ...theirSkills]).size
+            if (union > 0 && intersection / union >= 0.4) {
+              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', data.id).eq('data_env', inboundDataEnv)
+              console.log(`[duplicate] 名前+スキル類似 → duplicate_flag=true: ${analyzed.name} jaccard=${(intersection / union).toFixed(2)}`)
+              break
+            }
+          }
+        }
+      }
 
       // candidate_skills に一括INSERT
       const validCategories = [

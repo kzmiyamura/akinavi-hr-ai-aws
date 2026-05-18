@@ -15,9 +15,21 @@ ROLE_ARN="${LAMBDA_ROLE_ARN:?環境変数 LAMBDA_ROLE_ARN を設定してくだ�
 API_KEY="${LAMBDA_API_KEY:-}"
 FUNCTIONS=("gate-filter" "pdf-processor")
 
-# メモリ・タイムアウト設定
-declare -A MEMORY=( ["gate-filter"]="256" ["pdf-processor"]="512" )
-declare -A TIMEOUT=( ["gate-filter"]="15" ["pdf-processor"]="60" )
+# メモリ・タイムアウト設定（bash 3 互換: 連想配列の代わりに関数で代替）
+get_memory() {
+  case "$1" in
+    gate-filter)   echo "256" ;;
+    pdf-processor) echo "512" ;;
+    *) echo "256" ;;
+  esac
+}
+get_timeout() {
+  case "$1" in
+    gate-filter)   echo "15" ;;
+    pdf-processor) echo "60" ;;
+    *) echo "30" ;;
+  esac
+}
 
 cd "$(dirname "$0")"
 
@@ -38,8 +50,8 @@ npm run build
 for FN in "${FUNCTIONS[@]}"; do
   FUNC_NAME="akinavi-${FN}"
   ZIP_PATH="dist/${FN}.zip"
-  MEM="${MEMORY[$FN]}"
-  TOUT="${TIMEOUT[$FN]}"
+  MEM=$(get_memory "${FN}")
+  TOUT=$(get_timeout "${FN}")
 
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -53,11 +65,12 @@ for FN in "${FUNCTIONS[@]}"; do
   echo "   サイズ: $(du -sh "${ZIP_PATH}" | cut -f1)"
 
   # 環境変数マップ
-  ENV_VARS="Variables={AWS_REGION=${REGION}"
+  # ※ AWS_REGION は Lambda ランタイムが自動設定する予約変数のため明示指定不可
   if [[ -n "${API_KEY}" ]]; then
-    ENV_VARS="${ENV_VARS},LAMBDA_API_KEY=${API_KEY}"
+    ENV_VARS="Variables={LAMBDA_API_KEY=${API_KEY}}"
+  else
+    ENV_VARS="Variables={}"
   fi
-  ENV_VARS="${ENV_VARS}}"
 
   # 既存の Lambda があれば更新、なければ新規作成
   if aws lambda get-function \
