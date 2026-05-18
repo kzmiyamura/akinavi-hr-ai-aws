@@ -169,6 +169,9 @@ function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' |
     return 'skip'
   }
 
+  // 件名だけで案件確定のパターン（HR判定前に先にチェック）
+  if (/エンド直|直案件|直\s*案件|合う人材|ご紹介をお待ち|エンドユーザー.*直/.test(subject)) return 'project'
+
   // HR確定チェック（件名だけで明らかに候補者か案件）
   if (HR_SUBJECT_PATTERNS.some(p => p.test(subject))) {
     // 件名に「案件」「要件」「募集」「参画」「依頼」を含む場合は project
@@ -455,15 +458,28 @@ async function classifyEmailsBatch(
     '説明文・コードブロックは不要です。',
     '',
     '種別の定義:',
-    '  candidate  - 人材・エンジニア・求職者・フリーランス本人の情報（スキルシート・経歴書・自己紹介・稼働確認など）',
-    '             ※ 人名・連絡先があるだけでは candidate にしない。内容がHR情報か確認すること。',
-    '  project    - 案件・プロジェクト・仕事依頼（要件定義・募集要項・単価・参画依頼など）',
-    '  other      - 上記以外すべて。以下は必ず other:',
-    '             ・営業メール・BtoBサービス案内（テレアポ代行・集客支援・マーケ支援・営業代行など）',
-    '             ・ホームページ・フォームからの問い合わせ通知（「ホームページよりお問い合わせ」「【お問い合わせ区分】」等）',
-    '             ・配信停止リンクを含む広告・メルマガ',
-    '             ・サービス通知・システム通知・請求書・領収書',
-    '             ・日程調整や資料請求への誘導が目的のメール',
+    '',
+    '【candidate】送り主が「うちの人材を使ってください」と紹介するメール',
+    '  ・人材会社・SES会社・フリーランス本人が、特定の人材を売り込んでいる',
+    '  ・スキルシート・経歴書・自己紹介・稼働確認・要員ご紹介など',
+    '  ・「直要員」「ご要員」「即日参画可」「弊社エンジニア」「スキルシート添付」',
+    '  ・件名にスキル名が並んでいても、人材を売り込む内容なら candidate',
+    '  ※ 人名・連絡先があるだけでは candidate にしない',
+    '',
+    '【project】送り主が「あなたの人材を紹介してください」と依頼するメール',
+    '  ・案件紹介会社・エンド企業が、受け取り側に候補者の提案を求めている',
+    '  ・「ご提案をお待ちしております」「合う人材がいればご紹介ください」',
+    '  ・「人材を募集しております」「見合う方がいれば」',
+    '  ・必須スキル/尚可スキル・金額・清算・面談回数などの案件条件が記載されている',
+    '  ・「管理ID」「エンド直」「商流」「清算幅」などの案件管理用語がある',
+    '  ・件名に【エンド直】【急募】【直案件】などがあれば project の可能性が高い',
+    '',
+    '【other】上記以外。以下は必ず other:',
+    '  ・営業メール・BtoBサービス案内（テレアポ代行・集客支援・マーケ支援・営業代行など）',
+    '  ・ホームページ・フォームからの問い合わせ通知',
+    '  ・配信停止リンクのみ含む広告・メルマガ（ただし案件紹介メールにも配信停止リンクが付く場合があるので注意）',
+    '  ・サービス通知・システム通知・請求書・領収書',
+    '  ・日程調整や資料請求への誘導が目的のメール',
     '',
     '返却形式: [{"i":0,"t":"candidate"},{"i":1,"t":"project"},...]',
     '',
@@ -769,6 +785,24 @@ Deno.serve(async (req: Request) => {
 
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
+    // ---- 排他ロック（二重起動防止） ----
+    // 前のポーリングがまだ動いている場合はスキップ（タイムアウト: 8分）
+    const LOCK_KEY = 'poll_email_lock'
+    const LOCK_TIMEOUT_MS = 8 * 60 * 1000
+    const { data: lockRow } = await supabase.from('app_config').select('value').eq('key', LOCK_KEY).maybeSingle()
+    if (lockRow?.value) {
+      const lockedAt = new Date(lockRow.value).getTime()
+      if (Date.now() - lockedAt < LOCK_TIMEOUT_MS) {
+        const elapsedSec = Math.round((Date.now() - lockedAt) / 1000)
+        console.log(`[poll-email] 前回のポーリングが実行中のためスキップ (${elapsedSec}秒前に開始)`)
+        return new Response(
+          JSON.stringify({ ok: true, skipped: true, reason: 'LOCKED', lockedAtSec: elapsedSec }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+    }
+    await supabase.from('app_config').upsert({ key: LOCK_KEY, value: new Date().toISOString() }, { onConflict: 'key' })
+
     console.log('[poll-email] 開始')
 
     // app_config からメール設定を読み込む
@@ -835,12 +869,20 @@ Deno.serve(async (req: Request) => {
 
     console.log(`[poll-email] 完了: ${totalProcessed}件処理, エラー ${totalErrors.length}件`)
 
+    // ロック解除
+    await supabase.from('app_config').delete().eq('key', LOCK_KEY)
+
     return new Response(
       JSON.stringify({ ok: true, mode, useAiClassificationProd, useAiClassificationDev, totalProcessed, totalErrors, summary }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     )
   } catch (e) {
     console.error('[poll-email] 致命的エラー', e)
+    // ロック解除（エラー時も確実に）
+    try {
+      const supabaseForUnlock = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
+      await supabaseForUnlock.from('app_config').delete().eq('key', 'poll_email_lock')
+    } catch { /* ignore */ }
     // pg_cron が停止しないよう 200 を返す
     return new Response(
       JSON.stringify({ ok: false, error: String(e) }),

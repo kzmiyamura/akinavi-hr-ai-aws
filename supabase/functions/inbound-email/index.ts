@@ -700,7 +700,11 @@ function buildCandidateGroqPrompt(
 ): string {
   const GROQ_MAX = 4_300
   const header = `人材紹介メール解析。書かれた情報のみ抽出。推測禁止。差出人(${from})は営業担当者。
-氏名はPDF/本文から読む。「М・T」「A.B.」「T.Y.」などイニシャル形式も有効な氏名として採用すること。見つからない場合のみ"不明"。emailは候補者本人のみ(差出人は含めない)。experienceYearsは職歴の最初の年から現在（または最後の職歴終了年）までを計算すること。fromCompanyは差出人の署名・所属から抽出する送信元会社名。冒頭の宛先（「〇〇御中」「〇〇様」）に書かれた会社名は絶対に入れないこと。
+氏名: メール冒頭の「田中様」「〇〇御中」は受信者の敬称であり候補者名ではない。候補者名は本文・添付・署名から探す。「М・T」「A.B.」「T.Y.」などイニシャル形式も有効。見つからない場合のみ"不明"。
+emailは候補者本人のみ(差出人は含めない)。
+experienceYears: 職歴の最初の年から現在までの年数。「経験〇年」「IT歴〇年」「エンジニア歴〇年」の明記があればその値を優先。
+desiredRate: 「〇〇万円以上」「単価〇〇万」「希望単価〇〇万」「〇〇万/月」等の金額を必ず抽出。「65万円以上」→"65万円以上"のまま返す。
+fromCompanyは差出人の署名・所属から抽出する送信元会社名。冒頭の宛先（「〇〇御中」「〇〇様」）に書かれた会社名は絶対に入れないこと。
 
 以下JSONのみ返す:
 {"name":string,"email":string|null,"phone":string|null,"skills":string[],"skillsByCategory":{"languages":[],"frameworks":[],"libraries":[],"os":[],"databases":[],"dwh":[],"clouds":[],"infrastructures":[],"tools":[],"methodologies":[],"certifications":[],"design":[],"marketing":[],"others":[]},"roles":string[],"industries":string[],"experienceYears":number|null,"summary":string,"nearestStation":string|null,"prefecture":string|null,"availableRegions":string[]|null,"currentWorkLocation":string|null,"remoteAvailable":boolean,"desiredRate":string|null,"fromCompany":string|null}
@@ -2113,7 +2117,7 @@ Deno.serve(async (req: Request) => {
   例:「グラフィックデザイン / WEBデザイン / 動画編集」→ ["グラフィックデザイン", "WEBデザイン", "動画編集"]
 - skillsは重複なしで返してください。表記が異なっても同じ技術は1つにまとめ、より一般的な表記に統一してください。
 - experienceYearsは職歴の最初の年から現在までの年数を計算してください。
-  備考欄や本文に「デザイン歴20年」「経験年数○年」等の明記があればその値を優先してください。
+  備考欄や本文に「デザイン歴20年」「経験年数○年」「IT歴○年」「エンジニア歴○年」「経験○年以上」等の明記があればその値を優先してください。
 - summaryは具体的な社名・プロジェクト名・実績・受賞歴を必ず含めてください。
 
 件名: ${subject}
@@ -2137,7 +2141,7 @@ Deno.serve(async (req: Request) => {
 - remoteAvailable: 本文やサマリーに「リモート希望」「リモート勤務」「フリーランス」等の記載があれば true。明記がなければ false。
 
 抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
-- name: string（フルネーム。ファイル名・文字化け文字列は使わない。不明なら "不明"）
+- name: string（フルネーム。メール冒頭の「田中様」「〇〇御中」は受信者への敬称であり候補者名ではない。候補者名は本文中の紹介文・添付ファイル・署名から探す。ファイル名・文字化け文字列は使わない。どうしても見つからない場合のみ "不明"）
 - email: string | null（候補者本人のみ。なければ null）
 - phone: string | null（明記されたもののみ。なければ null）
 - skills: string[]（職種問わず明記されているもののみ。重複なし。正規化済み。なければ[]）
@@ -2166,7 +2170,7 @@ Deno.serve(async (req: Request) => {
 - availableRegions: string[] | null（就業可能な地域。例: ["北海道", "東京都"]。情報がなければ null）
 - currentWorkLocation: string | null（現在の拠点都道府県。例: "北海道"。情報がなければ null）
 - remoteAvailable: boolean（リモート勤務対応可否。「リモート希望」等の明記で true。記載なければ false）
-- desiredRate: string | null（希望単価・希望年収。例: "60万円/月"、"700万円/年"。記載なければ null）
+- desiredRate: string | null（希望単価・希望年収。「〇〇万円以上」「〇〇万/月」「単価〇〇万」「希望単価〇〇万」「〇〇万円@〇〇」等の金額を見逃さず抽出。例: "65万円以上"、"60万円/月"、"700万円/年"。記載なければ null）
 - fromCompany: string | null（紹介元・送信元の会社名。差出人の署名・本文末尾から抽出。メール冒頭の宛先「〇〇御中」「〇〇様」に書かれた会社名は絶対に入れないこと。なければ null）
 
 本文:
