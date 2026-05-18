@@ -917,7 +917,7 @@ desiredRate: 「〇〇万円以上」「単価〇〇万」「希望単価〇〇�
 fromCompanyは差出人の署名・所属から抽出する送信元会社名。冒頭の宛先（「〇〇御中」「〇〇様」）に書かれた会社名は絶対に入れないこと。
 
 以下JSONのみ返す:
-{"name":string,"skills":string[],"skillsByCategory":{"languages":[],"frameworks":[],"libraries":[],"os":[],"databases":[],"dwh":[],"clouds":[],"infrastructures":[],"tools":[],"methodologies":[],"certifications":[],"design":[],"marketing":[],"others":[]},"roles":string[],"industries":string[],"experienceYears":number|null,"summary":string,"nearestStation":string|null,"prefecture":string|null,"availableRegions":string[]|null,"currentWorkLocation":string|null,"remoteAvailable":boolean,"desiredRate":string|null,"fromCompany":string|null}
+{"name":string,"roles":string[],"industries":string[],"experienceYears":number|null,"summary":string,"nearestStation":string|null,"prefecture":string|null,"availableRegions":string[]|null,"currentWorkLocation":string|null,"remoteAvailable":boolean,"desiredRate":string|null,"fromCompany":string|null}
 
 件名:${subject}
 本文:`
@@ -2324,31 +2324,12 @@ Deno.serve(async (req: Request) => {
 - 氏名が本文・添付テキスト・ファイル名に一切見つからない場合のみ "不明" にしてください。
 
 【その他のルール】
-- skillsはIT系に限らず、職種問わず本文・添付に明記されたスキル・ツール・知見を全て抽出してください。
-  例: ITエンジニア系（PHP, Java, MySQL等）はもちろん、
-  デザイン系（Illustrator, Photoshop, Figma, After Effects等）、
-  ビジネス系（Excel, PowerPoint, Salesforce等）、
-  知見・専門性（グラフィックデザイン, WEBデザイン, 動画編集, ECサイト運営等）も含めてください。
-- 本文中で「/」「・」「,」「、」で区切られたスキルは必ず個別に分割して抽出してください。
-  例:「Illustrator / Photoshop / Figma」→ ["Illustrator", "Photoshop", "Figma"]
-  例:「グラフィックデザイン / WEBデザイン / 動画編集」→ ["グラフィックデザイン", "WEBデザイン", "動画編集"]
-- skillsは重複なしで返してください。表記が異なっても同じ技術は1つにまとめ、より一般的な表記に統一してください。
+- roles/industriesのみ抽出してください。スキルはDBで処理するためAIで抽出不要です。
 - experienceYearsは職歴の最初の年から現在までの年数を計算してください。
   備考欄や本文に「デザイン歴20年」「経験年数○年」「IT歴○年」「エンジニア歴○年」「経験○年以上」等の明記があればその値を優先してください。
 - summaryは具体的な社名・プロジェクト名・実績・受賞歴を必ず含めてください。
 
 件名: ${subject}
-
-【スキル正規化ルール】
-※このリストは「表記ゆれを統一するための参考」です。リストにあるスキルを新たに追加してはいけません。
-本文・添付に明記されているスキルのみ抽出し、以下の表記に統一してください：
-- Javascript / JS → JavaScript
-- Mysql / MYSQL → MySQL
-- PostageSQL / Postgre → PostgreSQL
-- Salesforce / saleforce → Salesforce
-- Powerpoint → PowerPoint
-- After effect / AfterEffects → After Effects
-- Premiere / PremierePro → Premiere Pro
 
 【地域・勤務地に関するルール】
 - nearestStation: 「基本情報」や「最寄駅」フィールドから記載された駅名を抽出。都道府県名も含めます。例: "北海道 麻生駅"。記載がなければ null。
@@ -2359,23 +2340,6 @@ Deno.serve(async (req: Request) => {
 
 抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
 - name: string（フルネーム。メール冒頭の「田中様」「〇〇御中」は受信者への敬称であり候補者名ではない。候補者名は本文中の紹介文・添付ファイル・署名から探す。ファイル名・文字化け文字列は使わない。どうしても見つからない場合のみ "不明"）
-- skills: string[]（職種問わず明記されているもののみ。重複なし。正規化済み。なければ[]）
-- skillsByCategory: object（skillsを以下の14カテゴリに分類。該当なしは[]）
-  【カテゴリ厳守ルール】以下の14カテゴリキーのみ使用すること。それ以外のキーは絶対に追加しないこと。どのカテゴリにも当てはまらないスキルはすべて others に入れること。
-  - languages: string[]（プログラミング言語・クエリ言語。例: PHP, Java, Python, SQL, HTML/CSS）
-  - frameworks: string[]（Webフレームワーク・アプリFW等。例: Laravel, React, Vue, Spring）
-  - libraries: string[]（ライブラリ、UIキット等。例: jQuery, Bootstrap, NumPy）
-  - os: string[]（OS。例: Linux, Windows, MacOS, Unix）
-  - databases: string[]（RDB, NoSQL, KVS等。例: MySQL, PostgreSQL, MongoDB, Redis）
-  - dwh: string[]（データウェアハウス・分析基盤。例: BigQuery, Snowflake, Redshift, dbt, Looker, Tableau, Power BI）
-  - clouds: string[]（クラウドサービス。例: AWS, Azure, GCP, Firebase）
-  - infrastructures: string[]（インフラ技術。例: Docker, Kubernetes, Terraform, Nginx, Apache, CI/CD）
-  - tools: string[]（開発・業務ツール。例: Git, Jira, Slack, Notion, Salesforce, Excel, PowerPoint）
-  - methodologies: string[]（手法・マネジメント。例: アジャイル, スクラム, 要件定義, 企画立案, ディレクション, PM）
-  - certifications: string[]（資格試験等。例: AWS認定, 情報処理技術者, TOEIC）
-  - design: string[]（デザイン・クリエイティブ。例: Illustrator, Photoshop, Figma, XD, After Effects, Premiere Pro, グラフィックデザイン, 動画編集）
-  - marketing: string[]（マーケティング・集客。例: SEO, SNS運用, Web広告, ECサイト運営, デジタルマーケティング）
-  - others: string[]（上記14カテゴリに当てはまらないもの全て）
 - roles: string[]（担当役割・職種。例: ["PM", "グラフィックデザイナー", "クリエイティブディレクター", "ITコンサル"]。明記されているもののみ）
 - industries: string[]（業界経験。例: ["通信", "金融", "広告", "EC"]。職歴・本文から読み取れるもの）
 - experienceYears: number | null（計算または明記された値。なければ null）
@@ -2400,13 +2364,6 @@ JSON:`.trim()
       let parseFallback: 'none' | 'body_only_after_attachment_timeout' = 'none'
       type CandAi = {
         name: string
-        skills: string[]
-        skillsByCategory: {
-          languages: string[]; frameworks: string[]; libraries: string[]; os: string[]
-          databases: string[]; dwh: string[]; clouds: string[]; infrastructures: string[]
-          tools: string[]; methodologies: string[]; certifications: string[]
-          design: string[]; marketing: string[]; others: string[]
-        }
         roles: string[]
         industries: string[]
         experienceYears: number | null; summary: string
@@ -2479,38 +2436,8 @@ JSON:`.trim()
       }
 
 
-      // skill_master に未登録のスキルを source='ai' で自動登録
-      const knownSkillNames = new Set(masterSkills.map(s => s.name.toLowerCase()))
-      await registerNewSkillsToDb(
-        supabase,
-        analyzed.skills ?? [],
-        analyzed.skillsByCategory ?? {},
-        knownSkillNames,
-      )
-
-      // DB照合スキルと AI スキルをマージして重複除去
-      const aiSkillDeduped = Array.from(
-        new Map(
-          (analyzed.skills ?? [])
-            .map((s: string) => s.trim())
-            .filter((s: string) => s.length > 0)
-            .map((s: string) => [s.toLowerCase(), s])
-        ).values()
-      )
-      const mergedSkillMap = new Map<string, string>()
-      // DB照合スキルを先に入れる（正規化済みの名称を優先）
-      for (const name of dbSkillNames) {
-        mergedSkillMap.set(name.toLowerCase(), name)
-      }
-      // AIスキルで補完（DB照合にないものを追加）
-      for (const name of aiSkillDeduped) {
-        if (!mergedSkillMap.has(name.toLowerCase())) {
-          mergedSkillMap.set(name.toLowerCase(), name)
-        }
-      }
-
-      // スキル重複除去（trim + 大文字小文字を無視して正規化）
-      const skills = Array.from(mergedSkillMap.values())
+      // スキルはDB照合結果のみ使用（AIによるスキル抽出廃止）
+      const skills = dbSkillNames
 
       const dbPayload = {
         data_env: inboundDataEnv,
@@ -2522,12 +2449,11 @@ JSON:`.trim()
         raw_profile: {
           text: body.slice(0, 5000),
           summary: analyzed.summary ?? '',
-          skillsByCategory: analyzed.skillsByCategory ?? {
-            languages: [], frameworks: [], libraries: [], os: [],
-            databases: [], dwh: [], clouds: [], infrastructures: [],
-            tools: [], methodologies: [], certifications: [],
-            design: [], marketing: [], others: [],
-          },
+          skillsByCategory: dbMatchedSkills.reduce((acc, s) => {
+            if (!acc[s.category]) acc[s.category] = []
+            acc[s.category].push(s.name)
+            return acc
+          }, {} as Record<string, string[]>),
           roles: analyzed.roles ?? [],
           industries: analyzed.industries ?? [],
           nearestStation: analyzed.nearestStation ?? null,
@@ -2583,19 +2509,11 @@ JSON:`.trim()
         }
       }
 
-      // candidate_skills に一括INSERT
-      const validCategories = [
-        'languages', 'frameworks', 'libraries', 'os',
-        'databases', 'dwh', 'clouds', 'infrastructures',
-        'tools', 'methodologies', 'certifications',
-        'design', 'marketing', 'others',
-      ]
+      // candidate_skills に一括INSERT（DB照合結果のカテゴリを使用）
       const skillsPayload: { candidate_id: string; category: string; skill: string }[] = []
-      const categoryMap = analyzed.skillsByCategory ?? {}
-      for (const category of validCategories) {
-        const skillList: string[] = (categoryMap as Record<string, string[]>)[category] ?? []
-        for (const skill of skillList) {
-          if (skill && skill.trim()) skillsPayload.push({ candidate_id: data.id, category, skill: skill.trim() })
+      for (const matched of dbMatchedSkills) {
+        if (matched.name && matched.name.trim()) {
+          skillsPayload.push({ candidate_id: data.id, category: matched.category, skill: matched.name.trim() })
         }
       }
       if (skillsPayload.length > 0) {
