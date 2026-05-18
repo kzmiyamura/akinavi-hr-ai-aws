@@ -88,7 +88,7 @@ def main():
     days = args.days
 
     since = f"NOW() - INTERVAL '{days} days'"
-    print(f'=== AI解析品質チェック（過去{days}日） ===')
+    print(f'=== AI解析品質チェック（過去{days}日・prod環境のみ） ===')
     print(f'実行時刻: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
     print()
 
@@ -96,7 +96,7 @@ def main():
     rows = run_query(f"""
         SELECT l.id, l.from_address, l.subject, c.name, l.raw_body
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND c.name IN ('不明', '')
@@ -110,7 +110,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, c.name, c.id
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND c.name IS NOT NULL
@@ -124,7 +124,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, c.name, l.raw_body
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND c.email IS NULL
@@ -146,7 +146,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, c.name, c.phone, l.raw_body
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND c.phone IS NULL
@@ -160,7 +160,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, c.name, c.desired_rate, l.raw_body
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND c.desired_rate IS NULL
@@ -177,7 +177,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, c.name, c.experience_years, l.raw_body
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND c.experience_years IS NULL
@@ -194,7 +194,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, c.name, c.experience_years
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND (c.experience_years > 50 OR c.experience_years < 0)
@@ -206,7 +206,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, c.name, c.desired_rate
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND c.desired_rate IS NOT NULL
@@ -223,7 +223,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, c.name, c.from_company
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND c.from_company IN ({own_names_sql})
@@ -235,7 +235,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, c.name, c.from_company
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND c.from_company IS NOT NULL
@@ -259,7 +259,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, c.name, l.raw_body
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND l.raw_body IS NOT NULL
@@ -277,7 +277,7 @@ def main():
     rows = run_query(f"""
         SELECT l.from_address, l.subject, p.title, l.raw_body
         FROM ai_logs l
-        JOIN projects p ON p.id = l.linked_id
+        JOIN projects p ON p.id = l.linked_id AND p.data_env = 'prod'
         WHERE l.type = 'project'
           AND l.created_at >= {since}
           AND l.raw_body IS NOT NULL
@@ -297,7 +297,7 @@ def main():
                jsonb_array_length(COALESCE(c.skills, '[]'::jsonb)) as skill_count,
                l.raw_body
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND jsonb_array_length(COALESCE(c.skills, '[]'::jsonb)) = 0
@@ -318,7 +318,7 @@ def main():
         SELECT l.from_address, l.subject, c.name,
                jsonb_array_length(COALESCE(c.skills, '[]'::jsonb)) as skill_count
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND jsonb_array_length(COALESCE(c.skills, '[]'::jsonb)) >= 50
@@ -330,7 +330,7 @@ def main():
     rows = run_query(f"""
         SELECT c.id, c.name, c.skills, l.raw_body, l.subject
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE l.type = 'candidate'
           AND l.created_at >= {since}
           AND l.raw_body IS NOT NULL
@@ -453,8 +453,8 @@ def main():
     rows = run_query(f"""
         SELECT l.id, l.type, l.from_address, l.subject, l.linked_id
         FROM ai_logs l
-        LEFT JOIN candidates c ON c.id = l.linked_id AND l.type = 'candidate'
-        LEFT JOIN projects p ON p.id = l.linked_id AND l.type = 'project'
+        LEFT JOIN candidates c ON c.id = l.linked_id AND l.type = 'candidate' AND c.data_env = 'prod'
+        LEFT JOIN projects p ON p.id = l.linked_id AND l.type = 'project' AND p.data_env = 'prod'
         WHERE l.linked_id IS NOT NULL
           AND l.created_at >= {since}
           AND c.id IS NULL
@@ -641,7 +641,7 @@ def main():
         SELECT l.from_address, COUNT(*) as cnt,
                MIN(l.created_at AT TIME ZONE 'Asia/Tokyo') as first_at
         FROM ai_logs l
-        JOIN candidates c ON c.id = l.linked_id
+        JOIN candidates c ON c.id = l.linked_id AND c.data_env = 'prod'
         WHERE c.data_env = 'prod'
           AND c.name IN ('不明', '')
           AND l.created_at >= NOW() - INTERVAL '7 days'
