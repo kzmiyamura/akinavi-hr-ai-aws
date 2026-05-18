@@ -652,6 +652,27 @@ def main():
     check('D08', '7日以内に同一差出人から「名前=不明」が3件以上（一括送信スパム疑い）', rows,
           lambda r: f"from={r['from_address']} | count={r['cnt']}")
 
+    # ── P25 AIプロバイダー使用内訳（Groq未達/Bedrock使用率） ──────
+    rows = run_query(f"""
+        SELECT model, COUNT(*) as cnt
+        FROM ai_logs
+        WHERE type IN ('candidate', 'project')
+          AND status = 'success'
+          AND created_at >= {since}
+        GROUP BY model
+        ORDER BY cnt DESC
+    """)
+    total = sum(int(r.get('cnt', 0)) for r in rows)
+    bedrock_cnt = sum(int(r.get('cnt', 0)) for r in rows if 'bedrock' in (r.get('model') or '').lower())
+    bedrock_pct = (bedrock_cnt * 100 // total) if total > 0 else 0
+    # Bedrock使用率が20%超の場合は警告（Groqレート制限の兆候）
+    bedrock_issues = [r for r in rows if 'bedrock' in (r.get('model') or '').lower()] if bedrock_pct >= 20 else []
+    check(25, f'Bedrock使用率{bedrock_pct}%（Groq未達の目安・20%超で警告）— 合計{total}件', bedrock_issues,
+          lambda r: f"model={r['model']} | count={r['cnt']}")
+    if rows and total > 0:
+        breakdown = ' | '.join(f"{r.get('model', '?')}: {r.get('cnt', 0)}件 ({int(r.get('cnt', 0)) * 100 // total}%)" for r in rows)
+        print(f'    内訳: {breakdown}')
+
     # ── サマリー ─────────────────────────────────────────────────
     print()
     print('=' * 50)

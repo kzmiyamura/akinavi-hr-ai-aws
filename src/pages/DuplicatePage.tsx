@@ -6,7 +6,7 @@ import { useState } from 'react'
 import type { Candidate } from '../lib/db/candidates'
 import type { DataEnv } from '../lib/dataEnv'
 
-export function DuplicatePage({ dataEnv }: { dataEnv: DataEnv }) {
+export function DuplicatePage({ dataEnv, onOpenCandidateDetail }: { dataEnv: DataEnv; onOpenCandidateDetail?: (id: string) => void }) {
   const queryClient = useQueryClient()
   const [mergeTarget, setMergeTarget] = useState<Record<string, string>>({})
 
@@ -72,7 +72,17 @@ export function DuplicatePage({ dataEnv }: { dataEnv: DataEnv }) {
             {(duplicates as Candidate[]).map((c) => (
               <div key={c.id} className="border border-yellow-200 bg-yellow-50 rounded-lg p-4 space-y-3">
                 <div>
-                  <p className="font-medium text-gray-800 text-sm">{c.name}</p>
+                  {onOpenCandidateDetail ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenCandidateDetail(c.id)}
+                      className="font-medium text-gray-800 text-sm text-left hover:text-blue-700 hover:underline"
+                    >
+                      {c.name}
+                    </button>
+                  ) : (
+                    <p className="font-medium text-gray-800 text-sm">{c.name}</p>
+                  )}
                   <p className="text-xs text-gray-500">
                     {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年
                   </p>

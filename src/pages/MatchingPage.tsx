@@ -380,7 +380,17 @@ function ProjectModeRankCard({
         <div className="space-y-1.5">
           {duplicates.map(d => (
             <div key={d.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs bg-white rounded px-2.5 py-1.5 border border-amber-200">
-              <span className="font-medium text-gray-800">{d.name}</span>
+              {onOpenCandidateDetail ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenCandidateDetail(d.id)}
+                  className="font-medium text-gray-800 hover:text-blue-700 hover:underline"
+                >
+                  {d.name}
+                </button>
+              ) : (
+                <span className="font-medium text-gray-800">{d.name}</span>
+              )}
               {d.from_company && <span className="text-amber-700">{d.from_company}</span>}
               {d.desired_rate && <span className="text-green-700 font-medium">{d.desired_rate}</span>}
               {d.experience_years != null && <span className="text-gray-500">経験{d.experience_years}年</span>}
@@ -538,8 +548,9 @@ export function MatchingPage({
 
   const projectList = projects as Project[]
   // 同一人材疑い（duplicate_flag=true）かつ名前が「不明」の人材はマッチング対象外
+  // 名寄せ済み（merged_into != null）の人材もマッチング対象外（余った枠は別の人材が自動補充される）
   const candidateList = useMemo(
-    () => (candidates as Candidate[]).filter((c) => !(c.duplicate_flag && c.name === '不明')),
+    () => (candidates as Candidate[]).filter((c) => !(c.duplicate_flag && c.name === '不明') && c.merged_into == null),
     [candidates],
   )
 

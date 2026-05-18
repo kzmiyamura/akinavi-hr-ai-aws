@@ -616,6 +616,7 @@ async function generateJSONWithCerebras(
 // ---- Groq API（テキスト専用・無料枠 14,400回/日） ----
 
 const GROQ_MODEL = 'llama-3.1-8b-instant' // TPD 500,000トークン（70b比5倍・1日125件処理可）
+const GROQ_MODEL_VERSATILE = 'llama-3.3-70b-versatile' // TPD 100,000トークン（8b失敗時のフォールバック・高精度）
 
 /**
  * Groq API でJSON抽出（テキストのみ・添付非対応）
@@ -625,6 +626,7 @@ async function generateJSONWithGroq(
   prompt: string,
   timeoutMs = 30_000,
   traceInfo?: string,
+  model: string = GROQ_MODEL,
 ): Promise<{ result: unknown; durationMs: number }> {
   const apiKey = Deno.env.get('GROQ_API_KEY')
   if (!apiKey) throw new Error('GROQ_API_KEY 未設定')
@@ -641,7 +643,7 @@ async function generateJSONWithGroq(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: GROQ_MODEL,
+        model,
         messages: [{ role: 'user', content: prompt }],
         response_format: { type: 'json_object' },
         temperature: 0,
@@ -663,7 +665,7 @@ async function generateJSONWithGroq(
 
     const result = JSON.parse(content)
     const durationMs = Date.now() - start
-    console.log(`[Groq] 成功 durationMs=${durationMs}${traceInfo ? ` ${traceInfo}` : ''}`)
+    console.log(`[Groq ${model}] 成功 durationMs=${durationMs}${traceInfo ? ` ${traceInfo}` : ''}`)
     return { result, durationMs }
   } catch (e) {
     clearTimeout(timer)
@@ -795,13 +797,19 @@ async function generateJSONSmart(
     }
   }
 
-  // Groq 70B（128K）
+  // Groq 8B（高速・低コスト）→ Groq 70B（精度向上・別レート枠）
   if (groqKey) {
     try {
-      const r = await generateJSONWithGroq(prompt, timeout, trace)
+      const r = await generateJSONWithGroq(groqPrompt ?? prompt, timeout, trace, GROQ_MODEL)
       return { ...r, usedModel: GROQ_MODEL }
     } catch (e) {
-      console.warn(`[Groq] 失敗、Geminiにフォールバック: ${String(e)}`)
+      console.warn(`[Groq 8B] 失敗、Groq 70Bにフォールバック: ${String(e)}`)
+      try {
+        const r = await generateJSONWithGroq(prompt, timeout, trace, GROQ_MODEL_VERSATILE)
+        return { ...r, usedModel: GROQ_MODEL_VERSATILE }
+      } catch (e2) {
+        console.warn(`[Groq 70B] 失敗、Geminiにフォールバック: ${String(e2)}`)
+      }
     }
   }
 
