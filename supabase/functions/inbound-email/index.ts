@@ -834,50 +834,6 @@ function extractAndRemoveSkills(
   return { matched, remaining: remaining.replace(/\s{2,}/g, ' ').trim() }
 }
 
-/** AI が返したスキルのうち skill_master に未登録のものを source='ai' で登録する */
-async function registerNewSkillsToDb(
-  supabase: ReturnType<typeof import('https://esm.sh/@supabase/supabase-js@2').createClient>,
-  aiSkills: string[],
-  skillsByCategory: Record<string, string[]>,
-  knownNames: Set<string>,
-): Promise<void> {
-  // 明らかに技術語でないものを除外するパターン
-  const SKIP_PATTERN = /^(経験|以上|あり|なし|可能|対応|担当|実績|設計|構築|運用|管理|提案|分析|作成|実装|習得|使用|利用|活用|業務|機能|処理|連携|統合|移行|更新|保守|改修|対象|必要|要件|希望|優遇|歓迎|必須|尚可|概要|詳細|内容|期間|場所|条件|契約|稼働|即日|その他|各種)$/
-
-  const toInsert: { name: string; category: string; source: string }[] = []
-  for (const skillName of aiSkills) {
-    const trimmed = skillName.trim()
-    const lower = trimmed.toLowerCase()
-    if (knownNames.has(lower)) continue
-    if (!trimmed || trimmed.length < 2 || trimmed.length > 60) continue
-    if (SKIP_PATTERN.test(trimmed)) continue
-    if (/^\d+$/.test(trimmed)) continue
-
-    // skillsByCategory から category を特定
-    let category = 'others'
-    for (const [cat, catSkills] of Object.entries(skillsByCategory)) {
-      if ((catSkills as string[]).some(s => s.toLowerCase() === lower)) {
-        category = cat
-        break
-      }
-    }
-    toInsert.push({ name: trimmed, category, source: 'ai' })
-    knownNames.add(lower) // 同一バッチ内の重複を防止
-  }
-
-  if (toInsert.length > 0) {
-    try {
-      await supabase.from('skill_master').insert(toInsert)
-      console.log(`[skill_master] 新規登録(ai): ${toInsert.map(s => s.name).join(', ')}`)
-      // キャッシュ無効化
-      _skillDbCache = null
-      _skillDbCacheExpiry = 0
-    } catch (e) {
-      console.warn('[skill_master] 新規登録失敗:', String(e))
-    }
-  }
-}
-
 /**
  * 件名から候補者内部コードを抽出する（例: "IA62", "AS400", "FE3"）
  * name=不明のとき代替名として使用
@@ -1077,47 +1033,8 @@ async function generateJSONSmart(
   }
 
   // Gemini フォールバック
-  try {
-    const r = await generateJSON(prompt, attachments, kind, maxRetries, timeoutMs, geminiTrace, geminiModel)
-    return { ...r, usedModel: geminiModel ?? AI_MODEL }
-  } catch (e) {
-    console.warn(`[Gemini] 失敗、Bedrock Haikuにフォールバック: ${String(e)}`)
-  }
-
-  // Bedrock Claude Haiku 最終フォールバック
-  const bedrockParseUrl = Deno.env.get('LAMBDA_BEDROCK_PARSE_URL')
-  const bedrockApiKey = Deno.env.get('LAMBDA_API_KEY') ?? ''
-  if (bedrockParseUrl) {
-    const bedrockStart = Date.now()
-    try {
-      const bedrockRes = await fetch(bedrockParseUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(bedrockApiKey ? { 'x-api-key': bedrockApiKey } : {}),
-        },
-        // Bedrockにはコンパクトなgroqプロンプトを使う（入力トークン削減）
-        body: JSON.stringify({ prompt: groqPrompt ?? prompt }),
-      })
-      if (bedrockRes.ok) {
-        const bedrockJson = await bedrockRes.json() as { result?: string; error?: string }
-        if (bedrockJson.result) {
-          const cleaned = bedrockJson.result.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-          const match = cleaned.match(/[\[{][\s\S]*[\]}]/)
-          if (match) {
-            const result = JSON.parse(match[0])
-            console.log(`[Bedrock] 成功 durationMs=${Date.now() - bedrockStart}`)
-            return { result, durationMs: Date.now() - bedrockStart, usedModel: 'bedrock-claude-haiku-4-5' }
-          }
-        }
-      }
-      console.warn(`[Bedrock] parse失敗 status=${bedrockRes.status}`)
-    } catch (e) {
-      console.warn(`[Bedrock] フォールバック失敗: ${String(e)}`)
-    }
-  }
-
-  throw new Error('全AIプロバイダーが失敗しました (Cerebras/Groq/Gemini/Bedrock)')
+  const r = await generateJSON(prompt, attachments, kind, maxRetries, timeoutMs, geminiTrace, geminiModel)
+  return { ...r, usedModel: geminiModel ?? AI_MODEL }
 }
 
 type MatchResult = { score: number; summary: string; duplicateSuspected: boolean }
@@ -1503,9 +1420,8 @@ async function fetchGoogleLinks(body: string): Promise<{
 
         const isPdf = ct.includes('pdf') || /\.pdf$/i.test(filename)
         if (isPdf) {
-          const b64 = arrayBufferToBase64(await res.arrayBuffer())
-          pdfAttachments.push({ data: b64, mimeType: 'application/pdf', name: filename })
-          console.log(`[DriveLink] Drive PDF取得成功: ${id} (${filename})`)
+          // PDF は解析しない。URLは本文から resumeUrl として保存済み
+          console.log(`[DriveLink] Drive PDF スキップ（解析なし）: ${id} (${filename})`)
         } else if (ct.includes('text') || ct.includes('csv')) {
           textContents.push({ label: `Driveファイル(${filename})`, content: await res.text() })
           console.log(`[DriveLink] Drive text取得成功: ${id} (${filename})`)
@@ -1561,189 +1477,6 @@ function stripHtml(html: string): string {
 }
 
 // ── Supabase Storage アップロード ────────────────────────────────────────
-
-/**
- * pdfjs-dist（npm: 経由・日本語CMap対応）で PDF からテキストを抽出する
- * - npm: プレフィックスで canvas.node をロードしない
- * - CMap を CDN から取得して日本語フォントに対応
- * テキストPDF: 成功 / スキャンPDF・暗号化PDF: null を返す
- */
-async function extractPdfTextWithPdfjs(dataB64: string): Promise<string | null> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mod = await import('npm:pdfjs-dist@3.11.174/legacy/build/pdf.js') as any
-    const pdfjsLib = mod.default ?? mod
-    if (pdfjsLib.GlobalWorkerOptions) pdfjsLib.GlobalWorkerOptions.workerSrc = ''
-    const pdfBytes = Uint8Array.from(atob(dataB64), c => c.charCodeAt(0))
-    const doc = await pdfjsLib.getDocument({
-      data: pdfBytes,
-      // 日本語CMap（MS明朝・MSゴシック等）を CDN から取得
-      cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
-      cMapPacked: true,
-      useWorkerFetch: false,
-      isEvalSupported: false,
-    }).promise
-    const pageTexts: string[] = []
-    for (let i = 1; i <= doc.numPages; i++) {
-      const page = await doc.getPage(i)
-      const content = await page.getTextContent()
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      pageTexts.push(content.items.map((item: any) => item.str ?? '').join(''))
-    }
-    const text = pageTexts.join('\n').trim()
-    if (text.length > 50) return text
-    console.warn(`[PDF Free Extract] テキスト不足(${text.length}文字) - スキャンPDFの可能性`)
-    return null
-  } catch (e) {
-    console.warn(`[PDF Free Extract] 失敗: ${String(e)}`)
-    return null
-  }
-}
-
-/**
- * PDFバイナリをテキスト抽出する（2段階処理の第1ステップ）
- * 優先順位: pdfjs-dist（無料） → Gemini（スキャンPDFのみフォールバック）
- * 抽出成功したPDFはテキストに変換し、バイナリ添付から除外することで Groq 利用を可能にする
- */
-async function extractPdfTextsWithGemini(
-  pdfs: Attachment[],
-  traceRid: string,
-): Promise<{ extractedTexts: Array<{ label: string; content: string }>; remainingPdfs: Attachment[] }> {
-  if (pdfs.length === 0) {
-    return { extractedTexts: [], remainingPdfs: pdfs }
-  }
-
-  const extractedTexts: Array<{ label: string; content: string }> = []
-  const remainingPdfs: Attachment[] = []
-
-  for (const pdf of pdfs) {
-    if (!pdf.data) { remainingPdfs.push(pdf); continue }
-
-    // ① pdfjs-dist で無料テキスト抽出を試みる
-    // base64長 2,000,000 ≒ 実ファイル ~1.5MB 超はメモリ超過リスクがあるためスキップ
-    const PDFJS_MAX_B64 = 2_000_000
-    if (pdf.data.length > PDFJS_MAX_B64) {
-      console.warn(`[PDF Extract] pdfjs スキップ（サイズ超過 ${pdf.data.length}文字）: ${pdf.name} rid=${traceRid}`)
-      remainingPdfs.push(pdf)
-      continue
-    }
-    const freeText = await extractPdfTextWithPdfjs(pdf.data)
-    // Lambda PDF Processor の URL（設定済みの場合のみ使用）
-    const pdfLambdaUrl = Deno.env.get('LAMBDA_PDF_PROCESSOR_URL')
-    const pdfLambdaKey = Deno.env.get('LAMBDA_API_KEY') ?? ''
-
-    if (freeText) {
-      // ②-A テキスト抽出成功 → Lambda PDF Processor（Bedrock Haiku 要約）があれば送信
-      // Haiku が構造化要約を返すので、下流の Gemini に渡すトークン量を大幅削減できる。
-      if (pdfLambdaUrl) {
-        try {
-          const pdfRes = await Promise.race([
-            fetch(pdfLambdaUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                ...(pdfLambdaKey ? { 'x-api-key': pdfLambdaKey } : {}),
-              },
-              body: JSON.stringify({ extractedText: freeText.slice(0, 8000) }),
-            }),
-            new Promise<never>((_, reject) =>
-              setTimeout(
-                () => reject(new Error('pdf-processor Lambda タイムアウト (20s)')),
-                20_000,
-              ),
-            ),
-          ])
-          if (pdfRes.ok) {
-            const pdfJson = await pdfRes.json() as { summary?: string; rawText?: string }
-            // summary（Haiku整形テキスト）を優先、なければ rawText、それも無ければ生テキスト
-            const content = pdfJson.summary ?? pdfJson.rawText ?? freeText.slice(0, 6000)
-            extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content })
-            console.log(`[PDF Extract] Lambda Haiku要約成功: ${pdf.name} ${content.length}文字 rid=${traceRid}`)
-            continue
-          }
-          console.warn(`[PDF Extract] pdf-processor HTTP ${pdfRes.status}、生テキストで継続`)
-        } catch (e) {
-          console.warn(`[PDF Extract] pdf-processor Lambda 失敗、生テキストで継続: ${String(e)}`)
-        }
-      }
-      // Lambda 未設定 or 失敗 → 従来通り生テキストを使用
-      extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content: freeText.slice(0, 6000) })
-      console.log(`[PDF Extract] pdfjs成功（無料）: ${pdf.name} ${freeText.length}文字 rid=${traceRid}`)
-      continue
-    }
-
-    // ②-B スキャンPDF → Lambda PDF Processor（Textract + Haiku）を優先し、次に Gemini へフォールバック
-    if (pdfLambdaUrl) {
-      try {
-        const scanRes = await Promise.race([
-          fetch(pdfLambdaUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(pdfLambdaKey ? { 'x-api-key': pdfLambdaKey } : {}),
-            },
-            body: JSON.stringify({ pdfBase64: pdf.data }),
-          }),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error('pdf-processor scan タイムアウト (30s)')),
-              30_000,
-            ),
-          ),
-        ])
-        if (scanRes.ok) {
-          const scanJson = await scanRes.json() as { summary?: string; rawText?: string }
-          const content = scanJson.summary ?? scanJson.rawText ?? ''
-          if (content.length > 50) {
-            extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content })
-            console.log(`[PDF Extract] Lambda Textract+Haiku成功（スキャンPDF）: ${pdf.name} ${content.length}文字 rid=${traceRid}`)
-            continue
-          }
-          console.warn(`[PDF Extract] pdf-processor テキスト不足(${content.length}文字): ${pdf.name}`)
-        } else {
-          console.warn(`[PDF Extract] pdf-processor scan HTTP ${scanRes.status}: ${pdf.name}`)
-        }
-      } catch (e) {
-        console.warn(`[PDF Extract] pdf-processor scan Lambda 失敗: ${pdf.name} ${String(e)} rid=${traceRid}`)
-      }
-    }
-
-    // ③ Gemini にフォールバック（GROQ_API_KEY 設定時のみ。未設定時はバイナリのまま渡す）
-    const groqKey = Deno.env.get('GROQ_API_KEY')
-    if (!groqKey) {
-      remainingPdfs.push(pdf)
-      continue
-    }
-    try {
-      const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
-      const model = genAI.getGenerativeModel({ model: AI_MODEL_FAST })
-      const parts = [
-        { inlineData: { data: pdf.data, mimeType: pdf.mimeType } },
-        { text: 'このファイルのテキストを全て抽出してください。整形・要約不要。テキストのみ出力。' },
-      ]
-      const res = await Promise.race([
-        model.generateContent(parts),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('PDF抽出タイムアウト')), 20_000)
-        ),
-      ])
-      const text = res.response.text().trim()
-      if (text.length > 50) {
-        extractedTexts.push({ label: `PDF(${pdf.name ?? 'attachment'})`, content: text.slice(0, 6000) })
-        console.log(`[PDF Extract] Gemini成功（スキャンPDF）: ${pdf.name} ${text.length}文字 rid=${traceRid}`)
-      } else {
-        remainingPdfs.push(pdf)
-        console.warn(`[PDF Extract] Geminiテキスト不足(${text.length}文字)、バイナリ処理へ: ${pdf.name} rid=${traceRid}`)
-      }
-    } catch (e) {
-      remainingPdfs.push(pdf)
-      console.warn(`[PDF Extract] Gemini失敗、バイナリ処理へ: ${pdf.name} ${String(e)} rid=${traceRid}`)
-    }
-  }
-
-  console.log(`[PDF Extract] 完了: 変換=${extractedTexts.length}件 残バイナリ=${remainingPdfs.length}件 rid=${traceRid}`)
-  return { extractedTexts, remainingPdfs }
-}
 
 /**
  * ファイルを Supabase Storage の attachments バケットにアップロードし、公開URLを返す
@@ -2261,14 +1994,8 @@ Deno.serve(async (req: Request) => {
       elapsed: elapsed(),
     })
 
-    // ---- PDF テキスト抽出（2段階処理）----
-    // PDFバイナリをGeminiでテキスト化 → Groqで構造化抽出できるようにする
-    tracePhase = 'pdf_extract'
-    const pdfAttachmentsOnly = rawAllAttachments.filter(a => a.mimeType === 'application/pdf')
-    const nonPdfAttachments = rawAllAttachments.filter(a => a.mimeType !== 'application/pdf')
-    const { extractedTexts: pdfExtractedTexts, remainingPdfs } = await extractPdfTextsWithGemini(pdfAttachmentsOnly, traceRid)
-    // 変換成功PDFはテキストに、失敗PDFはバイナリのまま残す
-    const allAttachments = [...nonPdfAttachments, ...remainingPdfs]
+    // PDF は解析しない。Storage へのアップロードのみ（後続処理では除外）
+    const allAttachments = rawAllAttachments.filter(a => a.mimeType !== 'application/pdf')
 
     // ① 複雑度に応じてモデルを選択（コスト最適化）
     // シンプル: 添付なし・Driveリンクなし・本文2000文字以下 → gemini-2.0-flash（安価）
@@ -2310,7 +2037,8 @@ Deno.serve(async (req: Request) => {
         resumeUrl = picked
       }
 
-      // 添付ファイルを Supabase Storage にアップロード（resume_urlが未設定の場合に優先設定）
+      // 添付ファイルを Supabase Storage にアップロード（PDF含む全添付）
+      // アップロードのみ。PDF は AI 解析しない。
       for (const att of attachments) {
         if (!att.data) continue
         const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
@@ -2320,8 +2048,8 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // Drive取得テキスト + Officeテキスト + PDF抽出テキストを統合してプロンプトに追記
-    const allTextContents = [...driveTexts, ...officeTextContents, ...pdfExtractedTexts]
+    // Drive取得テキスト + Officeテキストを統合してプロンプトに追記（PDF は解析しない）
+    const allTextContents = [...driveTexts, ...officeTextContents]
     const driveTextSection = allTextContents.length > 0
       ? '\n\n' + allTextContents.map(t => `--- ${t.label} ---\n${t.content.slice(0, 3000)}`).join('\n\n')
       : ''

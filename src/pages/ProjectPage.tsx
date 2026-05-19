@@ -17,7 +17,7 @@ import type { Project } from '../lib/db/projects'
 import type { DataEnv } from '../lib/dataEnv'
 import type { ImageFileData } from '../lib/ai/types'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
-import { extractTextFromPDF, extractTextFromExcel, extractTextFromWord, imageFileToBase64, getFileCategory } from '../lib/fileParser'
+import { extractTextFromExcel, extractTextFromWord, imageFileToBase64, getFileCategory } from '../lib/fileParser'
 import { getIsImportActive } from '../lib/db/emailSettings'
 
 interface Props {
@@ -461,9 +461,7 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
       for (const file of files) {
         const category = getFileCategory(file)
         if (category === 'pdf') {
-          const extracted = await extractTextFromPDF(file)
-          setText((prev) => prev ? `${prev}\n\n${extracted}` : extracted)
-          newNames.push(`${file.name}（テキスト抽出済み）`)
+          setMessage({ type: 'error', text: `${file.name}：PDF はテキスト解析対象外です。テキストを手動で貼り付けてください` })
         } else if (category === 'excel') {
           const extracted = await extractTextFromExcel(file)
           setText((prev) => prev ? `${prev}\n\n${extracted}` : extracted)
