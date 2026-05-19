@@ -495,7 +495,6 @@ async function generateJSON(
   let lastError: unknown
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(logP(`gemini attempt ${attempt} 開始`, ` timeoutMs=${GEMINI_TIMEOUT_MS}`))
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() =>
           reject(new Error(
@@ -504,7 +503,6 @@ async function generateJSON(
       )
       const res = await Promise.race([model.generateContent(parts), timeoutPromise])
       const durationMs = Date.now() - start
-      console.log(logP(`gemini attempt ${attempt} 完了 durationMs=${durationMs}`))
       const raw = res.response.text()
       const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
       const result = JSON.parse(cleaned)
@@ -1534,7 +1532,6 @@ function extractDocRawText(bytes: Uint8Array): string {
     const matches = utf16.match(/[\u3000-\u9FFF\uFF00-\uFFEF\u30A0-\u30FF\u3040-\u309Fa-zA-Z0-9\s\u3001\u3002\uff0c\uff0e\uff1a\uff1b\uff08\uff09\u300c\u300d\u300e\u300f\u3010\u3011\u30fb\u2015\u2212\uff0d]{3,}/g) ?? []
     const result = matches.join(' ').replace(/\s+/g, ' ').trim()
     if (result.length > 50) {
-      console.log(`[Doc] バイナリ raw 抽出: ${result.length}文字`)
       return result
     }
     return ''
@@ -1701,9 +1698,7 @@ async function extractExcelText(base64: string): Promise<string> {
       utils: { sheet_to_csv: (sheet: unknown) => string }
     }
     const bytes = base64ToUint8Array(base64)
-    console.log(`[Excel] read開始 bytes=${bytes.byteLength}`)
     const workbook = XLSX.read(bytes, { type: 'array' })
-    console.log(`[Excel] sheets=${workbook.SheetNames.join(',')}`)
     const texts: string[] = []
     // スキル・経歴関連のシートを優先、それ以外を後ろに（最大3シート）
     const PRIORITY_SHEET_KEYWORDS = ['スキル', '経歴', '職務', 'スキルシート', 'skill', 'career', 'profile', '人材']
@@ -1715,10 +1710,8 @@ async function extractExcelText(base64: string): Promise<string> {
     for (const sheetName of sortedSheetNames.slice(0, 3)) {
       const sheet = workbook.Sheets[sheetName]
       const csv = XLSX.utils.sheet_to_csv(sheet)
-      console.log(`[Excel] sheet="${sheetName}" csvLen=${csv.length}`)
       if (csv.trim()) {
         const cleansed = cleanseExcelCsv(csv)
-        console.log(`[Excel] sheet="${sheetName}" rawLen=${csv.length} cleansedLen=${cleansed.length} ratio=${Math.round(cleansed.length / csv.length * 100)}%`)
         texts.push(`--- シート: ${sheetName} ---\n${cleansed}`)
       }
     }
@@ -1769,7 +1762,6 @@ async function fetchGoogleLinks(body: string): Promise<{
       const res = await fetchWithTimeout(exportUrl)
       if (res.ok) {
         textContents.push({ label: `Googleスプレッドシート(${id})`, content: await res.text() })
-        console.log(`[DriveLink] Sheets取得成功: ${id}`)
       } else {
         // フォールバックDLは認証が必要なSheetsではHTMLゴミを返すためスキップ
         console.warn(`[DriveLink] Sheetsエクスポート失敗(${res.status}): ${id} - スキップ（公開設定を確認してください）`)
@@ -1786,7 +1778,6 @@ async function fetchGoogleLinks(body: string): Promise<{
       const res = await fetchWithTimeout(exportUrl)
       if (res.ok) {
         textContents.push({ label: `Googleドキュメント(${id})`, content: await res.text() })
-        console.log(`[DriveLink] Docs取得成功: ${id}`)
       } else {
         console.warn(`[DriveLink] Docs取得失敗(${res.status}): ${id}`)
       }
@@ -1803,7 +1794,6 @@ async function fetchGoogleLinks(body: string): Promise<{
     const preceding = body.slice(Math.max(0, urlIndex - 150), urlIndex)
     const shouldSkip = DRIVE_SKIP_KEYWORDS.some(kw => preceding.includes(kw))
     if (shouldSkip) {
-      console.log(`[DriveLink] スキップ（ポートフォリオ等）: ${id}`)
       continue
     }
     const downloadUrl = `https://drive.google.com/uc?export=download&id=${id}`
@@ -1823,16 +1813,13 @@ async function fetchGoogleLinks(body: string): Promise<{
         const isPdf = ct.includes('pdf') || /\.pdf$/i.test(filename)
         if (isPdf) {
           // PDF は解析しない。URLは本文から resumeUrl として保存済み
-          console.log(`[DriveLink] Drive PDF スキップ（解析なし）: ${id} (${filename})`)
         } else if (ct.includes('text') || ct.includes('csv')) {
           textContents.push({ label: `Driveファイル(${filename})`, content: await res.text() })
-          console.log(`[DriveLink] Drive text取得成功: ${id} (${filename})`)
         } else if (isExcel) {
           const b64 = arrayBufferToBase64(await res.arrayBuffer())
           const text = await extractExcelText(b64)
           if (text.trim()) {
             textContents.push({ label: `Drive Excel(${filename})`, content: text })
-            console.log(`[DriveLink] Drive Excel取得成功: ${id} (${filename}) ${text.length}文字`)
           } else {
             console.warn(`[DriveLink] Drive Excel テキスト抽出結果が空: ${id}`)
           }
@@ -1841,7 +1828,6 @@ async function fetchGoogleLinks(body: string): Promise<{
           const rawText = await extractWordText(b64)
           if (rawText.trim()) {
             const text = cleanseWordText(rawText)
-            console.log(`[DriveLink] Drive Word取得成功: ${id} (${filename}) rawLen=${rawText.length} cleansedLen=${text.length}`)
             textContents.push({ label: `Drive Word(${filename})`, content: text })
           } else {
             console.warn(`[DriveLink] Drive Word テキスト抽出結果が空: ${id}`)
@@ -2222,12 +2208,10 @@ Deno.serve(async (req: Request) => {
       const isExcelByMime = EXCEL_MIME.includes(att.mimeType)
       const isWordByExt = /\.(docx?|doc)$/.test(attNameLower) && !isExcelByMime
       const isExcelByExt = /\.(xlsx?|xls|ods|csv)$/.test(attNameLower) && !isWordByMime
-      console.log('[STEP3 attach]', { name: att.name, mimeType: att.mimeType, dataLen: att.data?.length ?? 0, isWordByMime, isExcelByMime, isWordByExt, isExcelByExt })
       if (isWordByMime || isWordByExt) {
         const rawText = await extractWordText(att.data)
         if (rawText.trim()) {
           const text = cleanseWordText(rawText)
-          console.log(`[Word] rawLen=${rawText.length} cleansedLen=${text.length} ratio=${Math.round(text.length / rawText.length * 100)}%`)
           officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
         } else console.warn(`[Word] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
       } else if (isExcelByMime || isExcelByExt) {
@@ -2385,7 +2369,6 @@ Deno.serve(async (req: Request) => {
     tracePhase = 'drive_links_fetch'
     pipe(traceRid, tracePhase)
     // Google Drive / Sheets / Docs リンクの取得
-    console.log(`[STEP4 DriveLink開始] elapsed=${elapsed()}`, { rid: traceRid })
     const { textContents: driveTexts, pdfAttachments: drivePdfs } = await fetchGoogleLinks(body)
     const rawAllAttachments = [...supportedAttachments, ...drivePdfs]
     tracePhase = 'drive_links_done'
@@ -2502,7 +2485,6 @@ Deno.serve(async (req: Request) => {
     console.log(
       `[skill_master] DB照合: body=${bodyMatched.length}件 attach生=${attachRawMatched.length}件(D/E除外${attachRatingFiltered}件→評価後${attachRated.length}件→重複除外${attachDedupCount}件→${attachDeduped.length}件) 合計=${dbMatchedSkills.length}件`,
     )
-    console.log(`[skill_master] カテゴリ内訳: ${JSON.stringify(byCategory)}`)
     if (certNames.length > 0) console.log(`[skill_master] 資格タグ: ${certNames.join(', ')}`)
 
     // ── 人材メール ────────────────────────────────────────────
@@ -2513,7 +2495,6 @@ Deno.serve(async (req: Request) => {
       const compressedBody = compressBodyForAI(effectiveBody, 3000)
       const preExtracted = preExtractFields(effectiveBody)
       const preExtractHint = buildPreExtractHint(preExtracted)
-      console.log(`[preExtract] compressed=${compressedBody.length}→${body.length}文字 skills=${preExtracted.skills.length}件 exp=${preExtracted.experienceYears} rate=${preExtracted.desiredRate}`)
 
       // ファイル名から氏名を推測
       const extractNameFromFilename = (filename: string): string | null => {
@@ -2688,7 +2669,6 @@ JSON:`.trim()
       // Phase1対象: 件名+本文+ファイル名 / Phase2対象: 添付テキスト
       const regexBodyText = [subject, body, allAttachmentNames].join('\n')
       const regexFields = extractCandidateFieldsRegex(regexBodyText, attachText)
-      console.log(`[regex_fallback] ${JSON.stringify(regexFields)}`)
 
       // name: AI → regex(ラベル抽出) → extractNameFallback(イニシャル) → 件名コード
       const resolvedName = (analyzed.name && analyzed.name !== '不明')
