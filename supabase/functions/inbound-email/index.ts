@@ -754,6 +754,27 @@ async function getSkillMasterFromDb(
  * テキストから skill_master エントリを照合してスキルを抽出する。
  * マッチしたスキルをテキストから除去した残テキストも返す。
  */
+/**
+ * テキスト中の「資格」見出し周辺（後方 windowSize 文字）を抽出する。
+ * 保有資格・取得資格・資格一覧・資格・免許 等のヘッダ直後の行を対象にする。
+ * 見出しが見つからない場合は空文字を返す（→ 資格マッチをスキップ）。
+ */
+function extractCertContext(text: string, windowSize = 500): string {
+  const markers = ['保有資格', '取得資格', '資格・免許', '免許・資格', '資格一覧', '資格情報', '資格欄', '資格']
+  const contexts: string[] = []
+  for (const marker of markers) {
+    let searchFrom = 0
+    while (searchFrom < text.length) {
+      const pos = text.indexOf(marker, searchFrom)
+      if (pos === -1) break
+      contexts.push(text.slice(pos, Math.min(pos + marker.length + windowSize, text.length)))
+      searchFrom = pos + 1
+    }
+    if (contexts.length > 0) break // 最初に見つかったマーカーだけ使えば十分
+  }
+  return contexts.join('\n')
+}
+
 function extractAndRemoveSkills(
   text: string,
   masterSkills: SkillMasterEntry[],
@@ -761,24 +782,35 @@ function extractAndRemoveSkills(
   const matched: { name: string; category: string }[] = []
   let remaining = text
 
+  // 資格カテゴリは「資格」見出し周辺のみで照合する。
+  // 見出しが存在しない（certContext が空）場合は資格マッチをスキップし誤タグを防ぐ。
+  const certContext = extractCertContext(text)
+
   for (const skill of masterSkills) {
+    const isCert = skill.category === 'certifications'
+    // 資格: certContext が空なら照合しない
+    if (isCert && !certContext) continue
+    const matchTarget = isCert ? certContext : remaining
+
     const terms = [skill.name, ...skill.aliases]
     for (const term of terms) {
       if (!term || term.length < 2) continue
       const escaped = term.replace(/[.+*?()[\]{}\\|^$]/g, '\\$&')
 
-      // 純粋な英小文字のみ 2〜3 文字の語（Go, R言語除く）は英語自然文と区別できないため
-      // 大文字始まりか日本語混じりの文脈（直後が日本語文字）でのみマッチさせる。
-      // 例: "Go" は "Let's go" に誤マッチするが "Go言語" や "Go で開発" には正しくマッチする。
+      // 純粋な英小文字のみ 2〜3 文字の語（go 等）は英語自然文と区別できないため
+      // 直後が日本語文字・空白・文末の場合のみマッチさせる。
       const isShortLowerAscii = /^[a-z]{2,3}$/.test(term)
       const pattern = isShortLowerAscii
-        ? `(?<![a-zA-Z0-9_#])${escaped}(?=[\\s\\u3000-\\u9FFF、。！？）」』]|$)`  // 直後が日本語/空白/文末
+        ? `(?<![a-zA-Z0-9_#])${escaped}(?=[\\s\\u3000-\\u9FFF、。！？）」』]|$)`
         : `(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_])`
 
       const regex = new RegExp(pattern, 'gi')
-      if (regex.test(remaining)) {
+      if (regex.test(matchTarget)) {
         matched.push({ name: skill.name, category: skill.category })
-        remaining = remaining.replace(new RegExp(pattern, 'gi'), ' ')
+        // remaining からも除去（資格は certContext でのみ判定するが remaining はそのまま保持でよい）
+        if (!isCert) {
+          remaining = remaining.replace(new RegExp(pattern, 'gi'), ' ')
+        }
         break // このスキルはマッチ済み、次のスキルへ
       }
     }
