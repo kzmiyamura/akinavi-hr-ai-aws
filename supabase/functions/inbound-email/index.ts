@@ -348,7 +348,15 @@ function pipe(rid: string, phase: string, detail?: Record<string, unknown>) {
 }
 
 /**
- * 無関係メールを本解析の前に弾く（Gemini 1 回・短文）。
+ * 無関係メールを本解析の前に弾く。
+ *
+ * 優先順位:
+ *   1. DB キーワードゲート（relevance_keywords テーブル・AIなし・最速）
+ *      - exclude キーワードにヒット → relevant: false
+ *      - candidate / project キーワードにヒット → relevant: true
+ *      - ヒットなし → 2. へフォールバック
+ *   2. Gemini AI（キーワード未ヒット時のみ）
+ *
  * 例外・タイムアウト・パース失敗時は true（取り込み続行）に倒す。
  */
 async function classifyInboundRelevance(input: {
@@ -360,6 +368,53 @@ async function classifyInboundRelevance(input: {
   attachmentMimeTypes: string[]
   traceRid?: string
 }): Promise<{ relevant: boolean; durationMs: number; usedModel: string }> {
+  const rid = input.traceRid ?? '—'
+  const gateStart = Date.now()
+
+  // ---- 1. DB キーワードゲート（AIなし） ----
+  try {
+    const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
+    const { data: keywords, error: kwError } = await supabase
+      .from('relevance_keywords')
+      .select('id, keyword, type')
+
+    if (!kwError && keywords && keywords.length > 0) {
+      const searchText = `${input.subject} ${input.from} ${input.body.slice(0, 8000)}`.toLowerCase()
+      const matchedIds: number[] = []
+      let hasExclude = false
+      let hasRelevant = false
+
+      for (const kw of keywords as { id: number; keyword: string; type: string }[]) {
+        if (searchText.includes(kw.keyword.toLowerCase())) {
+          matchedIds.push(kw.id)
+          if (kw.type === 'exclude') hasExclude = true
+          else hasRelevant = true
+        }
+      }
+
+      if (matchedIds.length > 0) {
+        // match_count インクリメント（fire and forget）
+        supabase.rpc('increment_relevance_match_counts', { p_ids: matchedIds })
+          .then(({ error }) => { if (error) console.warn('[RELEVANCE-KW] match_count更新失敗', error.message) })
+
+        if (hasExclude) {
+          pipe(rid, 'relevance_kw_exclude', { matchedCount: matchedIds.length })
+          return { relevant: false, durationMs: Date.now() - gateStart, usedModel: 'keyword-db' }
+        }
+        pipe(rid, 'relevance_kw_match', { matchedCount: matchedIds.length })
+        return { relevant: true, durationMs: Date.now() - gateStart, usedModel: 'keyword-db' }
+      }
+
+      // キーワード未ヒット → AI フォールバック
+      pipe(rid, 'relevance_kw_no_match', { keywordCount: keywords.length })
+    } else if (kwError) {
+      console.warn('[RELEVANCE-KW] DB取得失敗、AIにフォールバック:', kwError.message)
+    }
+  } catch (e) {
+    console.warn('[RELEVANCE-KW] 予期せぬエラー、AIにフォールバック:', String(e))
+  }
+
+  // ---- 2. Gemini AI フォールバック（キーワード未ヒット時のみ） ----
   const prompt = `
 あなたはメール仕分け担当です。次のメールが「この HR / 案件マッチングシステムへの取り込み対象」かだけ判定してください。
 
@@ -384,88 +439,16 @@ JSON のみ返す（説明・コードブロック禁止）:
 {"relevant": true または false}
 `.trim()
 
-  const rid = input.traceRid ?? '—'
   const TIMEOUT_MS = 15_000
-
-  // ---- Bedrock Claude 3 Haiku 門番フィルター（Lambda 経由・最速・最安） ----
-  // LAMBDA_GATE_FILTER_URL が設定されている場合のみ実行。
-  // "0" → 即スキップ、"1" → 即通過、それ以外 or エラー → 後続モデルにフォールバック。
-  const gateLambdaUrl = Deno.env.get('LAMBDA_GATE_FILTER_URL')
-  if (gateLambdaUrl) {
-    const gateStart = Date.now()
-    try {
-      const preview = `件名: ${input.subject}\n差出人: ${input.from}\n\n${input.body.slice(0, 500)}`
-      const lambdaApiKey = Deno.env.get('LAMBDA_API_KEY') ?? ''
-      const gateRes = await Promise.race([
-        fetch(gateLambdaUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(lambdaApiKey ? { 'x-api-key': lambdaApiKey } : {}),
-          },
-          body: JSON.stringify({ text: preview }),
-        }),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('gate-filter Lambda タイムアウト (5s)')),
-            5_000,
-          ),
-        ),
-      ])
-      if (gateRes.ok) {
-        const gateJson = await gateRes.json() as { result?: string }
-        const digit = (gateJson.result ?? '').trim().slice(0, 1)
-        pipe(rid, 'gate_filter_done', { digit, durationMs: Date.now() - gateStart })
-        if (digit === '0') return { relevant: false, durationMs: Date.now() - gateStart, usedModel: 'bedrock-claude-3-haiku (gate-filter)' }
-        if (digit === '1') return { relevant: true, durationMs: Date.now() - gateStart, usedModel: 'bedrock-claude-3-haiku (gate-filter)' }
-        // 0/1 以外（異常応答）は後続フォールバックへ
-        console.warn(`[RELEVANCE] gate-filter 異常応答 digit="${digit}"、次のモデルへ`)
-      } else {
-        console.warn(`[RELEVANCE] gate-filter HTTP ${gateRes.status}、次のモデルへフォールバック`)
-      }
-    } catch (e) {
-      console.warn(`[RELEVANCE] gate-filter Lambda 失敗、次のモデルへフォールバック: ${String(e)}`)
-    }
-  }
-
-  // ---- Cerebras を試みる ----
-  const cerebrasKey = Deno.env.get('CEREBRAS_API_KEY')
-  if (cerebrasKey) {
-    pipe(rid, 'relevance_cerebras_wait', { inboundType: input.inboundType })
-    try {
-      const r = await generateJSONWithCerebras(prompt, TIMEOUT_MS, `rid=${rid} phase=relevance_check`)
-      const obj = r.result as { relevant?: unknown }
-      const relevant = typeof obj.relevant === 'boolean' ? obj.relevant : true
-      return { relevant, durationMs: r.durationMs, usedModel: CEREBRAS_MODEL }
-    } catch (e) {
-      console.warn(`[RELEVANCE] Cerebras失敗、Groqにフォールバック: ${String(e)}`)
-    }
-  }
-
-  // ---- Groq を試みる ----
-  const groqKey = Deno.env.get('GROQ_API_KEY')
-  if (groqKey) {
-    pipe(rid, 'relevance_groq_wait', { inboundType: input.inboundType })
-    try {
-      const r = await generateJSONWithGroq(prompt, TIMEOUT_MS, `rid=${rid} phase=relevance_check`)
-      const obj = r.result as { relevant?: unknown }
-      const relevant = typeof obj.relevant === 'boolean' ? obj.relevant : true
-      return { relevant, durationMs: r.durationMs, usedModel: GROQ_MODEL }
-    } catch (e) {
-      console.warn(`[RELEVANCE] Groq失敗、Geminiにフォールバック: ${String(e)}`)
-    }
-  }
-
-  // ---- Gemini フォールバック ----
   pipe(rid, 'relevance_gemini_wait', { inboundType: input.inboundType })
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
   const model = genAI.getGenerativeModel({ model: AI_MODEL_FAST, generationConfig: { temperature: 0 } })
-  const start = Date.now()
+  const aiStart = Date.now()
   const timeoutPromise = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error(`関連度判定タイムアウト (${TIMEOUT_MS}ms) rid=${rid} phase=relevance_gemini`)), TIMEOUT_MS)
   )
   const res = await Promise.race([model.generateContent(prompt), timeoutPromise])
-  const durationMs = Date.now() - start
+  const durationMs = Date.now() - aiStart
   const raw = res.response.text()
   const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
   let parsed: { relevant?: unknown }
