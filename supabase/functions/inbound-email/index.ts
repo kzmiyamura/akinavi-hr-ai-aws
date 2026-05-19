@@ -903,9 +903,9 @@ function buildPreExtractHint(pre: PreExtracted): string {
  * 直後に値がなければ即 null（不明）。
  */
 function extractNameFallback(text: string): string | null {
-  // ① ラベル（氏名/名前等）の直後: コロンまたはスペース1つのみ許容
+  // ① ラベル（氏名/名前等）の直後: 「氏名：田中」「【名前】K.M」「名前 佐藤」形式
   const labelMatch = text.match(
-    /(?:氏名|名前|候補者名?|お名前|フルネーム|ご氏名)[　 ]?[：:]?[　 ]([^\n\r　 、。,]{1,20})/
+    /(?:【名前】|【氏名】|(?:氏名|名前|候補者名?|お名前|フルネーム|ご氏名)[　 ]?[：:][　 ]?)([^\n\r】、。,　 ]{1,20})/
   )
   if (labelMatch) {
     const v = labelMatch[1].trim()
@@ -2120,7 +2120,8 @@ Deno.serve(async (req: Request) => {
     const attachRawMatched = attachText.trim()
       ? extractAndRemoveSkills(attachText, masterSkills, { looseCert: true }).matched
       : []
-    const attachDeduped = attachRawMatched.filter(s => !bodyMatchedNames.has(s.name))
+    // 添付は上位20件に絞る（スキルシート一覧等の過剰ヒットを防ぐ）
+    const attachDeduped = attachRawMatched.filter(s => !bodyMatchedNames.has(s.name)).slice(0, 20)
     const attachDedupCount = attachRawMatched.length - attachDeduped.length
 
     const dbMatchedSkills = [...bodyMatched, ...attachDeduped]
