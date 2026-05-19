@@ -1033,8 +1033,21 @@ async function generateJSONSmart(
   }
 
   // Gemini フォールバック
-  const r = await generateJSON(prompt, attachments, kind, maxRetries, timeoutMs, geminiTrace, geminiModel)
-  return { ...r, usedModel: geminiModel ?? AI_MODEL }
+  try {
+    const r = await generateJSON(prompt, attachments, kind, maxRetries, timeoutMs, geminiTrace, geminiModel)
+    return { ...r, usedModel: geminiModel ?? AI_MODEL }
+  } catch (e) {
+    console.warn(`[generateJSONSmart] 全AIプロバイダー失敗、不明フォールバック: ${String(e)}`)
+  }
+
+  // 全AI失敗 → 最小構造で返す（DB照合スキルは呼び出し元で付与済み）
+  const fallback =
+    kind === 'candidate'
+      ? { name: '不明', skills: [], experienceYears: null, summary: '', roles: [], industries: [], nearestStation: null, prefecture: null, desiredRate: null, availableFrom: null, workStyle: null }
+      : kind === 'project'
+      ? { title: '不明', requiredSkills: [], niceToHaveSkills: [], minBudget: null, maxBudget: null, summary: '', startDate: null, endDate: null, location: null, workStyle: null, contractType: null }
+      : { score: 0, summary: '', duplicateSuspected: false }
+  return { result: fallback, durationMs: 0, usedModel: 'fallback-none' }
 }
 
 type MatchResult = { score: number; summary: string; duplicateSuspected: boolean }
