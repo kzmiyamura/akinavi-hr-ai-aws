@@ -2350,16 +2350,26 @@ Deno.serve(async (req: Request) => {
 
     const attachText = allTextContents.map(t => t.content ?? '').join('\n')
     const bodyMatchedNames = new Set(bodyMatched.map(s => s.name))
-    const attachMatched = attachText.trim()
+    const attachRawMatched = attachText.trim()
       ? extractAndRemoveSkills(attachText, masterSkills, { looseCert: true }).matched
-        .filter(s => !bodyMatchedNames.has(s.name))
       : []
+    const attachDeduped = attachRawMatched.filter(s => !bodyMatchedNames.has(s.name))
+    const attachDedupCount = attachRawMatched.length - attachDeduped.length
 
-    const dbMatchedSkills = [...bodyMatched, ...attachMatched]
+    const dbMatchedSkills = [...bodyMatched, ...attachDeduped]
     const dbSkillNames = dbMatchedSkills.map(s => s.name)
+
+    // カテゴリ別内訳（品質確認用）
+    const byCategory = dbMatchedSkills.reduce((acc, s) => {
+      acc[s.category] = (acc[s.category] ?? 0) + 1
+      return acc
+    }, {} as Record<string, number>)
+    const certNames = dbMatchedSkills.filter(s => s.category === 'certifications').map(s => s.name)
     console.log(
-      `[skill_master] DB照合: body=${bodyMatched.length}件 attach=${attachMatched.length}件 合計=${dbMatchedSkills.length}件`,
+      `[skill_master] DB照合: body=${bodyMatched.length}件 attach生=${attachRawMatched.length}件(重複除外${attachDedupCount}件→${attachDeduped.length}件) 合計=${dbMatchedSkills.length}件`,
     )
+    console.log(`[skill_master] カテゴリ内訳: ${JSON.stringify(byCategory)}`)
+    if (certNames.length > 0) console.log(`[skill_master] 資格タグ: ${certNames.join(', ')}`)
 
     // ── 人材メール ────────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
