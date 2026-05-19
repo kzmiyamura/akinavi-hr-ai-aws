@@ -896,6 +896,26 @@ function buildPreExtractHint(pre: PreExtracted): string {
   return `\n【regex事前検出値（確認・補正してください）】\n${hints.map(h => `- ${h}`).join('\n')}\n`
 }
 
+/**
+ * AI不使用・正規表現で候補者名をざっくり抽出する（全AI失敗時のフォールバック用）
+ * 「名前：田中太郎」「氏名: T.T」「候補者名：佐藤」などから抽出。なければ null。
+ */
+function extractNameFallback(text: string): string | null {
+  // 「名前：」「氏名：」「候補者名：」「お名前：」などの後の値
+  const labelMatch = text.match(
+    /(?:氏名|名前|候補者名?|お名前|フルネーム|ご氏名)[　 ]*[：:][　 ]*([^\n\r、。,]{1,20})/
+  )
+  if (labelMatch) {
+    const v = labelMatch[1].trim()
+    if (v && v !== '不明' && v.length >= 1) return v
+  }
+  // イニシャル形式（例: T.Y. / М・T / A.B）
+  const initialMatch = text.match(/\b([A-ZА-Я][.・][A-ZА-Я][.・]?)\b/)
+  if (initialMatch) return initialMatch[1]
+
+  return null
+}
+
 /** Groqプロンプト用スマートトランケーション: 先頭65% + 末尾35% */
 function smartTruncateForGroq(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text
@@ -989,6 +1009,7 @@ async function generateJSONSmart(
   geminiTrace?: { rid: string; phase: string },
   geminiModel?: string,
   groqPrompt?: string, // Groq専用コンパクトプロンプト（指定時はこちらを使用）
+  fallbackText?: string, // 全AI失敗時の名前抽出用テキスト（本文）
 ): Promise<{ result: unknown; durationMs: number; usedModel: string }> {
   const hasImageAttachments = attachments.some(a =>
     SUPPORTED_MIME.includes(a.mimeType)
@@ -1041,12 +1062,14 @@ async function generateJSONSmart(
   }
 
   // 全AI失敗 → 最小構造で返す（DB照合スキルは呼び出し元で付与済み）
+  const extractedName = fallbackText ? (extractNameFallback(fallbackText) ?? '不明') : '不明'
   const fallback =
     kind === 'candidate'
-      ? { name: '不明', skills: [], experienceYears: null, summary: '', roles: [], industries: [], nearestStation: null, prefecture: null, desiredRate: null, availableFrom: null, workStyle: null }
+      ? { name: extractedName, skills: [], experienceYears: null, summary: '', roles: [], industries: [], nearestStation: null, prefecture: null, desiredRate: null, availableFrom: null, workStyle: null }
       : kind === 'project'
-      ? { title: '不明', requiredSkills: [], niceToHaveSkills: [], minBudget: null, maxBudget: null, summary: '', startDate: null, endDate: null, location: null, workStyle: null, contractType: null }
+      ? { title: extractedName !== '不明' ? extractedName : '不明', requiredSkills: [], niceToHaveSkills: [], minBudget: null, maxBudget: null, summary: '', startDate: null, endDate: null, location: null, workStyle: null, contractType: null }
       : { score: 0, summary: '', duplicateSuspected: false }
+  console.log(`[generateJSONSmart] 不明フォールバック name="${extractedName}"`)
   return { result: fallback, durationMs: 0, usedModel: 'fallback-none' }
 }
 
@@ -2230,7 +2253,7 @@ JSON:`.trim()
         const { result, durationMs: d1, usedModel: _usedModel1 } = await generateJSONSmart(prompt, allAttachments, 'candidate', 2, undefined, {
           rid: traceRid,
           phase: 'gemini_candidate_extract',
-        }, extractModel, candidateGroqPrompt)
+        }, extractModel, candidateGroqPrompt, `${subject}\n${body}`)
         usedModel1 = _usedModel1
         durationMs = d1
         analyzed = result as CandAi
@@ -2488,7 +2511,7 @@ JSON:`.trim()
       const { result, durationMs, usedModel: usedModelP } = await generateJSONSmart(prompt, allAttachments, 'project', 2, undefined, {
         rid: traceRid,
         phase: 'gemini_project_extract',
-      }, extractModel, projectGroqPrompt)
+      }, extractModel, projectGroqPrompt, `${subject}\n${body}`)
       tracePhase = 'gemini_project_done'
 
       const projectObjects = normalizeToProjectObjects(result)
