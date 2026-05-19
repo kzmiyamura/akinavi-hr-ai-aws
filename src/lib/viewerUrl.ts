@@ -15,6 +15,7 @@ function extractDriveFileId(url: string): string | null {
  * Google Drive / Docs URL を開けるURLに変換する。
  * - drive.google.com の場合: /file/d/{id}/view 形式に正規化（open?id= 等も変換）
  * - docs.google.com (Docs/Sheets/Slides) はそのまま返す
+ * - supabase.co/storage の場合: 直接ダウンロードURLとしてそのまま返す
  * - その他: Google Docs Viewer でラップ
  */
 export function toViewerUrl(url: string): string {
@@ -26,6 +27,10 @@ export function toViewerUrl(url: string): string {
     if (fileId) {
       return `https://drive.google.com/file/d/${fileId}/view`
     }
+    return url
+  }
+  // Supabase Storage URL はそのまま返す（直接ダウンロード）
+  if (url.includes('supabase.co/storage')) {
     return url
   }
   return `https://docs.google.com/viewer?url=${encodeURIComponent(url)}`
