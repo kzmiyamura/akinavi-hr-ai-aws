@@ -775,22 +775,38 @@ function extractCertContext(text: string, windowSize = 500): string {
   return contexts.join('\n')
 }
 
+/**
+ * テキストからスキルを照合して抽出する。
+ *
+ * @param text         照合対象テキスト
+ * @param masterSkills スキルマスター一覧
+ * @param options.looseCert
+ *   false（デフォルト・メール本文用）:
+ *     資格は certContext（「資格」見出し周辺）のみ照合。見出しがなければスキップ。
+ *   true（添付ファイル用）:
+ *     certContext が見つかれば優先使用。見つからない場合はフォーマット崩れを考慮して
+ *     テキスト全体を対象に照合（全文fallback）。
+ */
 function extractAndRemoveSkills(
   text: string,
   masterSkills: SkillMasterEntry[],
+  options: { looseCert?: boolean } = {},
 ): { matched: { name: string; category: string }[]; remaining: string } {
   const matched: { name: string; category: string }[] = []
   let remaining = text
-
-  // 資格カテゴリは「資格」見出し周辺のみで照合する。
-  // 見出しが存在しない（certContext が空）場合は資格マッチをスキップし誤タグを防ぐ。
   const certContext = extractCertContext(text)
+  const { looseCert = false } = options
+
+  // 資格の照合対象テキストを決定
+  // - certContext あり: 見出し周辺のみ（本文・添付共通）
+  // - certContext なし + looseCert=false（本文）: スキップ
+  // - certContext なし + looseCert=true（添付）: テキスト全体をfallback
+  const certMatchTarget = certContext || (looseCert ? text : null)
 
   for (const skill of masterSkills) {
     const isCert = skill.category === 'certifications'
-    // 資格: certContext が空なら照合しない
-    if (isCert && !certContext) continue
-    const matchTarget = isCert ? certContext : remaining
+    if (isCert && !certMatchTarget) continue
+    const matchTarget = isCert ? certMatchTarget! : remaining
 
     const terms = [skill.name, ...skill.aliases]
     for (const term of terms) {
@@ -807,11 +823,10 @@ function extractAndRemoveSkills(
       const regex = new RegExp(pattern, 'gi')
       if (regex.test(matchTarget)) {
         matched.push({ name: skill.name, category: skill.category })
-        // remaining からも除去（資格は certContext でのみ判定するが remaining はそのまま保持でよい）
         if (!isCert) {
           remaining = remaining.replace(new RegExp(pattern, 'gi'), ' ')
         }
-        break // このスキルはマッチ済み、次のスキルへ
+        break
       }
     }
   }
@@ -2320,12 +2335,31 @@ Deno.serve(async (req: Request) => {
       : ''
 
     // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
+    // 本文と添付を分けて照合し、精度を向上させる。
+    //
+    // 【本文】subject + body
+    //   - 構造が保たれているため厳密な照合（certContext 空なら資格スキップ）
+    //
+    // 【添付】Drive テキスト / Office / PDF 抽出テキスト
+    //   - フォーマットが崩れる場合があるため資格は looseCert=true（certContext 空でも全文fallback）
+    //   - 本文で既にマッチしたスキルは重複登録しない
     const masterSkills = await getSkillMasterFromDb(supabase)
-    // subjectも照合対象に含める（body=0の場合でもsubjectからスキルを抽出）
-    const fullTextForSkill = [subject, body, ...allTextContents.map(t => t.content ?? '')].join('\n')
-    const { matched: dbMatchedSkills } = extractAndRemoveSkills(fullTextForSkill, masterSkills)
+
+    const bodyText = [subject, body].join('\n')
+    const { matched: bodyMatched } = extractAndRemoveSkills(bodyText, masterSkills, { looseCert: false })
+
+    const attachText = allTextContents.map(t => t.content ?? '').join('\n')
+    const bodyMatchedNames = new Set(bodyMatched.map(s => s.name))
+    const attachMatched = attachText.trim()
+      ? extractAndRemoveSkills(attachText, masterSkills, { looseCert: true }).matched
+        .filter(s => !bodyMatchedNames.has(s.name))
+      : []
+
+    const dbMatchedSkills = [...bodyMatched, ...attachMatched]
     const dbSkillNames = dbMatchedSkills.map(s => s.name)
-    console.log(`[skill_master] DB照合: ${dbSkillNames.length}件マッチ テキスト長=${fullTextForSkill.length}文字`)
+    console.log(
+      `[skill_master] DB照合: body=${bodyMatched.length}件 attach=${attachMatched.length}件 合計=${dbMatchedSkills.length}件`,
+    )
 
     // ── 人材メール ────────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
