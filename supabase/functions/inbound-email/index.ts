@@ -898,19 +898,22 @@ function buildPreExtractHint(pre: PreExtracted): string {
 
 /**
  * AI不使用・正規表現で候補者名をざっくり抽出する（全AI失敗時のフォールバック用）
- * 「名前：田中太郎」「氏名: T.T」「候補者名：佐藤」などから抽出。なければ null。
+ * ① 「氏名：田中」「名前 佐藤」などラベル直後の値
+ * ② ラベルがなければ「T・Y」「T Y」形式のイニシャル（大文字2文字＋スペースor・）のみ
+ * 直後に値がなければ即 null（不明）。
  */
 function extractNameFallback(text: string): string | null {
-  // 「名前：」「氏名：」「候補者名：」「お名前：」などの後の値
+  // ① ラベル（氏名/名前等）の直後: コロンまたはスペース1つのみ許容
   const labelMatch = text.match(
-    /(?:氏名|名前|候補者名?|お名前|フルネーム|ご氏名)[　 ]*[：:][　 ]*([^\n\r、。,]{1,20})/
+    /(?:氏名|名前|候補者名?|お名前|フルネーム|ご氏名)[　 ]?[：:]?[　 ]([^\n\r　 、。,]{1,20})/
   )
   if (labelMatch) {
     const v = labelMatch[1].trim()
-    if (v && v !== '不明' && v.length >= 1) return v
+    if (v && v.length >= 1) return v
   }
-  // イニシャル形式（例: T.Y. / М・T / A.B）
-  const initialMatch = text.match(/\b([A-ZА-Я][.・][A-ZА-Я][.・]?)\b/)
+
+  // ② イニシャル: 大文字アルファベット2文字の間にスペースまたは・のみ（例: T・Y / T Y）
+  const initialMatch = text.match(/\b([A-Z][　 ・][A-Z])\b/)
   if (initialMatch) return initialMatch[1]
 
   return null
