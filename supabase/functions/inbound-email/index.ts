@@ -2706,6 +2706,35 @@ JSON:`.trim()
         || proseFields.workStyle === 'リモート可'
         || proseFields.workStyle === 'リモート希望'
 
+      // ── AI必要性チェック用: フィールドごとの情報源を記録 ──────────────────
+      // 'ai'=AI提供, 'regex'=正規表現補完, 'prose'=文章スキャン補完, 'none'=取得不可
+      const _fieldSources: Record<string, string> = {
+        name: (analyzed.name && analyzed.name !== '不明') ? 'ai'
+          : regexFields.name ? 'regex'
+          : extractNameFallback([regexBodyText, attachText].join('\n')) ? 'regex_initial'
+          : extractCandidateCode(subject) ? 'regex_code'
+          : 'none',
+        nearestStation: analyzed.nearestStation ? 'ai' : regexFields.nearestStation ? 'regex' : 'none',
+        prefecture:     analyzed.prefecture     ? 'ai' : regexFields.prefecture     ? 'regex' : 'none',
+        experienceYears: analyzed.experienceYears != null ? 'ai' : regexFields.experienceYears != null ? 'regex' : 'none',
+        desiredRate:     analyzed.desiredRate    ? 'ai' : regexFields.desiredRate    ? 'regex' : 'none',
+        availableFrom:   analyzed.availableFrom  ? 'ai' : regexFields.availableFrom  ? 'regex' : 'none',
+        roles:       (analyzed.roles?.length ?? 0) > 0      ? 'ai' : proseFields.roles.length > 0      ? 'prose' : 'none',
+        industries:  (analyzed.industries?.length ?? 0) > 0 ? 'ai' : proseFields.industries.length > 0 ? 'prose' : 'none',
+        remoteAvailable: analyzed.remoteAvailable ? 'ai' : proseFields.workStyle ? 'prose' : 'none',
+        // summary は AI専用（regex代替不可）
+        summary:    analyzed.summary ? 'ai' : 'none',
+        // スキルはDB照合のみ（AI不使用）
+        skills:     `db:${dbSkillNames.length}`,
+      }
+      // AI が実際に貢献したフィールド数（summary含む）
+      const aiOnlyCount = Object.values(_fieldSources).filter(v => v === 'ai').length
+      const regexSavedCount = Object.values(_fieldSources).filter(v => v.startsWith('regex') || v === 'prose').length
+      console.log(
+        `[ai_necessity] ai=${aiOnlyCount}フィールド regex/prose=${regexSavedCount}フィールド none=${Object.values(_fieldSources).filter(v => v === 'none').length}フィールド`,
+        JSON.stringify(_fieldSources),
+      )
+
       const dbPayload = {
         data_env: inboundDataEnv,
         name: resolvedName,
@@ -2811,7 +2840,7 @@ JSON:`.trim()
         model: usedModel1 ?? extractModel,
         from_address: from,
         subject,
-        ai_result: analyzed,
+        ai_result: { ...analyzed, _field_sources: _fieldSources },
         prompt_length: prompt.length,
         status: 'success',
         duration_ms: durationMs,
