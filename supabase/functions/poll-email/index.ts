@@ -570,6 +570,8 @@ async function callInboundEmail(
     from:     email.from?.emailAddress?.address ?? '',
     subject:  email.subject ?? '',
     body:     email.body?.content ?? '',
+    // Outlookがメールを受信した実際の日時（解析完了時刻=created_atとは別）
+    email_received_at: email.receivedDateTime ?? null,
     // poll-email 側でルールフィルター・AI分類済みだが、Lambda門番（Bedrock）も通す
     skip_relevance: false,
     // 添付分割時に各呼び出しを区別（inbound-email のデdup判定で使用）

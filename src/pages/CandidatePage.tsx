@@ -41,6 +41,7 @@ interface RawProfile {
   subject?: string | null
   summary?: string | null
   text?: string | null
+  emailReceivedAt?: string | null
 }
 
 function getRaw(c: Candidate): RawProfile {
@@ -147,7 +148,7 @@ export function CandidateProfileFields({
   const { skillsByCategory: sbc, roles, industries,
     prefecture, nearestStation, availableRegions,
     currentWorkLocation, remoteAvailable,
-    from: mailFrom, subject: mailSubject } = raw
+    from: mailFrom, subject: mailSubject, emailReceivedAt } = raw
 
   const totalSkills = sbc
     ? Object.values(sbc).reduce((sum, arr) => sum + (arr?.length ?? 0), 0)
@@ -193,7 +194,10 @@ export function CandidateProfileFields({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
           <span className="flex items-center gap-1 text-xs text-gray-400 shrink-0">
             <Mail size={10} />
-            受信: {c.created_at ? formatDate(c.created_at) : '—'}
+            {emailReceivedAt
+              ? <>受信: {formatDate(emailReceivedAt)} <span className="text-gray-300">/ 登録: {c.created_at ? formatDate(c.created_at) : '—'}</span></>
+              : <>登録: {c.created_at ? formatDate(c.created_at) : '—'}</>
+            }
           </span>
           {mailFrom && (
             <span className="text-xs text-gray-400 truncate max-w-xs" title={mailFrom}>
@@ -485,6 +489,10 @@ export function CandidateEditModal({ candidate, nickname, dataEnv, onClose, onSa
             </div>
             <div className="space-y-1">
               <label className={labelCls}>メール受信日時（変更不可）</label>
+              <input className={readonlyCls} value={getRaw(candidate).emailReceivedAt ? formatDate(getRaw(candidate).emailReceivedAt!) : (candidate.created_at ? formatDate(candidate.created_at) : '')} readOnly />
+            </div>
+            <div className="space-y-1">
+              <label className={labelCls}>解析完了日時（変更不可）</label>
               <input className={readonlyCls} value={candidate.created_at ? formatDate(candidate.created_at) : ''} readOnly />
             </div>
           </section>

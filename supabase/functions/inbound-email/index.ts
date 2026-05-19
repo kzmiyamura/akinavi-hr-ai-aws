@@ -842,6 +842,19 @@ async function registerNewSkillsToDb(
   }
 }
 
+/**
+ * 件名から候補者内部コードを抽出する（例: "IA62", "AS400", "FE3"）
+ * name=不明のとき代替名として使用
+ */
+function extractCandidateCode(subject: string): string | null {
+  // 【直人材/ AS/400, RPG/...】のようなパターンから英数コードを抽出
+  // 1〜4文字のアルファベット + 1〜3桁の数字（例: IA62, FE3, AS400, AA11）
+  const codePattern = /\b([A-Z]{1,4}\d{1,3})\b/g
+  const matches = [...subject.matchAll(codePattern)].map(m => m[1])
+  if (matches.length > 0) return matches[0]
+  return null
+}
+
 function preExtractFields(text: string): PreExtracted {
   // 経験年数（複数パターン）
   let experienceYears: number | null = null
@@ -1047,7 +1060,8 @@ async function generateJSONSmart(
           'Content-Type': 'application/json',
           ...(bedrockApiKey ? { 'x-api-key': bedrockApiKey } : {}),
         },
-        body: JSON.stringify({ prompt }),
+        // Bedrockにはコンパクトなgroqプロンプトを使う（入力トークン削減）
+        body: JSON.stringify({ prompt: groqPrompt ?? prompt }),
       })
       if (bedrockRes.ok) {
         const bedrockJson = await bedrockRes.json() as { result?: string; error?: string }
@@ -1970,6 +1984,8 @@ Deno.serve(async (req: Request) => {
     const type: string = normalizeInboundType(raw.type)
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
+    // Outlookがメールを実際に受信した日時（poll-emailから渡される）
+    const emailReceivedAt: string | null = typeof raw.email_received_at === 'string' ? raw.email_received_at : null
     const pickedPlain = pickEmailPlainBody(raw)
     let rawBody: string = pickedPlain
     rawBody = unwrapMicrosoftGraphBody(rawBody)
@@ -2173,6 +2189,27 @@ Deno.serve(async (req: Request) => {
       )
     }
     // 重複なし → ハッシュをまだ記録しない（処理成功後に記録する）
+
+    // ④ 送信者の1日上限チェック（一斉配信業者によるAIコスト急騰対策）
+    // 1送信者から1日50件超はスキップ（Bedrock費用急増を防ぐ）
+    const SENDER_DAILY_LIMIT = 50
+    if (from && type === 'candidate') {
+      const todayStart = new Date()
+      todayStart.setHours(0, 0, 0, 0)
+      const { count: senderCount } = await supabase
+        .from('candidates')
+        .select('id', { count: 'exact', head: true })
+        .eq('data_env', inboundDataEnv)
+        .gte('created_at', todayStart.toISOString())
+        .filter('raw_profile->>from', 'eq', from)
+      if ((senderCount ?? 0) >= SENDER_DAILY_LIMIT) {
+        console.warn(`[RATE_LIMIT] 送信者上限超過スキップ from=${from} count=${senderCount}`)
+        return new Response(
+          JSON.stringify({ ok: true, skipped: true, reason: 'SENDER_DAILY_LIMIT' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+    }
 
     tracePhase = 'drive_links_fetch'
     pipe(traceRid, tracePhase)
@@ -2443,9 +2480,14 @@ JSON:`.trim()
       // スキルはDB照合結果のみ使用（AIによるスキル抽出廃止）
       const skills = dbSkillNames
 
+      // name=不明 の場合は件名から内部コードを代替名として使用（例: IA62）
+      const resolvedName = (analyzed.name && analyzed.name !== '不明')
+        ? analyzed.name
+        : (extractCandidateCode(subject) ?? '不明')
+
       const dbPayload = {
         data_env: inboundDataEnv,
-        name: analyzed.name ?? '不明',
+        name: resolvedName,
         email: null as string | null,
         phone: null as string | null,
         skills,
@@ -2466,6 +2508,7 @@ JSON:`.trim()
           currentWorkLocation: analyzed.currentWorkLocation ?? null,
           remoteAvailable: analyzed.remoteAvailable ?? false,
           from, subject,
+          emailReceivedAt,
           attachmentCount: allAttachments.length,
           attachmentNames: [
             ...allAttachments.map(a => a.name ?? a.mimeType),
@@ -2489,12 +2532,12 @@ JSON:`.trim()
       if (error) throw new Error(`候補者保存エラー: ${error.message}`)
 
       // ライブラリ重複判定（AI不使用・名前+スキルJaccard類似度）
-      if (analyzed.name && analyzed.name !== '不明') {
+      if (resolvedName && resolvedName !== '不明') {
         const { data: similar } = await supabase
           .from('candidates')
           .select('id, name, skills')
           .eq('data_env', inboundDataEnv)
-          .eq('name', analyzed.name)
+          .eq('name', resolvedName)
           .neq('id', data.id)
           .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
           .limit(5)
@@ -2506,7 +2549,7 @@ JSON:`.trim()
             const union = new Set([...mySkillSet, ...theirSkills]).size
             if (union > 0 && intersection / union >= 0.4) {
               await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', data.id).eq('data_env', inboundDataEnv)
-              console.log(`[duplicate] 名前+スキル類似 → duplicate_flag=true: ${analyzed.name} jaccard=${(intersection / union).toFixed(2)}`)
+              console.log(`[duplicate] 名前+スキル類似 → duplicate_flag=true: ${resolvedName} jaccard=${(intersection / union).toFixed(2)}`)
               break
             }
           }
@@ -2651,6 +2694,7 @@ JSON:`.trim()
         text: body.slice(0, 5000),
         from,
         subject,
+        emailReceivedAt,
         attachmentCount: allAttachments.length,
         attachmentNames: [
           ...allAttachments.map((a) => a.name ?? a.mimeType),
