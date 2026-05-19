@@ -835,6 +835,51 @@ function extractAndRemoveSkills(
 }
 
 /**
+ * 日本式スキルシートの評価テーブル（A/B/C/D/E 評価）を検出し、
+ * D/E 評価（実務経験なし）のスキルを除外する。
+ *
+ * Excel を CSV 化すると評価行は  "Python,3,B"  や  "Python,,○,,,"  のようになる。
+ * 行に [ABC] が standalone で含まれれば高評価、[DE] のみなら低評価と判定する。
+ * スキルシート形式でない場合（評価行 <5 行）は入力をそのまま返す。
+ */
+function filterBySkillRating(
+  text: string,
+  skills: { name: string; category: string }[],
+): { name: string; category: string }[] {
+  if (!text.trim() || skills.length === 0) return skills
+
+  const lines = text.split(/\r?\n/)
+  // 行に独立した A〜E の 1 文字が含まれる行数でスキルシート形式かどうか判定
+  const ratingLineCount = lines.filter(l => /(?:^|,|\t)\s*[ABCDE]\s*(?:,|\t|$)/.test(l)).length
+  if (ratingLineCount < 5) {
+    // スキルシート形式ではない → フィルターしない
+    return skills
+  }
+
+  console.log(`[skill_rating] スキルシート形式を検出 (評価行 ${ratingLineCount} 行)`)
+
+  return skills.filter(skill => {
+    const escaped = skill.name.replace(/[.*+?()[\]{}\\|^$]/g, '\\$&')
+    const nameRe = new RegExp(`(?<![a-zA-Z0-9_])${escaped}(?![a-zA-Z0-9_])`, 'i')
+    const matchingLines = lines.filter(l => nameRe.test(l))
+
+    if (matchingLines.length === 0) return true // 該当行なし → 保持
+
+    // いずれかの行に A/B/C が含まれる → 高評価 → 保持
+    const hasHighRating = matchingLines.some(l =>
+      /(?:^|,|\t)\s*[ABC]\s*(?:,|\t|$)/.test(l),
+    )
+    if (hasHighRating) return true
+
+    // 全行が D/E のみ → 低評価 → 除外
+    const allLowRated = matchingLines.every(l =>
+      /(?:^|,|\t)\s*[DE]\s*(?:,|\t|$)/.test(l),
+    )
+    return !allLowRated
+  })
+}
+
+/**
  * 件名から候補者内部コードを抽出する（例: "IA62", "AS400", "FE3"）
  * name=不明のとき代替名として使用
  */
@@ -912,11 +957,329 @@ function extractNameFallback(text: string): string | null {
     if (v && v.length >= 1) return v
   }
 
-  // ② イニシャル: 大文字アルファベット2文字の間にスペースまたは・のみ（例: T・Y / T Y）
-  const initialMatch = text.match(/\b([A-Z][　 ・][A-Z])\b/)
+  // ② イニシャル: 大文字2文字の間にスペース・・.のいずれか（例: T・Y / T Y / K.M）
+  // 直後が英数字でなければマッチ（】 _ スペース 末尾 等）
+  const initialMatch = text.match(/\b([A-Z][　 ・.][A-Z])(?![a-zA-Z0-9])/)
   if (initialMatch) return initialMatch[1]
 
   return null
+}
+
+/**
+ * フィールド抽出ヘルパー（Phase0〜3）
+ *
+ * Phase0  本文ブロック絞り込み: 空行でブロック分割 → ラベルを含むブロック内で先に同行検索
+ * Phase1  本文・ファイル名 全体 同一行: `ラベル[SEP]値`
+ * Phase2a 添付テキスト 同一行         : `ラベル[SEP+カンマ]値`
+ * Phase2b 添付テキスト 次行/テーブル  :
+ *   - テーブル形式（CSV/TSV ヘッダ行）: ラベルの列インデックスで次行の対応セルを取得
+ *   - 非テーブル形式: ラベルのみ行の直後行を取得
+ * Phase3  全テキスト 単一半角SP区切り : 値が phase3MinLen 文字以上のみ採用
+ *
+ * 区切り文字 SEP: ：: \t 全角SP×1+ 半角SP×2+  （Phase0〜3共通）
+ * 添付追加   ,，                                （Phase2a/2b追加）
+ * 単独スペース                                  （Phase3のみ）
+ */
+function extractFieldTwoPhase(
+  labels: string[],
+  bodyText: string,
+  attachText: string,
+  validate?: (v: string) => boolean,
+  maxLen = 30,
+  phase3MinLen = 3,
+): string | null {
+  const esc = labels.map(l => l.replace(/[.*+?()[\]{}\\|^$]/g, '\\$&')).join('|')
+  const SEP     = `(?:[：:\\t]|　+| {2,})`
+  const SEP_ATT = `(?:[：:\\t,，]|　+| {2,})`
+
+  const check = (v: string, minLen = 1): string | null => {
+    const t = v.trim().replace(/[　 ]+$/, '')
+    if (!t || t.length < minLen || t.length > maxLen) return null
+    if (validate && !validate(t)) return null
+    return t
+  }
+
+  const rSameLine = (sep: string) =>
+    new RegExp(`(?:${esc})[　 ]?${sep}[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
+
+  // ── Phase0: 本文ブロック絞り込み ──────────────────────────────
+  // 空行2行以上でブロック分割し、ラベルを含む最初のブロック内で同行検索
+  const bodyBlocks = bodyText.split(/\n{2,}/)
+  if (bodyBlocks.length > 1) {
+    const labelPresent = new RegExp(`(?:${esc})`, 'i')
+    const block = bodyBlocks.find(b => labelPresent.test(b))
+    if (block && block !== bodyText) {
+      const m = block.match(rSameLine(SEP))
+      if (m) { const v = check(m[1]); if (v) return v }
+    }
+  }
+
+  // ── Phase1: 本文 全体 同一行 ──────────────────────────────────
+  const mBody = bodyText.match(rSameLine(SEP))
+  if (mBody) { const v = check(mBody[1]); if (v) return v }
+
+  if (attachText.trim()) {
+    // ── Phase2a: 添付 同一行 ──────────────────────────────────
+    const mAtt = attachText.match(rSameLine(SEP_ATT))
+    if (mAtt) { const v = check(mAtt[1]); if (v) return v }
+
+    // ── Phase2b: 添付 次行 / テーブル構造 ────────────────────
+    const lines = attachText.split(/\r?\n/)
+    const labelExact = new RegExp(`^(?:${esc})$`, 'i')   // 完全一致（テーブルヘッダ用）
+    const labelOnly  = new RegExp(`^[　 ]*(?:${esc})[　 ]?[：:,，]?[　 ]*$`, 'i') // ラベルのみ行
+
+    for (let i = 0; i < lines.length - 1; i++) {
+      const line = lines[i]
+      const labelPresent = new RegExp(`(?:${esc})`, 'i')
+      if (!labelPresent.test(line)) continue
+
+      // テーブル形式: カンマ or タブ区切りで複数セルある場合
+      const sep = line.includes('\t') ? /\t/ : /,/
+      const headers = line.split(sep).map(h => h.trim())
+      if (headers.length > 1) {
+        const colIdx = headers.findIndex(h => labelExact.test(h))
+        if (colIdx !== -1) {
+          // ヘッダ行確定 → 次のデータ行の同列セルを取得
+          for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
+            const dataLine = lines[j].trim()
+            if (!dataLine) continue
+            const cells = dataLine.split(sep).map(c => c.trim())
+            if (cells[colIdx]) {
+              const v = check(cells[colIdx])
+              if (v) return v
+            }
+            break // データ行は1行のみ試行
+          }
+          continue
+        }
+      }
+
+      // 非テーブル: ラベルのみ行の直後行
+      if (labelOnly.test(line)) {
+        for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
+          const v = check(lines[j])
+          if (v) return v
+        }
+      }
+    }
+  }
+
+  // ── Phase3: 単一半角スペース区切り（最終フォールバック） ──────
+  const allText = bodyText + '\n' + attachText
+  const rSingle = new RegExp(`(?:${esc}) ([^ \\t,，\\n　]{1,${maxLen}})`, 'i')
+  const mSingle = allText.match(rSingle)
+  if (mSingle) { const v = check(mSingle[1], phase3MinLen); if (v) return v }
+
+  return null
+}
+
+const PREFECTURES = [
+  '北海道','青森県','岩手県','宮城県','秋田県','山形県','福島県',
+  '茨城県','栃木県','群馬県','埼玉県','千葉県','東京都','神奈川県',
+  '新潟県','富山県','石川県','福井県','山梨県','長野県','岐阜県',
+  '静岡県','愛知県','三重県','滋賀県','京都府','大阪府','兵庫県',
+  '奈良県','和歌山県','鳥取県','島根県','岡山県','広島県','山口県',
+  '徳島県','香川県','愛媛県','高知県','福岡県','佐賀県','長崎県',
+  '熊本県','大分県','宮崎県','鹿児島県','沖縄県',
+]
+
+/**
+ * AI抽出が空だった項目を正規表現で2段階補完する（人材メール用）。
+ * bodyText = 件名+本文+ファイル名、attachText = 添付テキスト。
+ */
+function extractCandidateFieldsRegex(
+  bodyText: string,
+  attachText: string,
+): {
+  name: string | null
+  nearestStation: string | null
+  prefecture: string | null
+  experienceYears: number | null
+  desiredRate: string | null
+  availableFrom: string | null
+} {
+  // ── 氏名 ──────────────────────────────────────────────────────
+  // Phase3 は日本語の姓名（2文字〜）も有効なので phase3MinLen=2
+  const name = extractFieldTwoPhase(
+    ['氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
+    bodyText, attachText,
+    v => v.length >= 1 && !/^\d+$/.test(v),
+    20,
+    2,
+  )
+
+  // ── 最寄駅 ────────────────────────────────────────────────────
+  // 「渋谷」「大阪」など2文字の駅名もあるので phase3MinLen=2
+  let nearestStation = extractFieldTwoPhase(
+    ['最寄り?駅','最寄り?','沿線','通勤駅'],
+    bodyText, attachText,
+    v => /[駅線]$/.test(v) || v.length <= 10,
+    15,
+    2,
+  )
+  // ラベルなしフォールバック: 「○○駅徒歩N分」や「○○駅 」
+  if (!nearestStation) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/([^\s,、。（）「」【】\t]{1,10}駅)(?:[\s　_\-）」】徒歩]|$)/)
+    if (m) nearestStation = m[1].trim()
+  }
+
+  // ── 都道府県 ──────────────────────────────────────────────────
+  // ラベル付き抽出を優先し、なければ全文から都道府県リストを検索
+  let prefecture = extractFieldTwoPhase(
+    ['住所','居住地','在住','現住所','都道府県','居住エリア','在住地'],
+    bodyText, attachText,
+    v => PREFECTURES.some(p => v.includes(p)),
+    40,
+  )
+  if (prefecture) {
+    // 「大阪府大阪市〜」から都道府県部分だけ取り出す
+    const found = PREFECTURES.find(p => prefecture!.includes(p))
+    if (found) prefecture = found
+  }
+  if (!prefecture) {
+    const allText = bodyText + '\n' + attachText
+    prefecture = PREFECTURES.find(p => allText.includes(p)) ?? null
+  }
+
+  // ── 経験年数 ──────────────────────────────────────────────────
+  let experienceYears: number | null = null
+  const expPatterns = [
+    /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)歴\s*[約]?\s*(\d+)\s*年/,
+    /経験\s*[約]?\s*(\d+)\s*年/,
+    /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
+    /(?:経験年数|開発経験)[：:]\s*(\d+)年/,
+    /(?:社会人歴|就労歴)[：:\s]*(\d+)年/,
+  ]
+  const allText = bodyText + '\n' + attachText
+  for (const p of expPatterns) {
+    const m = allText.match(p)
+    if (m) {
+      const y = parseInt(m[1], 10)
+      if (y > 0 && y <= 60) { experienceYears = y; break }
+    }
+  }
+
+  // ── 希望単価 ──────────────────────────────────────────────────
+  let desiredRate: string | null = extractFieldTwoPhase(
+    ['希望単価','単価','希望報酬','希望月額','希望料金'],
+    bodyText, attachText,
+    v => /\d/.test(v),
+    20,
+  )
+  if (!desiredRate) {
+    const rateM = allText.match(
+      /(?:希望[単]?価|単価)[：:\s]*(\d{2,3})\s*万\s*円?(?:以上|\/月|程度|台|〜|~)?/
+    ) ?? allText.match(/(\d{2,3})\s*万\s*円?(?:以上|\/月|程度)/)
+    if (rateM) {
+      const amount = parseInt(rateM[1], 10)
+      if (amount >= 20 && amount <= 300) {
+        const raw = rateM[0]
+        const suffix = raw.includes('以上') ? '万円以上' : raw.includes('/月') ? '万円/月' : '万円'
+        desiredRate = `${amount}${suffix}`
+      }
+    }
+  }
+
+  // ── 稼働可能時期 ──────────────────────────────────────────────
+  let availableFrom = extractFieldTwoPhase(
+    ['参画可能時期','参画可能','稼働開始','稼働可能時期','稼働可能','稼働時期','開始可能日','稼動時期'],
+    bodyText, attachText,
+    v => v.length >= 2,
+    30,
+  )
+  if (!availableFrom && /(?:^|[\s　])即日(?:[\s　]|$)/.test(allText)) availableFrom = '即日'
+
+  return { name, nearestStation, prefecture, experienceYears, desiredRate, availableFrom }
+}
+
+/**
+ * 文章スキャンフェーズ（ProseExtract）
+ *
+ * ラベル-値ペアでは取れない roles / industries / workStyle を対象に、
+ * 「文章的な行」（20文字超 or 読点・句点を含む）からキーワードリストで抽出する。
+ * AI が空で返した場合のフォールバックとして呼び出す。
+ */
+
+const PROSE_ROLES: Array<{ re: RegExp; label: string }> = [
+  { re: /PM|プロジェクト[　 ]?マネージャー/,           label: 'プロジェクトマネージャー' },
+  { re: /PL|プロジェクト[　 ]?リーダー/,               label: 'プロジェクトリーダー' },
+  { re: /TL|テックリード|テック[　 ]?リード/,           label: 'テックリード' },
+  { re: /(?<![バックエンドフロントクラウドデータML])SE(?![A-Z])|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
+  { re: /PG|プログラマー?/,                            label: 'プログラマー' },
+  { re: /インフラ[　 ]?エンジニア/,                    label: 'インフラエンジニア' },
+  { re: /フロントエンド[　 ]?エンジニア|フロント[　 ]?エンジニア/, label: 'フロントエンドエンジニア' },
+  { re: /バックエンド[　 ]?エンジニア|バック[　 ]?エンジニア/,    label: 'バックエンドエンジニア' },
+  { re: /フルスタック[　 ]?エンジニア/,                label: 'フルスタックエンジニア' },
+  { re: /クラウド[　 ]?エンジニア/,                    label: 'クラウドエンジニア' },
+  { re: /データ[　 ]?エンジニア/,                      label: 'データエンジニア' },
+  { re: /MLエンジニア|機械学習[　 ]?エンジニア/,       label: 'MLエンジニア' },
+  { re: /スクラム[　 ]?マスター/,                      label: 'スクラムマスター' },
+  { re: /アーキテクト/,                                label: 'アーキテクト' },
+  { re: /コンサルタント/,                              label: 'コンサルタント' },
+  { re: /要件定義/,                                    label: '要件定義' },
+  { re: /基本設計/,                                    label: '基本設計' },
+  { re: /詳細設計/,                                    label: '詳細設計' },
+  { re: /テスト[　 ]?(?:リード|エンジニア|設計)/,      label: 'テストエンジニア' },
+  { re: /運用[　 ]?(?:保守|管理)/,                     label: '運用保守' },
+]
+
+const PROSE_INDUSTRIES: Array<{ re: RegExp; label: string }> = [
+  { re: /金融|銀行|証券|保険|FinTech|フィンテック/,    label: '金融' },
+  { re: /医療|ヘルスケア|病院|製薬|MedTech/,           label: '医療・ヘルスケア' },
+  { re: /製造|工場|メーカー|IoT|FA/,                   label: '製造' },
+  { re: /EC|イーコマース|eコマース|物流/,              label: 'EC・物流' },
+  { re: /小売|流通|リテール/,                          label: '小売・流通' },
+  { re: /通信|テレコム|キャリア/,                      label: '通信' },
+  { re: /ゲーム|エンタメ|メディア|動画配信/,           label: 'ゲーム・エンタメ' },
+  { re: /不動産|建設|住宅|プロパティ/,                 label: '不動産・建設' },
+  { re: /官公庁|自治体|公共|行政|省庁/,                label: '公共・官公庁' },
+  { re: /教育|EdTech|eLearning|学習/,                  label: '教育' },
+  { re: /SES|受託|SI(?!P)|システムインテグレーション/, label: 'SES・SI' },
+  { re: /スタートアップ|ベンチャー/,                   label: 'スタートアップ' },
+  { re: /人材|HR|採用|HRTech/,                         label: '人材・HR' },
+  { re: /マーケ(?:ティング)?|広告|デジタルマーケ/,    label: 'マーケティング' },
+]
+
+const PROSE_WORKSTYLE: Array<{ re: RegExp; label: string }> = [
+  { re: /フルリモート|完全リモート|100%リモート/,      label: 'フルリモート' },
+  { re: /週[234]日.*リモート|リモート.*週[234]日/,     label: 'リモート可' },
+  { re: /リモート[　 ]?[可能OK]/,                      label: 'リモート可' },
+  { re: /常駐[　 ]?(?:不可|なし)|在宅[　 ]?希望/,     label: 'リモート希望' },
+  { re: /常駐[　 ]?(?:可|OK|あり)|フル常駐/,          label: '常駐可' },
+]
+
+function extractFromProse(bodyText: string, attachText: string): {
+  roles: string[]
+  industries: string[]
+  workStyle: string | null
+} {
+  const allText = bodyText + '\n' + attachText
+
+  // 文章判定: 20文字超 or 読点・句点を含む行のみ抽出してスキャン
+  const proseLines = allText.split(/\r?\n/).filter(l => l.length > 20 || /[、。]/.test(l))
+  const prose = proseLines.join('\n')
+
+  const roles: string[] = []
+  if (prose.trim()) {
+    for (const { re, label } of PROSE_ROLES) {
+      if (re.test(prose) && !roles.includes(label)) roles.push(label)
+    }
+  }
+
+  // 業界は短い単語も多いので全文を対象
+  const industries: string[] = []
+  for (const { re, label } of PROSE_INDUSTRIES) {
+    if (re.test(allText) && !industries.includes(label)) industries.push(label)
+  }
+
+  let workStyle: string | null = null
+  for (const { re, label } of PROSE_WORKSTYLE) {
+    if (re.test(allText)) { workStyle = label; break }
+  }
+
+  console.log(`[prose_extract] roles=${roles.length} industries=${industries.length} workStyle=${workStyle ?? 'null'}`)
+  return { roles, industries, workStyle }
 }
 
 /** Groqプロンプト用スマートトランケーション: 先頭65% + 末尾35% */
@@ -2120,9 +2483,11 @@ Deno.serve(async (req: Request) => {
     const attachRawMatched = attachText.trim()
       ? extractAndRemoveSkills(attachText, masterSkills, { looseCert: true }).matched
       : []
+    // スキルシート形式（A〜E 評価テーブル）を検出し D/E 評価スキルを除外
+    const attachRated = filterBySkillRating(attachText, attachRawMatched)
     // 添付は上位20件に絞る（スキルシート一覧等の過剰ヒットを防ぐ）
-    const attachDeduped = attachRawMatched.filter(s => !bodyMatchedNames.has(s.name)).slice(0, 20)
-    const attachDedupCount = attachRawMatched.length - attachDeduped.length
+    const attachDeduped = attachRated.filter(s => !bodyMatchedNames.has(s.name)).slice(0, 20)
+    const attachDedupCount = attachRated.filter(s => bodyMatchedNames.has(s.name)).length
 
     const dbMatchedSkills = [...bodyMatched, ...attachDeduped]
     const dbSkillNames = dbMatchedSkills.map(s => s.name)
@@ -2133,8 +2498,9 @@ Deno.serve(async (req: Request) => {
       return acc
     }, {} as Record<string, number>)
     const certNames = dbMatchedSkills.filter(s => s.category === 'certifications').map(s => s.name)
+    const attachRatingFiltered = attachRawMatched.length - attachRated.length
     console.log(
-      `[skill_master] DB照合: body=${bodyMatched.length}件 attach生=${attachRawMatched.length}件(重複除外${attachDedupCount}件→${attachDeduped.length}件) 合計=${dbMatchedSkills.length}件`,
+      `[skill_master] DB照合: body=${bodyMatched.length}件 attach生=${attachRawMatched.length}件(D/E除外${attachRatingFiltered}件→評価後${attachRated.length}件→重複除外${attachDedupCount}件→${attachDeduped.length}件) 合計=${dbMatchedSkills.length}件`,
     )
     console.log(`[skill_master] カテゴリ内訳: ${JSON.stringify(byCategory)}`)
     if (certNames.length > 0) console.log(`[skill_master] 資格タグ: ${certNames.join(', ')}`)
@@ -2254,10 +2620,11 @@ JSON:`.trim()
 
       try {
         const candidateGroqPrompt = buildCandidateGroqPrompt(from, subject, effectiveBody, allTextContents)
+        const attachFilenames = allAttachments.map(a => a.name ?? '').filter(Boolean).join('\n')
         const { result, durationMs: d1, usedModel: _usedModel1 } = await generateJSONSmart(prompt, allAttachments, 'candidate', 2, undefined, {
           rid: traceRid,
           phase: 'gemini_candidate_extract',
-        }, extractModel, candidateGroqPrompt, `${subject}\n${body}`)
+        }, extractModel, candidateGroqPrompt, `${subject}\n${body}\n${attachFilenames}`)
         usedModel1 = _usedModel1
         durationMs = d1
         analyzed = result as CandAi
@@ -2313,10 +2680,43 @@ JSON:`.trim()
       // スキルはDB照合結果のみ使用（AIによるスキル抽出廃止）
       const skills = dbSkillNames
 
-      // name=不明 の場合は件名から内部コードを代替名として使用（例: IA62）
+      // AI結果が空の項目をregex 2段階補完
+      const allAttachmentNames = [
+        ...allAttachments.map(a => a.name ?? ''),
+        ...officeTextContents.map(t => t.label),
+      ].filter(Boolean).join('\n')
+      // Phase1対象: 件名+本文+ファイル名 / Phase2対象: 添付テキスト
+      const regexBodyText = [subject, body, allAttachmentNames].join('\n')
+      const regexFields = extractCandidateFieldsRegex(regexBodyText, attachText)
+      console.log(`[regex_fallback] ${JSON.stringify(regexFields)}`)
+
+      // name: AI → regex(ラベル抽出) → extractNameFallback(イニシャル) → 件名コード
       const resolvedName = (analyzed.name && analyzed.name !== '不明')
         ? analyzed.name
-        : (extractCandidateCode(subject) ?? '不明')
+        : (regexFields.name
+            ?? extractNameFallback([regexBodyText, attachText].join('\n'))
+            ?? extractCandidateCode(subject)
+            ?? '不明')
+
+      // AI空項目にregexフォールバックを適用
+      const resolvedStation = analyzed.nearestStation || regexFields.nearestStation
+      const resolvedPrefecture = analyzed.prefecture || regexFields.prefecture
+      const resolvedExperienceYears = analyzed.experienceYears ?? regexFields.experienceYears
+      const resolvedDesiredRate = analyzed.desiredRate || regexFields.desiredRate
+      const resolvedAvailableFrom = analyzed.availableFrom || regexFields.availableFrom
+
+      // 文章スキャンフェーズ: roles / industries / workStyle を文章から補完
+      const proseFields = extractFromProse(regexBodyText, attachText)
+      const resolvedRoles = (analyzed.roles?.length ?? 0) > 0
+        ? analyzed.roles!
+        : proseFields.roles
+      const resolvedIndustries = (analyzed.industries?.length ?? 0) > 0
+        ? analyzed.industries!
+        : proseFields.industries
+      const resolvedRemoteAvailable = analyzed.remoteAvailable
+        || proseFields.workStyle === 'フルリモート'
+        || proseFields.workStyle === 'リモート可'
+        || proseFields.workStyle === 'リモート希望'
 
       const dbPayload = {
         data_env: inboundDataEnv,
@@ -2324,7 +2724,7 @@ JSON:`.trim()
         email: null as string | null,
         phone: null as string | null,
         skills,
-        experience_years: toExperienceYears(analyzed.experienceYears),
+        experience_years: toExperienceYears(resolvedExperienceYears),
         raw_profile: {
           text: effectiveBody.slice(0, 5000),
           summary: analyzed.summary ?? '',
@@ -2333,13 +2733,13 @@ JSON:`.trim()
             acc[s.category].push(s.name)
             return acc
           }, {} as Record<string, string[]>),
-          roles: analyzed.roles ?? [],
-          industries: analyzed.industries ?? [],
-          nearestStation: analyzed.nearestStation ?? null,
-          prefecture: analyzed.prefecture ?? null,
+          roles: resolvedRoles,
+          industries: resolvedIndustries,
+          nearestStation: resolvedStation,
+          prefecture: resolvedPrefecture,
           availableRegions: analyzed.availableRegions ?? null,
           currentWorkLocation: analyzed.currentWorkLocation ?? null,
-          remoteAvailable: analyzed.remoteAvailable ?? false,
+          remoteAvailable: resolvedRemoteAvailable,
           from, subject,
           emailReceivedAt,
           attachmentCount: allAttachments.length,
@@ -2348,7 +2748,10 @@ JSON:`.trim()
             ...officeTextContents.map(t => t.label),
           ],
           driveLinks: driveTexts.map(t => t.label),
-          aiAnalysis: analyzed,
+          aiAnalysis: {
+            ...analyzed,
+            availableFrom: resolvedAvailableFrom,
+          },
           geminiParseFallback: parseFallback,
         },
         duplicate_flag: false,
@@ -2356,7 +2759,7 @@ JSON:`.trim()
         box_url: boxUrls[0] ?? null,
         box_status: boxUrls.length > 0 ? 'pending' : null,
         resume_url: resumeUrl,
-        desired_rate: analyzed.desiredRate ?? null,
+        desired_rate: resolvedDesiredRate ?? null,
         from_company: sanitizeFromCompany(analyzed.fromCompany),
       }
 
