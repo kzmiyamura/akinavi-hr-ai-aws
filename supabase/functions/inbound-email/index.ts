@@ -95,6 +95,19 @@ function parseFrom(from: string): string {
   }
 }
 
+/** メール本文中の HTML エンティティをデコードする（例: &#31292; → 稼） */
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCharCode(parseInt(code, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, code: string) => String.fromCharCode(parseInt(code, 16)))
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+}
+
 /** AI が返した日付を projects.start_date / end_date に渡せる YYYY-MM-DD のみ採用 */
 function parseIsoDateOnly(value: unknown): string | null {
   if (value == null || typeof value !== 'string') return null
@@ -863,17 +876,11 @@ function filterBySkillRating(
 
     if (matchingLines.length === 0) return true // 該当行なし → 保持
 
-    // いずれかの行に A/B/C が含まれる → 高評価 → 保持
-    const hasHighRating = matchingLines.some(l =>
+    // ホワイトリスト方式: いずれかの行に明示的な A/B/C が含まれる場合のみ保持
+    // 空欄・D/E はいずれも除外（スキルシート形式では評価なし＝経験なしとみなす）
+    return matchingLines.some(l =>
       /(?:^|,|\t)\s*[ABC]\s*(?:,|\t|$)/.test(l),
     )
-    if (hasHighRating) return true
-
-    // 全行が D/E のみ → 低評価 → 除外
-    const allLowRated = matchingLines.every(l =>
-      /(?:^|,|\t)\s*[DE]\s*(?:,|\t|$)/.test(l),
-    )
-    return !allLowRated
   })
 }
 
@@ -1181,12 +1188,12 @@ function extractCandidateFieldsRegex(
 
   // ── 稼働可能時期 ──────────────────────────────────────────────
   let availableFrom = extractFieldTwoPhase(
-    ['参画可能時期','参画可能','稼働開始','稼働可能時期','稼働可能','稼働時期','開始可能日','稼動時期'],
+    ['参画開始可能日','参画可能時期','参画可能','稼働開始','稼働可能時期','稼働可能','稼働時期','開始可能日','稼動時期','稼働'],
     bodyText, attachText,
     v => v.length >= 2,
     30,
   )
-  if (!availableFrom && /(?:^|[\s　])即日(?:[\s　]|$)/.test(allText)) availableFrom = '即日'
+  if (!availableFrom && /(?:^|[\s　【])即日(?:[\s　】]|$)/.test(allText)) availableFrom = '即日'
 
   return { name, nearestStation, prefecture, experienceYears, desiredRate, availableFrom }
 }
@@ -2667,7 +2674,8 @@ JSON:`.trim()
         ...officeTextContents.map(t => t.label),
       ].filter(Boolean).join('\n')
       // Phase1対象: 件名+本文+ファイル名 / Phase2対象: 添付テキスト
-      const regexBodyText = [subject, body, allAttachmentNames].join('\n')
+      // HTMLエンティティ（&#31292; → 稼 等）をデコードしてから正規表現抽出に渡す
+      const regexBodyText = decodeHtmlEntities([subject, body, allAttachmentNames].join('\n'))
       const regexFields = extractCandidateFieldsRegex(regexBodyText, attachText)
 
       // name: AI → regex(ラベル抽出) → extractNameFallback(イニシャル) → 件名コード
