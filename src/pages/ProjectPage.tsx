@@ -879,6 +879,30 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                     </div>
                   </div>
                   <ProjectProfileFields p={selectedProject} isExpanded detailMode />
+                  {/* 元メール本文 */}
+                  {(() => {
+                    const raw = (selectedProject.raw_data ?? {}) as Record<string, unknown>
+                    const bodyText = (raw.text as string | undefined) ?? ''
+                    if (!bodyText.trim()) return null
+                    return (
+                      <details className="mt-4 border border-gray-200 rounded-lg">
+                        <summary className="px-3 py-2 text-xs font-medium text-gray-500 cursor-pointer select-none hover:bg-gray-50 rounded-lg">
+                          元メール本文
+                        </summary>
+                        <div className="px-3 pb-3 pt-1">
+                          {(raw.subject as string | undefined) && (
+                            <p className="text-xs text-gray-400 mb-1">件名: {raw.subject as string}</p>
+                          )}
+                          {(raw.from as string | undefined) && (
+                            <p className="text-xs text-gray-400 mb-2">差出人: {raw.from as string}</p>
+                          )}
+                          <pre className="text-xs text-gray-700 whitespace-pre-wrap break-words leading-relaxed bg-gray-50 rounded p-2 max-h-96 overflow-y-auto">
+                            {bodyText}
+                          </pre>
+                        </div>
+                      </details>
+                    )
+                  })()}
                 </div>
               ) : (
                 <div className="flex items-center justify-center h-32 md:h-full text-sm text-gray-400 p-8 text-center">
