@@ -766,13 +766,19 @@ function extractAndRemoveSkills(
     for (const term of terms) {
       if (!term || term.length < 2) continue
       const escaped = term.replace(/[.+*?()[\]{}\\|^$]/g, '\\$&')
-      const regex = new RegExp(`(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_])`, 'gi')
+
+      // 純粋な英小文字のみ 2〜3 文字の語（Go, R言語除く）は英語自然文と区別できないため
+      // 大文字始まりか日本語混じりの文脈（直後が日本語文字）でのみマッチさせる。
+      // 例: "Go" は "Let's go" に誤マッチするが "Go言語" や "Go で開発" には正しくマッチする。
+      const isShortLowerAscii = /^[a-z]{2,3}$/.test(term)
+      const pattern = isShortLowerAscii
+        ? `(?<![a-zA-Z0-9_#])${escaped}(?=[\\s\\u3000-\\u9FFF、。！？）」』]|$)`  // 直後が日本語/空白/文末
+        : `(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_])`
+
+      const regex = new RegExp(pattern, 'gi')
       if (regex.test(remaining)) {
         matched.push({ name: skill.name, category: skill.category })
-        remaining = remaining.replace(
-          new RegExp(`(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_])`, 'gi'),
-          ' ',
-        )
+        remaining = remaining.replace(new RegExp(pattern, 'gi'), ' ')
         break // このスキルはマッチ済み、次のスキルへ
       }
     }
