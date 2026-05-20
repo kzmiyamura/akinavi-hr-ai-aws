@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { insertProject } from '../lib/db/projects'
-import { upsertCandidate } from '../lib/db/candidates'
+import { upsertCandidate, copyProdCandidatesToDemo } from '../lib/db/candidates'
 import type { AnalyzeProjectResponse } from '../lib/ai/types'
 import type { AnalyzeCandidateResponse } from '../lib/ai/types'
 
@@ -222,6 +222,7 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
   const [count, setCount] = useState(5)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [copyBusy, setCopyBusy] = useState(false)
 
   const label = useMemo(() => `${createdByLabel}（demo）`, [createdByLabel])
 
@@ -283,6 +284,20 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
     }
   }
 
+  async function runCopyProd() {
+    setCopyBusy(true)
+    setMsg(null)
+    try {
+      const copied = await copyProdCandidatesToDemo(count, nickname)
+      setMsg(`本番人材データを ${copied} 件デモ環境にコピーしました`)
+      onDone()
+    } catch (e) {
+      setMsg(String(e))
+    } finally {
+      setCopyBusy(false)
+    }
+  }
+
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-3">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
@@ -329,6 +344,16 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
         >
           {busy ? <Loader2 size={16} className="animate-spin" /> : null}
           {busy ? '追加中...' : '重複テスト用を追加'}
+        </button>
+        <button
+          type="button"
+          onClick={runCopyProd}
+          disabled={busy || copyBusy}
+          className="inline-flex items-center gap-2 rounded-lg bg-sky-700 text-white px-4 py-2 text-sm font-medium hover:bg-sky-800 disabled:opacity-50"
+          title="本番の人材データをランダムにデモ環境へコピー"
+        >
+          {copyBusy ? <Loader2 size={16} className="animate-spin" /> : null}
+          {copyBusy ? 'コピー中...' : '本番人材をランダムコピー'}
         </button>
       </div>
     </div>

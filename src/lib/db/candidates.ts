@@ -307,3 +307,66 @@ export async function findDuplicateCandidates(
   }))
 }
 
+/**
+ * 本番（prod）人材をランダムにデモ環境へコピーする。
+ * - 重複フラグ済みはスキップ
+ * - email は新規ユニーク値に差し替え（prod と衝突しないよう）
+ * - resume_url / box_url は削除（Storage パスが prod 専用のため）
+ * - drive_url は保持（公開 Google Drive リンク）
+ */
+export async function copyProdCandidatesToDemo(
+  count: number,
+  nickname: string,
+): Promise<number> {
+  // まず全件数を確認
+  const { count: total, error: countErr } = await supabase
+    .from('candidates')
+    .select('*', { count: 'exact', head: true })
+    .eq('data_env', 'prod')
+    .eq('duplicate_flag', false)
+
+  if (countErr) throw new Error(countErr.message)
+  if (!total || total === 0) throw new Error('本番環境に人材データがありません')
+
+  // ランダムなオフセットで最大 min(total, count*4, 100) 件取得してシャッフルで N 件選ぶ
+  const poolSize = Math.min(total, Math.max(count * 4, 20), 100)
+  const maxOffset = Math.max(0, total - poolSize)
+  const offset = Math.floor(Math.random() * (maxOffset + 1))
+
+  const { data: pool, error: fetchErr } = await supabase
+    .from('candidates')
+    .select('name,email,phone,skills,experience_years,raw_profile,desired_rate,from_company,drive_url')
+    .eq('data_env', 'prod')
+    .eq('duplicate_flag', false)
+    .range(offset, offset + poolSize - 1)
+
+  if (fetchErr) throw new Error(fetchErr.message)
+  if (!pool || pool.length === 0) throw new Error('取得できませんでした')
+
+  // シャッフルして N 件選ぶ
+  const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, count)
+
+  const makeUniqueId = () =>
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+  const rows = shuffled.map((c) => ({
+    data_env: 'demo' as const,
+    name: c.name,
+    email: `demo.prod+${makeUniqueId()}@demo.invalid`,
+    phone: c.phone,
+    skills: c.skills,
+    experience_years: c.experience_years,
+    raw_profile: c.raw_profile,
+    desired_rate: c.desired_rate,
+    from_company: c.from_company,
+    drive_url: c.drive_url,
+    duplicate_flag: false,
+    created_by: nickname,
+  }))
+
+  const { error: insertErr } = await supabase.from('candidates').insert(rows)
+  if (insertErr) throw new Error(insertErr.message)
+  return rows.length
+}
