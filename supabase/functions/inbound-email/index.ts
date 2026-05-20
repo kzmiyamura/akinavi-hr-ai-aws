@@ -1292,21 +1292,24 @@ function extractCandidateFieldsRegex(
   desiredRate: string | null
   availableFrom: string | null
   desiredProject: string | null
+  fromCompany: string | null
 } {
   // ── 氏名 ──────────────────────────────────────────────────────
   // Phase3 は日本語の姓名（2文字〜）も有効なので phase3MinLen=2
-  const name = extractFieldTwoPhase(
+  const rawName = extractFieldTwoPhase(
     ['氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
     bodyText, attachText,
     v => v.length >= 1 && !/^\d+$/.test(v),
     20,
     2,
   )
+  // 先頭の区切り文字（：: 等）を除去（「：T.B（27）」→「T.B（27）」）
+  const name = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
 
   // ── 最寄駅 ────────────────────────────────────────────────────
   // 「渋谷」「大阪」など2文字の駅名もあるので phase3MinLen=2
   let nearestStation = extractFieldTwoPhase(
-    ['最寄り?駅','最寄り?','沿線','通勤駅'],
+    ['最寄り?駅','最寄駅','最寄り?','沿線','通勤駅'],
     bodyText, attachText,
     v => /[駅線]$/.test(v) || v.length <= 10,
     15,
@@ -1317,6 +1320,19 @@ function extractCandidateFieldsRegex(
     const allText = bodyText + '\n' + attachText
     const m = allText.match(/([^\s,、。（）「」【】\t]{1,10}駅)(?:[\s　_\-）」】徒歩]|$)/)
     if (m) nearestStation = m[1].trim()
+  }
+  // 後処理: ラベル自体が値になっているケースを除外
+  // 例: 「最寄駅」「イニシャル+最寄駅」「最寄：北13条東駅」→ 実駅名のみに修正
+  if (nearestStation) {
+    // 「最寄：北13条東駅」のようにコロン区切りで前半がラベルの場合、後半だけ取る
+    const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
+    if (colonMatch) nearestStation = colonMatch[1].trim()
+    // ラベルそのものや template text は除外
+    if (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation)
+      || nearestStation.includes('イニシャル')
+      || nearestStation.includes('最寄駅')) {
+      nearestStation = null
+    }
   }
 
   // ── 都道府県 ──────────────────────────────────────────────────
@@ -1369,7 +1385,7 @@ function extractCandidateFieldsRegex(
 
   // ── 希望単価 ──────────────────────────────────────────────────
   let desiredRate: string | null = extractFieldTwoPhase(
-    ['希望単価','単価','希望報酬','希望月額','希望料金'],
+    ['希望単価','目安単価','単価','希望報酬','希望月額','希望料金'],
     bodyText, attachText,
     v => /\d/.test(v),
     20,
@@ -1414,7 +1430,22 @@ function extractCandidateFieldsRegex(
     50,
   )
 
-  return { name, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject }
+  // ── 送信元会社名（from_company） ──────────────────────────────
+  // メール署名エリア（末尾1200文字）から会社名を抽出。
+  // 宛先側の会社名（〇〇御中・〇〇様）は除外。
+  let fromCompany: string | null = null
+  const allBodyText = bodyText + '\n' + attachText
+  const sigArea = allBodyText.slice(-1200)
+  // 「株式会社XXX」先頭パターン
+  const mPre = sigArea.match(/(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)([\S]{2,20})/)
+  if (mPre) fromCompany = sanitizeFromCompany(`${mPre[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${mPre[1]}`)
+  // 「XXX株式会社」末尾パターン（前述で取れなかった場合）
+  if (!fromCompany) {
+    const mPost = sigArea.match(/([\S]{2,20})(?:株式会社|有限会社|合同会社)/)
+    if (mPost) fromCompany = sanitizeFromCompany(`${mPost[1]}${mPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
+  }
+
+  return { name, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany }
 }
 
 /**
@@ -2806,7 +2837,7 @@ Deno.serve(async (req: Request) => {
               box_status: blockBoxUrls.length > 0 ? 'pending' : null,
               resume_url: resumeUrl,
               desired_rate: blockRegexFields.desiredRate ?? null,
-              from_company: sanitizeFromCompany(null),
+              from_company: sanitizeFromCompany(blockRegexFields.fromCompany),
             }
 
             const { data: blockData, error: blockError } = await supabase
@@ -2819,7 +2850,7 @@ Deno.serve(async (req: Request) => {
             // 重複判定
             if (blockResolvedName !== '不明') {
               const { data: similar } = await supabase
-                .from('candidates').select('id, name, skills')
+                .from('candidates').select('id, name, skills, raw_profile')
                 .eq('data_env', inboundDataEnv)
                 .eq('name', blockResolvedName)
                 .neq('id', blockData.id)
@@ -2827,6 +2858,9 @@ Deno.serve(async (req: Request) => {
                 .limit(5)
               if (similar && similar.length > 0) {
                 for (const s of similar) {
+                  const myStation = blockRegexFields.nearestStation ?? null
+                  const theirStation = (s.raw_profile as any)?.nearestStation ?? null
+                  if (myStation && theirStation && myStation !== theirStation) continue
                   const mySet = new Set(blockSkillNames.map(sk => sk.toLowerCase()))
                   const theirSet = new Set(((s.skills as string[]) || []).map(sk => sk.toLowerCase()))
                   const intersection = [...mySet].filter(sk => theirSet.has(sk)).length
@@ -3030,7 +3064,7 @@ Deno.serve(async (req: Request) => {
         box_status: boxUrls.length > 0 ? 'pending' : null,
         resume_url: resumeUrl,
         desired_rate: resolvedDesiredRate ?? null,
-        from_company: sanitizeFromCompany(analyzed.fromCompany),
+        from_company: sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany),
       }
 
       const { data, error } = await supabase.from('candidates').insert(dbPayload).select().single()
@@ -3041,7 +3075,7 @@ Deno.serve(async (req: Request) => {
       if (resolvedName && resolvedName !== '不明') {
         const { data: similar } = await supabase
           .from('candidates')
-          .select('id, name, skills')
+          .select('id, name, skills, raw_profile')
           .eq('data_env', inboundDataEnv)
           .eq('name', resolvedName)
           .neq('id', data.id)
@@ -3049,6 +3083,13 @@ Deno.serve(async (req: Request) => {
           .limit(5)
         if (similar && similar.length > 0) {
           for (const s of similar) {
+            // 駅が両方存在して異なる場合は別人と判断
+            const myStation = resolvedStation ?? null
+            const theirStation = (s.raw_profile as any)?.nearestStation ?? null
+            if (myStation && theirStation && myStation !== theirStation) {
+              console.log(`[duplicate] 駅が異なるため別人: ${resolvedName} my=${myStation} their=${theirStation}`)
+              continue
+            }
             const mySkillSet = new Set(skills.map((sk: string) => sk.toLowerCase()))
             const theirSkills = new Set(((s.skills as string[]) || []).map((sk: string) => sk.toLowerCase()))
             const intersection = [...mySkillSet].filter(sk => theirSkills.has(sk)).length

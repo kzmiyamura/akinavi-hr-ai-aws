@@ -1081,7 +1081,11 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                                   {(dup as any).from_company && (
                                     <span className="text-blue-500 font-medium">{(dup as any).from_company}　</span>
                                   )}
-                                  登録: {new Date(dup.created_at ?? '').toLocaleDateString('ja-JP')}
+                                  {(() => {
+                                    const emailAt = (dup as any).raw_profile?.emailReceivedAt
+                                    const dt = emailAt ? new Date(emailAt) : new Date(dup.created_at ?? '')
+                                    return dt.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                  })()}
                                   {(dup as any).experience_years != null && `　経験${(dup as any).experience_years}年`}
                                 </p>
                                 {/* 単価・最寄駅・稼働時期 */}
