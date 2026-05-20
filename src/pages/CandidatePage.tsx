@@ -1115,16 +1115,34 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           Box{selectedCandidate.box_status === 'pending' ? '（処理待ち）' : selectedCandidate.box_status === 'enriched' ? '' : ''}
                         </a>
                       )}
-                      {getRaw(selectedCandidate).from && (
-                        <a
-                          href={`mailto:${getRaw(selectedCandidate).from}?subject=Re: ${encodeURIComponent(getRaw(selectedCandidate).subject ?? '')}`}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
-                          title="返信"
-                        >
-                          <Reply size={14} />
-                          返信
-                        </a>
-                      )}
+                      {getRaw(selectedCandidate).from && (() => {
+                        const raw = getRaw(selectedCandidate)
+                        const subject = encodeURIComponent(`Re: ${raw.subject ?? ''}`)
+                        const originalText = raw.text ?? ''
+                        const truncated = originalText.slice(0, 800)
+                        const quoted = [
+                          '',
+                          '',
+                          '--- 元のメッセージ ---',
+                          `差出人: ${raw.from ?? ''}`,
+                          `件名: ${raw.subject ?? ''}`,
+                          raw.emailReceivedAt ? `日時: ${new Date(raw.emailReceivedAt).toLocaleString('ja-JP')}` : '',
+                          '',
+                          truncated,
+                          originalText.length > 800 ? `\n...[以下省略]` : '',
+                        ].filter(s => s !== undefined).join('\n')
+                        const body = encodeURIComponent(quoted)
+                        return (
+                          <a
+                            href={`mailto:${raw.from}?subject=${subject}&body=${body}`}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                            title="返信（元メール引用）"
+                          >
+                            <Reply size={14} />
+                            返信
+                          </a>
+                        )
+                      })()}
                       {getRaw(selectedCandidate).text && (
                         <button
                           type="button"
