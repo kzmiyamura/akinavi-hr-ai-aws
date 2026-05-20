@@ -842,6 +842,30 @@ function extractAndRemoveSkills(
     }
   }
 
+  // Phase2: 2文字以下の短いスキルを区切り文字+隣接スキルコンテキストで補完
+  const matchedNameSet = new Set(matched.map(m => m.name))
+  for (const skill of masterSkills) {
+    if (skill.name.length > 2) continue
+    if (matchedNameSet.has(skill.name)) continue
+    const escaped = skill.name.replace(/[.+*?()[\]{}\\|^$]/g, '\\$&')
+    // 区切り文字に挟まれたパターン
+    const delimRe = new RegExp(
+      `(?:^|[,，/／・\\t\\n\\r])\\s*(${escaped})\\s*(?=[,，/／・\\t\\n\\r]|$)`,
+      'gi',
+    )
+    let m: RegExpExecArray | null
+    while ((m = delimRe.exec(text)) !== null) {
+      const pos = m.index
+      // 前後100文字に既マッチのスキルがあるか確認
+      const ctx = text.slice(Math.max(0, pos - 100), pos + m[0].length + 100)
+      if ([...matchedNameSet].some(n => n.length > 2 && ctx.includes(n))) {
+        matched.push({ name: skill.name, category: skill.category })
+        matchedNameSet.add(skill.name)
+        break
+      }
+    }
+  }
+
   return { matched, remaining: remaining.replace(/\s{2,}/g, ' ').trim() }
 }
 
@@ -1102,6 +1126,7 @@ function extractCandidateFieldsRegex(
   experienceYears: number | null
   desiredRate: string | null
   availableFrom: string | null
+  desiredProject: string | null
 } {
   // ── 氏名 ──────────────────────────────────────────────────────
   // Phase3 は日本語の姓名（2文字〜）も有効なので phase3MinLen=2
@@ -1187,15 +1212,32 @@ function extractCandidateFieldsRegex(
   }
 
   // ── 稼働可能時期 ──────────────────────────────────────────────
+  // スペースを含む「稼 働」などもマッチさせるため、正規化テキストも用意
+  const normalizedAllText = allText.replace(/稼\s+働/g, '稼働').replace(/参\s+画/g, '参画')
   let availableFrom = extractFieldTwoPhase(
-    ['参画開始可能日','参画可能時期','参画可能','稼働開始','稼働可能時期','稼働可能','稼働時期','開始可能日','稼動時期','稼働'],
-    bodyText, attachText,
+    ['参画開始可能日','参画可能時期','参画可能','稼働開始','稼働可能時期','稼働可能','稼働時期','開始可能日','稼動時期','稼働','参画時期','参画開始','就業開始'],
+    normalizedAllText, attachText,
     v => v.length >= 2,
     30,
   )
-  if (!availableFrom && /(?:^|[\s　【])即日(?:[\s　】]|$)/.test(allText)) availableFrom = '即日'
+  // 即日検出（【稼働】即日 / 稼働：即日 など）
+  if (!availableFrom && /(?:^|[\s　【:：])即日(?:[\s　】]|$)/.test(normalizedAllText)) availableFrom = '即日'
+  // 「6月〜」「7月上旬」「2026/6」「2026年6月」形式
+  if (!availableFrom) {
+    const dateM = normalizedAllText.match(/(?:稼働|参画|就業)[^。\n]{0,10}?([0-9０-９]{1,4}[\/年\-][0-9０-９]{1,2}(?:[\/月\-][0-9０-９]{1,2}日?)?)/i)
+      ?? normalizedAllText.match(/(?:稼働|参画)[^。\n]{0,5}?([0-9]{1,2}月(?:上旬|中旬|下旬|初旬)?(?:[〜~])?)/i)
+    if (dateM) availableFrom = dateM[1].trim()
+  }
 
-  return { name, nearestStation, prefecture, experienceYears, desiredRate, availableFrom }
+  // ── 希望案件 ──────────────────────────────────────────────────
+  const desiredProject = extractFieldTwoPhase(
+    ['希望案件','希望職種','希望業界','希望条件','希望業務','ご希望案件','ご希望'],
+    bodyText, attachText,
+    v => v.length >= 2,
+    50,
+  )
+
+  return { name, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject }
 }
 
 /**
@@ -1466,6 +1508,14 @@ ${JSON.stringify(candidateProfile, null, 2)}
 
 案件:
 ${JSON.stringify(projectRequirements, null, 2)}
+
+評価指針:
+- スキル一致度（必須スキルの充足率）を最重視してください。
+- 希望単価(desiredRate)が案件予算(budgetMax)以下なら加点。
+- 参画可能時期(availableFrom)が案件開始日(startDate)に間に合うなら加点。
+- リモート可否が一致すれば加点。
+- 希望案件(desiredProject)の記載があり案件と合致すれば加点。
+- 役割(roles)・業界(industries)が一致すれば加点。
 
 返却 JSON フィールド:
 - score: number（0〜100）
@@ -2552,6 +2602,7 @@ Deno.serve(async (req: Request) => {
             ...analyzed,
             availableFrom: resolvedAvailableFrom,
           },
+          desiredProject: regexFields.desiredProject,
           geminiParseFallback: parseFallback,
         },
         duplicate_flag: false,
@@ -2871,11 +2922,19 @@ Deno.serve(async (req: Request) => {
             for (const c of targetCandidates) {
               const candidateProfile: Record<string, unknown> = {
                 name: c.name,
-                email: c.email ?? null,
-                phone: c.phone ?? null,
                 skills: c.skills ?? [],
                 experienceYears: c.experience_years ?? null,
                 summary: typeof c.raw_profile?.summary === 'string' ? c.raw_profile.summary : '',
+                roles: Array.isArray(c.raw_profile?.roles) ? c.raw_profile.roles : [],
+                industries: Array.isArray(c.raw_profile?.industries) ? c.raw_profile.industries : [],
+                nearestStation: c.raw_profile?.nearestStation ?? null,
+                prefecture: c.raw_profile?.prefecture ?? null,
+                desiredRate: c.raw_profile?.aiAnalysis?.availableFrom != null
+                  ? c.raw_profile.aiAnalysis.availableFrom
+                  : null,
+                availableFrom: c.raw_profile?.aiAnalysis?.availableFrom ?? null,
+                remoteAvailable: c.raw_profile?.remoteAvailable ?? false,
+                desiredProject: c.raw_profile?.desiredProject ?? null,
               }
 
               tracePhase = 'gemini_auto_match_loop'
