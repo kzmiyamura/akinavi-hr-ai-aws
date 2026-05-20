@@ -1351,7 +1351,23 @@ function extractCandidateFieldsRegex(
       nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[\)）]/, '').trim()
     }
   }
-  const name = nameStripped || null
+  let name = nameStripped || null
+
+  // ── ラベルなし 名前+年齢+性別 フォールバック ─────────────────────
+  // 「■C-TN（44歳 / 男性）」のようにラベルなしで氏名・年齢・性別が記載されている場合
+  // name/age/gender のいずれかが未取得なら全文スキャンで補完する
+  if (!name || age === null || gender === null) {
+    const allTextForName = bodyText + '\n' + attachText
+    // 行頭デコレータ（任意）＋名前＋（年齢 / 性別）パターン
+    // 名前部分: 数字・空白・括弧・改行・【 を除く 1〜20文字
+    const noLabelPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([^\d\s　（(\n【]{1,20})[ 　]?[（(](\d{2})[才歳][ 　]*[/／：: ][ 　]*(男性|女性|男|女)[）)]/m
+    const nlM = allTextForName.match(noLabelPat)
+    if (nlM) {
+      if (!name)        name   = nlM[1].trim() || null
+      if (age === null)  age    = parseInt(nlM[2], 10)
+      if (gender === null) gender = nlM[3]
+    }
+  }
 
   // ── 最寄駅 ────────────────────────────────────────────────────
   // 「渋谷」「大阪」など2文字の駅名もあるので phase3MinLen=2
