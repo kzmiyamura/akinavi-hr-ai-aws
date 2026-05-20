@@ -75,6 +75,42 @@ const CATEGORY_KEYS = Object.keys(CATEGORY_STYLE) as (keyof SkillsByCategory)[]
 
 // カテゴリごとの折りたたみ閾値
 const COLLAPSED_PER_CATEGORY = 5
+
+/**
+ * スキル重要度スコアを計算する（raw_profile.text をもとに）
+ * - 出現回数が多いほど高スコア
+ * - 「希望・得意・専門・強み・メイン・注力」の近傍（±30字）にあると +2
+ * - 本文の前半 500 字以内に登場すると +1（冒頭に書く = 推しスキル）
+ */
+function computeSkillScores(skills: string[], rawText: string): Map<string, number> {
+  const scores = new Map<string, number>()
+  if (!rawText) {
+    for (const s of skills) scores.set(s, 0)
+    return scores
+  }
+  const lowerText = rawText.toLowerCase()
+  const EMPHASIS_RE = /希望|得意|専門|強み|メイン|主に|中心|注力|推し|自信/
+
+  for (const skill of skills) {
+    const lowerSkill = skill.toLowerCase()
+    let count = 0
+    let firstPos = Infinity
+    let bonus = 0
+    let idx = 0
+
+    while ((idx = lowerText.indexOf(lowerSkill, idx)) !== -1) {
+      if (count === 0) firstPos = idx
+      count++
+      const ctx = lowerText.slice(Math.max(0, idx - 30), idx + lowerSkill.length + 30)
+      if (EMPHASIS_RE.test(ctx)) bonus += 2
+      idx += lowerSkill.length
+    }
+
+    const posScore = firstPos < 500 ? 1 : 0
+    scores.set(skill, count + bonus + posScore)
+  }
+  return scores
+}
 // カード全体の折りたたみ表示を出す最低スキル合計数
 const EXPAND_THRESHOLD = 10
 
@@ -151,9 +187,21 @@ export function CandidateProfileFields({
     currentWorkLocation, remoteAvailable,
     from: mailFrom, subject: mailSubject, emailReceivedAt } = raw
 
+  const rawText = raw.text ?? ''
+
   const totalSkills = sbc
     ? Object.values(sbc).reduce((sum, arr) => sum + (arr?.length ?? 0), 0)
     : (c.skills as string[]).length
+
+  // スキルスコア（出現回数・強調コンテキスト・前半登場ボーナス）
+  const allSkillNames = sbc
+    ? (Object.values(sbc) as string[][]).flat()
+    : (c.skills as string[])
+  const skillScores = useMemo(
+    () => computeSkillScores(allSkillNames, rawText),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [c.id, rawText],
+  )
   const needsToggle = !detailMode && totalSkills > EXPAND_THRESHOLD
   const showAll = detailMode || isExpanded
 
@@ -243,7 +291,10 @@ export function CandidateProfileFields({
             const items = sbc[key]
             if (!items || items.length === 0) return null
             const { label, badge } = CATEGORY_STYLE[key]
-            const shown = showAll ? items : items.slice(0, COLLAPSED_PER_CATEGORY)
+            const sorted = [...items].sort(
+              (a, b) => (skillScores.get(b) ?? 0) - (skillScores.get(a) ?? 0)
+            )
+            const shown = showAll ? sorted : sorted.slice(0, COLLAPSED_PER_CATEGORY)
             const hidden = items.length - COLLAPSED_PER_CATEGORY
             return (
               <div key={key} className="flex flex-wrap gap-1 items-center">
@@ -259,12 +310,14 @@ export function CandidateProfileFields({
           })
         ) : (
           <div className="flex flex-wrap gap-1">
-            {(showAll
-              ? (c.skills as string[])
-              : (c.skills as string[]).slice(0, COLLAPSED_PER_CATEGORY)
-            ).map((s) => (
-              <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
-            ))}
+            {(() => {
+              const sorted = [...(c.skills as string[])].sort(
+                (a, b) => (skillScores.get(b) ?? 0) - (skillScores.get(a) ?? 0)
+              )
+              return (showAll ? sorted : sorted.slice(0, COLLAPSED_PER_CATEGORY)).map((s) => (
+                <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
+              ))
+            })()}
             {!showAll && (c.skills as string[]).length > COLLAPSED_PER_CATEGORY && (
               <span className="text-xs text-gray-400">+{(c.skills as string[]).length - COLLAPSED_PER_CATEGORY}</span>
             )}
