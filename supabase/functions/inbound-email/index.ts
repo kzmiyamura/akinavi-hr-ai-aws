@@ -1183,8 +1183,14 @@ function extractFieldTwoPhase(
   // 区切り文字。
   //   - 】 を含めることで「【単　価】65万」のような囲み記号ラベル直後に値が続くフォーマットも拾える。
   //   - ラベル直後（または半角スペース許容）にのみ ] として作用するため、本文中の単独「】」は誤検出しない。
-  const SEP     = `(?:[：:\\t】]|　+| {2,})`
-  const SEP_ATT = `(?:[：:\\t,，】]|　+| {2,})`
+  const SEP     = `(?:[：:\\t】◆◇●■▼★]|　+| {2,})`
+  const SEP_ATT = `(?:[：:\\t,，】◆◇●■▼★]|　+| {2,})`
+
+  // ◆氏名◆ / ●名前● 等のデコレータ文字でラベルが囲まれているケースを正規化
+  // 「◆氏名◆\nSS」→「氏名\nSS」、「◆氏名◆：SS」→「氏名：SS」
+  const DECO_RE = /[◆◇●■▼★◎※▪]+([^◆◇●■▼★◎※▪\n]{1,30})[◆◇●■▼★◎※▪]+/g
+  const normalBody   = bodyText.replace(DECO_RE,   (_, inner) => inner.trim())
+  const normalAttach = attachText.replace(DECO_RE, (_, inner) => inner.trim())
 
   const check = (v: string, minLen = 1): string | null => {
     const t = v.trim().replace(/[　 ]+$/, '')
@@ -1198,27 +1204,40 @@ function extractFieldTwoPhase(
 
   // ── Phase0: 本文ブロック絞り込み ──────────────────────────────
   // 空行2行以上でブロック分割し、ラベルを含む最初のブロック内で同行検索
-  const bodyBlocks = bodyText.split(/\n{2,}/)
+  const bodyBlocks = normalBody.split(/\n{2,}/)
   if (bodyBlocks.length > 1) {
     const labelPresent = new RegExp(`(?:${esc})`, 'i')
     const block = bodyBlocks.find(b => labelPresent.test(b))
-    if (block && block !== bodyText) {
+    if (block && block !== normalBody) {
       const m = block.match(rSameLine(SEP))
       if (m) { const v = check(m[1]); if (v) return v }
     }
   }
 
   // ── Phase1: 本文 全体 同一行 ──────────────────────────────────
-  const mBody = bodyText.match(rSameLine(SEP))
+  const mBody = normalBody.match(rSameLine(SEP))
   if (mBody) { const v = check(mBody[1]); if (v) return v }
 
-  if (attachText.trim()) {
+  // ── Phase1b: 本文 次行（◆氏名◆\n値 等のデコレータ付きラベル対応） ──
+  {
+    const labelOnly1b = new RegExp(`^[　 ]*(?:${esc})[　 ]?[：:,，]?[　 ]*$`, 'i')
+    const bodyLines = normalBody.split(/\r?\n/)
+    for (let i = 0; i < bodyLines.length - 1; i++) {
+      if (!labelOnly1b.test(bodyLines[i])) continue
+      for (let j = i + 1; j < Math.min(i + 3, bodyLines.length); j++) {
+        const v = check(bodyLines[j])
+        if (v) return v
+      }
+    }
+  }
+
+  if (normalAttach.trim()) {
     // ── Phase2a: 添付 同一行 ──────────────────────────────────
-    const mAtt = attachText.match(rSameLine(SEP_ATT))
+    const mAtt = normalAttach.match(rSameLine(SEP_ATT))
     if (mAtt) { const v = check(mAtt[1]); if (v) return v }
 
     // ── Phase2b: 添付 次行 / テーブル構造 ────────────────────
-    const lines = attachText.split(/\r?\n/)
+    const lines = normalAttach.split(/\r?\n/)
     const labelExact = new RegExp(`^(?:${esc})$`, 'i')   // 完全一致（テーブルヘッダ用）
     const labelOnly  = new RegExp(`^[　 ]*(?:${esc})[　 ]?[：:,，]?[　 ]*$`, 'i') // ラベルのみ行
 
@@ -1259,7 +1278,7 @@ function extractFieldTwoPhase(
   }
 
   // ── Phase3: 単一半角スペース区切り（最終フォールバック） ──────
-  const allText = bodyText + '\n' + attachText
+  const allText = normalBody + '\n' + normalAttach
   const rSingle = new RegExp(`(?:${esc}) ([^ \\t,，\\n　]{1,${maxLen}})`, 'i')
   const mSingle = allText.match(rSingle)
   if (mSingle) { const v = check(mSingle[1], phase3MinLen); if (v) return v }
@@ -1307,17 +1326,30 @@ function extractCandidateFieldsRegex(
   )
   // 先頭の区切り文字（：: 等）を除去（「：T.B（27）」→「T.B（27）」）
   const cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
-  // 名前から年齢・性別を抽出して除去（「Ｔ・Ｔ 56才(男性)」→ name=「Ｔ・Ｔ」 age=56 gender=「男性」）
-  const ageMatch = cleanedName?.match(/[\s　]?[\(（]?(\d{2})[才歳][\)）]?/)
-  const age: number | null = ageMatch ? parseInt(ageMatch[1], 10) : null
-  const genderMatch = cleanedName?.match(/[\(（]?(男性|女性|男|女)[\)）]?/)
-  const gender: string | null = genderMatch ? genderMatch[1] : null
-  const name = cleanedName
-    ? cleanedName
-        .replace(/[\s　]?[\(（]?\d{2}[才歳][\)）]?/, '')
-        .replace(/[\s　]?[\(（]?(?:男性|女性|男|女)[\)）]?/, '')
-        .trim() || null
-    : null
+  // 名前から年齢・性別を抽出して除去
+  // パターン1: (34歳/男性) (34才/女性) - スラッシュ区切り一体型
+  // パターン2: 56才(男性) - 分離型
+  let age: number | null = null
+  let gender: string | null = null
+  let nameStripped = cleanedName || ''
+  const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][/／](男性|女性|男|女)[\)）]/)
+  if (agGenderUnified) {
+    age = parseInt(agGenderUnified[1], 10)
+    gender = agGenderUnified[2]
+    nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][/／](?:男性|女性|男|女)[\)）]/, '').trim()
+  } else {
+    const ageMatch = nameStripped.match(/[\s　][\(（]?(\d{2})[才歳][\)）]?/)
+    if (ageMatch) {
+      age = parseInt(ageMatch[1], 10)
+      nameStripped = nameStripped.replace(/[\s　][\(（]?\d{2}[才歳][\)）]?/, '').trim()
+    }
+    const genderMatch = nameStripped.match(/[\s　]?[\(（](男性|女性|男|女)[\)）]/)
+    if (genderMatch) {
+      gender = genderMatch[1]
+      nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[\)）]/, '').trim()
+    }
+  }
+  const name = nameStripped || null
 
   // ── 最寄駅 ────────────────────────────────────────────────────
   // 「渋谷」「大阪」など2文字の駅名もあるので phase3MinLen=2
