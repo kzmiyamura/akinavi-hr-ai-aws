@@ -1318,7 +1318,7 @@ function extractCandidateFieldsRegex(
   // ── 氏名 ──────────────────────────────────────────────────────
   // Phase3 は日本語の姓名（2文字〜）も有効なので phase3MinLen=2
   const rawName = extractFieldTwoPhase(
-    ['氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
+    ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
     bodyText, attachText,
     v => v.length >= 1 && !/^\d+$/.test(v),
     20,
@@ -1332,16 +1332,18 @@ function extractCandidateFieldsRegex(
   let age: number | null = null
   let gender: string | null = null
   let nameStripped = cleanedName || ''
-  const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][/／](男性|女性|男|女)[\)）]/)
+  // (26歳/男性) (26歳：男性) (26歳:男性) — 区切り文字はスラッシュまたはコロン
+  const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][/／：:](男性|女性|男|女)[\)）]/)
   if (agGenderUnified) {
     age = parseInt(agGenderUnified[1], 10)
     gender = agGenderUnified[2]
-    nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][/／](?:男性|女性|男|女)[\)）]/, '').trim()
+    nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][/／：:](?:男性|女性|男|女)[\)）]/, '').trim()
   } else {
-    const ageMatch = nameStripped.match(/[\s　][\(（]?(\d{2})[才歳][\)）]?/)
+    // スペースなしで括弧が直後に来るケース: YS(26歳) → スペース不要で拾う
+    const ageMatch = nameStripped.match(/[\s　]?[\(（](\d{2})[才歳][\)）]?/)
     if (ageMatch) {
       age = parseInt(ageMatch[1], 10)
-      nameStripped = nameStripped.replace(/[\s　][\(（]?\d{2}[才歳][\)）]?/, '').trim()
+      nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][\)）]?/, '').trim()
     }
     const genderMatch = nameStripped.match(/[\s　]?[\(（](男性|女性|男|女)[\)）]/)
     if (genderMatch) {
@@ -1460,7 +1462,7 @@ function extractCandidateFieldsRegex(
   // スペースを含む「稼 働」などもマッチさせるため、正規化テキストも用意
   const normalizedAllText = allText.replace(/稼\s+働/g, '稼働').replace(/参\s+画/g, '参画')
   let availableFrom = extractFieldTwoPhase(
-    ['参画開始可能日','参画可能時期','参画可能','稼働開始','稼働可能時期','稼働可能','稼働時期','開始可能日','稼動時期','稼働','参画時期','参画開始','就業開始','就業時期','就業可能時期'],
+    ['参画開始可能日','参画可能時期','参画可能','稼働開始月','稼働開始','稼働可能時期','稼働可能','稼働時期','開始可能日','稼動時期','稼働','参画時期','参画開始','就業開始','就業時期','就業可能時期'],
     normalizedAllText, attachText,
     v => v.length >= 2,
     30,
