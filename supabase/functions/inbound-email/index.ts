@@ -1286,6 +1286,8 @@ function extractCandidateFieldsRegex(
   attachText: string,
 ): {
   name: string | null
+  age: number | null
+  gender: string | null
   nearestStation: string | null
   prefecture: string | null
   experienceYears: number | null
@@ -1304,7 +1306,18 @@ function extractCandidateFieldsRegex(
     2,
   )
   // 先頭の区切り文字（：: 等）を除去（「：T.B（27）」→「T.B（27）」）
-  const name = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
+  const cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
+  // 名前から年齢・性別を抽出して除去（「Ｔ・Ｔ 56才(男性)」→ name=「Ｔ・Ｔ」 age=56 gender=「男性」）
+  const ageMatch = cleanedName?.match(/[\s　]?[\(（]?(\d{2})[才歳][\)）]?/)
+  const age: number | null = ageMatch ? parseInt(ageMatch[1], 10) : null
+  const genderMatch = cleanedName?.match(/[\(（]?(男性|女性|男|女)[\)）]?/)
+  const gender: string | null = genderMatch ? genderMatch[1] : null
+  const name = cleanedName
+    ? cleanedName
+        .replace(/[\s　]?[\(（]?\d{2}[才歳][\)）]?/, '')
+        .replace(/[\s　]?[\(（]?(?:男性|女性|男|女)[\)）]?/, '')
+        .trim() || null
+    : null
 
   // ── 最寄駅 ────────────────────────────────────────────────────
   // 「渋谷」「大阪」など2文字の駅名もあるので phase3MinLen=2
@@ -1332,6 +1345,13 @@ function extractCandidateFieldsRegex(
       || nearestStation.includes('イニシャル')
       || nearestStation.includes('最寄駅')) {
       nearestStation = null
+    }
+    // 「西武池袋線　飯能駅」→「飯能駅」（路線名+駅名 → 駅名だけ取る）
+    if (nearestStation) {
+      const stationOnly = nearestStation.match(/([^\s　]{2,12}駅)$/)
+      if (stationOnly && stationOnly[1] !== nearestStation) {
+        nearestStation = stationOnly[1]
+      }
     }
   }
 
@@ -1385,7 +1405,7 @@ function extractCandidateFieldsRegex(
 
   // ── 希望単価 ──────────────────────────────────────────────────
   let desiredRate: string | null = extractFieldTwoPhase(
-    ['希望単価','目安単価','単価','希望報酬','希望月額','希望料金'],
+    ['希望単価','目安単価','単価','単金','単　金','単 金','希望報酬','希望月額','希望料金'],
     bodyText, attachText,
     v => /\d/.test(v),
     20,
@@ -1408,7 +1428,7 @@ function extractCandidateFieldsRegex(
   // スペースを含む「稼 働」などもマッチさせるため、正規化テキストも用意
   const normalizedAllText = allText.replace(/稼\s+働/g, '稼働').replace(/参\s+画/g, '参画')
   let availableFrom = extractFieldTwoPhase(
-    ['参画開始可能日','参画可能時期','参画可能','稼働開始','稼働可能時期','稼働可能','稼働時期','開始可能日','稼動時期','稼働','参画時期','参画開始','就業開始'],
+    ['参画開始可能日','参画可能時期','参画可能','稼働開始','稼働可能時期','稼働可能','稼働時期','開始可能日','稼動時期','稼働','参画時期','参画開始','就業開始','就業時期','就業可能時期'],
     normalizedAllText, attachText,
     v => v.length >= 2,
     30,
@@ -1445,7 +1465,7 @@ function extractCandidateFieldsRegex(
     if (mPost) fromCompany = sanitizeFromCompany(`${mPost[1]}${mPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
   }
 
-  return { name, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany }
+  return { name, age, gender, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany }
 }
 
 /**
@@ -3056,6 +3076,8 @@ Deno.serve(async (req: Request) => {
             availableFrom: resolvedAvailableFrom,
           },
           desiredProject: regexFields.desiredProject,
+          age: regexFields.age,
+          gender: regexFields.gender,
           geminiParseFallback: parseFallback,
         },
         duplicate_flag: false,
