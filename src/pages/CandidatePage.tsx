@@ -4,6 +4,7 @@ import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, W
 import { ai } from '../lib/ai'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { upsertCandidate, updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate } from '../lib/db/candidates'
+import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
 import type { DataEnv } from '../lib/dataEnv'
@@ -531,6 +532,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [replayingId, setReplayingId] = useState<string | null>(null)
+  const [replayMsg, setReplayMsg] = useState<{ id: string; text: string; ok: boolean } | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
@@ -607,6 +610,36 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     if (!window.confirm(`「${c.name}」を削除しますか？この操作は元に戻せません。`)) return
     setDeletingId(c.id)
     deleteMutation.mutate(c.id)
+  }
+
+  async function handleReplay(c: Candidate) {
+    const rawText = (c.raw_profile as RawProfile)?.text
+    if (!rawText) {
+      setReplayMsg({ id: c.id, text: 'メール本文（raw_profile.text）がないため再解析できません', ok: false })
+      return
+    }
+    setReplayingId(c.id)
+    setReplayMsg(null)
+    try {
+      const { error } = await supabase.functions.invoke('inbound-email', {
+        body: {
+          subject: `【再解析】${c.name}`,
+          body: rawText,
+          from: `replay+${c.id}@demo.invalid`,
+          attachments: [],
+          mode: dataEnv,
+          type: 'candidate',
+        },
+      })
+      if (error) throw error
+      setReplayMsg({ id: c.id, text: '再解析完了。新規候補として登録されました。', ok: true })
+      queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
+      queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
+    } catch (e) {
+      setReplayMsg({ id: c.id, text: `再解析失敗: ${String(e)}`, ok: false })
+    } finally {
+      setReplayingId(null)
+    }
   }
 
   const { data: isImportActive } = useQuery({
@@ -1039,6 +1072,20 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           返信
                         </a>
                       )}
+                      {getRaw(selectedCandidate).text && (
+                        <button
+                          type="button"
+                          onClick={() => handleReplay(selectedCandidate)}
+                          disabled={replayingId === selectedCandidate.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-violet-200 rounded-lg text-violet-600 hover:text-violet-800 hover:border-violet-400 transition-colors disabled:opacity-50"
+                          title="保存済みメール本文を再解析して新規登録"
+                        >
+                          {replayingId === selectedCandidate.id
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <RefreshCw size={14} />}
+                          再解析
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setEditingCandidate(selectedCandidate)}
@@ -1062,6 +1109,11 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       </button>
                     </div>
                   </div>
+                  {replayMsg?.id === selectedCandidate.id && (
+                    <p className={`text-xs px-3 py-2 rounded-lg ${replayMsg.ok ? 'bg-violet-50 text-violet-700' : 'bg-red-50 text-red-700'}`}>
+                      {replayMsg.text}
+                    </p>
+                  )}
                   <CandidateProfileFields c={selectedCandidate} isExpanded detailMode />
                   {/* 重複候補者 */}
                   {selectedCandidate.duplicate_flag && dupCandidates && dupCandidates.length > 0 && (
