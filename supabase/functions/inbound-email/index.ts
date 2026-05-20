@@ -2275,66 +2275,6 @@ Deno.serve(async (req: Request) => {
     pipe(traceRid, tracePhase)
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
-    // poll-email から呼ばれた場合は既に分類済みのためスキップ
-    const skipRelevance = raw.skip_relevance === 'true' || raw.skip_relevance === '1'
-    if (!skipRelevance && isInboundRelevanceCheckEnabled()) {
-      tracePhase = 'relevance_check'
-      pipe(traceRid, tracePhase, { type, inboundDataEnv })
-      try {
-        const { relevant, durationMs: relevanceDurationMs, usedModel: relevanceModel } = await classifyInboundRelevance({
-          subject,
-          from,
-          body,
-          inboundType: type,
-          attachmentCount: attachments.length,
-          attachmentMimeTypes: attachments.map((a) => a.mimeType || ''),
-          traceRid,
-        })
-        tracePhase = 'relevance_done'
-        console.log('[RELEVANCE] 判定結果', { rid: traceRid, relevant, durationMs: relevanceDurationMs, model: relevanceModel })
-
-        // ai_logs に記録（失敗してもメイン処理は継続）
-        supabase.from('ai_logs').insert({
-          type: 'relevance_check',
-          model: relevanceModel,
-          from_address: from,
-          subject,
-          ai_result: { relevant },
-          prompt_length: body.slice(0, 8000).length + subject.length,
-          status: 'success',
-          duration_ms: relevanceDurationMs,
-          raw_body: body.slice(0, 3000),
-        }).then(({ error }) => {
-          if (error) console.error('[RELEVANCE] ai_logs insert失敗', error.message)
-        })
-
-        if (!relevant) {
-          tracePhase = 'skip_not_relevant'
-          console.warn('[RELEVANCE] 無関係のためスキップ（200）', {
-            rid: traceRid,
-            subject,
-            from: from.slice(0, 120),
-          })
-          return new Response(
-            JSON.stringify({
-              ok: true,
-              skipped: true,
-              reason: 'NOT_RELEVANT_CONTENT',
-              message: '無関係メールと判定したため取り込みをスキップしました（Make の後続処理は続行できます）',
-              type,
-              inboundDataEnv,
-            }),
-            {
-              status: 200,
-              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            },
-          )
-        }
-      } catch (e) {
-        console.warn('[RELEVANCE] 判定エラー、本処理へ続行', e)
-      }
-    }
-
     tracePhase = 'pre_supabase'
 
     // ③ 重複メール判定（同一メールが複数受信箱に転送された場合の二重処理防止）
@@ -2389,15 +2329,6 @@ Deno.serve(async (req: Request) => {
     // PDF は解析しない。Storage へのアップロードのみ（後続処理では除外）
     const allAttachments = rawAllAttachments.filter(a => a.mimeType !== 'application/pdf')
 
-    // ① 複雑度に応じてモデルを選択（コスト最適化）
-    // シンプル: 添付なし・Driveリンクなし・本文2000文字以下 → gemini-2.0-flash（安価）
-    // 複雑:    添付あり・Driveリンクあり・長文 → gemini-2.5-flash（精度重視）
-    const hasAttachments = attachments.length > 0 || drivePdfs.length > 0
-    const hasDriveLinks = driveTexts.length > 0
-    const isLongBody = body.length > 2000
-    const isComplex = hasAttachments || hasDriveLinks || isLongBody
-    const extractModel = isComplex ? AI_MODEL : AI_MODEL_FAST
-
     // Box URL の検出（人材登録時にスプレッドシートへ書き込み・DB保存するため事前に抽出）
     const boxUrls = type === 'candidate' || type === 'human' ? extractBoxUrls(body) : []
     if (boxUrls.length > 0) {
@@ -2440,19 +2371,8 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // Drive取得テキスト + Officeテキストを統合してプロンプトに追記（PDF は解析しない）
+    // Drive取得テキスト + Officeテキストを統合（スキルマスター照合に使用）
     const allTextContents = [...driveTexts, ...officeTextContents]
-    const driveTextSection = allTextContents.length > 0
-      ? '\n\n' + allTextContents.map(t => `--- ${t.label} ---\n${t.content.slice(0, 3000)}`).join('\n\n')
-      : ''
-
-    const allAttachmentNames = [
-      ...allAttachments.map(a => a.name ?? a.mimeType),
-      ...officeTextContents.map(t => t.label),
-    ]
-    const attachmentNote = allAttachmentNames.length > 0
-      ? `\n※添付ファイル（${allAttachmentNames.join('、')}）も含めて解析してください。`
-      : ''
 
     // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
     // 本文と添付を分けて照合し、精度を向上させる。
@@ -2498,98 +2418,9 @@ Deno.serve(async (req: Request) => {
     if (type === 'candidate' || type === 'human') {
       // body が空の場合はsubjectを本文代わりに使う（cy-tech等の件名のみメール対策）
       const effectiveBody = body.trim() ? body : subject
-      // ライブラリ前処理: テキスト圧縮 + regex事前抽出
-      const compressedBody = compressBodyForAI(effectiveBody, 3000)
-      const preExtracted = preExtractFields(effectiveBody)
-      const preExtractHint = buildPreExtractHint(preExtracted)
 
-      // ファイル名から氏名を推測
-      const extractNameFromFilename = (filename: string): string | null => {
-        if (!filename) return null
-        // 拡張子を除去
-        const nameWithoutExt = filename.replace(/\.[^/.]+$/, '')
-        // アンダースコアやハイフンで分割し、最後の部分を氏名候補とする
-        const parts = nameWithoutExt.split(/[_-]/)
-        const lastPart = parts[parts.length - 1]
-        // 日本語の姓名パターン（2-4文字の漢字ひらがなカタカナ）にマッチするかチェック
-        if (/^[ぁ-んァ-ン一-龯]{2,4}$/.test(lastPart)) {
-          return lastPart
-        }
-        // アルファベット+数字のパターン（例: OH_一之江 → 一之江）
-        const match = nameWithoutExt.match(/[a-zA-Z_]+([ぁ-んァ-ン一-龯]{2,4})/)
-        if (match) return match[1]
-        return null
-      }
-
-      const filenameCandidates: string[] = []
-      for (const att of allAttachments) {
-        if (att.name) {
-          const extracted = extractNameFromFilename(att.name)
-          if (extracted) filenameCandidates.push(extracted)
-        }
-      }
-      const filenameNote = filenameCandidates.length > 0
-        ? `\n※ファイル名から推測される氏名候補: ${filenameCandidates.join('、')}`
-        : ''
-
-      const prompt = `
-これは営業担当者が転送・送付した人材紹介メールです。${attachmentNote}${filenameNote}${preExtractHint}
-差出人（${from}）は営業担当者であり、候補者本人ではありません。
-
-【重要ルール】
-- 本文または添付ファイルに明示的に書かれている情報だけを抽出してください。
-- 書かれていない情報は絶対に推測・補完・でっち上げをしないでください。
-
-【氏名の抽出ルール】
-- 氏名はPDFや本文の「テキスト内容」から読み取ってください。
-- 添付ファイルのファイル名に姓名が明記されている場合（例: 山田太郎.pdf）は、ファイル名から氏名を抽出してください。ただし、拡張子や記号を除去し、人名として妥当な部分のみを使用してください。
-- ファイル名から推測される氏名候補が提供される場合がありますが、これはヒントとして参考にしてください。駅名やイニシャルなどが混入している可能性があるため、必ず本文・PDFの内容と照合して判断してください。
-- 文字化けしている文字列（例：㻻㻴、㼃indows、㻼㻴㻼 等）は正しく読み取れていません。これらを氏名として使わないでください。
-- PDFは複数ページある場合があります。必ず全ページを確認してください。
-- 学歴/職歴ページ（最終ページ付近）に「フリガナ」「氏名」が明記されている場合、そのページの情報を最優先で使用してください。
-- イニシャル（例: O.H., T.Y.、またはМ・T や A・B のような中点区切り形式）が明記されている場合は、それを氏名としてそのまま使用してください。フルネームが同じ文書内で見つからない場合でもイニシャルを有効とします。
-- 地名・駅名・会社名を氏名と混同しないでください。
-- 氏名が本文・添付テキスト・ファイル名に一切見つからない場合のみ "不明" にしてください。
-
-【その他のルール】
-- roles/industriesのみ抽出してください。スキルはDBで処理するためAIで抽出不要です。
-- experienceYearsは職歴の最初の年から現在までの年数を計算してください。
-  備考欄や本文に「デザイン歴20年」「経験年数○年」「IT歴○年」「エンジニア歴○年」「経験○年以上」等の明記があればその値を優先してください。
-- summaryは具体的な社名・プロジェクト名・実績・受賞歴を必ず含めてください。
-
-件名: ${subject}
-
-【地域・勤務地に関するルール】
-- nearestStation: 「基本情報」や「最寄駅」フィールドから記載された駅名を抽出。都道府県名も含めます。例: "北海道 麻生駅"。記載がなければ null。
-- prefecture: nearestStation から都道府県を抽出。例: "北海道"、"東京都"。記載がなければ null。
-- availableRegions: 就業可能な地域（都道府県単位）。居住地（prefecture）がある場合は必ず含めてください。例: ["北海道", "東京都"]。
-- currentWorkLocation: 現在の拠点。prefecture または nearestStation が判明している場合は、その都道府県を必ず設定してください。例: "北海道"。
-- remoteAvailable: 本文やサマリーに「リモート希望」「リモート勤務」「フリーランス」等の記載があれば true。明記がなければ false。
-
-抽出項目（JSON形式のみで返してください。前後に余分なテキスト不要）:
-- name: string（フルネーム。メール冒頭の「田中様」「〇〇御中」は受信者への敬称であり候補者名ではない。候補者名は本文中の紹介文・添付ファイル・署名から探す。ファイル名・文字化け文字列は使わない。どうしても見つからない場合のみ "不明"）
-- roles: string[]（担当役割・職種。例: ["PM", "グラフィックデザイナー", "クリエイティブディレクター", "ITコンサル"]。明記されているもののみ）
-- industries: string[]（業界経験。例: ["通信", "金融", "広告", "EC"]。職歴・本文から読み取れるもの）
-- experienceYears: number | null（計算または明記された値。なければ null）
-- summary: string（職務経歴の概要300字以内。社名・実績・受賞歴を含めること）
-- nearestStation: string | null（最寄駅。都道府県を含む形式。例: "北海道 麻生駅"。記載がなければ null）
-- prefecture: string | null（都道府県。例: "北海道"。記載がなければ null）
-- availableRegions: string[] | null（就業可能な地域。例: ["北海道", "東京都"]。情報がなければ null）
-- currentWorkLocation: string | null（現在の拠点都道府県。例: "北海道"。情報がなければ null）
-- remoteAvailable: boolean（リモート勤務対応可否。「リモート希望」等の明記で true。記載なければ false）
-- desiredRate: string | null（希望単価・希望年収。「〇〇万円以上」「〇〇万/月」「単価〇〇万」「希望単価〇〇万」「〇〇万円@〇〇」等の金額を見逃さず抽出。例: "65万円以上"、"60万円/月"、"700万円/年"。記載なければ null）
-- fromCompany: string | null（紹介元・送信元の会社名。差出人の署名・本文末尾から抽出。メール冒頭の宛先「〇〇御中」「〇〇様」に書かれた会社名は絶対に入れないこと。なければ null）
-
-本文:
-${compressedBody}${driveTextSection}
-
-JSON:`.trim()
-
-      tracePhase = 'gemini_candidate_extract'
-      pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
-
-      let durationMs: number
-      let parseFallback: 'none' | 'body_only_after_attachment_timeout' = 'none'
+      const durationMs = 0
+      const parseFallback: 'none' | 'body_only_after_attachment_timeout' = 'none'
       type CandAi = {
         name: string
         roles: string[]
@@ -2603,68 +2434,20 @@ JSON:`.trim()
         desiredRate: string | null
         fromCompany: string | null
       }
-      let analyzed: CandAi
-      let usedModel1: string | undefined
-
-      try {
-        const candidateGroqPrompt = buildCandidateGroqPrompt(from, subject, effectiveBody, allTextContents)
-        const attachFilenames = allAttachments.map(a => a.name ?? '').filter(Boolean).join('\n')
-        const { result, durationMs: d1, usedModel: _usedModel1 } = await generateJSONSmart(prompt, allAttachments, 'candidate', 2, undefined, {
-          rid: traceRid,
-          phase: 'gemini_candidate_extract',
-        }, extractModel, candidateGroqPrompt, `${subject}\n${body}\n${attachFilenames}`)
-        usedModel1 = _usedModel1
-        durationMs = d1
-        analyzed = result as CandAi
-        tracePhase = 'gemini_candidate_done'
-
-        // 品質チェック：添付ありでスキル0件 → 本文のみで再解析
-        // 名前が取れていてもスキルが0の場合は添付が邪魔している可能性があるため再試行する
-        const qualityPoor = allTextContents.length > 0 &&
-          (analyzed.skills?.length ?? 0) === 0
-        if (qualityPoor) {
-          tracePhase = 'candidate_extract_body_only_retry'
-          console.warn('[candidate] 品質不足(添付あり)→本文のみで再解析', { rid: traceRid, name: analyzed.name })
-          const promptBodyOnly = driveTextSection.length > 0
-            ? prompt.replace(driveTextSection, '')
-            : prompt
-          const bodyOnlyGroqPrompt = buildCandidateGroqPrompt(from, subject, effectiveBody, [])
-          const { result: r2, durationMs: d2, usedModel: um2 } = await generateJSONSmart(
-            promptBodyOnly, [], 'candidate', 2, undefined,
-            { rid: traceRid, phase: 'candidate_extract_body_only_retry' },
-            extractModel, bodyOnlyGroqPrompt,
-          )
-          analyzed = r2 as CandAi
-          durationMs = d2
-          usedModel1 = um2
-          parseFallback = 'body_only_after_attachment_timeout'
-          tracePhase = 'gemini_candidate_done_body_only'
-        }
-      } catch (e) {
-        const msg = String(e)
-        const canFallback =
-          isCandidateBodyFallbackOnTimeoutEnabled() &&
-          allAttachments.length > 0 &&
-          msg.includes('Gemini APIタイムアウト')
-        if (!canFallback) throw e
-
-        tracePhase = 'gemini_candidate_extract_body_only'
-        pipe(traceRid, tracePhase, { rid: traceRid })
-        console.warn('[candidate] 添付付きGeminiがタイムアウト。本文・Drive・Officeテキストのみで再試行', { rid: traceRid })
-        const slimPrompt = `${prompt}
-
-【システム通知】初回解析がタイムアウトしたため、画像・PDF添付バイナリは参照していません。メール本文・Driveリンク由来テキスト・Office抽出テキストのみを根拠に抽出してください。推測はしないでください。`
-        const { result, durationMs: d2, usedModel: usedModel2 } = await generateJSONSmart(slimPrompt, [], 'candidate', 2, undefined, {
-          rid: traceRid,
-          phase: 'gemini_candidate_extract_body_only',
-        }, extractModel)
-        durationMs = d2
-        analyzed = result as CandAi
-        parseFallback = 'body_only_after_attachment_timeout'
-        tracePhase = 'gemini_candidate_done_body_only'
+      const analyzed: CandAi = {
+        name: '',
+        roles: [],
+        industries: [],
+        experienceYears: null,
+        summary: '',
+        nearestStation: null,
+        prefecture: null,
+        availableRegions: null,
+        currentWorkLocation: null,
+        remoteAvailable: false,
+        desiredRate: null,
+        fromCompany: null,
       }
-
-
       // スキルはDB照合結果のみ使用（AIによるスキル抽出廃止）
       const skills = dbSkillNames
 
@@ -2837,11 +2620,11 @@ JSON:`.trim()
 
       const { error: logError } = await supabase.from('ai_logs').insert({
         type: 'candidate',
-        model: usedModel1 ?? extractModel,
+        model: 'no-ai',
         from_address: from,
         subject,
         ai_result: { ...analyzed, _field_sources: _fieldSources },
-        prompt_length: prompt.length,
+        prompt_length: 0,
         status: 'success',
         duration_ms: durationMs,
         linked_id: data.id,
@@ -2886,57 +2669,68 @@ JSON:`.trim()
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
         )
       }
-      const prompt = `
-これは営業担当者が転送・送付した業務委託・派遣・開発案件などの依頼メールです。${attachmentNote}
-差出人（${from}）は営業または元請け担当者であることがあります。本文・添付・以下の参考テキストに書かれた内容だけを根拠に抽出してください。
+      tracePhase = 'project_regex_extract'
+      const durationMs = 0
+      const allProjectText = [subject, body].join('\n')
 
-【重要ルール】
-- 明示されている情報だけを抽出し、推測・でっち上げはしないでください。
-- requiredSkills には「必須」「必須スキル」に相当するもののみ。尚可・歓迎・あれば尚可は niceToHaveSkills に入れてください。
-- スキル列の区切り（「/」「・」,「、」）は必ず分割し、重複は除き、一般的な表記に統一してください（例: Javascript→JavaScript, Mysql→MySQL）。
-- budgetMin / budgetMax は月額単価の万円（数値のみ）。「60万」「60万円」は 60。年収・日額と本文で明記されている場合のみそれに従い、曖昧なら null。
-- startDate / endDate は YYYY-MM-DD のみ。和暦や「4月上旬」だけでは null（西暦の確定日がある場合のみセット）。
-- headcount は募集人数の整数（「2名」→2）。不明なら null。
-- settlementMin / settlementMax は本文に明記された精算の下限・上限を数値化できる場合のみ（例: 1日8時間→8、月次精算レンジ140〜180→140と180）。単位が曖昧なら null。
-- workLocation / remotePolicy / contractType / workload / roleSummary / industry は記載がある場合のみ短く要約。なければ null。
-- **1つのメール・1つの文書の中に複数の独立した募集案件がある場合**は、各案件を1要素とする **JSON配列** で返してください（例: [{...},{...}]）。
-- **案件が1件だけ**の場合は、オブジェクト1つ **または** 要素1つの配列のどちらでも構いません。
+      // 予算: 「60万」「50〜70万」「MAX80万」等
+      let budgetMin: number | null = null
+      let budgetMax: number | null = null
+      const budgetRangeM = allProjectText.match(/(\d{2,3})\s*[〜~～]\s*(\d{2,3})\s*万/)
+      if (budgetRangeM) {
+        budgetMin = parseInt(budgetRangeM[1], 10)
+        budgetMax = parseInt(budgetRangeM[2], 10)
+      } else {
+        const budgetSingleM = allProjectText.match(/(?:MAX|上限|予算|単価)[^\d]*(\d{2,3})\s*万/)
+          ?? allProjectText.match(/(\d{2,3})\s*万(?:円)?(?:\/月|程度|以内|まで|〜|~|）|$|\s)/)
+        if (budgetSingleM) {
+          const v = parseInt(budgetSingleM[1], 10)
+          if (v >= 20 && v <= 300) budgetMax = v
+        }
+      }
 
-件名: ${subject}
+      // 勤務地
+      const locationM = allProjectText.match(/(?:勤務地|作業場所|就業場所|常駐先)[：:\s]*([^\s\n、。]{2,20})/)
+      const workLocation = locationM ? locationM[1].trim() : (PREFECTURES.find(p => allProjectText.includes(p)) ?? null)
 
-抽出項目（各案件オブジェクトのフィールド。JSON形式のみ。前後に余分なテキスト不要）:
-- title: string（案件名。件名・本文見出しを優先。不明なら "案件"）
-- client: string | null（エンド・クライアント名。不明なら null）
-- description: string（作業内容・背景・場所・勤務形態などの要約。なければ ""）
-- requiredSkills: string[]（必須スキル・ツール。なければ[]）
-- niceToHaveSkills: string[]（尚可・歓迎。なければ[]）
-- budgetMin: number | null（月額・万円）
-- budgetMax: number | null（月額・万円）
-- startDate: string | null（YYYY-MM-DD）
-- endDate: string | null（YYYY-MM-DD）
-- workLocation: string | null（勤務地・オフィス・エリア）
-- remotePolicy: string | null（フルリモート可・週○出社・常駐など）
-- contractType: string | null（業務委託・派遣・準委任・請負など）
-- headcount: number | null
-- workload: string | null（週5日・月20日など稼働の目安）
-- settlementMin: number | null
-- settlementMax: number | null
-- roleSummary: string | null（PL/SE/PG・リーダー等）
-- industry: string | null（金融・製造・EC 等）
+      // リモート
+      let remotePolicy: string | null = null
+      if (/フルリモート|完全リモート|100[%％]リモート/.test(allProjectText)) remotePolicy = 'フルリモート'
+      else if (/リモート可|テレワーク可|在宅可/.test(allProjectText)) remotePolicy = 'リモート可'
+      else if (/週[1-5１-５]日.*(?:リモート|在宅)|(?:リモート|在宅).*週[1-5１-５]日/.test(allProjectText)) remotePolicy = allProjectText.match(/週[1-5１-５]日.*(?:リモート|在宅)|(?:リモート|在宅).*週[1-5１-５]日/)?.[0] ?? 'リモート一部可'
+      else if (/常駐|フル出社|出社必須/.test(allProjectText)) remotePolicy = '常駐'
 
-本文:
-${(body.trim() ? body : subject).slice(0, 3000)}${driveTextSection}
+      // 契約形態
+      let contractType: string | null = null
+      if (/業務委託/.test(allProjectText)) contractType = '業務委託'
+      else if (/派遣/.test(allProjectText)) contractType = '派遣'
+      else if (/準委任/.test(allProjectText)) contractType = '準委任'
+      else if (/請負/.test(allProjectText)) contractType = '請負'
 
-JSON:`.trim()
+      // タイトル（件名から【】を除去して整形）
+      const cleanTitle = subject.replace(/【[^】]*】/g, '').replace(/^[★☆●◆◇■□▼▲※・\s]+/, '').trim() || subject
 
-      tracePhase = 'gemini_project_extract'
-      pipe(traceRid, tracePhase, { promptLen: prompt.length, attachmentParts: allAttachments.length })
-      const projectGroqPrompt = buildProjectGroqPrompt(subject, body.trim() ? body : subject, allTextContents)
-      const { result, durationMs, usedModel: usedModelP } = await generateJSONSmart(prompt, allAttachments, 'project', 2, undefined, {
-        rid: traceRid,
-        phase: 'gemini_project_extract',
-      }, extractModel, projectGroqPrompt, `${subject}\n${body}`)
-      tracePhase = 'gemini_project_done'
+      const result = {
+        title: cleanTitle,
+        client: null,
+        description: body.slice(0, 500),
+        requiredSkills: dbSkillNames,
+        niceToHaveSkills: [],
+        budgetMin,
+        budgetMax,
+        startDate: null,
+        endDate: null,
+        workLocation,
+        remotePolicy,
+        contractType,
+        headcount: null,
+        workload: null,
+        settlementMin: null,
+        settlementMax: null,
+        roleSummary: null,
+        industry: null,
+      }
+      tracePhase = 'project_regex_done'
 
       const projectObjects = normalizeToProjectObjects(result)
       if (projectObjects.length === 0) {
@@ -3118,11 +2912,11 @@ JSON:`.trim()
         insertedRows.map((row, i) =>
           supabase.from('ai_logs').insert({
             type: 'project',
-            model: AI_MODEL,
+            model: 'no-ai',
             from_address: from,
             subject,
             ai_result: { ...projectObjects[i], batchIndex: i, batchSize: projectObjects.length },
-            prompt_length: prompt.length,
+            prompt_length: 0,
             status: 'success',
             duration_ms: durationMs,
             linked_id: row.id,
