@@ -13,9 +13,15 @@ AIによるスコアリング（match-score）は1回の呼び出しにトーク
 ```
 全候補者（数百人）
   └─► スキル一致数で絞り込み（高速・無料）
-        └─► 上位N人のみAIスコアリング（Cerebras→Groq→Gemini）
-              └─► スコア順でランキング表示
+        └─► 上位N人のみAIスコアリング（match-score Edge Function 経由）
+              ├─ Cerebras llama3.1-8b（1段目）
+              ├─ Groq llama-3.3-70b-versatile（2段目）
+              └─ Gemini gemini-2.5-flash（最終フォールバック）
+                └─► スコア順でランキング表示
 ```
+
+> `skill_master` の正規化テーブルでスキルの表記ゆれ（React/React.js/ReactJS など）は内部で同名扱いされる。  
+> 自動マッチング（`auto-match` cron）は Gemini `gemini-2.5-flash-lite` 単発でフォールバックなし。
 
 ---
 
@@ -106,4 +112,4 @@ required_skills が空 → スキル一致数による絞り込みが無意味
 
 ---
 
-*最終更新: 2026-05-15*
+*最終更新: 2026-05-20*

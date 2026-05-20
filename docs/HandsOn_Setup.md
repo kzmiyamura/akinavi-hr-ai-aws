@@ -236,35 +236,60 @@ cd akinavi-hr-ai
 
 **3. 追加のSQLファイルを順番に実行する**
 
-同じ手順で、以下のファイルを**上から順番に**実行してください。
+`supabase/migrations/` 配下の SQL ファイルを**ファイル名の昇順で全て**実行してください。代表的なファイルとその目的は以下のとおりです。
 
 | 順番 | ファイル名 | 内容 |
 |---|---|---|
-| 1 | `supabase/migrations/add_ai_logs.sql` | AI解析のログテーブル |
-| 2 | `supabase/migrations/add_candidate_skills.sql` | スキルのカテゴリ分けテーブル |
-| 3 | `supabase/migrations/add_data_env.sql` | 本番/デモの環境分けカラム |
-| 4 | `supabase/migrations/add_project_detail_fields.sql` | 案件の詳細項目 |
-| 5 | `supabase/migrations/add_projects_updated_by.sql` | 案件の更新者記録 |
-| 6 | `supabase/migrations/add_updated_by.sql` | 人材の更新者記録 |
+| 1 | `add_ai_logs.sql` | AI解析のログテーブル |
+| 2 | `add_candidate_skills.sql` | スキルのカテゴリ分けテーブル（14カテゴリの CHECK 制約） |
+| 3 | `add_data_env.sql` | 本番/デモの環境分けカラム |
+| 4 | `add_project_detail_fields.sql` | 案件の詳細項目 |
+| 5 | `add_projects_updated_by.sql` | 案件の更新者記録 |
+| 6 | `add_updated_by.sql` | 人材の更新者記録 |
+| 7 | `add_email_settings.sql` | メール設定（アドレス・ポーリングモード等） |
+| 8 | `add_box_columns.sql` | candidates に box_url / box_status を追加 |
+| 9 | `add_resume_url.sql` | candidates に resume_url / drive_url / desired_rate / from_company を追加 |
+| 10 | `add_skill_master.sql` | スキルマスタテーブル + match_count RPC |
+| 11 | `seed_skill_master.sql` | スキルマスタ初期データ（約 1,600 件） |
+| 12 | `20260520121447_fix_skill_master_quality.sql` | JP1/Teraterm/Zabbix 等 32 件のスキル追加と alias 修正 |
+| 13 | `20260519090000_add_relevance_keywords.sql` ほか | 関連性キーワード辞書 + tighten 系（ファイル名順） |
+| 14 | `add_attachments_bucket.sql` | 添付ファイル用 Storage バケット |
+| 15 | `add_find_duplicate_candidates_rpc.sql` | 重複候補者検索 RPC |
+| 16 | `add_search_rpc.sql` | 検索用 RPC |
+| 17 | `add_email_polling_cron.sql` | 5分ごとのメールポーリング cron |
+| 18 | `add_auto_match_cron.sql` | 毎朝 JST 9:00 の自動マッチ cron |
+| 19 | `add_skill_cleanup_cron.sql` | 毎日 JST 3:00 のスキルマスタクリーンアップ cron |
+| 20 | `add_enrich_cron.sql` | Box 連携の再解析 cron（Box 運用時のみ必要） |
 
-> `add_email_polling_cron.sql` は第5章で別途設定するため、今は実行しないでください。
+> ファイル名にタイムスタンプ（`YYYYMMDDHHMMSS_` プレフィックス）が付いているものはその順で。それ以外は `add_*.sql` の名前順で OK です。  
+> `*_cron.sql` 系は `YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を実際の値に書き換えてから実行してください。
+
+> ⚠️ **重要**: `schema.sql` の `candidate_skills.check_category` は旧 11 カテゴリのまま残っています。`add_candidate_skills.sql` で 14 カテゴリへ上書きされるため、必ず migrations を全て流してください。
 
 ### 完了チェック
 
 - [ ] Supabaseのプロジェクトを作成した
 - [ ] Project URL・anon キー・service_role キーをメモした
 - [ ] `schema.sql` を実行した
-- [ ] 6つのマイグレーションSQLを順番に実行した
+- [ ] `supabase/migrations/` 配下を**全て**ファイル名順に実行した
+- [ ] `*_cron.sql` 系は `YOUR_PROJECT_REF` / `YOUR_SERVICE_ROLE_KEY` を置換した上で実行した
 
 ---
 
 ## 第3章　AIの設定（APIキーの取得）
 
-このシステムはメール解析に複数のAIを使います。Gemini はフォールバック・画像解析用（有料）、Groq と Cerebras はメイン解析用（**無料**）です。
+> **重要**: 2026-05-19 のコミット `139a4f2` でメール解析（`inbound-email`）から AI 利用が完全に除去されました。  
+> 現在 AI を使うのは **マッチング処理（`match-score` / `auto-match`）** と **ブラウザでの入力解析** だけです。
+
+| AI | 主な用途 | 必須度 |
+|---|---|---|
+| Gemini | `auto-match`（毎朝 JST 9:00 自動マッチ）・ブラウザの入力解析・`match-score` 最終フォールバック | ◎ 必須 |
+| Groq | `match-score` の 2 段目（高精度モデル `llama-3.3-70b-versatile`） | ◎ 必須 |
+| Cerebras | `match-score` の 1 段目（軽量・実質無制限） | 推奨 |
 
 > **取得したAPIキーは第4章と第6章でまとめて登録します。ここではメモするだけでOKです。**
 
-### 3-1. Gemini APIキーを取得する（有料・フォールバック用）
+### 3-1. Gemini APIキーを取得する（必須）
 
 **1. `https://aistudio.google.com` をブラウザで開く**
 
@@ -280,11 +305,11 @@ Googleアカウントでログインします。
 
 表示されたキー（`AIza...` のような文字列）をメモしてください。
 
-> Gemini はプリペイド制（従量課金）です。無料枠はありません。クレジットをチャージしないとフォールバック時に失敗します。
+> Gemini はプリペイド制（従量課金）です。無料枠はありません。クレジット切れの場合は `auto-match` のスコア計算が失敗します。
 
-### 3-2. Groq APIキーを取得する（無料・メイン解析用）
+### 3-2. Groq APIキーを取得する（必須）
 
-Groq はメール本文・添付ファイルのAI解析に使うメインプロバイダーです。無料枠で1日約125件処理できます。
+Groq は `match-score`（手動マッチング）の 2 段目モデル（`llama-3.3-70b-versatile`）として使います。無料枠は 500K tokens/日（JST 9:00 リセット）で、マッチング用なら約 300 ペア/日に相当します。
 
 **1. `https://console.groq.com` をブラウザで開く**
 
@@ -296,9 +321,9 @@ Groq はメール本文・添付ファイルのAI解析に使うメインプロ�
 
 表示されたキー（`gsk_...` のような文字列）をメモしてください。
 
-### 3-3. Cerebras APIキーを取得する（無料・関連性チェック用）
+### 3-3. Cerebras APIキーを取得する（推奨）
 
-Cerebras はスパムフィルタリング・マッチングスコア計算に使います。無料枠が非常に大きいため実質無制限です。
+Cerebras は `match-score` の 1 段目（軽量モデル `llama3.1-8b`）として使います。無料枠が非常に大きいため実質無制限で、ここで成功すれば Groq を消費しません。
 
 **1. `https://cloud.cerebras.ai` をブラウザで開く**
 
@@ -312,16 +337,26 @@ Cerebras はスパムフィルタリング・マッチングスコア計算に�
 
 ### 完了チェック
 
-- [ ] Google AI Studio で Gemini APIキーを取得し、メモした
-- [ ] Groq で APIキーを取得し、メモした
-- [ ] Cerebras で APIキーを取得し、メモした
+- [ ] Google AI Studio で Gemini APIキーを取得し、メモした（必須）
+- [ ] Groq で APIキーを取得し、メモした（必須）
+- [ ] Cerebras で APIキーを取得し、メモした（推奨）
 
 ---
 
 ## 第4章　サーバー機能のデプロイ（Edge Functions）
 
 「Edge Functions」とは、Supabase のサーバー上で動くプログラムです。  
-メールの自動解析（`inbound-email`）と Outlook のメール取得（`poll-email`）の2つをデプロイします。
+このシステムでは以下の Edge Functions をデプロイします。
+
+| Edge Function | 役割 |
+|---|---|
+| `inbound-email` | メール解析（AI 不使用・regex + DB 照合のみ） |
+| `poll-email` | Outlook のメール取得（5 分ごと cron） |
+| `auto-match` | 毎朝 JST 9:00 の自動マッチング |
+| `match-score` | UI から呼ばれるスコア計算 |
+| `microsoft-oauth` | Microsoft アカウント連携（OAuth コールバック） |
+| `enrich-candidate` | Box 連携・再解析（Box 運用時のみ） |
+| `skill-master-cleanup` | skill_master の毎日クリーンアップ |
 
 ### 4-1. Supabase CLIでログインする
 
@@ -349,6 +384,7 @@ npx supabase functions deploy auto-match
 npx supabase functions deploy match-score
 npx supabase functions deploy microsoft-oauth
 npx supabase functions deploy enrich-candidate
+npx supabase functions deploy skill-master-cleanup
 ```
 
 それぞれ「Deployed」と表示されればOKです。
@@ -362,12 +398,13 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add
 
 | Secret名 | 値 | 必須 |
 |---|---|---|
-| `GEMINI_API_KEY` | 第3章でメモしたGemini APIキー | ◎ |
-| `GROQ_API_KEY` | 第3章でメモしたGroq APIキー | ◎ |
-| `CEREBRAS_API_KEY` | 第3章でメモしたCerebras APIキー | 推奨 |
+| `GEMINI_API_KEY` | 第3章でメモしたGemini APIキー（`auto-match` 等で使用） | ◎ |
+| `GROQ_API_KEY` | 第3章でメモしたGroq APIキー（`match-score` で使用） | ◎ |
+| `CEREBRAS_API_KEY` | 第3章でメモしたCerebras APIキー（`match-score` 1 段目） | 推奨 |
 | `INBOUND_CALL_KEY` | 第2章でメモした service_role キー | ◎ |
 
-> `SUPABASE_URL` と `SUPABASE_SERVICE_ROLE_KEY` は Supabase が自動で設定するため、手動登録は不要です。もしエラーが出る場合は手動で追加してください。
+> `SUPABASE_URL` と `SUPABASE_SERVICE_ROLE_KEY` は Supabase が自動で設定するため、手動登録は不要です。もしエラーが出る場合は手動で追加してください。  
+> `inbound-email` は AI を使わなくなったため、上記の API キーがなくてもメール解析自体は動きます。ただしマッチング処理が動かないと意味がないので必ず設定してください。
 
 **第5章で追加登録するもの（今はスキップ）**
 
@@ -380,11 +417,18 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add
 | `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 第5章で取得 |
 | `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 第5章で取得 |
 
+**Box 連携を使う場合のみ**
+
+| Secret名 | 用途 |
+|---|---|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Box → Drive 移送用キュー（スプレッドシート）アクセス |
+| `BOX_SPREADSHEET_ID` | キュー用スプレッドシート ID |
+
 ### 完了チェック
 
 - [ ] `supabase login` が完了した
 - [ ] `supabase link` でプロジェクトに接続した
-- [ ] 全Edge Functions（6つ）をデプロイした
+- [ ] 全Edge Functions（7つ）をデプロイした
 - [ ] `GEMINI_API_KEY`・`GROQ_API_KEY`・`CEREBRAS_API_KEY`・`INBOUND_CALL_KEY` を Secrets に登録した
 
 ---

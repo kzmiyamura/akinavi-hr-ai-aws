@@ -177,11 +177,14 @@ CREATE INDEX IF NOT EXISTS idx_candidate_skills_candidate_id ON candidate_skills
 CREATE INDEX IF NOT EXISTS idx_candidate_skills_category     ON candidate_skills(category);
 CREATE INDEX IF NOT EXISTS idx_candidate_skills_skill        ON candidate_skills(skill);
 
+-- ※ 14 カテゴリ。`supabase/migrations/add_candidate_skills.sql` を正とする
 ALTER TABLE candidate_skills
   ADD CONSTRAINT check_category CHECK (
     category IN (
-      'languages', 'frameworks', 'os', 'databases', 'dwh',
-      'cloud', 'design', 'marketing', 'management', 'business', 'others'
+      'languages', 'frameworks', 'libraries', 'os',
+      'databases', 'dwh', 'clouds', 'infrastructures',
+      'tools', 'methodologies', 'certifications',
+      'design', 'marketing', 'others'
     )
   );
 

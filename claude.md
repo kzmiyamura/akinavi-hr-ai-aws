@@ -8,8 +8,10 @@
 - **Frontend**: React 19 (Vite 8), TypeScript, Tailwind CSS v4, TanStack Query v5
 - **Backend/DB**: Supabase (PostgreSQL, Edge Functions, Realtime, pg_cron, pg_net)
 - **AI（ブラウザ）**: Google Gemini デフォルト `gemini-2.5-flash-lite`（`VITE_GEMINI_MODEL` で上書き可）・マルチモーダル対応（画像解析）
-- **ファイルパース（ブラウザ）**: `pdfjs-dist`（PDF）・`xlsx`（Excel）・`mammoth`（Word）— `src/lib/fileParser.ts`
-- **AI（サーバー・自動取り込み）**: Cerebras `llama3.1-8b` → Groq `llama-3.1-8b-instant` → Gemini `gemini-2.5-flash-lite` のフォールバック順 — Supabase Edge Function `inbound-email`
+- **ファイルパース（ブラウザ）**: `xlsx`（Excel）・`mammoth`（Word）— `src/lib/fileParser.ts`。**PDF は現状未対応**（旧 `pdfjs-dist` は依存に残るが import されていない。CandidatePage で「PDF は手動貼り付け or 画像化して添付」を案内）
+- **AI（サーバー・メール解析）**: **AI 不使用**。`inbound-email` Edge Function は regex（`extractCandidateFieldsRegex`） + 文章スキャン（`extractFromProse`） + `skill_master` DB 照合 + 駅→都道府県マッピング のみで構造化抽出する（コミット `139a4f2` で完全廃止、`ccc82ec` で品質改善）。`classifyInboundRelevance` / `generateJSONSmart` 等の関数定義は残るがどこからも呼ばれない（要整理）
+- **AI（サーバー・マッチング）**: `match-score`（UI 手動）が Cerebras `llama3.1-8b` → Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.5-flash` のフォールバック順。`auto-match`（毎朝 JST 9:00 cron）は Gemini `gemini-2.5-flash-lite` 単発のみ
+- **AI（サーバー・メール種別分類）**: `poll-email` 内で Gemini バッチ分類（任意・既定 `email_classify_enabled='false'`）
 - **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は未実装スタブ
 - **メール自動取り込み（現行・稼働中）**: Microsoft Graph API ポーリング + Supabase pg_cron（Make.com不要・完全無料・5分間隔）
 - **メール自動取り込み（旧・現在停止中）**: Make.com → Pipedream（いずれも無料枠超過により運用停止）
@@ -276,25 +278,34 @@ BoxはOAuth2なしで機械的なファイル取得ができないため、古�
 #### 概要
 `skill_master` テーブルにITスキルを蓄積し、`inbound-email` Edge Function で AI を使わずにスキルを照合・抽出する。AI が新スキルを発見した際は自動的に DB に登録し、毎日クリーンアップ Cron でゴミエントリを除去する。
 
-#### フロー
+#### フロー（コミット `139a4f2` で AI 完全廃止後の現行）
 
 ```
 ① inbound-email でメール受信
    ↓
-② skill_master DB照合（AIなし）
-   - 全テキスト（本文+添付+Google Drive）から skill_master のスキルを照合
-   - マッチしたスキルを dbSkillNames として保持
+② URL ストリッピング + 送信者署名除去（コミット `ccc82ec`）
+   - "https://...cc.php" 等が PHP/HTTPS に誤マッチするのを防止
+   - "〒XXX-XXXX 東京都..." 等の署名行を都道府県判定から除外
    ↓
-③ Gemini/Groq で残テキストを解析（既存フロー）
-   - AI が返したスキルのうち skill_master 未登録のものを source='ai' で自動登録
+③ skill_master DB照合（AIなし）
+   - 本文と添付を別ロジックで照合（本文: certContext 内のみ資格判定 / 添付: 全文 fallback）
+   - スキルシート形式の場合は A/B/C 評価のみ採用、D/E は除外
+   - 添付は上位 20 件に絞る（スキルシート一覧の過剰ヒット防止）
+   - フェーズ表ヘッダー行（"調査分析 要件定義 ..."）は役割・業界の判定から除外
    ↓
-④ DB照合スキルと AIスキルをマージして candidates.skills に保存
+④ regex / 文章スキャンで残りフィールドを抽出（AIなし）
+   - 氏名・最寄駅・都道府県・経験年数・希望単価・参画時期・希望案件
+   - 駅 → 都道府県マッピングで送信者署名由来の誤判定を上書き
+   ↓
+⑤ DB照合スキルを candidates.skills と candidate_skills に保存
    - match_count を RPC でインクリメント（fire and forget）
    ↓
-⑤ 毎日 JST 3:00 に skill-master-cleanup が実行
+⑥ 毎日 JST 3:00 に skill-master-cleanup が実行
    - ルールベースでゴミエントリ（source='ai'）を削除
    - 30日間未マッチ（match_count=0）のエントリを削除
 ```
+
+※ ③ で `skill_master` に **未登録の業界標準スキル**（JP1/Teraterm/Zabbix/Hinemos/Tivoli/HULFT/上級情報処理士/ITパスポート ほか）はコミット `acf9d31` で 32 件追加済み（`supabase/migrations/20260520121447_fix_skill_master_quality.sql`）。AI が新スキルを自動登録する経路は inbound-email の AI 廃止により**現状動いていない**点に注意。
 
 #### 新規ファイル一覧
 
@@ -321,8 +332,36 @@ python3 scripts/skill_master_review.py
    - `supabase/migrations/seed_skill_master.sql` を SQL Editor で実行
    - `supabase/migrations/add_skill_cleanup_cron.sql` の `YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を書き換えてから実行
 
-### 【Phase 5】最終納品ドキュメント作成（未着手）
-1. **[Claude] 作業**: システム構成図のメンテナンス（README.md に Mermaid 図あり）
+### 【Phase 4.9】inbound-email から AI 解析を完全除去（コミット `139a4f2` で完了）
+
+#### 背景・成果
+- 無料枠の Groq `llama-3.1-8b-instant` が 1 日 125 件で枯渇し無限リトライループに陥っていた
+- 名前抽出など regex / 文章スキャン側のフォールバックロジックが十分に成熟していたため AI を排除する判断
+- メール取り込みが**完全無料・上限なし**で永続稼働するようになった
+
+#### 現行の抽出パイプライン（AI 不使用）
+| ステップ | 関数 | 内容 |
+|---|---|---|
+| 1 | `stripUrlsForSkillMatching` | URL を除去（`https://.../cc.php` 等が PHP/HTTPS に誤マッチするのを防止） |
+| 2 | `stripSenderSignature` | 「━━━」「───」等の長い区切り線以降を送信者署名とみなして除去 |
+| 3 | `extractAndRemoveSkills` | `skill_master` で本文・添付を別ロジックで照合（資格は `extractCertContext` で「資格」見出し周辺のみ照合・添付は全文 fallback） |
+| 4 | `filterBySkillRating` | スキルシートの A〜E 評価で D/E 評価のスキルを除外 |
+| 5 | `extractCandidateFieldsRegex` | 氏名・最寄駅・都道府県・経験年数・希望単価・参画時期・希望案件を 2 段階 regex で抽出 |
+| 6 | `inferPrefectureFromStation` | 駅名から都道府県を逆引きして送信者住所由来の誤判定を上書き |
+| 7 | `isPhaseTableHeader` + `extractFromProse` | フェーズ表ヘッダー行を除外した上で `PROSE_ROLES` / `PROSE_INDUSTRIES` を文章スキャン |
+| 8 | `splitMultiCandidateBody` | 区切り線（`*****` / `─────`）で 1 メール=複数候補者を分割 |
+| 9 | 重複判定（ルールベース） | 名前完全一致 + スキル Jaccard ≥ 0.4 → `duplicate_flag=true` |
+
+#### 残存しているデッドコード（要整理）
+- `classifyInboundRelevance`（STEP1 関連性チェック）
+- `generateJSONSmart`, `generateJSONWithCerebras`, `generateJSONWithGroq`, `generateJSON`（kind='candidate' / 'project' で呼ばれる経路は全消失。`kind='match'` のみ `matchCandidateToProject` 内で利用）
+- `buildCandidateGroqPrompt` / `buildProjectGroqPrompt`
+- package.json の `pdfjs-dist`（未 import）
+
+これらは Phase 5 のドキュメント整理時にあわせて削除する想定。
+
+### 【Phase 5】最終納品ドキュメント作成（一部進行中）
+1. **[Claude] 作業**: システム構成図のメンテナンス（README.md に Mermaid 図あり・コミット `2026-05-20` で更新）
 2. **[Claude] 作業**: 操作マニュアルのメンテナンス（`docs/Sales_Manual.md` / `docs/Sales_Manual.pdf`・営業担当者向け）
 3. **[Claude] 完了**: 全成果物を commit & push し、納品完了
 
@@ -345,13 +384,14 @@ python3 scripts/skill_master_review.py
 ### テーブル一覧
 | テーブル | 用途 |
 |---|---|
-| `candidates` | 人材マスタ。スキル・経歴・raw_profile を保持。**`data_env`**（`prod` \| `demo`）で論理分離。`box_url` / `box_status` でBox連携状態を管理 |
+| `candidates` | 人材マスタ。スキル・経歴・raw_profile を保持。**`data_env`**（`prod` \| `demo`）で論理分離。<br>主要カラム: `box_url`, `box_status`, `resume_url`, `drive_url`, `desired_rate`, `from_company`, `duplicate_flag`, `merged_into` |
 | `projects` | 案件マスタ。必要スキル・予算・raw_data を保持。**`data_env`** 同上 |
 | `submissions` | マッチング提案履歴。スコア・AI要約を保持。**`data_env`** 同上 |
 | `candidate_skills` | スキルをカテゴリ別に分解して保持（検索最適化・14カテゴリ） |
-| `ai_logs` | AI解析の実行ログ（モデル・所要時間・結果・エラー） |
-| `skill_master` | ITスキルマスタ。約1600件のシードデータ + AI自動登録（source='ai'）。aliases（別名）で表記ゆれを吸収。match_count / last_matched_at でマッチ実績管理 |
-| `app_config` | アプリ全体設定 |
+| `ai_logs` | AI解析の実行ログ（モデル・所要時間・結果・エラー）。メール解析の AI 廃止後、`inbound-email` 由来のレコードは `model='no-ai'` で保存される |
+| `skill_master` | ITスキルマスタ。約1600件のシードデータ + AI自動登録（source='ai'）。aliases（別名）で表記ゆれを吸収。match_count / last_matched_at でマッチ実績管理。コミット `acf9d31` で JP1/Teraterm/Zabbix/Hinemos/Tivoli/HULFT/上級情報処理士/ITパスポート 等 32 件を追加 |
+| `relevance_keywords` | 関連性キーワード辞書（`exclude` / `candidate` / `project` の 3 種別）。`classifyInboundRelevance` で使用予定だが現状の `inbound-email` 経路では未呼び出し |
+| `app_config` | アプリ全体設定。Microsoft OAuth リフレッシュトークンのローテーション保存・`inbound_project_enabled` 等の機能フラグも保持 |
 
 ### candidate_skills の14カテゴリ
 | カテゴリ | 内容 |
@@ -388,15 +428,17 @@ pg_cron（5分ごと）
   - 処理済みメールを既読マーク（重複防止）
   - メール内容を inbound-email に HTTP POST で渡す（1件ずつ）
   ↓
-【inbound-email】解析・保存係（Make.com時代から存在）
+【inbound-email】解析・保存係（Make.com時代から存在・コミット `139a4f2` で AI 廃止）
   - STEP0-2: メタ情報・本文・添付の受け取りと検証
-  - STEP3:   Word/Excel 添付をテキスト変換
-  - STEP4:   メール本文中の Google Drive リンクを取得
-  - STEP5:   AI（Cerebras → Groq 8b-instant → Gemini フォールバック順）で人材/案件情報を解析
-  - STEP6-7: 解析結果を candidates / projects テーブルに DB 保存
+  - STEP3:   Word/Excel 添付をテキスト変換（PDF は Storage 保存のみ・解析しない）
+  - STEP4:   メール本文中の Google Drive / Sheets / Docs リンクを取得
+  - STEP5:   ★ AI 廃止 ★ regex + 文章スキャン + skill_master DB 照合で人材情報を構造化抽出
+             - URL 除去 → 送信者署名除去 → skill_master 照合 → 駅→都道府県マッピング → 重複判定
+  - STEP6-7: 解析結果を candidates / projects テーブルに DB 保存（ai_logs.model='no-ai'）
+  - 案件メール処理は app_config.inbound_project_enabled='true' のとき**のみ**実行（既定 OFF）
 ```
 
-**ポイント**: `inbound-email` は今も現役。`poll-email` は「Outlookからメールを取ってきて `inbound-email` に渡す橋渡し役」。Make.com が廃止された後も `inbound-email` の解析ロジックはそのまま流用している。
+**ポイント**: `inbound-email` は今も現役。`poll-email` は「Outlookからメールを取ってきて `inbound-email` に渡す橋渡し役」。Make.com が廃止された後も `inbound-email` の枠組みはそのまま流用しているが、AI 呼び出しは完全に除去されている。
 
 - **Edge Function**: `supabase/functions/poll-email/index.ts`（Phase 4.5 で実装）
 - **スケジューラ**: Supabase pg_cron（5分ごとに起動）
@@ -419,10 +461,10 @@ pg_cron（5分ごと）
 ### 全件取り込みモード（`poll-email` Edge Function）
 - **通常モード（incremental）**: 未読メールのみ取得（通常運用）
 - **全件モード（full）**: `email_full_import_since` 以降の全メールを順次取得（isRead フィルターなし）
-  - 1バッチ最大20件、`@odata.nextLink` でページネーション継続
-  - バッチごとに nextLink を `app_config`（`email_full_import_nextlink_<configKey>`）に保存し、5分ごとに続きから再開
+  - 1 バッチ最大 50 件（コミット `2afe469` で 20→50 に拡大）、`@odata.nextLink` でページネーション継続
+  - バッチごとに nextLink を `app_config`（`email_full_import_nextlink_<configKey>`）に保存し、5 分ごとに続きから再開
   - 全アカウント完了時に自動で incremental モードに戻す
-- **UI**: 設定ページの全件取り込みセクションは**削除済み**（7日以上前のデータは不要のため運用上使用しない）
+- **UI**: 設定ページの全件取り込みセクションは**削除済み**（7 日以上前のデータは不要のため運用上使用しない）
   - 必要な場合は Supabase SQL Editor で `app_config` の `email_poll_mode` を `full`、`email_full_import_since` を開始日付に手動設定すること
 
 ### メール自動受信（旧方式・停止中）
@@ -432,9 +474,9 @@ pg_cron（5分ごと）
 
 ### Edge Function `inbound-email`（`supabase/functions/inbound-email/index.ts` 準拠）
 - **データ環境**: ボディまたはクエリの `mode` / `data_env`（`prod` | `demo` | `dev`）。省略時は `prod`
-- **Secrets**: `GEMINI_API_KEY`、`SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`
-- **`GEMINI_INBOUND_TIMEOUT_MS`**: 1回のGemini待ち上限（未設定時 38,000ms）
-- **`INBOUND_MAKE_SOFT_FAIL`**: 例外時も HTTP 200 + `ok:false` で返す（Make/外部サービス停止回避）
+- **Secrets**: `SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`（AI 廃止により `GEMINI_API_KEY` 等は不要）
+- **app_config フラグ**: `inbound_project_enabled='true'` を設定するまで案件メールは解析せずスキップする（既定 OFF）
+- **`INBOUND_MAKE_SOFT_FAIL`**: 例外時も HTTP 200 + `ok:false` で返す（外部サービス停止回避用に名残として残置）
 - 本文・添付とも空: HTTP 200 + skipped
 
 ### 論理データ環境 `data_env`
@@ -478,8 +520,9 @@ pg_cron（5分ごと）
 - デモ環境向けに人材・案件のサンプルペアをDB投入
 
 ### 画面構成
-- タブは3つに整理（`マッチング結果` / `人材登録` / `案件登録`）
-- `提案履歴` / `重複管理` / `解析監視` は実装済みだがナビから非表示
+- タブは **4 つ**（`マッチング結果` / `人材登録` / `案件登録` / `設定`）。`src/components/Layout.tsx` の `NAV_ITEMS` を正とする
+- `設定` タブは Microsoft アカウント連携・案件メール解析の有効化トグル・データ環境情報などをまとめる
+- `提案履歴` / `重複管理` / `解析監視` は実装済みだがナビから非表示（`src/pages/HistoryPage.tsx`, `DuplicatePage.tsx`, `MonitorPage.tsx` は存在するが `App.tsx` 経由で参照されていない）
 
 ### Google Drive / Sheets / Docs 自動取得
 - メール本文中のリンクを自動検出・取得
@@ -488,18 +531,20 @@ pg_cron（5分ごと）
 
 ### ファイルアップロード解析（ブラウザ）
 - **実装**: `src/lib/fileParser.ts`
-- **PDF（テキストベース）**: `pdfjs-dist` でテキスト抽出 → テキストエリアへ自動転記 → 既存の解析フローへ
-- **PDF（スキャン・画像化）**: テキスト抽出不可。画像として添付するか手動テキスト入力が必要
-- **Excel（.xlsx/.xls）**: `xlsx`（SheetJS）で全シートをCSV変換 → テキストエリアへ自動転記
+- **PDF**: **現状未対応**。CandidatePage が「PDF はテキスト解析対象外です。テキストを手動で貼り付けてください」とエラー表示して処理中断。`pdfjs-dist` は package.json に残るが import されていない（旧コミット時の依存）。回避策: テキストを手動で貼り付ける、または PDF をページ画像化して添付する
+- **Excel（.xlsx/.xls）**: `xlsx`（SheetJS）で全シートを CSV 変換 → テキストエリアへ自動転記
 - **Word（.docx）**: `mammoth` で本文テキスト抽出 → テキストエリアへ自動転記
 - **画像（JPG/PNG等）**: base64変換 → `AnalyzeCandidateRequest.imageFiles` / `AnalyzeProjectRequest.imageFiles` に格納 → Gemini multimodal API（`inlineData`）で解析
 - 対応ページ: 人材登録（`CandidatePage.tsx`）・案件登録（`ProjectPage.tsx`）
 - 複数ファイル同時選択可。テキスト貼り付けとの併用も可能
 
 ### AI プロバイダー
-- **ブラウザ**: Gemini（既定 `gemini-2.0-flash`）・マルチモーダル対応（テキスト＋画像の同時解析）
-- **サーバー（Edge Function）**: Gemini `gemini-2.5-flash` 固定
-- フロントは `AIProvider` インターフェースで抽象化（OpenAI切替はスタブのみ）
+- **ブラウザ（人材・案件登録時の入力解析）**: Gemini（既定 `gemini-2.5-flash-lite`、`VITE_GEMINI_MODEL` で上書き可）・マルチモーダル対応（テキスト＋画像の同時解析）
+- **サーバー（`match-score` Edge Function）**: Cerebras `llama3.1-8b` → Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.5-flash` フォールバック
+- **サーバー（`auto-match` Edge Function）**: Gemini `gemini-2.5-flash-lite` 単発（フォールバックなし）
+- **サーバー（`poll-email` メール種別分類）**: Gemini `gemini-2.5-flash-lite` バッチ（任意・既定 OFF）
+- **メール解析 `inbound-email`**: AI 不使用（コミット `139a4f2`）
+- フロントは `AIProvider` インターフェースで抽象化（OpenAI 切替はスタブのみ）
 - `geminiProvider.ts` の `generate()` は `imageFiles` オプション引数でマルチモーダル対応
 
 ### 認証・ニックネーム制
@@ -508,8 +553,10 @@ pg_cron（5分ごと）
 
 ### データ重複管理
 - email が同じ場合は自動で既存レコードを UPDATE（上書き更新）
-- AI が重複疑いと判断した場合は `duplicate_flag = true` を立てるだけ（自動マージ不可）
+- 名前完全一致 + スキル Jaccard ≥ 0.4 のルールベース判定で `duplicate_flag = true` を立てるだけ（自動マージ不可・AI 不使用）
+- マージは UI から手動操作（`merged_into` カラムに参照先 ID を保存）
 
 ### AI解析ログ（ai_logs）
-- 全AI解析呼び出しをDBに記録（モデル名・所要時間ms・結果JSON・エラー）
+- 全 AI 解析呼び出しを DB に記録（モデル名・所要時間 ms・結果 JSON・エラー）
 - 成功・失敗どちらもログに残す
+- メール解析（`inbound-email`）は AI を使わなくなったが、後方互換のためログ自体は引き続き `model='no-ai'` で記録される
