@@ -2383,7 +2383,12 @@ function splitMultiCandidateBody(body: string): string[] | null {
     if (block.length >= 50) blocks.push(block)
   }
 
-  return blocks.length >= 2 ? blocks : null
+  // 【〇〇】形式の構造化フィールドを含むブロックのみ採用
+  // （メール署名の区切り線や通常の --- 区切りによる誤発動を防ぐ）
+  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】/
+  const validBlocks = blocks.filter(b => CANDIDATE_FIELD_RE.test(b))
+
+  return validBlocks.length >= 2 ? validBlocks : null
 }
 
 Deno.serve(async (req: Request) => {

@@ -711,7 +711,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
       const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
       const { data } = await supabase
         .from('candidates')
-        .select('id, name, skills, experience_years, raw_profile, created_at')
+        .select('id, name, skills, experience_years, desired_rate, from_company, raw_profile, created_at')
         .eq('data_env', dataEnv)
         .eq('name', selectedCandidate!.name)
         .neq('id', selectedCandidate!.id)
@@ -1073,13 +1073,32 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       <div className="px-3 pb-3 pt-1 space-y-2">
                         {dupCandidates.map((dup) => (
                           <div key={dup.id} className="bg-white border border-yellow-200 rounded-lg p-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
                                 <p className="text-xs font-semibold text-gray-800">{dup.name}</p>
+                                {/* 会社・登録日・経験年数 */}
                                 <p className="text-[10px] text-gray-400 mt-0.5">
+                                  {(dup as any).from_company && (
+                                    <span className="text-blue-500 font-medium">{(dup as any).from_company}　</span>
+                                  )}
                                   登録: {new Date(dup.created_at ?? '').toLocaleDateString('ja-JP')}
                                   {(dup as any).experience_years != null && `　経験${(dup as any).experience_years}年`}
                                 </p>
+                                {/* 単価・最寄駅・稼働時期 */}
+                                <p className="text-[10px] text-gray-600 mt-0.5 flex flex-wrap gap-x-2">
+                                  {(dup as any).desired_rate && (
+                                    <span className="text-green-700 font-medium">{(dup as any).desired_rate}</span>
+                                  )}
+                                  {((dup as any).raw_profile?.nearestStation || (dup as any).raw_profile?.prefecture) && (
+                                    <span>
+                                      📍{(dup as any).raw_profile?.nearestStation ?? (dup as any).raw_profile?.prefecture}
+                                    </span>
+                                  )}
+                                  {(dup as any).raw_profile?.aiAnalysis?.availableFrom && (
+                                    <span>🕐{(dup as any).raw_profile.aiAnalysis.availableFrom}</span>
+                                  )}
+                                </p>
+                                {/* スキル */}
                                 {Array.isArray(dup.skills) && dup.skills.length > 0 && (
                                   <p className="text-[10px] text-gray-500 mt-1 truncate">
                                     {(dup.skills as string[]).slice(0, 8).join(' / ')}
