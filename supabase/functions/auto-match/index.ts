@@ -5,19 +5,20 @@
 //   → { ok: true, matched: number, skipped: number, errors: string[] }
 //
 // 必要な Supabase Secrets:
-//   GEMINI_API_KEY
 //   SUPABASE_URL              （自動設定）
 //   SUPABASE_SERVICE_ROLE_KEY （自動設定）
+//   ※ AI呼び出しは match-batch Edge Function 経由（Cerebras/Groq/Gemini フォールバック）
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { GoogleGenerativeAI } from 'npm:@google/generative-ai@0.21.0'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? ''
 
 /** 案件1件あたりのマッチング候補者上限（スキルフィルター後） */
 const MAX_CANDIDATES_PER_PROJECT = 40
+
+/** match-batch への1バッチあたりの最大候補者数 */
+const BATCH_AI_SIZE = 20
 
 /** マッチング対象とする案件の登録からの経過時間（時間） */
 const TARGET_HOURS = 25 // 1時間の余裕を持って25時間
@@ -27,51 +28,42 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-interface MatchResult {
+interface BatchResult {
+  candidateId: string
   score: number
   summary: string
-  duplicateSuspected: boolean
+  method: 'ai' | 'rule'
+  ruleScore: number
 }
 
-/** Gemini でマッチングスコアを算出する */
-async function matchCandidateToProject(
-  candidateProfile: Record<string, unknown>,
+/** match-batch Edge Function を呼び出して候補者バッチを評価する */
+async function matchBatchProjectToCandidates(
+  supabase: ReturnType<typeof createClient>,
   projectRequirements: Record<string, unknown>,
-): Promise<MatchResult> {
-  const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' })
+  candidates: Array<{
+    id: string; name: string; skills: string[]; experienceYears: number | null
+    desiredRate: string | null; summary: string; remoteAvailable?: boolean | null; prefecture?: string | null
+  }>,
+): Promise<Map<string, { score: number; summary: string }>> {
+  const resultMap = new Map<string, { score: number; summary: string }>()
 
-  const prompt = `
-あなたはマッチング判定AIです。以下の「人材」と「案件」を読み、マッチング結果を JSON だけで返してください。
-余分な説明文・コードブロックは禁止です。
-
-人材:
-${JSON.stringify(candidateProfile, null, 2)}
-
-案件:
-${JSON.stringify(projectRequirements, null, 2)}
-
-返却 JSON フィールド:
-- score: number（0〜100）
-- summary: string（理由を200字以内）
-- duplicateSuspected: boolean（人材が既存と非常に似ている場合true）
-
-JSON:`.trim()
-
-  const result = await model.generateContent(prompt)
-  const text = result.response.text().trim()
-
-  // JSON部分を抽出
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error(`Gemini応答がJSONでない: ${text.slice(0, 100)}`)
-
-  const r = JSON.parse(jsonMatch[0]) as Partial<MatchResult>
-  const score = typeof r.score === 'number' ? r.score : Number(r.score ?? 0)
-  return {
-    score: Number.isFinite(score) ? Math.min(100, Math.max(0, score)) : 0,
-    summary: typeof r.summary === 'string' ? r.summary : '',
-    duplicateSuspected: Boolean(r.duplicateSuspected),
+  for (let i = 0; i < candidates.length; i += BATCH_AI_SIZE) {
+    const chunk = candidates.slice(i, i + BATCH_AI_SIZE)
+    const { data, error } = await supabase.functions.invoke('match-batch', {
+      body: {
+        mode: 'project_to_candidates',
+        projectRequirements,
+        candidates: chunk,
+        topN: chunk.length,
+      },
+    })
+    if (error) throw new Error(`match-batch呼び出し失敗: ${error.message}`)
+    const all: BatchResult[] = [...(data?.results ?? []), ...(data?.ruleOnly ?? [])]
+    for (const r of all) {
+      resultMap.set(r.candidateId, { score: r.score, summary: r.summary })
+    }
   }
+  return resultMap
 }
 
 Deno.serve(async (req: Request) => {
@@ -83,8 +75,6 @@ Deno.serve(async (req: Request) => {
   const elapsed = () => `${Date.now() - startedAt}ms`
 
   try {
-    if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY が未設定です')
-
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
     // ---- auto-match が設定画面で無効化されている場合はスキップ ----
@@ -191,7 +181,7 @@ Deno.serve(async (req: Request) => {
 
         console.log(`[auto-match] 案件「${project.title}」: スキルフィルター後=${targets.length}名`)
 
-        const projectReq = {
+        const projectReq: Record<string, unknown> = {
           title: project.title,
           client: project.client,
           description: project.description,
@@ -208,42 +198,50 @@ Deno.serve(async (req: Request) => {
           industry: project.industry ?? null,
         }
 
+        const batchInputs = targets.map(c => ({
+          id: c.id,
+          name: c.name,
+          skills: Array.isArray(c.skills) ? c.skills.map(String) : [],
+          experienceYears: c.experience_years ?? null,
+          desiredRate: (c.raw_profile as Record<string, unknown>)?.desiredRate as string | null ?? null,
+          summary: typeof (c.raw_profile as Record<string, unknown>)?.summary === 'string'
+            ? (c.raw_profile as Record<string, unknown>).summary as string
+            : '',
+          remoteAvailable: (c.raw_profile as Record<string, unknown>)?.remoteAvailable as boolean | null ?? null,
+          prefecture: (c.raw_profile as Record<string, unknown>)?.prefecture as string | null ?? null,
+        }))
+
+        let resultMap: Map<string, { score: number; summary: string }> = new Map()
+        try {
+          resultMap = await matchBatchProjectToCandidates(supabase, projectReq, batchInputs)
+        } catch (batchErr) {
+          const msg = `バッチマッチング失敗 project=${project.id}: ${String(batchErr)}`
+          console.error(`[auto-match] ${msg}`)
+          errors.push(msg)
+        }
+
         for (const c of targets) {
-          try {
-            const candidateProfile = {
-              name: c.name,
-              email: c.email ?? null,
-              skills: c.skills ?? [],
-              experienceYears: c.experience_years ?? null,
-              summary: typeof c.raw_profile?.summary === 'string' ? c.raw_profile.summary : '',
-            }
+          const r = resultMap.get(c.id)
+          if (!r) continue
+          const { error: upsertErr } = await supabase
+            .from('submissions')
+            .upsert(
+              {
+                data_env: 'prod',
+                candidate_id: c.id,
+                project_id: project.id,
+                match_score: r.score,
+                ai_summary: r.summary,
+                ai_raw: { autoMatched: true, source: 'auto-match-cron' },
+                created_by: 'auto-match-cron',
+              },
+              { onConflict: 'candidate_id,project_id' },
+            )
 
-            const mr = await matchCandidateToProject(candidateProfile, projectReq)
-
-            const { error: upsertErr } = await supabase
-              .from('submissions')
-              .upsert(
-                {
-                  data_env: 'prod',
-                  candidate_id: c.id,
-                  project_id: project.id,
-                  match_score: mr.score,
-                  ai_summary: mr.summary,
-                  ai_raw: { duplicateSuspected: mr.duplicateSuspected, autoMatched: true, source: 'auto-match-cron' },
-                  created_by: 'auto-match-cron',
-                },
-                { onConflict: 'candidate_id,project_id' },
-              )
-
-            if (upsertErr) {
-              errors.push(`upsert失敗 (${c.id}x${project.id}): ${upsertErr.message}`)
-            } else {
-              totalMatched++
-            }
-          } catch (pairErr) {
-            const msg = `マッチング失敗 candidate=${c.id} project=${project.id}: ${String(pairErr)}`
-            console.error(`[auto-match] ${msg}`)
-            errors.push(msg)
+          if (upsertErr) {
+            errors.push(`upsert失敗 (${c.id}x${project.id}): ${upsertErr.message}`)
+          } else {
+            totalMatched++
           }
         }
 

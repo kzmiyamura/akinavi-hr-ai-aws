@@ -23,16 +23,116 @@ import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
 import type { DataEnv } from '../lib/dataEnv'
 
-async function callMatchScore(
-  candidateProfile: unknown,
-  projectRequirements: unknown,
-): Promise<{ score: number; summary: string; duplicateSuspected: boolean }> {
-  const { data, error } = await supabase.functions.invoke('match-score', {
-    body: { candidateProfile, projectRequirements },
+interface BatchMatchResult {
+  candidateId: string
+  projectId?: string
+  score: number
+  summary: string
+  method: 'ai' | 'rule'
+  ruleScore: number
+}
+
+/** バッチマッチング：1回のAI呼び出しで複数候補者/案件を一括評価 */
+async function callMatchBatch(
+  mode: 'project_to_candidates' | 'candidate_to_projects',
+  payload: Record<string, unknown>,
+  topN: number,
+): Promise<{ results: BatchMatchResult[]; ruleOnly: BatchMatchResult[] }> {
+  const { data, error } = await supabase.functions.invoke('match-batch', {
+    body: { mode, ...payload, topN },
   })
   if (error) throw error
   if (data?.error) throw new Error(data.error)
-  return data as { score: number; summary: string; duplicateSuspected: boolean }
+  return data as { results: BatchMatchResult[]; ruleOnly: BatchMatchResult[] }
+}
+
+/** 案件→複数候補者のバッチマッチング（全件モード時はBATCH_SIZEごとに分割） */
+const BATCH_AI_SIZE = 20
+
+type CandidateBatchInput = {
+  id: string
+  name: string
+  skills: string[]
+  experienceYears: number | null
+  desiredRate: string | null
+  summary: string
+  remoteAvailable?: boolean | null
+  prefecture?: string | null
+}
+
+function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
+  const rp = c.raw_profile as Record<string, unknown>
+  return {
+    id: c.id,
+    name: c.name,
+    skills: c.skills as string[],
+    experienceYears: c.experience_years,
+    desiredRate: (rp?.desiredRate as string | null) ?? null,
+    summary: typeof rp?.summary === 'string' ? rp.summary : '',
+    remoteAvailable: (rp?.remoteAvailable as boolean | null) ?? null,
+    prefecture: (rp?.prefecture as string | null) ?? null,
+  }
+}
+
+async function matchBatchProjectToCandidates(
+  projectReq: unknown,
+  targets: Candidate[],
+  onProgress: (done: number, total: number) => void,
+): Promise<Map<string, { score: number; summary: string }>> {
+  const resultMap = new Map<string, { score: number; summary: string }>()
+  const batchInputs = targets.map(toCandidateBatchInput)
+  let done = 0
+  const total = targets.length
+
+  for (let i = 0; i < batchInputs.length; i += BATCH_AI_SIZE) {
+    const chunk = batchInputs.slice(i, i + BATCH_AI_SIZE)
+    const { results, ruleOnly } = await callMatchBatch('project_to_candidates', {
+      projectRequirements: projectReq,
+      candidates: chunk,
+    }, chunk.length)
+    for (const r of [...results, ...ruleOnly]) {
+      resultMap.set(r.candidateId, { score: r.score, summary: r.summary })
+    }
+    done = Math.min(i + BATCH_AI_SIZE, total)
+    onProgress(done, total)
+  }
+  return resultMap
+}
+
+async function matchBatchCandidateToProjects(
+  candidateInput: CandidateBatchInput,
+  targetProjects: Project[],
+  onProgress: (done: number, total: number) => void,
+): Promise<Map<string, { score: number; summary: string }>> {
+  const resultMap = new Map<string, { score: number; summary: string }>()
+  const projectInputs = targetProjects.map(p => ({
+    id: p.id,
+    title: p.title,
+    requiredSkills: p.required_skills as string[],
+    niceToHaveSkills: (p.raw_data?.niceToHaveSkills as string[] | undefined) ?? [],
+    budgetMin: p.budget_min ?? null,
+    budgetMax: p.budget_max ?? null,
+    workLocation: p.work_location ?? null,
+    remotePolicy: p.remote_policy ?? null,
+    description: p.description ?? null,
+    roleSummary: p.role_summary ?? null,
+  }))
+  let done = 0
+  const total = targetProjects.length
+
+  for (let i = 0; i < projectInputs.length; i += BATCH_AI_SIZE) {
+    const chunk = projectInputs.slice(i, i + BATCH_AI_SIZE)
+    const { results, ruleOnly } = await callMatchBatch('candidate_to_projects', {
+      candidateProfile: candidateInput,
+      projects: chunk,
+    }, chunk.length)
+    for (const r of [...results, ...ruleOnly]) {
+      if (r.projectId) resultMap.set(r.projectId, { score: r.score, summary: r.summary })
+    }
+    done = Math.min(i + BATCH_AI_SIZE, total)
+    onProgress(done, total)
+  }
+  return resultMap
 }
 
 interface Props {
@@ -669,41 +769,28 @@ export function MatchingPage({
       if (total === 0) return
 
       try {
-        for (let i = 0; i < targets.length; i++) {
-          const candidate = targets[i]
-          setMatchRunProgressNow({
-            overall: { done: i, total },
-            inner: { current: i + 1, total, unit: '候補者' },
-          })
-          const candidateProfile = {
-            name: candidate.name,
-            email: candidate.email,
-            phone: candidate.phone,
-            skills: candidate.skills as string[],
-            experienceYears: candidate.experience_years,
-            summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
-          }
+        setMatchRunProgressNow({ overall: { done: 0, total }, inner: { current: 0, total, unit: '候補者' } })
+
+        const resultMap = await matchBatchProjectToCandidates(
+          projectReq,
+          targets,
+          (done, t) => setMatchRunProgressNow({ overall: { done, total: t }, inner: { current: done, total: t, unit: '候補者' } }),
+        )
+
+        for (const candidate of targets) {
+          const r = resultMap.get(candidate.id)
+          if (!r) continue
           try {
-            const matchResult = await callMatchScore(candidateProfile, projectReq)
-
-            if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
-            }
-
             await upsertSubmission({
               candidateId: candidate.id,
               projectId,
-              matchResult,
+              matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false },
               createdBy: nickname,
               dataEnv,
             })
           } catch (err) {
             console.warn(`[match] ${candidate.name} スキップ: ${err}`)
           }
-          setMatchRunProgressNow({
-            overall: { done: i + 1, total },
-            inner: { current: i + 1, total, unit: '候補者' },
-          })
         }
       } finally {
         setMatchRunProgressNow(null)
@@ -728,48 +815,34 @@ export function MatchingPage({
       if (!candidate) throw new Error('人材が見つかりません')
       if ((projects as Project[]).length === 0) throw new Error('募集中の案件がありません')
 
-      const candidateProfile = {
-        name: candidate.name,
-        email: candidate.email,
-        phone: candidate.phone,
-        skills: candidate.skills as string[],
-        experienceYears: candidate.experience_years,
-        summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
-      }
-
       const targetProjects = pickProjectsForCandidateMatch(candidate, projects as Project[], matchingRunMode, fastMaxProjects)
       const total = targetProjects.length
       if (total === 0) return
 
       try {
-        for (let i = 0; i < targetProjects.length; i++) {
-          const project = targetProjects[i]
-          setMatchRunProgressNow({
-            overall: { done: i, total },
-            inner: { current: i + 1, total, unit: '案件' },
-          })
-          const projectReq = projectToMatchRequirements(project)
+        setMatchRunProgressNow({ overall: { done: 0, total }, inner: { current: 0, total, unit: '案件' } })
+
+        const candidateInput = toCandidateBatchInput(candidate)
+        const resultMap = await matchBatchCandidateToProjects(
+          candidateInput,
+          targetProjects,
+          (done, t) => setMatchRunProgressNow({ overall: { done, total: t }, inner: { current: done, total: t, unit: '案件' } }),
+        )
+
+        for (const project of targetProjects) {
+          const r = resultMap.get(project.id)
+          if (!r) continue
           try {
-            const matchResult = await callMatchScore(candidateProfile, projectReq)
-
-            if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
-            }
-
             await upsertSubmission({
               candidateId: candidate.id,
               projectId: project.id,
-              matchResult,
+              matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false },
               createdBy: nickname,
               dataEnv,
             })
           } catch (err) {
             console.warn(`[match] ${project.title} スキップ: ${err}`)
           }
-          setMatchRunProgressNow({
-            overall: { done: i + 1, total },
-            inner: { current: i + 1, total, unit: '案件' },
-          })
         }
       } finally {
         setMatchRunProgressNow(null)
@@ -812,60 +885,50 @@ export function MatchingPage({
           const projectReq = projectToMatchRequirements(project)
           const targets = pickCandidatesForProjectMatch(project, clist, matchingRunMode, fastMaxCandidates)
           const candTotal = targets.length
-          for (let ci = 0; ci < targets.length; ci++) {
+
+          setMatchRunProgressNow({
+            overall: { done, total },
+            outer: projectTotal > 1 ? { current: pi + 1, total: projectTotal, unit: '案件', detail: project.title } : undefined,
+            inner: candTotal > 0 ? { current: 0, total: candTotal, unit: '候補者' } : undefined,
+          })
+
+          let resultMap: Map<string, { score: number; summary: string }> = new Map()
+          try {
+            resultMap = await matchBatchProjectToCandidates(
+              projectReq,
+              targets,
+              (batchDone, batchTotal) => {
+                setMatchRunProgressNow({
+                  overall: { done, total },
+                  outer: projectTotal > 1 ? { current: pi + 1, total: projectTotal, unit: '案件', detail: project.title } : undefined,
+                  inner: batchTotal > 0 ? { current: batchDone, total: batchTotal, unit: '候補者' } : undefined,
+                })
+              },
+            )
+          } catch (err) {
+            console.warn(`[bulk-match] ${project.title} バッチ失敗: ${err}`)
+          }
+
+          for (const candidate of targets) {
             if (bulkCancelRequestedRef.current) {
               setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, total) })
               return
             }
-            const candidate = targets[ci]
-            setMatchRunProgressNow({
-              overall: { done, total },
-              outer:
-                projectTotal > 1
-                  ? { current: pi + 1, total: projectTotal, unit: '案件', detail: project.title }
-                  : undefined,
-              inner:
-                candTotal > 0
-                  ? { current: ci + 1, total: candTotal, unit: '候補者' }
-                  : undefined,
-            })
-            const candidateProfile = {
-              name: candidate.name,
-              email: candidate.email,
-              phone: candidate.phone,
-              skills: candidate.skills as string[],
-              experienceYears: candidate.experience_years,
-              summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
-            }
-            try {
-              const matchResult = await callMatchScore(candidateProfile, projectReq)
-
-              if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-                await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+            const r = resultMap.get(candidate.id)
+            if (r) {
+              try {
+                await upsertSubmission({
+                  candidateId: candidate.id,
+                  projectId: project.id,
+                  matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false },
+                  createdBy: nickname,
+                  dataEnv,
+                })
+              } catch (err) {
+                console.warn(`[bulk-match] ${candidate.name} × ${project.title} スキップ: ${err}`)
               }
-
-              await upsertSubmission({
-                candidateId: candidate.id,
-                projectId: project.id,
-                matchResult,
-                createdBy: nickname,
-                dataEnv,
-              })
-            } catch (err) {
-              console.warn(`[bulk-match] ${candidate.name} × ${project.title} スキップ: ${err}`)
             }
             done += 1
-            setMatchRunProgressNow({
-              overall: { done, total },
-              outer:
-                projectTotal > 1
-                  ? { current: pi + 1, total: projectTotal, unit: '案件', detail: project.title }
-                  : undefined,
-              inner:
-                candTotal > 0
-                  ? { current: ci + 1, total: candTotal, unit: '候補者' }
-                  : undefined,
-            })
           }
         }
         setMessage({
@@ -905,64 +968,53 @@ export function MatchingPage({
             return
           }
           const candidate = clist[ci]
-          const candidateProfile = {
-            name: candidate.name,
-            email: candidate.email,
-            phone: candidate.phone,
-            skills: candidate.skills as string[],
-            experienceYears: candidate.experience_years,
-            summary: (candidate.raw_profile as { summary?: string }).summary ?? '',
-          }
           const targetProjects = pickProjectsForCandidateMatch(candidate, plist, matchingRunMode, fastMaxProjects)
           const projTotal = targetProjects.length
 
-          for (let pi = 0; pi < targetProjects.length; pi++) {
+          setMatchRunProgressNow({
+            overall: { done, total },
+            outer: peopleTotal > 1 ? { current: ci + 1, total: peopleTotal, unit: '人材', detail: candidate.name } : undefined,
+            inner: projTotal > 0 ? { current: 0, total: projTotal, unit: '案件' } : undefined,
+          })
+
+          const candidateInput = toCandidateBatchInput(candidate)
+          let resultMap: Map<string, { score: number; summary: string }> = new Map()
+          try {
+            resultMap = await matchBatchCandidateToProjects(
+              candidateInput,
+              targetProjects,
+              (batchDone, batchTotal) => {
+                setMatchRunProgressNow({
+                  overall: { done, total },
+                  outer: peopleTotal > 1 ? { current: ci + 1, total: peopleTotal, unit: '人材', detail: candidate.name } : undefined,
+                  inner: batchTotal > 0 ? { current: batchDone, total: batchTotal, unit: '案件' } : undefined,
+                })
+              },
+            )
+          } catch (err) {
+            console.warn(`[bulk-match] ${candidate.name} バッチ失敗: ${err}`)
+          }
+
+          for (const project of targetProjects) {
             if (bulkCancelRequestedRef.current) {
               setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, total) })
               return
             }
-            const project = targetProjects[pi]
-            setMatchRunProgressNow({
-              overall: { done, total },
-              outer:
-                peopleTotal > 1
-                  ? { current: ci + 1, total: peopleTotal, unit: '人材', detail: candidate.name }
-                  : undefined,
-              inner:
-                projTotal > 0
-                  ? { current: pi + 1, total: projTotal, unit: '案件' }
-                  : undefined,
-            })
-            const projectReq = projectToMatchRequirements(project)
-            try {
-              const matchResult = await callMatchScore(candidateProfile, projectReq)
-
-              if (matchResult.duplicateSuspected && !candidate.duplicate_flag) {
-                await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', candidate.id).eq('data_env', dataEnv)
+            const r = resultMap.get(project.id)
+            if (r) {
+              try {
+                await upsertSubmission({
+                  candidateId: candidate.id,
+                  projectId: project.id,
+                  matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false },
+                  createdBy: nickname,
+                  dataEnv,
+                })
+              } catch (err) {
+                console.warn(`[bulk-match] ${candidate.name} × ${project.title} スキップ: ${err}`)
               }
-
-              await upsertSubmission({
-                candidateId: candidate.id,
-                projectId: project.id,
-                matchResult,
-                createdBy: nickname,
-                dataEnv,
-              })
-            } catch (err) {
-              console.warn(`[bulk-match] ${candidate.name} × ${project.title} スキップ: ${err}`)
             }
             done += 1
-            setMatchRunProgressNow({
-              overall: { done, total },
-              outer:
-                peopleTotal > 1
-                  ? { current: ci + 1, total: peopleTotal, unit: '人材', detail: candidate.name }
-                  : undefined,
-              inner:
-                projTotal > 0
-                  ? { current: pi + 1, total: projTotal, unit: '案件' }
-                  : undefined,
-            })
           }
         }
         setMessage({
