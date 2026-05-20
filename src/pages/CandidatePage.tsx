@@ -702,6 +702,25 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   const selectedCandidate = candidates.find((c: Candidate) => c.id === selectedId) ?? null
 
+  // 重複疑い候補者クエリ（duplicate_flag=true の場合のみ同名・直近90日・別IDを取得）
+  const { data: dupCandidates } = useQuery({
+    queryKey: ['dup-candidates', selectedCandidate?.id, selectedCandidate?.name, dataEnv],
+    enabled: !!(selectedCandidate?.duplicate_flag && selectedCandidate?.name),
+    queryFn: async () => {
+      const { supabase } = await import('../lib/supabase')
+      const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
+      const { data } = await supabase
+        .from('candidates')
+        .select('id, name, skills, experience_years, raw_profile, created_at')
+        .eq('data_env', dataEnv)
+        .eq('name', selectedCandidate!.name)
+        .neq('id', selectedCandidate!.id)
+        .gte('created_at', since)
+        .limit(5)
+      return (data ?? []) as Candidate[]
+    },
+  })
+
   return (
     <div className="space-y-6">
       {/* 編集モーダル */}
@@ -1044,6 +1063,41 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     </div>
                   </div>
                   <CandidateProfileFields c={selectedCandidate} isExpanded detailMode />
+                  {/* 重複候補者 */}
+                  {selectedCandidate.duplicate_flag && dupCandidates && dupCandidates.length > 0 && (
+                    <details className="mt-4 border border-yellow-200 rounded-lg bg-yellow-50">
+                      <summary className="px-3 py-2 text-xs font-medium text-yellow-700 cursor-pointer select-none hover:bg-yellow-100 rounded-lg flex items-center gap-1">
+                        <span className="text-yellow-500">⚠</span>
+                        重複の疑い {dupCandidates.length}件
+                      </summary>
+                      <div className="px-3 pb-3 pt-1 space-y-2">
+                        {dupCandidates.map((dup) => (
+                          <div key={dup.id} className="bg-white border border-yellow-200 rounded-lg p-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-gray-800">{dup.name}</p>
+                                <p className="text-[10px] text-gray-400 mt-0.5">
+                                  登録: {new Date(dup.created_at ?? '').toLocaleDateString('ja-JP')}
+                                  {(dup as any).experience_years != null && `　経験${(dup as any).experience_years}年`}
+                                </p>
+                                {Array.isArray(dup.skills) && dup.skills.length > 0 && (
+                                  <p className="text-[10px] text-gray-500 mt-1 truncate">
+                                    {(dup.skills as string[]).slice(0, 8).join(' / ')}
+                                  </p>
+                                )}
+                              </div>
+                              <button
+                                onClick={() => setSelectedId(dup.id)}
+                                className="shrink-0 text-[10px] bg-yellow-100 hover:bg-yellow-200 text-yellow-700 rounded px-2 py-1 whitespace-nowrap"
+                              >
+                                この人を見る
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
                   {/* 元メール本文 */}
                   {(() => {
                     const raw = getRaw(selectedCandidate)
