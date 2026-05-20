@@ -855,6 +855,11 @@ const STATION_TO_PREFECTURE: Record<string, string> = {
   '藤沢': '神奈川県', '茅ヶ崎': '神奈川県', '平塚': '神奈川県', '小田原': '神奈川県',
   '鎌倉': '神奈川県', '逗子': '神奈川県', '横須賀': '神奈川県', '本厚木': '神奈川県',
   '海老名': '神奈川県', '相模大野': '神奈川県', '町田': '神奈川県', // 町田駅は東京都だが署名誤検出回避目的
+  '鶴見': '神奈川県', '大船': '神奈川県', '東神奈川': '神奈川県',
+  '元住吉': '神奈川県', '日吉': '神奈川県', '綱島': '神奈川県', '青葉台': '神奈川県',
+  'たまプラーザ': '神奈川県', '溝の口': '神奈川県', '武蔵中原': '神奈川県', '登戸': '神奈川県',
+  '向ヶ丘遊園': '神奈川県', '川崎大師': '神奈川県', '矢向': '神奈川県',
+  // ※ 蒲田駅（東京都大田区）は神奈川県ではないため意図的に未登録
   // 茨城県
   '水戸': '茨城県', 'つくば': '茨城県', '土浦': '茨城県', '取手': '茨城県',
   '守谷': '茨城県', '日立': '茨城県',
@@ -1143,6 +1148,29 @@ function extractNameFallback(text: string): string | null {
  * 添付追加   ,，                                （Phase2a/2b追加）
  * 単独スペース                                  （Phase3のみ）
  */
+/**
+ * ラベル文字列に「単　価」「氏　名」のような全角・半角スペース挿入があってもマッチするよう、
+ * 各文字の間に `[　 ]*` を挟んだ正規表現用文字列に変換する。
+ *
+ * メタ文字（? * + 等）は前文字に対する量指定子のため、メタ文字の直前には `[　 ]*` を挟まない。
+ * メタ文字の直後には挟む（例: `最寄り?駅` → `最[　 ]*寄[　 ]*り?[　 ]*駅` で「最　寄り　駅」も拾える）。
+ */
+function flexLabel(label: string): string {
+  const META = /[.*+?()[\]{}\\|^$]/
+  let result = ''
+  for (let i = 0; i < label.length; i++) {
+    const ch = label[i]
+    const isMeta = META.test(ch)
+    result += isMeta ? ch : ch.replace(/[.*+?()[\]{}\\|^$]/g, '\\$&')
+    if (i < label.length - 1) {
+      const next = label[i + 1]
+      const nextIsMeta = META.test(next)
+      if (!nextIsMeta) result += '[　 ]*'
+    }
+  }
+  return result
+}
+
 function extractFieldTwoPhase(
   labels: string[],
   bodyText: string,
@@ -1151,9 +1179,12 @@ function extractFieldTwoPhase(
   maxLen = 30,
   phase3MinLen = 3,
 ): string | null {
-  const esc = labels.map(l => l.replace(/[.*+?()[\]{}\\|^$]/g, '\\$&')).join('|')
-  const SEP     = `(?:[：:\\t]|　+| {2,})`
-  const SEP_ATT = `(?:[：:\\t,，]|　+| {2,})`
+  const esc = labels.map(flexLabel).join('|')
+  // 区切り文字。
+  //   - 】 を含めることで「【単　価】65万」のような囲み記号ラベル直後に値が続くフォーマットも拾える。
+  //   - ラベル直後（または半角スペース許容）にのみ ] として作用するため、本文中の単独「】」は誤検出しない。
+  const SEP     = `(?:[：:\\t】]|　+| {2,})`
+  const SEP_ATT = `(?:[：:\\t,，】]|　+| {2,})`
 
   const check = (v: string, minLen = 1): string | null => {
     const t = v.trim().replace(/[　 ]+$/, '')
@@ -2295,6 +2326,66 @@ async function unmarkEmailProcessed(
   }
 }
 
+/**
+ * 1メールに複数人材が区切り線（`*****`/`-----` 8文字以上）で並んでいる場合に分割する。
+ *
+ * メール構造（Phoenixテクノロジーズ等）:
+ *   [前置き]
+ *   N0774 MT (61才 男性)   ← 各ブロックの直前行が氏名
+ *   ********...
+ *   【時　期】即日
+ *   【単　価】65万
+ *   ...
+ *   ********...
+ *   N0773 OM ...
+ *
+ * 戻り値: ブロックが2件以上あれば string[] を返す。1件以下なら null。
+ */
+function splitMultiCandidateBody(body: string): string[] | null {
+  const DELIM_RE = /^[\*\-=＊]{8,}\s*$/
+  const lines = body.split(/\r?\n/)
+
+  const delimIndices: number[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (DELIM_RE.test(lines[i])) delimIndices.push(i)
+  }
+
+  // 区切り線が2本未満 → 複数人材なし
+  if (delimIndices.length < 2) return null
+
+  // 区切り線で parts に分割
+  // parts[0] = 前置き（1人目の名前行を末尾に含む可能性）
+  // parts[1] = 1人目の内容
+  // parts[2] = 空行＋2人目の名前行
+  // parts[3] = 2人目の内容 … と交互に続く
+  const delimSet = new Set(delimIndices)
+  const allParts: string[] = []
+  let current: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (delimSet.has(i)) {
+      allParts.push(current.join('\n'))
+      current = []
+    } else {
+      current.push(lines[i])
+    }
+  }
+  if (current.length > 0) allParts.push(current.join('\n'))
+
+  const blocks: string[] = []
+  for (let i = 1; i < allParts.length; i += 2) {
+    const content = allParts[i].trim()
+    if (!content) continue
+    // 直前の偶数パートの末尾非空行 = 名前行
+    const prevPart = allParts[i - 1] ?? ''
+    const prevLines = prevPart.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    const nameLine = prevLines[prevLines.length - 1] ?? ''
+    const block = nameLine ? `${nameLine}\n${content}` : content
+    if (block.length >= 50) blocks.push(block)
+  }
+
+  return blocks.length >= 2 ? blocks : null
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -2629,6 +2720,168 @@ Deno.serve(async (req: Request) => {
     if (type === 'candidate' || type === 'human') {
       // body が空の場合はsubjectを本文代わりに使う（cy-tech等の件名のみメール対策）
       const effectiveBody = body.trim() ? body : subject
+
+      // ── 複数人材検出（*****や-----の区切り線） ─────────────────────────────
+      const multiBlocks = splitMultiCandidateBody(effectiveBody)
+      if (multiBlocks && multiBlocks.length >= 2) {
+        console.log(`[multi-candidate] ${multiBlocks.length}人検出 from=${from} subject=${subject.slice(0, 80)}`)
+        tracePhase = 'multi_candidate'
+
+        const attachmentNames = [
+          ...allAttachments.map(a => a.name ?? ''),
+          ...officeTextContents.map(t => t.label),
+        ].filter(Boolean).join('\n')
+
+        type BlockResult = { id: string; name: string; skills: number }
+        const results: BlockResult[] = []
+        const allBlockBoxUrls: string[] = []
+
+        for (const block of multiBlocks) {
+          try {
+            // ブロック固有のスキル照合
+            const blockBodyText = [subject, block].join('\n')
+            const { matched: blockBodyMatched } = extractAndRemoveSkills(blockBodyText, masterSkills, { looseCert: false })
+            const blockBodyMatchedNames = new Set(blockBodyMatched.map(s => s.name))
+            const blockAttachDeduped = attachRated.filter(s => !blockBodyMatchedNames.has(s.name)).slice(0, 10)
+            const blockDbMatchedSkills = [...blockBodyMatched, ...blockAttachDeduped]
+            const blockSkillNames = blockDbMatchedSkills.map(s => s.name)
+
+            // フィールド抽出（件名＋ブロック本文＋添付名）
+            const blockRegexBodyText = decodeHtmlEntities([subject, block, attachmentNames].join('\n'))
+            const blockRegexFields = extractCandidateFieldsRegex(blockRegexBodyText, attachText)
+            const blockProseFields = extractFromProse(blockRegexBodyText, attachText)
+
+            const blockResolvedName = blockRegexFields.name
+              ?? extractNameFallback([blockRegexBodyText, attachText].join('\n'))
+              ?? extractCandidateCode(subject)
+              ?? '不明'
+            const blockRemoteAvailable = blockProseFields.workStyle === 'フルリモート'
+              || blockProseFields.workStyle === 'リモート可'
+              || blockProseFields.workStyle === 'リモート希望'
+            const blockBoxUrls = extractBoxUrls(block)
+            if (blockBoxUrls.length > 0) allBlockBoxUrls.push(...blockBoxUrls)
+
+            const blockPayload = {
+              data_env: inboundDataEnv,
+              name: blockResolvedName,
+              email: null as string | null,
+              phone: null as string | null,
+              skills: blockSkillNames,
+              experience_years: toExperienceYears(blockRegexFields.experienceYears),
+              raw_profile: {
+                text: block.slice(0, 5000),
+                summary: '',
+                skillsByCategory: blockDbMatchedSkills.reduce((acc, s) => {
+                  if (!acc[s.category]) acc[s.category] = []
+                  acc[s.category].push(s.name)
+                  return acc
+                }, {} as Record<string, string[]>),
+                roles: blockProseFields.roles,
+                industries: blockProseFields.industries,
+                nearestStation: blockRegexFields.nearestStation,
+                prefecture: blockRegexFields.prefecture,
+                availableRegions: null,
+                currentWorkLocation: null,
+                remoteAvailable: blockRemoteAvailable,
+                from, subject,
+                emailReceivedAt,
+                attachmentCount: allAttachments.length,
+                attachmentNames: [
+                  ...allAttachments.map(a => a.name ?? a.mimeType),
+                  ...officeTextContents.map(t => t.label),
+                ],
+                driveLinks: driveTexts.map(t => t.label),
+                aiAnalysis: { availableFrom: blockRegexFields.availableFrom },
+                desiredProject: blockRegexFields.desiredProject,
+                multiCandidateBlock: true,
+              },
+              duplicate_flag: false,
+              created_by: 'make-inbound',
+              box_url: blockBoxUrls[0] ?? null,
+              box_status: blockBoxUrls.length > 0 ? 'pending' : null,
+              resume_url: resumeUrl,
+              desired_rate: blockRegexFields.desiredRate ?? null,
+              from_company: sanitizeFromCompany(null),
+            }
+
+            const { data: blockData, error: blockError } = await supabase
+              .from('candidates').insert(blockPayload).select().single()
+            if (blockError) {
+              console.error(`[multi-candidate] 保存エラー "${blockResolvedName}":`, blockError.message)
+              continue
+            }
+
+            // 重複判定
+            if (blockResolvedName !== '不明') {
+              const { data: similar } = await supabase
+                .from('candidates').select('id, name, skills')
+                .eq('data_env', inboundDataEnv)
+                .eq('name', blockResolvedName)
+                .neq('id', blockData.id)
+                .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
+                .limit(5)
+              if (similar && similar.length > 0) {
+                for (const s of similar) {
+                  const mySet = new Set(blockSkillNames.map(sk => sk.toLowerCase()))
+                  const theirSet = new Set(((s.skills as string[]) || []).map(sk => sk.toLowerCase()))
+                  const intersection = [...mySet].filter(sk => theirSet.has(sk)).length
+                  const union = new Set([...mySet, ...theirSet]).size
+                  if (union > 0 && intersection / union >= 0.4) {
+                    await supabase.from('candidates').update({ duplicate_flag: true })
+                      .eq('id', blockData.id).eq('data_env', inboundDataEnv)
+                    console.log(`[multi-candidate duplicate] ${blockResolvedName} jaccard=${(intersection / union).toFixed(2)}`)
+                    break
+                  }
+                }
+              }
+            }
+
+            // candidate_skills INSERT
+            const blockSkillsPayload = blockDbMatchedSkills
+              .filter(s => s.name?.trim())
+              .map(s => ({ candidate_id: blockData.id, category: s.category, skill: s.name.trim() }))
+            if (blockSkillsPayload.length > 0) {
+              await supabase.from('candidate_skills').delete().eq('candidate_id', blockData.id)
+              await supabase.from('candidate_skills').insert(blockSkillsPayload)
+            }
+
+            // skill_master match_count インクリメント（fire and forget）
+            if (blockSkillNames.length > 0) {
+              const matchedIds = masterSkills.filter(s => blockSkillNames.includes(s.name)).map(s => s.id)
+              if (matchedIds.length > 0) {
+                supabase.rpc('increment_skill_match_counts', { skill_ids: matchedIds })
+                  .then(() => {}).catch(() => {})
+              }
+            }
+
+            await supabase.from('ai_logs').insert({
+              type: 'candidate',
+              model: 'no-ai',
+              from_address: from,
+              subject,
+              ai_result: { multiCandidateBlock: true, _field_sources: { skills: `db:${blockSkillNames.length}` } },
+              prompt_length: 0,
+              status: 'success',
+              duration_ms: 0,
+              linked_id: blockData.id,
+              raw_body: block.slice(0, 3000),
+            })
+
+            results.push({ id: blockData.id, name: blockData.name, skills: blockSkillNames.length })
+            console.log(`[multi-candidate] 登録完了: ${blockData.name} skills=${blockSkillNames.length}`)
+          } catch (blockErr) {
+            console.error(`[multi-candidate] ブロック処理エラー:`, String(blockErr))
+          }
+        }
+
+        if (allBlockBoxUrls.length > 0) await appendToBoxSpreadsheet(allBlockBoxUrls)
+        await markEmailProcessed(supabase, dedupConfigKey)
+        return new Response(
+          JSON.stringify({ ok: true, type: 'multi-candidate', count: results.length, results }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+      // ── 単一人材（通常モード）────────────────────────────────────────────
 
       const durationMs = 0
       const parseFallback: 'none' | 'body_only_after_attachment_timeout' = 'none'

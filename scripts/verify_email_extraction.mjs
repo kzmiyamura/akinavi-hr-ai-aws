@@ -18,6 +18,54 @@ function stripUrlsForSkillMatching(text) {
   return text.replace(/https?:\/\/[^\s\u3000<>"'\(\)\[\]｝】、，。]+/gi, ' ')
 }
 
+function flexLabel(label) {
+  const META = /[.*+?()[\]{}\\|^$]/
+  let result = ''
+  for (let i = 0; i < label.length; i++) {
+    const ch = label[i]
+    const isMeta = META.test(ch)
+    result += isMeta ? ch : ch.replace(/[.*+?()[\]{}\\|^$]/g, '\\$&')
+    if (i < label.length - 1) {
+      const nextIsMeta = META.test(label[i + 1])
+      if (!nextIsMeta) result += '[　 ]*'
+    }
+  }
+  return result
+}
+
+function extractFieldTwoPhase(labels, bodyText, attachText, validate, maxLen = 30, phase3MinLen = 3) {
+  const esc = labels.map(flexLabel).join('|')
+  const SEP = `(?:[：:\\t】]|　+| {2,})`
+  const SEP_ATT = `(?:[：:\\t,，】]|　+| {2,})`
+  const check = (v, minLen = 1) => {
+    const t = v.trim().replace(/[　 ]+$/, '')
+    if (!t || t.length < minLen || t.length > maxLen) return null
+    if (validate && !validate(t)) return null
+    return t
+  }
+  const rSameLine = (sep) => new RegExp(`(?:${esc})[　 ]?${sep}[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
+  const bodyBlocks = bodyText.split(/\n{2,}/)
+  if (bodyBlocks.length > 1) {
+    const labelPresent = new RegExp(`(?:${esc})`, 'i')
+    const block = bodyBlocks.find(b => labelPresent.test(b))
+    if (block && block !== bodyText) {
+      const m = block.match(rSameLine(SEP))
+      if (m) { const v = check(m[1]); if (v) return v }
+    }
+  }
+  const mBody = bodyText.match(rSameLine(SEP))
+  if (mBody) { const v = check(mBody[1]); if (v) return v }
+  if (attachText && attachText.trim()) {
+    const mAtt = attachText.match(rSameLine(SEP_ATT))
+    if (mAtt) { const v = check(mAtt[1]); if (v) return v }
+  }
+  const allText = bodyText + '\n' + (attachText ?? '')
+  const rSingle = new RegExp(`(?:${esc}) ([^ \\t,，\\n　]{1,${maxLen}})`, 'i')
+  const mSingle = allText.match(rSingle)
+  if (mSingle) { const v = check(mSingle[1], phase3MinLen); if (v) return v }
+  return null
+}
+
 function stripSenderSignature(text) {
   if (!text) return text
   const lines = text.split(/\r?\n/)
@@ -38,6 +86,9 @@ const STATION_TO_PREFECTURE = {
   '千葉': '千葉県',
   '大宮': '埼玉県', '浦和': '埼玉県',
   '横浜': '神奈川県', '川崎': '神奈川県', '町田': '神奈川県',
+  '鶴見': '神奈川県', '大船': '神奈川県', '東神奈川': '神奈川県',
+  '元住吉': '神奈川県', '日吉': '神奈川県', '青葉台': '神奈川県',
+  'たまプラーザ': '神奈川県', '溝の口': '神奈川県',
   '梅田': '大阪府', '難波': '大阪府',
   '名古屋': '愛知県',
   '札幌': '北海道', '仙台': '宮城県', '博多': '福岡県',
@@ -339,6 +390,52 @@ console.log(`  ④ 最終確定         : ${final}`)
 console.log(`  期待: "千葉県"`)
 console.log(`  結果: ${final === '千葉県' ? '✅ PASS' : '❌ FAIL'}\n`)
 
-console.log('========================================')
+// =============================================================================
+// 検証ケース2: Phoenixテクノロジーズ N0774 MT メール
+//   - 「【単　価】」のような全角スペース入りラベル
+//   - 「鶴見駅」→ 神奈川県
+// =============================================================================
+console.log('\n========================================')
+console.log('品質検証2: Phoenixテクノロジーズ N0774 MT メール')
+console.log('========================================\n')
+
+const PHOENIX_SUBJECT = '【新鮮エンジニア情報】Phoenixテクノロジーズ採用事務局 コナカ でございます。'
+const PHOENIX_BODY = `N0774 MT (61才 男性)
+【時　期】即日
+【単　価】65万
+【居住地】神奈川県 横浜市
+【最　寄】JR京浜東北線 鶴見駅
+【スキル】
+分野：インフラ系・サーバ構築
+言語：Shell，PowerShell，SQL
+ＯＳ：Windows，Linux，CentOS，AWS，Vmware
+ＤＢ：Oracle，Oracle DataGade
+その他：JP1，OCI Exadata Cloud Service
+【備　考】
+ORACLE MASTER Gold Oracle Database 10gを
+取得し、長年にわたり多数のデータベースエンジ
+ニア業務に従事してきた経験豊富なエンジニアです。
+Oracle DBの設計・構築・運用・性能改善まで一貫
+して対応可能です。`
+
+// 検証7: 全角スペース入りラベル（【単　価】等）からの抽出
+console.log('【検証7】全角スペース入りラベルからの抽出（flexLabel）')
+const ratePhoenix = extractFieldTwoPhase(['希望単価','単価','希望報酬'], PHOENIX_BODY, '', v => /\d/.test(v), 20)
+const timePhoenix = extractFieldTwoPhase(['参画','参画時期','稼働','稼働開始','時期','着任'], PHOENIX_BODY, '', undefined, 20)
+const nearPhoenix = extractFieldTwoPhase(['最寄り?駅','最寄り?','沿線','通勤駅'], PHOENIX_BODY, '',
+  v => /[駅線]$/.test(v) || v.length <= 10, 15, 2)
+const addrPhoenix = extractFieldTwoPhase(['住所','居住地','在住','現住所'], PHOENIX_BODY, '', undefined, 40)
+console.log(`  【単　価】65万      → "${ratePhoenix}"   ${ratePhoenix?.includes('65') ? '✅' : '❌ FAIL'}`)
+console.log(`  【時　期】即日      → "${timePhoenix}"   ${timePhoenix === '即日' ? '✅' : '❌ FAIL'}`)
+console.log(`  【最　寄】鶴見駅    → "${nearPhoenix}"   ${nearPhoenix?.includes('鶴見') ? '✅' : '❌ FAIL'}`)
+console.log(`  【居住地】神奈川県  → "${addrPhoenix}"   ${addrPhoenix?.includes('神奈川県') ? '✅' : '❌ FAIL'}`)
+
+// 検証8: 鶴見駅 → 神奈川県マッピング
+console.log('\n【検証8】鶴見駅 → 神奈川県の推定')
+const tsurumi = inferPrefectureFromStation('鶴見駅')
+console.log(`  入力: "鶴見駅" / 出力: "${tsurumi}" / 期待: "神奈川県"`)
+console.log(`  結果: ${tsurumi === '神奈川県' ? '✅ PASS' : '❌ FAIL'}`)
+
+console.log('\n========================================')
 console.log('全テスト完了')
 console.log('========================================')
