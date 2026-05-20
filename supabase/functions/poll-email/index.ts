@@ -42,11 +42,10 @@ function resolveCallKey(): string {
 
 const CALL_KEY = resolveCallKey()
 
-// 1回のポーリングで取得するメール上限
-// 2,000通/日 ÷ 288ポーリング/日 ≈ 7通/回 → 余裕を持って20に設定
-const MAX_EMAILS_PER_ACCOUNT = 20
+// 1回のポーリングで取得するメール上限（AI解析廃止により高速化→50に拡大）
+const MAX_EMAILS_PER_ACCOUNT = 50
 // 全件取り込みモードでの1バッチあたりの取得上限
-const MAX_EMAILS_PER_ACCOUNT_FULL = 20
+const MAX_EMAILS_PER_ACCOUNT_FULL = 50
 
 // ---- ルールベース事前フィルター ----
 // Gemini を呼ぶ前に件名・送信元で明らかなスパム/広告を除外（コスト削減）
