@@ -148,6 +148,56 @@ const HR_SUBJECT_PATTERNS = [
   /クラウド.*案件/,
 ]
 
+// ---- ルールベース案件判定パターン ----
+
+/** 件名にこれらのパターンが含まれる場合は project と判定 */
+const PROJECT_SUBJECT_PATTERNS = [
+  /【案件/,
+  /案件情報/,
+  /開発案件/,
+  /スキルチェック/,
+  /要員募集/,
+  /人材募集/,
+  /エンジニア募集/,
+  /求人/,
+]
+
+/** 本文冒頭500文字にこれらのパターンが含まれる場合は project と判定 */
+const PROJECT_BODY_PATTERNS = [
+  /【案件情報】/,
+  /案件名[：:]/,
+  /必須スキル[：:]/,
+  /参画時期[：:]/,
+  /募集人数[：:]/,
+  /単価[：:]\s*[\d～〜]/,
+  /契約形態[：:]/,
+  /精算幅[：:]/,
+  /清算幅[：:]/,
+  /稼働開始[：:]/,
+  /就業場所[：:]/,
+  /作業場所[：:]/,
+  /勤務地[：:]/,
+  /商流[：:]/,
+  /管理ID[：:]/,
+  /ご提案をお待ち/,
+  /合う人材がいれば/,
+  /見合う方がいれば/,
+  /人材をお持ちであれば/,
+  /人材を探して/,
+]
+
+/**
+ * ルールベースで案件メールか判定する
+ * 件名と本文冒頭500文字を対象とする
+ */
+function isProjectByRuleBase(subject: string, plainBody500: string): boolean {
+  // 件名パターン
+  if (PROJECT_SUBJECT_PATTERNS.some(p => p.test(subject))) return true
+  // 本文パターン
+  if (PROJECT_BODY_PATTERNS.some(p => p.test(plainBody500))) return true
+  return false
+}
+
 /**
  * ルールベースで事前フィルタリング（Gemini 不要）
  * 件名と本文（先頭1000文字）の両方を確認する
@@ -157,6 +207,7 @@ function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' |
   const subject = email.subject ?? ''
   const rawBody = email.body?.content ?? ''
   const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000)
+  const plainBody500 = plainBody.slice(0, 500)
 
   // 件名でスキップ確定
   if (SKIP_SUBJECT_PATTERNS.some(p => p.test(subject))) {
@@ -170,6 +221,10 @@ function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' |
 
   // 件名だけで案件確定のパターン（HR判定前に先にチェック）
   if (/エンド直|直案件|直\s*案件|合う人材|ご紹介をお待ち|エンドユーザー.*直/.test(subject)) return 'project'
+
+  // ルールベース案件判定（件名＋本文冒頭500文字）
+  // → AI分類より前に実施し、明確な案件メールを確実に project と判定
+  if (isProjectByRuleBase(subject, plainBody500)) return 'project'
 
   // HR確定チェック（件名だけで明らかに候補者か案件）
   if (HR_SUBJECT_PATTERNS.some(p => p.test(subject))) {
@@ -700,9 +755,21 @@ async function pollAccount(
           continue
         }
 
-        const finalType: 'candidate' | 'project' = useAiClassification
-          ? (emailType as 'candidate' | 'project')
-          : config.type
+        // 優先度: (1) AI分類結果 → (2) ルールベース案件判定 → (3) config.type デフォルト
+        let finalType: 'candidate' | 'project'
+        if (useAiClassification) {
+          finalType = emailType as 'candidate' | 'project'
+        } else {
+          // AI分類が無効の場合でも、ルールベースで案件と判定できるなら project にする
+          const rawBody2 = email.body?.content ?? ''
+          const plainBody500 = rawBody2.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500)
+          if (isProjectByRuleBase(email.subject ?? '', plainBody500)) {
+            finalType = 'project'
+            console.log(`[poll] ルールベース案件判定 (AI無効フォールバック): "${email.subject}"`)
+          } else {
+            finalType = config.type
+          }
+        }
 
         // 既読マーク（incremental: 二重処理防止 / full: 処理済みマーク）
         await markAsRead(accessToken, email.id)
