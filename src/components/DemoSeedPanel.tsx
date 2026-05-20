@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { insertProject } from '../lib/db/projects'
 import { upsertCandidate, copyProdCandidatesToDemo } from '../lib/db/candidates'
+import { supabase } from '../lib/supabase'
 import type { AnalyzeProjectResponse } from '../lib/ai/types'
 import type { AnalyzeCandidateResponse } from '../lib/ai/types'
 
@@ -223,6 +224,7 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [copyBusy, setCopyBusy] = useState(false)
+  const [replayBusy, setReplayBusy] = useState(false)
 
   const label = useMemo(() => `${createdByLabel}（demo）`, [createdByLabel])
 
@@ -281,6 +283,63 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
       setMsg(String(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function runReplayEmails() {
+    setReplayBusy(true)
+    setMsg(null)
+    try {
+      // デモ環境の人材を取得（ランダムに count 件選ぶ）
+      const { data: pool, error: fetchErr } = await supabase
+        .from('candidates')
+        .select('id, name, raw_profile')
+        .eq('data_env', 'demo')
+        .eq('duplicate_flag', false)
+        .limit(100)
+
+      if (fetchErr) throw new Error(fetchErr.message)
+      if (!pool?.length) throw new Error('デモ環境に人材データがありません')
+
+      // raw_profile.text があるものだけ対象
+      const withText = pool.filter(
+        (c) => typeof (c.raw_profile as Record<string, unknown>)?.text === 'string'
+          && ((c.raw_profile as Record<string, unknown>).text as string).length > 0
+      )
+      if (!withText.length) throw new Error('メール本文（raw_profile.text）を持つ人材がいません')
+
+      // シャッフルして count 件選ぶ
+      const selected = [...withText].sort(() => Math.random() - 0.5).slice(0, count)
+
+      let done = 0
+      let failed = 0
+      for (const c of selected) {
+        const rawText = (c.raw_profile as Record<string, unknown>).text as string
+        // from はユニーク値にしてデdup・送信者上限チェックを回避
+        const uniqueFrom = `replay+${c.id}@demo.invalid`
+        const { error } = await supabase.functions.invoke('inbound-email', {
+          body: {
+            subject: `【再解析】${c.name}`,
+            body: rawText,
+            from: uniqueFrom,
+            attachments: [],
+            mode: 'demo',
+            type: 'candidate',
+          },
+        })
+        if (error) { failed++; console.error('[replay]', c.name, error) }
+        else done++
+      }
+
+      setMsg(
+        `${done}件を再解析しました（デモ環境に新規登録）` +
+        (failed > 0 ? `\n失敗: ${failed}件` : '')
+      )
+      onDone()
+    } catch (e) {
+      setMsg(String(e))
+    } finally {
+      setReplayBusy(false)
     }
   }
 
@@ -348,12 +407,22 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
         <button
           type="button"
           onClick={runCopyProd}
-          disabled={busy || copyBusy}
+          disabled={busy || copyBusy || replayBusy}
           className="inline-flex items-center gap-2 rounded-lg bg-sky-700 text-white px-4 py-2 text-sm font-medium hover:bg-sky-800 disabled:opacity-50"
           title="本番の人材データをランダムにデモ環境へコピー"
         >
           {copyBusy ? <Loader2 size={16} className="animate-spin" /> : null}
           {copyBusy ? 'コピー中...' : '本番人材をランダムコピー'}
+        </button>
+        <button
+          type="button"
+          onClick={runReplayEmails}
+          disabled={busy || copyBusy || replayBusy}
+          className="inline-flex items-center gap-2 rounded-lg bg-violet-700 text-white px-4 py-2 text-sm font-medium hover:bg-violet-800 disabled:opacity-50"
+          title="デモ環境の人材の保存済みメール本文を inbound-email へ再投入して再解析"
+        >
+          {replayBusy ? <Loader2 size={16} className="animate-spin" /> : null}
+          {replayBusy ? '再解析中...' : 'メール本文を再解析'}
         </button>
       </div>
     </div>
