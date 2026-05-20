@@ -787,6 +787,138 @@ function extractCertContext(text: string, windowSize = 500): string {
 }
 
 /**
+ * テキストから URL を除去する。
+ *
+ * URL の path 部に含まれる "cc.php" や "https" 自体がスキル名のエイリアスに
+ * マッチしてしまうケース（PHP / HTTPS の false positive）を防ぐためのヘルパー。
+ * Google Drive など別の URL 検出ロジックはこの関数より前段で済んでいる前提。
+ */
+export function stripUrlsForSkillMatching(text: string): string {
+  if (!text) return text
+  return text.replace(/https?:\/\/[^\s\u3000<>"'\(\)\[\]｝】、，。]+/gi, ' ')
+}
+
+/**
+ * メール末尾の送信者署名ブロックを除去する。
+ *
+ * 「━━━」「───」「===」等の長い区切り線で囲まれた領域は送信者署名とみなし、
+ * 都道府県判定（送信者所在地の "東京都町田市" を候補者の都道府県と誤判定する問題）
+ * の対象から除外するためのヘルパー。
+ *
+ * 区切り線が見つからない場合は元のテキストをそのまま返す。
+ */
+export function stripSenderSignature(text: string): string {
+  if (!text) return text
+  const lines = text.split(/\r?\n/)
+  // 区切り線（東罫線・水平線・等号など8文字以上連続）を境界とみなす
+  const separatorRe = /[━─=＝]{8,}/
+  for (let i = 0; i < lines.length; i++) {
+    if (separatorRe.test(lines[i])) {
+      // 区切り線が本文中盤以前にあれば、それを境界とせず無視する
+      // （末尾署名は通常テキスト全体の後半 60% 以降に出現する）
+      if (i / lines.length >= 0.5) {
+        return lines.slice(0, i).join('\n')
+      }
+    }
+  }
+  return text
+}
+
+/**
+ * 駅名 → 都道府県マッピング。
+ *
+ * 送信者署名に書かれた会社所在地（多くは東京都）と候補者の所在地が混在する場合に、
+ * 「最寄駅」から都道府県を逆引きして優先採用するための辞書。
+ *
+ * 全国の駅を網羅するのは現実的でないため、東京近郊で東京都と誤判定されやすい
+ * 千葉・埼玉・神奈川の主要駅、および首都圏外の主要都市駅を中心に登録する。
+ */
+const STATION_TO_PREFECTURE: Record<string, string> = {
+  // 千葉県
+  '八街': '千葉県', '佐倉': '千葉県', '成東': '千葉県', '東金': '千葉県',
+  '館山': '千葉県', '木更津': '千葉県', '茂原': '千葉県', '銚子': '千葉県',
+  '柏': '千葉県', '松戸': '千葉県', '市川': '千葉県', '船橋': '千葉県',
+  '津田沼': '千葉県', '稲毛': '千葉県', '海浜幕張': '千葉県', '幕張': '千葉県',
+  '蘇我': '千葉県', '千葉': '千葉県', '本千葉': '千葉県', '西船橋': '千葉県',
+  '南船橋': '千葉県', '新浦安': '千葉県', '浦安': '千葉県', '舞浜': '千葉県',
+  '我孫子': '千葉県', '流山': '千葉県', '野田': '千葉県', '勝浦': '千葉県',
+  '成田': '千葉県', '成田空港': '千葉県', '佐原': '千葉県', '東松戸': '千葉県',
+  // 埼玉県
+  '大宮': '埼玉県', '浦和': '埼玉県', '川口': '埼玉県', '所沢': '埼玉県',
+  '熊谷': '埼玉県', '川越': '埼玉県', '春日部': '埼玉県', '越谷': '埼玉県',
+  '草加': '埼玉県', '南越谷': '埼玉県', '新越谷': '埼玉県', '蕨': '埼玉県',
+  '武蔵浦和': '埼玉県', '北浦和': '埼玉県', '西川口': '埼玉県', '志木': '埼玉県',
+  '朝霞': '埼玉県', '和光市': '埼玉県', '小手指': '埼玉県',
+  // 神奈川県
+  '横浜': '神奈川県', '川崎': '神奈川県', '武蔵小杉': '神奈川県', '新横浜': '神奈川県',
+  '関内': '神奈川県', '桜木町': '神奈川県', '上大岡': '神奈川県', '戸塚': '神奈川県',
+  '藤沢': '神奈川県', '茅ヶ崎': '神奈川県', '平塚': '神奈川県', '小田原': '神奈川県',
+  '鎌倉': '神奈川県', '逗子': '神奈川県', '横須賀': '神奈川県', '本厚木': '神奈川県',
+  '海老名': '神奈川県', '相模大野': '神奈川県', '町田': '神奈川県', // 町田駅は東京都だが署名誤検出回避目的
+  // 茨城県
+  '水戸': '茨城県', 'つくば': '茨城県', '土浦': '茨城県', '取手': '茨城県',
+  '守谷': '茨城県', '日立': '茨城県',
+  // 関西
+  '梅田': '大阪府', '難波': '大阪府', '天王寺': '大阪府', '新大阪': '大阪府',
+  '京橋': '大阪府', '本町': '大阪府', '淀屋橋': '大阪府', '心斎橋': '大阪府',
+  '京都': '京都府', '河原町': '京都府', '烏丸': '京都府', '四条': '京都府',
+  '三宮': '兵庫県', '神戸': '兵庫県', '元町': '兵庫県',
+  '奈良': '奈良県', '和歌山': '和歌山県',
+  // 中部
+  '名古屋': '愛知県', '栄': '愛知県', '金山': '愛知県', '岐阜': '岐阜県',
+  '静岡': '静岡県', '浜松': '静岡県', '長野': '長野県', '松本': '長野県',
+  '新潟': '新潟県', '富山': '富山県', '金沢': '石川県', '福井': '福井県',
+  // 九州
+  '博多': '福岡県', '天神': '福岡県', '小倉': '福岡県', '熊本': '熊本県',
+  '鹿児島中央': '鹿児島県', '長崎': '長崎県', '大分': '大分県', '宮崎': '宮崎県',
+  '那覇': '沖縄県',
+  // 北海道・東北
+  '札幌': '北海道', 'すすきの': '北海道', '函館': '北海道', '旭川': '北海道',
+  '仙台': '宮城県', '盛岡': '岩手県', '青森': '青森県', '秋田': '秋田県',
+  '山形': '山形県', '福島': '福島県', '郡山': '福島県',
+}
+
+/**
+ * 駅名（"八街駅" "八街" 等）から都道府県を推定する。
+ * 不一致時は null を返す。
+ */
+export function inferPrefectureFromStation(station: string | null | undefined): string | null {
+  if (!station) return null
+  const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim()
+  if (!cleaned) return null
+  return STATION_TO_PREFECTURE[cleaned] ?? null
+}
+
+/**
+ * スキルシートのフェーズ表ヘッダー行を検出する。
+ *
+ * 添付スキルシート（Excel→CSV）には次のような行が含まれる:
+ *   「調査分析\t要件定義\t基本設計\t詳細設計\t製造/構築\t単体試験\t総合試験\t運用試験\t保守/運用」
+ * これを PROSE_ROLES マッチに含めると候補者の経験有無に関わらず
+ * 要件定義/基本設計/詳細設計 等が一律に役割として登録されてしまう false positive を起こす。
+ *
+ * 厳密なフェーズ用語（"単体試験" "結合試験" など、通常の散文ではまず4語以上同時に登場しない語）を
+ * 4 種類以上含む行のみフェーズ表ヘッダーとみなして除外する。
+ */
+const STRICT_PHASE_HEADER_KEYWORDS = [
+  '調査分析', '要件定義', '基本設計', '詳細設計',
+  '単体試験', '結合試験', '総合試験', '運用試験', '受入試験',
+  '単体テスト', '結合テスト', '総合テスト', '受入テスト',
+] as const
+
+export function isPhaseTableHeader(line: string): boolean {
+  if (!line) return false
+  let count = 0
+  for (const kw of STRICT_PHASE_HEADER_KEYWORDS) {
+    if (line.includes(kw)) {
+      count++
+      if (count >= 4) return true
+    }
+  }
+  return false
+}
+
+/**
  * テキストからスキルを照合して抽出する。
  *
  * @param text         照合対象テキスト
@@ -804,8 +936,10 @@ function extractAndRemoveSkills(
   options: { looseCert?: boolean } = {},
 ): { matched: { name: string; category: string }[]; remaining: string } {
   const matched: { name: string; category: string }[] = []
-  let remaining = text
-  const certContext = extractCertContext(text)
+  // URL をスペース化してから照合（PHP / HTTPS の false positive 防止）
+  const cleanedText = stripUrlsForSkillMatching(text)
+  let remaining = cleanedText
+  const certContext = extractCertContext(cleanedText)
   const { looseCert = false } = options
 
   // 資格の照合対象テキストを決定
@@ -854,10 +988,10 @@ function extractAndRemoveSkills(
       'gi',
     )
     let m: RegExpExecArray | null
-    while ((m = delimRe.exec(text)) !== null) {
+    while ((m = delimRe.exec(cleanedText)) !== null) {
       const pos = m.index
       // 前後100文字に既マッチのスキルがあるか確認
-      const ctx = text.slice(Math.max(0, pos - 100), pos + m[0].length + 100)
+      const ctx = cleanedText.slice(Math.max(0, pos - 100), pos + m[0].length + 100)
       if ([...matchedNameSet].some(n => n.length > 2 && ctx.includes(n))) {
         matched.push({ name: skill.name, category: skill.category })
         matchedNameSet.add(skill.name)
@@ -926,9 +1060,9 @@ function preExtractFields(text: string): PreExtracted {
   let experienceYears: number | null = null
   const expPatterns = [
     /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)歴\s*[約]?\s*(\d+)\s*年/,
-    /経験\s*[約]?\s*(\d+)\s*年/,
+    /経験[：:\s]*[約]?\s*(\d+)\s*年/,
     /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
-    /(?:経験年数|開発経験)[：:]\s*(\d+)年/,
+    /(?:経験年数|開発経験)[：:]\s*[約]?\s*(\d+)年/,
   ]
   for (const p of expPatterns) {
     const m = text.match(p)
@@ -1168,17 +1302,29 @@ function extractCandidateFieldsRegex(
     if (found) prefecture = found
   }
   if (!prefecture) {
-    const allText = bodyText + '\n' + attachText
+    // 全文走査時に送信者署名（〒XXX-XXXX 東京都...）を除外して誤判定を防ぐ。
+    // 同様に署名内の "■MAIL/TEL/FAX/URL" 行も除外する。
+    const allText = stripSenderSignature(bodyText) + '\n' + attachText
     prefecture = PREFECTURES.find(p => allText.includes(p)) ?? null
+  }
+  // 最寄駅から推定できる都道府県があれば最優先で採用する。
+  // 送信者署名（東京都町田市等）由来の誤判定を上書きするため、
+  // station 推定が一致した場合のみ駅由来を使う。
+  const stationPrefecture = inferPrefectureFromStation(nearestStation)
+  if (stationPrefecture) {
+    if (!prefecture || prefecture !== stationPrefecture) {
+      console.log(`[prefecture] 駅由来で上書き: ${prefecture ?? 'null'} → ${stationPrefecture} (station=${nearestStation})`)
+      prefecture = stationPrefecture
+    }
   }
 
   // ── 経験年数 ──────────────────────────────────────────────────
   let experienceYears: number | null = null
   const expPatterns = [
     /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)歴\s*[約]?\s*(\d+)\s*年/,
-    /経験\s*[約]?\s*(\d+)\s*年/,
+    /経験[：:\s]*[約]?\s*(\d+)\s*年/,
     /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
-    /(?:経験年数|開発経験)[：:]\s*(\d+)年/,
+    /(?:経験年数|開発経験)[：:]\s*[約]?\s*(\d+)年/,
     /(?:社会人歴|就労歴)[：:\s]*(\d+)年/,
   ]
   const allText = bodyText + '\n' + attachText
@@ -1271,21 +1417,27 @@ const PROSE_ROLES: Array<{ re: RegExp; label: string }> = [
   { re: /運用[　 ]?(?:保守|管理)/,                     label: '運用保守' },
 ]
 
+// 業界判定の false positive を避けるため、複合語や明示語のみマッチさせる。
+// 例:
+//   - "製造" 単独 → スキルシートのフェーズ名「製造/構築」に誤マッチするため "製造業" 等を要求
+//   - "教育" 単独 → 「新人教育」「ITパスポート研修」のような社内研修にも誤マッチするため
+//                   「教育機関」「学校法人」「EdTech」等の業界明示語のみマッチ
+//   - "学習" 単独 → 「機械学習」「自己学習」等にも誤マッチするため削除
 const PROSE_INDUSTRIES: Array<{ re: RegExp; label: string }> = [
-  { re: /金融|銀行|証券|保険|FinTech|フィンテック/,    label: '金融' },
-  { re: /医療|ヘルスケア|病院|製薬|MedTech/,           label: '医療・ヘルスケア' },
-  { re: /製造|工場|メーカー|IoT|FA/,                   label: '製造' },
-  { re: /EC|イーコマース|eコマース|物流/,              label: 'EC・物流' },
-  { re: /小売|流通|リテール/,                          label: '小売・流通' },
-  { re: /通信|テレコム|キャリア/,                      label: '通信' },
-  { re: /ゲーム|エンタメ|メディア|動画配信/,           label: 'ゲーム・エンタメ' },
-  { re: /不動産|建設|住宅|プロパティ/,                 label: '不動産・建設' },
-  { re: /官公庁|自治体|公共|行政|省庁/,                label: '公共・官公庁' },
-  { re: /教育|EdTech|eLearning|学習/,                  label: '教育' },
-  { re: /SES|受託|SI(?!P)|システムインテグレーション/, label: 'SES・SI' },
-  { re: /スタートアップ|ベンチャー/,                   label: 'スタートアップ' },
-  { re: /人材|HR|採用|HRTech/,                         label: '人材・HR' },
-  { re: /マーケ(?:ティング)?|広告|デジタルマーケ/,    label: 'マーケティング' },
+  { re: /金融機関|銀行|証券|保険会社|生命?保険|損害?保険|信用金庫|信託銀行|FinTech|フィンテック|金融業界|金融系/, label: '金融' },
+  { re: /医療機関|ヘルスケア|病院|クリニック|製薬|医薬品|MedTech|医療業界/, label: '医療・ヘルスケア' },
+  { re: /製造業|メーカー(?!ロゴ)|プラント|工場(?!勤務|常駐|地域|長)|IoT分野|FAシステム|自動車業界|電気業界|電機メーカー|製造業界/, label: '製造' },
+  { re: /(?:^|[^A-Z])EC(?![A-Z])|イーコマース|eコマース|電子商取引|物流(?!倉庫担当)|運送業|商社/, label: 'EC・物流' },
+  { re: /小売(?:業)?|流通(?:業)?|リテール|百貨店|スーパー|コンビニ/, label: '小売・流通' },
+  { re: /通信(?:業|会社|キャリア|機器)?|テレコム|キャリア(?![,\sア-ン])/, label: '通信' },
+  { re: /ゲーム業界|エンタメ|エンターテインメント|メディア業界|動画配信|配信プラットフォーム/, label: 'ゲーム・エンタメ' },
+  { re: /不動産|建設|住宅|プロパティ|デベロッパー/, label: '不動産・建設' },
+  { re: /官公庁|自治体|公共(?!IT)|行政|省庁|外務省|区役所|市役所|県庁|地方公共団体/, label: '公共・官公庁' },
+  { re: /教育機関|学校法人|塾|EdTech|eLearning|教育業界|学校教育|大学|高校|専門学校/, label: '教育' },
+  { re: /SES(?![A-Z])|受託(?:開発)?|SI(?!P|[A-Z])|システムインテグレーション/, label: 'SES・SI' },
+  { re: /スタートアップ|ベンチャー(?:企業)?/, label: 'スタートアップ' },
+  { re: /人材(?:業界|業)|HR(?![A-Z]|テスト)|HRTech|採用(?:業務|プラットフォーム|マーケット)/, label: '人材・HR' },
+  { re: /マーケ(?:ティング)?(?:業界|職)?|広告(?:代理店|業界)?|デジタルマーケ/, label: 'マーケティング' },
 ]
 
 const PROSE_WORKSTYLE: Array<{ re: RegExp; label: string }> = [
@@ -1301,10 +1453,17 @@ function extractFromProse(bodyText: string, attachText: string): {
   industries: string[]
   workStyle: string | null
 } {
-  const allText = bodyText + '\n' + attachText
+  // URL を除去（"https://example.com/cc.php" 等が PHP/HTTPS に誤マッチするのを防ぐ）
+  const cleanedBody = stripUrlsForSkillMatching(bodyText)
+  const cleanedAttach = stripUrlsForSkillMatching(attachText)
+  const allText = cleanedBody + '\n' + cleanedAttach
 
   // 文章判定: 20文字超 or 読点・句点を含む行のみ抽出してスキャン
-  const proseLines = allText.split(/\r?\n/).filter(l => l.length > 20 || /[、。]/.test(l))
+  // ただしスキルシートのフェーズ表ヘッダー行（"調査分析 要件定義 基本設計 ..." 等）は
+  // 役割の false positive を引き起こすため除外する。
+  const proseLines = allText.split(/\r?\n/).filter(
+    l => (l.length > 20 || /[、。]/.test(l)) && !isPhaseTableHeader(l),
+  )
   const prose = proseLines.join('\n')
 
   const roles: string[] = []
@@ -1314,10 +1473,12 @@ function extractFromProse(bodyText: string, attachText: string): {
     }
   }
 
-  // 業界は短い単語も多いので全文を対象
+  // 業界判定もフェーズ表ヘッダー行を除外したテキストを対象にする
+  // （以前は短い単語も拾うため全文対象だったが、誤検出が多いためフィルタ済みテキストに変更）
+  const industryScanText = allText.split(/\r?\n/).filter(l => !isPhaseTableHeader(l)).join('\n')
   const industries: string[] = []
   for (const { re, label } of PROSE_INDUSTRIES) {
-    if (re.test(allText) && !industries.includes(label)) industries.push(label)
+    if (re.test(industryScanText) && !industries.includes(label)) industries.push(label)
   }
 
   let workStyle: string | null = null
