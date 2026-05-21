@@ -121,7 +121,7 @@ Email: ${agentName.toLowerCase().replace(/\s/g, '.')}@${agentCompany.replace(/�
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`.trim()
 }
 
-function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateResponse; analyzedProject: AnalyzeProjectResponse; candidateEmailBody: string } {
+function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateResponse; analyzedProject: AnalyzeProjectResponse; candidateEmailBody: string; projectDescription: string } {
   const stacks = [
     {
       role: 'バックエンドエンジニア',
