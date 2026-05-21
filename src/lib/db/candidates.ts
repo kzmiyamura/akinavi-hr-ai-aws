@@ -317,34 +317,55 @@ export async function findDuplicateCandidates(
 export async function copyProdCandidatesToDemo(
   count: number,
   nickname: string,
+  mode: 'random' | 'recent' = 'random',
 ): Promise<number> {
-  // まず全件数を確認
-  const { count: total, error: countErr } = await supabase
-    .from('candidates')
-    .select('*', { count: 'exact', head: true })
-    .eq('data_env', 'prod')
-    .eq('duplicate_flag', false)
+  let pool: Array<Record<string, unknown>> | null = null
 
-  if (countErr) throw new Error(countErr.message)
-  if (!total || total === 0) throw new Error('本番環境に人材データがありません')
+  if (mode === 'recent') {
+    // 直近コピー: created_at降順で上位 count 件を取得
+    const { data, error: fetchErr } = await supabase
+      .from('candidates')
+      .select('name,email,phone,skills,experience_years,raw_profile,desired_rate,from_company,drive_url')
+      .eq('data_env', 'prod')
+      .eq('duplicate_flag', false)
+      .order('created_at', { ascending: false })
+      .limit(count)
 
-  // ランダムなオフセットで最大 min(total, count*4, 100) 件取得してシャッフルで N 件選ぶ
-  const poolSize = Math.min(total, Math.max(count * 4, 20), 100)
-  const maxOffset = Math.max(0, total - poolSize)
-  const offset = Math.floor(Math.random() * (maxOffset + 1))
+    if (fetchErr) throw new Error(fetchErr.message)
+    if (!data || data.length === 0) throw new Error('本番環境に人材データがありません')
+    pool = data
+  } else {
+    // ランダムコピー: まず全件数を確認
+    const { count: total, error: countErr } = await supabase
+      .from('candidates')
+      .select('*', { count: 'exact', head: true })
+      .eq('data_env', 'prod')
+      .eq('duplicate_flag', false)
 
-  const { data: pool, error: fetchErr } = await supabase
-    .from('candidates')
-    .select('name,email,phone,skills,experience_years,raw_profile,desired_rate,from_company,drive_url')
-    .eq('data_env', 'prod')
-    .eq('duplicate_flag', false)
-    .range(offset, offset + poolSize - 1)
+    if (countErr) throw new Error(countErr.message)
+    if (!total || total === 0) throw new Error('本番環境に人材データがありません')
 
-  if (fetchErr) throw new Error(fetchErr.message)
-  if (!pool || pool.length === 0) throw new Error('取得できませんでした')
+    // ランダムなオフセットで最大 min(total, count*4, 100) 件取得してシャッフルで N 件選ぶ
+    const poolSize = Math.min(total, Math.max(count * 4, 20), 100)
+    const maxOffset = Math.max(0, total - poolSize)
+    const offset = Math.floor(Math.random() * (maxOffset + 1))
 
-  // シャッフルして N 件選ぶ
-  const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, count)
+    const { data, error: fetchErr } = await supabase
+      .from('candidates')
+      .select('name,email,phone,skills,experience_years,raw_profile,desired_rate,from_company,drive_url')
+      .eq('data_env', 'prod')
+      .eq('duplicate_flag', false)
+      .range(offset, offset + poolSize - 1)
+
+    if (fetchErr) throw new Error(fetchErr.message)
+    if (!data || data.length === 0) throw new Error('取得できませんでした')
+    pool = data
+  }
+
+  // ランダムモードのみシャッフルして N 件選ぶ
+  const shuffled = mode === 'recent'
+    ? pool.slice(0, count)
+    : [...pool].sort(() => Math.random() - 0.5).slice(0, count)
 
   const makeUniqueId = () =>
     typeof crypto !== 'undefined' && 'randomUUID' in crypto

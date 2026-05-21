@@ -39,6 +39,7 @@ interface CandidateInput {
   summary: string
   remoteAvailable?: boolean | null
   prefecture?: string | null
+  agentComment?: string | null
 }
 
 interface ProjectReq {
@@ -137,10 +138,11 @@ function buildBatchProjectToCandidatesPrompt(
   candidates: Array<CandidateInput & { ruleScore: number }>,
 ): string {
   const cList = candidates.map((c, i) =>
-    `[${i + 1}] id="${c.id}" name="${c.name}" skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" summary="${c.summary.slice(0, 80)}"`
+    `[${i + 1}] id="${c.id}" name="${c.name}" skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" summary="${c.summary.slice(0, 80)}"` +
+    (c.agentComment ? ` comment="${c.agentComment.slice(0, 100)}"` : '')
   ).join('\n')
 
-  return `人材と案件のマッチング評価。JSON配列のみ返す。説明文・コードブロック禁止。
+  return `人材と案件のマッチングコメント生成。JSON配列のみ返す。説明文・コードブロック禁止。
 
 案件: title="${project.title}" required=${JSON.stringify(project.requiredSkills)} budget=${project.budgetMin ?? '?'}〜${project.budgetMax ?? '?'}万 location="${project.workLocation ?? ''}" remote="${project.remotePolicy ?? ''}"
 ${project.description ? `説明: ${project.description.slice(0, 200)}` : ''}
@@ -148,8 +150,8 @@ ${project.description ? `説明: ${project.description.slice(0, 200)}` : ''}
 候補者${candidates.length}名:
 ${cList}
 
-各候補者を 0-100 でスコアリング。
-出力形式（配列のみ・改行なし）: [{"id":"...","score":数値,"summary":"50字以内"},...]`
+各候補者についてマッチングコメントを50字以内で生成（スコアは不要）。
+出力形式（配列のみ・改行なし）: [{"id":"...","summary":"50字以内"},...]`
 }
 
 function buildBatchCandidateToProjectsPrompt(
@@ -160,15 +162,16 @@ function buildBatchCandidateToProjectsPrompt(
     `[${i + 1}] id="${p.id ?? i}" title="${p.title}" required=${JSON.stringify(p.requiredSkills)} budget=${p.budgetMin ?? '?'}〜${p.budgetMax ?? '?'}万`
   ).join('\n')
 
-  return `人材と案件のマッチング評価。JSON配列のみ返す。説明文・コードブロック禁止。
+  return `人材と案件のマッチングコメント生成。JSON配列のみ返す。説明文・コードブロック禁止。
 
-人材: name="${candidate.name}" skills=${JSON.stringify(candidate.skills)} exp=${candidate.experienceYears}年 rate="${candidate.desiredRate ?? ''}" summary="${candidate.summary.slice(0, 100)}"
+人材: name="${candidate.name}" skills=${JSON.stringify(candidate.skills)} exp=${candidate.experienceYears}年 rate="${candidate.desiredRate ?? ''}" summary="${candidate.summary.slice(0, 100)}"` +
+    (candidate.agentComment ? ` comment="${candidate.agentComment.slice(0, 100)}"` : '') + `
 
 案件${projects.length}件:
 ${pList}
 
-各案件を 0-100 でスコアリング。
-出力形式（配列のみ・改行なし）: [{"id":"...","score":数値,"summary":"50字以内"},...]`
+各案件についてマッチングコメントを50字以内で生成（スコアは不要）。
+出力形式（配列のみ・改行なし）: [{"id":"...","summary":"50字以内"},...]`
 }
 
 async function callGroq(key: string, prompt: string): Promise<string> {
@@ -252,8 +255,8 @@ async function callAI(prompt: string): Promise<{ text: string; model: string }> 
   return { text, model: GEMINI_MODEL }
 }
 
-/** AI 応答テキストから JSON 配列を抽出 */
-function parseArrayResponse(text: string): Array<{ id: string; score: number; summary: string }> {
+/** AI 応答テキストから JSON 配列を抽出（id + summary のみ。score は任意） */
+function parseArrayResponse(text: string): Array<{ id: string; summary: string }> {
   const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
   const m = cleaned.match(/\[[\s\S]*\]/)
   if (!m) throw new Error(`JSON配列が見つかりません: ${cleaned.slice(0, 200)}`)
@@ -261,7 +264,6 @@ function parseArrayResponse(text: string): Array<{ id: string; score: number; su
   if (!Array.isArray(arr)) throw new Error('配列ではありません')
   return arr.map(item => ({
     id: String(item.id ?? ''),
-    score: typeof item.score === 'number' ? Math.min(100, Math.max(0, Math.round(item.score))) : 0,
     summary: typeof item.summary === 'string' ? item.summary : '',
   }))
 }
@@ -298,7 +300,7 @@ Deno.serve(async (req) => {
       const ruleRest = scored.slice(topN)
 
       let usedModel = 'rule'
-      let aiResults: Array<{ id: string; score: number; summary: string }> = []
+      let aiResults: Array<{ id: string; summary: string }> = []
 
       if (aiTargets.length > 0) {
         const prompt = buildBatchProjectToCandidatesPrompt(projectRequirements, aiTargets)
@@ -308,31 +310,32 @@ Deno.serve(async (req) => {
           aiResults = parseArrayResponse(text)
         } catch (e) {
           console.warn(`[match-batch] AI失敗、ルールスコアで代替: ${e}`)
-          // AI 失敗時は ruleScore をそのまま使う
-          aiResults = aiTargets.map(c => ({ id: c.id, score: c.ruleScore, summary: '' }))
+          aiResults = []
           usedModel = 'rule'
         }
       }
 
-      // AI結果をidでマップ
+      // AI結果をidでマップ（summaryのみ）
       const aiMap = new Map(aiResults.map(r => [r.id, r]))
 
+      // topN: ruleScore をスコアとして使い、AI summaryがあれば付与
       const results: BatchResult[] = aiTargets.map(c => {
         const ai = aiMap.get(c.id)
         return {
           candidateId: c.id,
-          score: ai?.score ?? c.ruleScore,
+          score: c.ruleScore,
           summary: ai?.summary ?? '',
           method: ai ? 'ai' : 'rule',
           ruleScore: c.ruleScore,
         }
       })
 
+      // 残り: ruleScoreのみ
       const ruleOnly: BatchResult[] = ruleRest.map(c => ({
         candidateId: c.id,
         score: c.ruleScore,
         summary: '',
-        method: 'rule',
+        method: 'rule' as const,
         ruleScore: c.ruleScore,
       }))
 
@@ -361,7 +364,7 @@ Deno.serve(async (req) => {
       const ruleRest = scored.slice(topN)
 
       let usedModel = 'rule'
-      let aiResults: Array<{ id: string; score: number; summary: string }> = []
+      let aiResults: Array<{ id: string; summary: string }> = []
 
       if (aiTargets.length > 0) {
         const prompt = buildBatchCandidateToProjectsPrompt(candidateProfile, aiTargets)
@@ -371,31 +374,33 @@ Deno.serve(async (req) => {
           aiResults = parseArrayResponse(text)
         } catch (e) {
           console.warn(`[match-batch] AI失敗、ルールスコアで代替: ${e}`)
-          aiResults = aiTargets.map(p => ({ id: String(p.id ?? ''), score: p.ruleScore, summary: '' }))
+          aiResults = []
           usedModel = 'rule'
         }
       }
 
       const aiMap = new Map(aiResults.map(r => [r.id, r]))
 
+      // topN: ruleScore をスコアとして使い、AI summaryがあれば付与
       const results: BatchResult[] = aiTargets.map(p => {
         const ai = aiMap.get(String(p.id ?? ''))
         return {
           candidateId: '',
           projectId: String(p.id ?? ''),
-          score: ai?.score ?? p.ruleScore,
+          score: p.ruleScore,
           summary: ai?.summary ?? '',
           method: ai ? 'ai' : 'rule',
           ruleScore: p.ruleScore,
         }
       })
 
+      // 残り: ruleScoreのみ
       const ruleOnly: BatchResult[] = ruleRest.map(p => ({
         candidateId: '',
         projectId: String(p.id ?? ''),
         score: p.ruleScore,
         summary: '',
-        method: 'rule',
+        method: 'rule' as const,
         ruleScore: p.ruleScore,
       }))
 

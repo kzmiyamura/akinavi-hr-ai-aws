@@ -224,6 +224,7 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [copyBusy, setCopyBusy] = useState(false)
+  const [copyRecentBusy, setCopyRecentBusy] = useState(false)
   const [replayBusy, setReplayBusy] = useState(false)
 
   const label = useMemo(() => `${createdByLabel}（demo）`, [createdByLabel])
@@ -357,6 +358,20 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
     }
   }
 
+  async function runCopyRecentProd() {
+    setCopyRecentBusy(true)
+    setMsg(null)
+    try {
+      const copied = await copyProdCandidatesToDemo(count, nickname, 'recent')
+      setMsg(`本番人材データ（直近${copied}件）をデモ環境にコピーしました`)
+      onDone()
+    } catch (e) {
+      setMsg(String(e))
+    } finally {
+      setCopyRecentBusy(false)
+    }
+  }
+
   return (
     <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-3">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
@@ -407,7 +422,7 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
         <button
           type="button"
           onClick={runCopyProd}
-          disabled={busy || copyBusy || replayBusy}
+          disabled={busy || copyBusy || copyRecentBusy || replayBusy}
           className="inline-flex items-center gap-2 rounded-lg bg-sky-700 text-white px-4 py-2 text-sm font-medium hover:bg-sky-800 disabled:opacity-50"
           title="本番の人材データをランダムにデモ環境へコピー"
         >
@@ -416,8 +431,18 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
         </button>
         <button
           type="button"
+          onClick={runCopyRecentProd}
+          disabled={busy || copyBusy || copyRecentBusy || replayBusy}
+          className="inline-flex items-center gap-2 rounded-lg bg-indigo-700 text-white px-4 py-2 text-sm font-medium hover:bg-indigo-800 disabled:opacity-50"
+          title="本番の人材データを直近登録順にデモ環境へコピー"
+        >
+          {copyRecentBusy ? <Loader2 size={16} className="animate-spin" /> : null}
+          {copyRecentBusy ? 'コピー中...' : '本番人材を直近コピー'}
+        </button>
+        <button
+          type="button"
           onClick={runReplayEmails}
-          disabled={busy || copyBusy || replayBusy}
+          disabled={busy || copyBusy || copyRecentBusy || replayBusy}
           className="inline-flex items-center gap-2 rounded-lg bg-violet-700 text-white px-4 py-2 text-sm font-medium hover:bg-violet-800 disabled:opacity-50"
           title="デモ環境の人材の保存済みメール本文を inbound-email へ再投入して再解析"
         >

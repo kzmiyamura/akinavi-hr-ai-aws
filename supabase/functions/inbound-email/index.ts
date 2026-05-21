@@ -262,6 +262,48 @@ function toExperienceYears(value: unknown): number | null {
   return years
 }
 
+/**
+ * メール本文・添付テキストからエージェントコメント（担当者所感・推薦コメント等）を抽出する。
+ * 最大500文字・複数セクション発見時は \n\n で結合。見つからない場合は null。
+ */
+function extractAgentComment(body: string, attachText: string): string | null {
+  const text = [body, attachText].filter(Boolean).join('\n')
+  if (!text.trim()) return null
+
+  // コメントセクションの見出しパターン
+  const LABELS = [
+    '弊社コメント', 'エージェントコメント', '担当者コメント', 'コーディネーターコメント',
+    '営業コメント', '推薦コメント', '備考', '所感', '評価', '推薦理由', '特記事項',
+    '人物像', '所見', '印象',
+  ]
+  const prefix = '[【◆■●▼★◎※]?'
+  const suffix = '[】：: 　]+'
+  const labelPattern = LABELS.map(l => `(?:${prefix}${l}${suffix})`).join('|')
+  const sectionRe = new RegExp(
+    `(?:${labelPattern})([\\s\\S]{1,600})`,
+    'gi',
+  )
+
+  const found: string[] = []
+  let match: RegExpExecArray | null
+  while ((match = sectionRe.exec(text)) !== null) {
+    // セクション内容：次の見出しっぽいパターンまたは空行2連続で切る
+    let content = match[1]
+    // 次のラベル行で切る
+    const nextLabel = new RegExp(`(?:${labelPattern})`, 'i')
+    const cutIdx = content.search(nextLabel)
+    if (cutIdx > 0) content = content.slice(0, cutIdx)
+    // 空行2連続で切る
+    const blankIdx = content.search(/\n\s*\n/)
+    if (blankIdx > 0 && blankIdx < 300) content = content.slice(0, blankIdx)
+    content = content.trim().slice(0, 500)
+    if (content.length >= 5) found.push(content)
+  }
+
+  if (found.length === 0) return null
+  return found.join('\n\n').slice(0, 500)
+}
+
 /** 自社名（受信側）として登録されてしまうことを防ぐ会社名リスト */
 const OWN_COMPANY_NAMES = ['株式会社ボイス', 'i-voice', 'アキナビ', 'akinavi', '株式会社アキナビ']
 
@@ -3130,6 +3172,7 @@ Deno.serve(async (req: Request) => {
           desiredProject: regexFields.desiredProject,
           age: regexFields.age,
           gender: regexFields.gender,
+          agentComment: extractAgentComment(body, attachText) ?? null,
           geminiParseFallback: parseFallback,
         },
         duplicate_flag: false,

@@ -43,6 +43,9 @@ interface RawProfile {
   summary?: string | null
   text?: string | null
   emailReceivedAt?: string | null
+  age?: number | null
+  gender?: string | null
+  agentComment?: string | null
 }
 
 function getRaw(c: Candidate): RawProfile {
@@ -185,7 +188,8 @@ export function CandidateProfileFields({
   const { skillsByCategory: sbc, roles, industries,
     prefecture, nearestStation, availableRegions,
     currentWorkLocation, remoteAvailable,
-    from: mailFrom, subject: mailSubject, emailReceivedAt } = raw
+    from: mailFrom, subject: mailSubject, emailReceivedAt,
+    age, gender, agentComment } = raw
 
   const rawText = raw.text ?? ''
 
@@ -217,7 +221,7 @@ export function CandidateProfileFields({
         )}
       </div>
       <p className="text-xs text-gray-400 mt-0.5">
-        {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年
+        {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年{age != null ? ` ／ ${age}歳` : ''}{gender ? `（${gender}）` : ''}
       </p>
 
       {hasLocation && (
@@ -283,6 +287,13 @@ export function CandidateProfileFields({
             {!showAll && (industries ?? []).length > COLLAPSED_PER_CATEGORY && (
               <span className="text-xs text-gray-400">+{(industries ?? []).length - COLLAPSED_PER_CATEGORY}</span>
             )}
+          </div>
+        )}
+
+        {agentComment && (
+          <div className="mt-1.5 rounded-md bg-amber-50 border border-amber-100 px-3 py-2">
+            <p className="text-xs font-medium text-amber-700 mb-0.5">エージェントコメント</p>
+            <p className="text-xs text-amber-900 whitespace-pre-wrap leading-relaxed">{agentComment}</p>
           </div>
         )}
 
