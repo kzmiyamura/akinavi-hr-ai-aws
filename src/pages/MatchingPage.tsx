@@ -1398,6 +1398,38 @@ export function MatchingPage({
                         </button>
                       </div>
                     </div>
+                    {/* 案件詳細サマリー */}
+                    <div className="text-xs space-y-1.5 bg-gray-50 rounded-lg px-3 py-2.5">
+                      {(selectedProject.required_skills?.length ?? 0) > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {(selectedProject.required_skills as string[]).slice(0, 10).map(s => (
+                            <span key={s} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">{s}</span>
+                          ))}
+                          {(selectedProject.required_skills?.length ?? 0) > 10 && (
+                            <span className="text-gray-400">+{(selectedProject.required_skills?.length ?? 0) - 10}</span>
+                          )}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-500">
+                        {(selectedProject.budget_min != null || selectedProject.budget_max != null) && (
+                          <span>単価: {selectedProject.budget_min ?? '?'}〜{selectedProject.budget_max ?? '?'}万</span>
+                        )}
+                        {selectedProject.work_location && (
+                          <span>勤務地: {selectedProject.work_location}</span>
+                        )}
+                        {selectedProject.remote_policy && (
+                          <span>リモート: {selectedProject.remote_policy}</span>
+                        )}
+                        {selectedProject.start_date && (
+                          <span>開始: {selectedProject.start_date}</span>
+                        )}
+                      </div>
+                      {(selectedProject.role_summary || selectedProject.description) && (
+                        <p className="text-gray-500 line-clamp-2 leading-relaxed">
+                          {(selectedProject.role_summary || selectedProject.description)?.slice(0, 150)}
+                        </p>
+                      )}
+                    </div>
                     {matchByProjectMutation.isPending && matchByProjectMutation.variables === selectedProject.id && matchRunProgress && (
                       <p className="text-xs text-blue-700 bg-blue-50 rounded px-3 py-2">
                         {formatMatchRunProgressLine(matchRunProgress)}
