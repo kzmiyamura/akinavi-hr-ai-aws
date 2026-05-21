@@ -128,23 +128,18 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq): number {
 
   // ── 勤務地・居住地マッチング ──
   const isFullRemote = /フルリモート|完全リモート|100[%％]リモート/.test(project.remotePolicy ?? '')
-  const loc = (project.workLocation ?? '').toLowerCase()
+  const projLoc = (project.workLocation ?? '').toLowerCase()
   if (isFullRemote) {
     // フルリモートならどこに住んでいても問題なし
     score += 20
-  } else if (loc) {
-    const pref = (candidate.prefecture ?? '').toLowerCase()
-    const regions: string[] = Array.isArray(candidate.availableRegions)
-      ? candidate.availableRegions.map(r => r.toLowerCase())
-      : []
-    // 居住地（都道府県）が勤務地に含まれる or 勤務地が居住地に含まれる
-    const prefMatch = pref && (loc.includes(pref) || pref.includes(loc))
-    // 希望勤務地（availableRegions）に勤務地が含まれる
-    const regionMatch = regions.some(r => loc.includes(r) || r.includes(loc))
-    if (prefMatch && regionMatch) score += 20
-    else if (prefMatch || regionMatch) score += 12
-    // どちらも不明の場合はペナルティなし（情報不足）
-    else if (!pref && regions.length === 0) score += 5
+  } else if (projLoc) {
+    const candPref = (candidate.prefecture ?? '').toLowerCase()
+    // 都道府県の末尾（都/道/府/県）を除いたコア部分で照合
+    // 例: "東京都" → "東京" が "東京都港区田町" に含まれるか
+    const prefCore = candPref.replace(/[都道府県]$/, '')
+    if (prefCore && projLoc.includes(prefCore)) score += 20
+    // 居住地不明の場合はペナルティなし
+    else if (!candPref) score += 5
   }
 
   // ── リモート対応 ──

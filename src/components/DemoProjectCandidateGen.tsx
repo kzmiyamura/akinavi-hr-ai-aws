@@ -65,23 +65,22 @@ interface ScoreLevel {
   rateOffset: number     // 予算上限からの差分（万円）正=超過
   prefecture: string
   sameLocation: boolean
-  prefOnly: boolean      // true=居住地のみ一致（希望勤務地は不一致）→ +12pt
   remoteAvailable: boolean
 }
 
-// スコア設計（calcRuleScore 準拠）:
+// スコア設計（calcRuleScore 準拠・勤務地は同県=+20 / 不一致=0 の二値）:
 //   スキル40pt + 経験15pt + 単価15pt（予算未設定は+15固定）+ 勤務地20pt + リモート10pt
-//   90pt: 40+15+15+20+0 = 90
-//   70pt: 27+8+15+20+0  = 70  (skillRatio=0.7: 4/6→27pt, exp=6→8pt, rate=57万≦budget)
-//   50pt: 20+4+15+12+0  = 51  (skillRatio=0.5: 3/6→20pt, exp=4→4pt, prefOnly→+12pt)
-//   30pt: 13+2+15+0+0   = 30  (skillRatio=0.35: 2/6→13pt, exp=2→2pt, 場所不一致)
-//   10pt: 0+2+15+0+0    = 17  (予算未設定時の最低値。budget設定済みなら rate超過で+0→2pt)
+//   90pt: 40+15+15+20+0 = 90  (全スキル, 12年, 予算内, 同県)
+//   70pt: 27+8+15+20+0  = 70  (7割スキル, 6年, 予算内, 同県)
+//   50pt: 27+8+15+0+0   = 50  (7割スキル, 6年, 予算内, 県外)  ← 場所だけ違う
+//   30pt: 13+2+15+0+0   = 30  (3.5割スキル, 2年, 予算内, 県外)
+//   10pt: 0+2+0+0+0     = 2   (スキル0, 1年, 予算超過, 県外)  ※予算未設定時は17pt
 const SCORE_LEVELS: ScoreLevel[] = [
-  { label: '超マッチ',       score: 90, skillRatio: 1.0,  extraUnrelated: 1, expYears: 12, rateOffset: -5, prefecture: '', sameLocation: true,  prefOnly: false, remoteAvailable: true  },
-  { label: 'まあまあ合う',   score: 70, skillRatio: 0.7,  extraUnrelated: 2, expYears: 6,  rateOffset: -3, prefecture: '', sameLocation: true,  prefOnly: false, remoteAvailable: true  },
-  { label: '少し合う',       score: 50, skillRatio: 0.5,  extraUnrelated: 3, expYears: 4,  rateOffset: -3, prefecture: '', sameLocation: false, prefOnly: true,  remoteAvailable: false },
-  { label: 'あまり合わない', score: 30, skillRatio: 0.35, extraUnrelated: 5, expYears: 2,  rateOffset: -3, prefecture: '', sameLocation: false, prefOnly: false, remoteAvailable: false },
-  { label: '全く合わない',   score: 10, skillRatio: 0.0,  extraUnrelated: 6, expYears: 1,  rateOffset: 30, prefecture: '', sameLocation: false, prefOnly: false, remoteAvailable: false },
+  { label: '超マッチ',       score: 90, skillRatio: 1.0,  extraUnrelated: 1, expYears: 12, rateOffset: -5, prefecture: '', sameLocation: true,  remoteAvailable: true  },
+  { label: 'まあまあ合う',   score: 70, skillRatio: 0.7,  extraUnrelated: 2, expYears: 6,  rateOffset: -3, prefecture: '', sameLocation: true,  remoteAvailable: true  },
+  { label: '少し合う',       score: 50, skillRatio: 0.7,  extraUnrelated: 3, expYears: 6,  rateOffset: -3, prefecture: '', sameLocation: false, remoteAvailable: false },
+  { label: 'あまり合わない', score: 30, skillRatio: 0.35, extraUnrelated: 5, expYears: 2,  rateOffset: -3, prefecture: '', sameLocation: false, remoteAvailable: false },
+  { label: '全く合わない',   score: 10, skillRatio: 0.0,  extraUnrelated: 6, expYears: 1,  rateOffset: 30, prefecture: '', sameLocation: false, remoteAvailable: false },
 ]
 
 const LOCATIONS = ['東京都', '神奈川県', '大阪府', '愛知県', '福岡県', '北海道', '宮城県', '広島県']
@@ -107,7 +106,7 @@ function buildCandidate(
   // 勤務地
   const projectPref = (project.work_location ?? '').replace(/[市区町村].*/g, '')
   const differentLoc = LOCATIONS[(seed + idx * 3) % LOCATIONS.length]
-  const prefecture = (level.sameLocation || level.prefOnly) && projectPref
+  const prefecture = level.sameLocation && projectPref
     ? projectPref
     : differentLoc
 
@@ -123,11 +122,7 @@ function buildCandidate(
     experienceYears: level.expYears,
     summary,
     prefecture,
-    availableRegions: level.sameLocation
-      ? [prefecture]
-      : level.prefOnly
-        ? [LOCATIONS[(seed + 5) % LOCATIONS.length]]  // prefOnly: 居住地は一致するが希望勤務地は不一致
-        : [prefecture, LOCATIONS[(seed + 5) % LOCATIONS.length]],
+    availableRegions: level.sameLocation ? [prefecture] : [prefecture, LOCATIONS[(seed + 5) % LOCATIONS.length]],
     remoteAvailable: level.remoteAvailable,
     desiredRate,
   } as AnalyzeCandidateResponse & { desiredRate: string }
