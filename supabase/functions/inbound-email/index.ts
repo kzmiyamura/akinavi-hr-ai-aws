@@ -2735,7 +2735,7 @@ Deno.serve(async (req: Request) => {
     tracePhase = 'dedup_check'
     const { isDuplicate, configKey: _dedupConfigKey } = await checkEmailDuplicate(supabase, from, subject, body, dedupSalt)
     dedupConfigKey = _dedupConfigKey
-    if (isDuplicate) {
+    if (isDuplicate && !forceProcess) {
       console.warn('[DEDUP] 重複メールのためスキップ', { rid: traceRid, subject, from: from.slice(0, 80) })
       return new Response(
         JSON.stringify({ ok: true, skipped: true, reason: 'DUPLICATE_EMAIL' }),
@@ -2747,7 +2747,7 @@ Deno.serve(async (req: Request) => {
     // ④ 送信者の1日上限チェック（一斉配信業者によるAIコスト急騰対策）
     // 1送信者から1日50件超はスキップ（Bedrock費用急増を防ぐ）
     const SENDER_DAILY_LIMIT = 50
-    if (from && type === 'candidate') {
+    if (from && type === 'candidate' && !forceProcess) {
       const todayStart = new Date()
       todayStart.setHours(0, 0, 0, 0)
       const { count: senderCount } = await supabase
