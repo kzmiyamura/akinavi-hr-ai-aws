@@ -23,7 +23,78 @@ function makeEmail(prefix: string): string {
 }
 
 /** 実際の求人・経歴書っぽいデモ用ペア（架空の個人・社名） */
-function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateResponse; analyzedProject: AnalyzeProjectResponse } {
+/**
+ * AnalyzeCandidateResponse からエージェントが送るようなメール本文を生成する。
+ * inbound-email の regex/skill_master 抽出が動作するフォーマット。
+ */
+function buildCandidateEmailBody(
+  c: AnalyzeCandidateResponse,
+  exp: number,
+  agentComment: string,
+  agentName: string,
+  agentCompany: string,
+): string {
+  const sbc = c.skillsByCategory
+  const skillLines = sbc
+    ? [
+        sbc.languages?.length     ? `言語: ${sbc.languages.join('、')}` : '',
+        sbc.frameworks?.length    ? `FW: ${sbc.frameworks.join('、')}` : '',
+        sbc.databases?.length     ? `DB: ${sbc.databases.join('、')}` : '',
+        sbc.clouds?.length        ? `クラウド: ${sbc.clouds.join('、')}` : '',
+        sbc.infrastructures?.length ? `インフラ: ${sbc.infrastructures.join('、')}` : '',
+        sbc.tools?.length         ? `ツール: ${sbc.tools.join('、')}` : '',
+        sbc.methodologies?.length ? `手法: ${sbc.methodologies.join('、')}` : '',
+        sbc.certifications?.length ? `資格: ${sbc.certifications.join('、')}` : '',
+      ].filter(Boolean)
+    : [`スキル: ${c.skills.join('、')}`]
+
+  const genders = ['男性', '女性']
+  const age = 25 + (exp * 1.5 | 0) + (exp % 3)
+  const gender = genders[exp % 2]!
+
+  return `お世話になっております。${agentCompany}の${agentName}でございます。
+弊社登録エンジニアをご紹介させていただきます。ご検討のほどよろしくお願いいたします。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ 候補者プロフィール
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+氏名：${c.name}（${age}歳 / ${gender}）
+最寄駅：${c.nearestStation ?? ''}
+稼働可能エリア：${(c.availableRegions ?? []).join('・')}
+リモート：${c.remoteAvailable ? 'リモート可' : '基本常駐'}
+希望単価：${65 + exp}万〜${70 + exp}万円/月
+稼働開始：即日〜1ヶ月以内
+経験年数：${exp}年
+所属：フリーランス（前職: ${['SIer', 'Webベンチャー', 'メガベンチャー', '事業会社'][exp % 4]}）
+
+【職務経歴概要】
+${c.summary}
+
+【主なスキル】
+${skillLines.join('\n')}
+
+【主な業種・役割】
+業種: ${(c.industries ?? []).join('、')}
+役割: ${(c.roles ?? []).join('、')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ 弊社コメント
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${agentComment}
+
+ご不明点がございましたらお気軽にご連絡ください。
+どうぞよろしくお願いいたします。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${agentCompany}
+担当: ${agentName}
+TEL: 03-XXXX-XXXX
+Email: ${agentName.toLowerCase().replace(/\s/g, '.')}@${agentCompany.replace(/株式会社|合同会社|\s/g, '').toLowerCase()}.co.jp
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`.trim()
+}
+
+function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateResponse; analyzedProject: AnalyzeProjectResponse; candidateEmailBody: string } {
   const stacks = [
     {
       role: 'バックエンドエンジニア',
@@ -196,7 +267,21 @@ function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateRespo
     industry: s.industryP,
   }
 
-  return { analyzedCandidate, analyzedProject }
+  const agentComments = [
+    `コミュニケーション能力が高く、クライアントからの評判も良い方です。技術的な質問への回答も的確で、面談でも好印象を与えています。スキルセットは${s.role}として申し分なく、即戦力として活躍が期待できます。`,
+    `前職での実績が豊富で、設計から実装・テストまで一貫して対応できる方です。チームでの協調性も高く、リーダー経験もあることから、中核メンバーとしてご活用いただけると思います。`,
+    `責任感が強く、期限を守る姿勢が見受けられます。未経験の技術でも積極的にキャッチアップする意欲があり、成長意欲の高いエンジニアです。ご面談の際にぜひ直接確認いただければ幸いです。`,
+    `技術力・人柄ともに弊社でも上位クラスの方です。複数案件からオファーをいただいているため、ご検討の場合はお早めにご連絡ください。`,
+  ]
+  const agentNames = ['山田 太郎', '佐々木 花子', '田村 拓海', '中島 由美']
+  const agentCompanies = ['株式会社テックパートナーズ', '合同会社エンジニアコネクト', '株式会社スキルブリッジ', 'ネクストキャリア株式会社']
+  const agentComment = agentComments[seed % agentComments.length]!
+  const agentName = agentNames[seed % agentNames.length]!
+  const agentCompany = agentCompanies[seed % agentCompanies.length]!
+
+  const candidateEmailBody = buildCandidateEmailBody(analyzedCandidate, exp, agentComment, agentName, agentCompany)
+
+  return { analyzedCandidate, analyzedProject, candidateEmailBody }
 }
 
 interface Props {
@@ -234,10 +319,10 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
     setMsg(null)
     try {
       for (let i = 0; i < count; i++) {
-        const { analyzedCandidate, analyzedProject } = buildDemoPair(i + randInt(1, 1000))
+        const { analyzedCandidate, analyzedProject, candidateEmailBody } = buildDemoPair(i + randInt(1, 1000))
         await upsertCandidate({
           analyzed: analyzedCandidate,
-          rawText: analyzedCandidate.summary,
+          rawText: candidateEmailBody,
           createdBy: nickname,
           duplicateSuspected: false,
           dataEnv: 'demo',
