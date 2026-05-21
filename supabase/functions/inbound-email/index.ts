@@ -2597,7 +2597,7 @@ Deno.serve(async (req: Request) => {
 
     const type: string = normalizeInboundType(raw.type)
     /** 手動登録など、app_config フラグをバイパスして強制処理する場合は true */
-    const forceProcess: boolean = raw.force === true
+    const forceProcess: boolean = raw.force === true || raw.force === 'true'
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
     // Outlookがメールを実際に受信した日時（poll-emailから渡される）
