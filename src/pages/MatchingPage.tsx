@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { fetchCandidates, findDuplicateCandidates } from '../lib/db/candidates'
+import { fetchCandidatesForMatching, findDuplicateCandidates } from '../lib/db/candidates'
 import {
   fetchOpenProjects,
   projectToMatchRequirements,
@@ -645,7 +645,7 @@ export function MatchingPage({
   })
   const { data: candidates = [], isLoading: isLoadingCandidates } = useQuery({
     queryKey: ['candidates', dataEnv],
-    queryFn: () => fetchCandidates(dataEnv),
+    queryFn: () => fetchCandidatesForMatching(dataEnv),
   })
   const { data: stats, isLoading: isLoadingStats } = useQuery({
     queryKey: ['submission-stats', dataEnv],

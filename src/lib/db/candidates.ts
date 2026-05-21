@@ -126,6 +126,18 @@ export async function fetchCandidateById(id: string, dataEnv: DataEnv): Promise<
   return (data ?? null) as Candidate | null
 }
 
+/**
+ * マッチング用候補者取得（RPC経由）
+ * 優先順位: 直近30日登録の全員 → 経験年数多い順 → 登録日新しい順
+ * limit デフォルト 800（通常の fetchCandidates の 500 より広く取る）
+ */
+export async function fetchCandidatesForMatching(dataEnv: DataEnv, limit = 800): Promise<Candidate[]> {
+  const { data, error } = await supabase
+    .rpc('fetch_candidates_for_matching', { p_data_env: dataEnv, p_limit: limit })
+  if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
+  return (data ?? []) as Candidate[]
+}
+
 /** 全候補者を取得（マージ済みを除外） */
 export async function fetchCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
   const { data, error } = await supabase
