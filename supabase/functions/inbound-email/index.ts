@@ -3344,17 +3344,16 @@ Deno.serve(async (req: Request) => {
       // 開始時期（startDate: YYYY-MM-DD ISO文字列に変換して格納）
       let startDate: string | null = null
       const startDateM = allProjectText.match(
-        /(?:時[　\s]*期|開始時期|参画時期|稼働開始|参画開始|開始予定|スタート)[：:\s　]*([^\n]{2,20})/
+        /(?:時[　\s]*期|開始時期|参画時期|参画予定|稼働開始|稼働予定|参画開始|開始予定|スタート)[：:\s　・]*([^\n]{2,30})/
       )
       if (startDateM) {
         const rawDate = startDateM[1].trim().replace(/[　\s]+/g, '')
-        // YYYY-MM-DD or YYYY/MM/DD or YYYY年MM月DD日
-        const isoM = rawDate.match(/^(\d{4})[\/\-年](\d{1,2})[\/\-月]?(\d{1,2})?日?$/)
-        if (isoM) {
-          const y = isoM[1], m = isoM[2].padStart(2, '0'), d = (isoM[3] ?? '01').padStart(2, '0')
-          startDate = `${y}-${m}-${d}`
+        // YYYY年MM月 or YYYY/MM/DD or YYYY-MM-DD（年が明示されているパターン優先）
+        const yearMonthM = rawDate.match(/(\d{4})[年\/\-](\d{1,2})月?/)
+        if (yearMonthM) {
+          startDate = `${yearMonthM[1]}-${yearMonthM[2].padStart(2, '0')}-01`
         } else {
-          // 「7月〜」「即日」「来月」等 → 当該月の1日にマッピング
+          // 「7月〜」等、年なしの月表記 → 当該月の1日にマッピング
           const moM = rawDate.match(/(\d{1,2})月/)
           if (moM) {
             const mo = parseInt(moM[1], 10)
