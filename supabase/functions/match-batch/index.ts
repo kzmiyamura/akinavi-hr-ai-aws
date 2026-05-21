@@ -157,7 +157,7 @@ function buildBatchProjectToCandidatesPrompt(
   candidates: Array<CandidateInput & { ruleScore: number }>,
 ): string {
   const cList = candidates.map((c, i) =>
-    `[${i + 1}] id="${c.id}" name="${c.name}" skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}"` +
+    `[${i + 1}] id="${c.id}" name="${c.name}" score=${c.ruleScore} skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}"` +
     (c.availableRegions?.length ? ` regions=${JSON.stringify(c.availableRegions)}` : '') +
     (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
     ` summary="${c.summary.slice(0, 80)}"` +
@@ -170,10 +170,15 @@ function buildBatchProjectToCandidatesPrompt(
 ${project.roleSummary ? `役割: ${project.roleSummary.slice(0, 150)}` : ''}
 ${project.description ? `説明: ${project.description.slice(0, 200)}` : ''}
 
-候補者${candidates.length}名:
+候補者${candidates.length}名（score はルールベース評価点）:
 ${cList}
 
-各候補者についてマッチングコメントを50字以内で生成（スコアは不要）。
+各候補者について50字以内のコメントを生成。スコアに応じてトーンを変えること。
+- score≧80: 強みを具体的に褒める肯定的なコメント（「即戦力」「スキルが高度に合致」等）
+- score 60〜79: 合う点を先に述べてから軽い補足
+- score 40〜59: 合う点と懸念点を客観的に並記
+- score＜40: 懸念点を率直に指摘
+
 出力形式（配列のみ・改行なし）: [{"id":"...","summary":"50字以内"},...]`
 }
 
