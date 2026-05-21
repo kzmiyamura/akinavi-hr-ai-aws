@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { fetchCandidatesForMatching, findDuplicateCandidates } from '../lib/db/candidates'
+import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates } from '../lib/db/candidates'
 import {
   fetchOpenProjects,
   projectToMatchRequirements,
@@ -770,7 +770,12 @@ export function MatchingPage({
       if (!project) throw new Error('案件が見つかりません')
 
       const projectReq = projectToMatchRequirements(project)
-      const targets = pickCandidatesForProjectMatch(project, candidates as Candidate[], matchingRunMode, fastMaxCandidates)
+      // SQLでスキルオーバーラップ絞り込み → 高速モードはJSでさらに上位N名に絞る
+      const sqlFiltered = await fetchCandidatesForProject(
+        project.required_skills as string[],
+        dataEnv,
+      )
+      const targets = pickCandidatesForProjectMatch(project, sqlFiltered, matchingRunMode, fastMaxCandidates)
       const total = targets.length
       if (total === 0) return
 
@@ -871,29 +876,30 @@ export function MatchingPage({
     mutationFn: async () => {
       bulkCancelRequestedRef.current = false
       const plist = projects as Project[]
-      const clist = candidates as Candidate[]
-      const total =
-        matchingRunMode === 'full'
-          ? plist.length * clist.length
-          : plist.reduce((sum, p) => sum + pickCandidatesForProjectMatch(p, clist, 'fast', fastMaxCandidates).length, 0)
-      if (total === 0) return
+      if (plist.length === 0) return
 
       let done = 0
       const projectTotal = plist.length
-      setMatchRunProgressNow({ overall: { done: 0, total } })
+      // SQL絞り込みを使うため総候補者数は事前不明 → 案件数ベースで進捗表示
+      setMatchRunProgressNow({ overall: { done: 0, total: projectTotal } })
       try {
         for (let pi = 0; pi < plist.length; pi++) {
           if (bulkCancelRequestedRef.current) {
-            setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, total) })
+            setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, projectTotal) })
             return
           }
           const project = plist[pi]
           const projectReq = projectToMatchRequirements(project)
-          const targets = pickCandidatesForProjectMatch(project, clist, matchingRunMode, fastMaxCandidates)
+          // 案件スキルでSQL絞り込み → 高速モードはJSでさらに上位N名に絞る
+          const sqlFiltered = await fetchCandidatesForProject(
+            project.required_skills as string[],
+            dataEnv,
+          )
+          const targets = pickCandidatesForProjectMatch(project, sqlFiltered, matchingRunMode, fastMaxCandidates)
           const candTotal = targets.length
 
           setMatchRunProgressNow({
-            overall: { done, total },
+            overall: { done, total: projectTotal },
             outer: projectTotal > 1 ? { current: pi + 1, total: projectTotal, unit: '案件', detail: project.title } : undefined,
             inner: candTotal > 0 ? { current: 0, total: candTotal, unit: '候補者' } : undefined,
           })
@@ -905,7 +911,7 @@ export function MatchingPage({
               targets,
               (batchDone, batchTotal) => {
                 setMatchRunProgressNow({
-                  overall: { done, total },
+                  overall: { done, total: projectTotal },
                   outer: projectTotal > 1 ? { current: pi + 1, total: projectTotal, unit: '案件', detail: project.title } : undefined,
                   inner: batchTotal > 0 ? { current: batchDone, total: batchTotal, unit: '候補者' } : undefined,
                 })
@@ -917,7 +923,7 @@ export function MatchingPage({
 
           for (const candidate of targets) {
             if (bulkCancelRequestedRef.current) {
-              setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, total) })
+              setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, projectTotal) })
               return
             }
             const r = resultMap.get(candidate.id)
@@ -942,7 +948,7 @@ export function MatchingPage({
           text:
             matchingRunMode === 'fast'
               ? `一括マッチング完了（高速モード：各案件 最大${fastMaxCandidates}名をAI評価）`
-              : `一括マッチング完了（全件モード：募集中 ${plist.length} 案件 × 全 ${clist.length} 名）`,
+              : `一括マッチング完了（全件モード：募集中 ${plist.length} 案件）`,
         })
       } finally {
         bulkCancelRequestedRef.current = false
