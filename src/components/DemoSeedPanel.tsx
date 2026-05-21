@@ -265,14 +265,45 @@ function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateRespo
       ? `【${loc.prefecture.slice(0, 2)}】${s.projectHook.slice(0, 28)}…（${s.role}）`
       : `${client.replace(/株式会社|・/g, '').slice(0, 12)}向け ${s.role}募集`
 
+  const docTool = randPick(['Notion', 'Confluence', 'Backlog'])
+  const projectDescription = [
+    `＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝`,
+    `${projectTitle}`,
+    `＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝＝`,
+    ``,
+    `【案件背景・概要】`,
+    `${s.projectHook}。`,
+    `既存チームと協業しながら、設計書・テスト観点の整備も担当いただく予定です。`,
+    `業界: ${s.industryP}`,
+    ``,
+    `【必須スキル】`,
+    ...requiredSkills.map(sk => `・${sk}`),
+    ``,
+    `【歓迎スキル】`,
+    ...niceToHaveSkills.map(sk => `・${sk}`),
+    ``,
+    `【稼働・体制】`,
+    `・稼働: 週5日（40h/週）想定。状況によりオンコールの可能性あり（要相談）`,
+    `・チーム規模: ${randInt(3, 12)}名`,
+    `・参画予定: 2026年6月〜（長期継続希望）`,
+    ``,
+    `【勤務条件】`,
+    `・勤務地: ${loc.prefecture}（${randPick(['ハイブリッド', '一部リモート可', 'フルリモート可'])}）`,
+    `・契約: 業務委託（準委任）`,
+    `・単価: ${budgetMin ?? 60}万〜${budgetMax ?? 80}万円/月`,
+    `・精算幅: ${randPick([140, 150, 160])}〜${randPick([175, 180, 190])}h`,
+    ``,
+    `【開発環境】`,
+    `GitHub、Slack、${docTool}でドキュメント管理。`,
+    ``,
+    `ご質問・ご紹介は本メールにご返信ください。`,
+    `よろしくお願いいたします。`,
+  ].join('\n')
+
   const analyzedProject: AnalyzeProjectResponse = {
     title: projectTitle,
     client,
-    description: [
-      `【背景】${s.projectHook}。既存チームと協業し、設計書・テスト観点の整備も依頼予定です。`,
-      `【稼働】週5を想定。状況によりオンコールの可能性あり（要相談）。`,
-      `【環境】GitHub、Slack、${randPick(['Notion', 'Confluence'])}でドキュメント管理。`,
-    ].join(''),
+    description: projectDescription,
     requiredSkills,
     niceToHaveSkills,
     budgetMin,
@@ -308,7 +339,7 @@ function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateRespo
 
   const candidateEmailBody = buildCandidateEmailBody(analyzedCandidate, exp, agentComment, agentName, agentCompany)
 
-  return { analyzedCandidate, analyzedProject, candidateEmailBody }
+  return { analyzedCandidate, analyzedProject, candidateEmailBody, projectDescription }
 }
 
 interface Props {
@@ -346,7 +377,7 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
     setMsg(null)
     try {
       for (let i = 0; i < count; i++) {
-        const { analyzedCandidate, analyzedProject, candidateEmailBody } = buildDemoPair(i + randInt(1, 1000))
+        const { analyzedCandidate, analyzedProject, candidateEmailBody, projectDescription } = buildDemoPair(i + randInt(1, 1000))
         await upsertCandidate({
           analyzed: analyzedCandidate,
           rawText: candidateEmailBody,
@@ -356,7 +387,7 @@ export function DemoSeedPanel({ nickname, createdByLabel, onDone }: Props) {
         })
         await insertProject({
           analyzed: analyzedProject,
-          rawText: analyzedProject.description,
+          rawText: projectDescription,
           createdBy: nickname,
           dataEnv: 'demo',
         })
