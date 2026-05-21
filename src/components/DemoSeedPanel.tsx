@@ -304,7 +304,7 @@ function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateRespo
   const analyzedProject: AnalyzeProjectResponse = {
     title: projectTitle,
     client,
-    description: projectDescription,
+    description: `${s.projectHook}。必須: ${requiredSkills.join('・')}。${s.industryP}向け${s.role}案件。`,
     requiredSkills,
     niceToHaveSkills,
     budgetMin,
