@@ -3388,14 +3388,22 @@ Deno.serve(async (req: Request) => {
         projectDescription = descSectionM[1].split(/\n(?=【)/)[0].trim().slice(0, 300)
       }
       if (!projectDescription) {
-        // 区切り線を除去した本文から description を作る。
-        // cleanTitle が本文1行目から取られた場合は、その行を除いた残りの先頭段落を使用
+        // 備考・概要のインライン記述を探す
+        const bikoMatch = body.match(/(?:備[　\s]?考|プロジェクト概要|案件概要)[：:]\s*([^\n]{10,200})/)
+        if (bikoMatch) {
+          projectDescription = bikoMatch[1].trim()
+        }
+      }
+      if (!projectDescription && /[＝=━─*]{4,}/.test(body)) {
+        // 区切り線を含む構造化メールのみ先頭段落をフォールバックとして使用
         const bodyStripped = body.replace(/^[＝=━─*]{4,}.*\n?/gm, '').trim()
-        const bodyForDesc = cleanTitle && bodyStripped.startsWith(cleanTitle.slice(0, 10))
+        const noTitleBody = cleanTitle && bodyStripped.startsWith(cleanTitle.slice(0, 10))
           ? bodyStripped.slice(cleanTitle.length).replace(/^[\s\n]+/, '')
           : bodyStripped
-        projectDescription = bodyForDesc.split(/\n{2,}/)[0].trim().slice(0, 300)
+        projectDescription = noTitleBody.split(/\n{2,}/)[0].trim().slice(0, 300)
       }
+      // 区切り線なしのフリーフォームテキストは description を空にする
+      // （生テキストは「元メール本文」アコーディオンで参照可能）
 
       const result = {
         title: cleanTitle,
