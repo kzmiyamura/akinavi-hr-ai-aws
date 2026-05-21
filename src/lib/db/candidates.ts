@@ -165,6 +165,8 @@ export async function fetchCandidateCount(dataEnv: DataEnv): Promise<number> {
   return count ?? 0
 }
 
+export type SearchScope = 'tags' | 'body' | 'all'
+
 /** キーワードでサーバーサイド検索（全件対象） */
 export async function searchCandidates(
   dataEnv: DataEnv,
@@ -172,6 +174,7 @@ export async function searchCandidates(
   mode: 'AND' | 'OR',
   offset: number,
   limit = 100,
+  scope: SearchScope = 'all',
 ): Promise<Candidate[]> {
   const { data, error } = await supabase.rpc('search_candidates', {
     p_data_env: dataEnv,
@@ -179,6 +182,7 @@ export async function searchCandidates(
     p_mode: mode,
     p_limit: limit,
     p_offset: offset,
+    p_scope: scope,
   })
   if (error) throw new Error(`人材の検索に失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
@@ -189,11 +193,13 @@ export async function searchCandidateCount(
   dataEnv: DataEnv,
   keywords: string[],
   mode: 'AND' | 'OR',
+  scope: SearchScope = 'all',
 ): Promise<number> {
   const { data, error } = await supabase.rpc('count_search_candidates', {
     p_data_env: dataEnv,
     p_keywords: keywords,
     p_mode: mode,
+    p_scope: scope,
   })
   if (error) throw new Error(`候補者数の取得に失敗しました: ${error.message}`)
   return (data as number) ?? 0

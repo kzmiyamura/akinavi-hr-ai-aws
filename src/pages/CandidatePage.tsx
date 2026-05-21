@@ -4,6 +4,7 @@ import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, W
 import { ai } from '../lib/ai'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { upsertCandidate, updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate } from '../lib/db/candidates'
+import type { SearchScope } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -601,6 +602,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
+  const [searchScope, setSearchScope] = useState<SearchScope>('tags')
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null)
   const [imageFiles, setImageFiles] = useState<ImageFileData[]>([])
   const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([])
@@ -737,9 +739,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   // サーバーサイド全件検索
   const searchInfiniteQuery = useInfiniteQuery({
-    queryKey: ['candidates-search', dataEnv, searchTokens, searchMode],
+    queryKey: ['candidates-search', dataEnv, searchTokens, searchMode, searchScope],
     queryFn: ({ pageParam }: { pageParam: number }) =>
-      searchCandidates(dataEnv, searchTokens, searchMode, pageParam),
+      searchCandidates(dataEnv, searchTokens, searchMode, pageParam, 100, searchScope),
     initialPageParam: 0,
     getNextPageParam: (lastPage: Candidate[], _: Candidate[][], lastPageParam: number) =>
       lastPage.length < 100 ? undefined : lastPageParam + 100,
@@ -762,8 +764,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   // 検索結果件数（検索中のみ）
   const { data: searchCount = 0 } = useQuery({
-    queryKey: ['candidates-search-count', dataEnv, searchTokens, searchMode],
-    queryFn: () => searchCandidateCount(dataEnv, searchTokens, searchMode),
+    queryKey: ['candidates-search-count', dataEnv, searchTokens, searchMode, searchScope],
+    queryFn: () => searchCandidateCount(dataEnv, searchTokens, searchMode, searchScope),
     enabled: isSearching,
   })
 
@@ -1014,6 +1016,25 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                 }`}
               >
                 {m}
+              </button>
+            ))}
+          </div>
+          <div className="flex rounded-lg border border-gray-300 overflow-hidden shrink-0" title="検索対象を選択">
+            {([
+              { value: 'tags', label: 'タグ', title: '名前・スキル・都道府県・役割・業界・コメント等の構造化フィールドのみ' },
+              { value: 'body', label: '本文', title: 'メール本文（raw_profile.text）のみ' },
+              { value: 'all',  label: '全て', title: 'タグ＋メール本文すべて（従来動作）' },
+            ] as const).map(({ value, label, title }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setSearchScope(value)}
+                title={title}
+                className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  searchScope === value ? 'bg-slate-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                {label}
               </button>
             ))}
           </div>
