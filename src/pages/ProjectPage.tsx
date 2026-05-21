@@ -17,6 +17,7 @@ import type { Project } from '../lib/db/projects'
 import type { DataEnv } from '../lib/dataEnv'
 import type { ImageFileData } from '../lib/ai/types'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
+import { DemoProjectCandidateGen } from '../components/DemoProjectCandidateGen'
 import { extractTextFromExcel, extractTextFromWord, imageFileToBase64, getFileCategory } from '../lib/fileParser'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import { supabase } from '../lib/supabase'
@@ -920,6 +921,18 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                     </div>
                   </div>
                   <ProjectProfileFields p={selectedProject} isExpanded detailMode />
+                  {/* デモ人材生成（デモモード時のみ） */}
+                  {demoUiEnabled && dataEnv === 'demo' && (
+                    <DemoProjectCandidateGen
+                      project={selectedProject}
+                      nickname={nickname}
+                      dataEnv={dataEnv}
+                      onDone={() => {
+                        queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+                        queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
+                      }}
+                    />
+                  )}
                   {/* 元メール本文 */}
                   {(() => {
                     const raw = (selectedProject.raw_data ?? {}) as Record<string, unknown>
