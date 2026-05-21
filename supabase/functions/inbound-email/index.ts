@@ -2852,7 +2852,13 @@ Deno.serve(async (req: Request) => {
     const attachDedupCount = attachRated.filter(s => bodyMatchedNames.has(s.name)).length
 
     const dbMatchedSkills = [...bodyMatched, ...attachDeduped]
-    const dbSkillNames = dbMatchedSkills.map(s => s.name)
+    // 求人票のセクション見出し・汎用語など、スキルとして不適切な単語を除外する
+    const SKILL_NOISE_WORDS = new Set([
+      '必須', '歓迎', '尚可', '優遇', '経験', '実務', '業務', '対応', '作業',
+      '設計', '開発', '実装', '保守', '運用', '管理', '構築', '調査', '分析',
+      '改善', '構成', '制作', '作成', '提案', '支援', '担当', '従事', '参画',
+    ])
+    const dbSkillNames = dbMatchedSkills.map(s => s.name).filter(n => !SKILL_NOISE_WORDS.has(n))
 
     // カテゴリ別内訳（品質確認用）
     const byCategory = dbMatchedSkills.reduce((acc, s) => {
@@ -3335,8 +3341,25 @@ Deno.serve(async (req: Request) => {
       else if (/準委任/.test(allProjectText)) contractType = '準委任'
       else if (/請負/.test(allProjectText)) contractType = '請負'
 
-      // タイトル（件名から【】を除去して整形）
-      const cleanTitle = subject.replace(/【[^】]*】/g, '').replace(/^[★☆●◆◇■□▼▲※・\s]+/, '').trim() || subject
+      // タイトル（件名から【】を除去して整形。手入力等の汎用件名の場合は本文から抽出）
+      let cleanTitle = subject.replace(/【[^】]*】/g, '').replace(/^[★☆●◆◇■□▼▲※・\s]+/, '').trim() || subject
+      const GENERIC_SUBJECTS = ['手入力登録', '無題', 'no subject', 'test', 'テスト', '']
+      if (GENERIC_SUBJECTS.some(s => cleanTitle.toLowerCase() === s.toLowerCase())) {
+        // ＝＝＝ / ━━━ 等の区切り線直後の最初の非空行をタイトルとして採用
+        const sepRe = /[＝=━─*]{4,}/
+        const bodyLines = body.split(/\r?\n/)
+        outer: for (let i = 0; i < bodyLines.length - 1; i++) {
+          if (sepRe.test(bodyLines[i])) {
+            for (let j = i + 1; j < Math.min(i + 6, bodyLines.length); j++) {
+              const cand = bodyLines[j].replace(/^[★☆●◆◇■□▼▲※・【】\s]+/, '').replace(/[】）\s]+$/, '').trim()
+              if (cand.length >= 5 && !sepRe.test(cand) && !/^[（(【]/.test(cand)) {
+                cleanTitle = cand.slice(0, 80)
+                break outer
+              }
+            }
+          }
+        }
+      }
 
       const result = {
         title: cleanTitle,

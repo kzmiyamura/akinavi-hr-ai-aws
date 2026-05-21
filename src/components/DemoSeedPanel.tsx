@@ -37,61 +37,88 @@ function buildCandidateEmailBody(
   const sbc = c.skillsByCategory
   const skillLines = sbc
     ? [
-        sbc.languages?.length     ? `言語: ${sbc.languages.join('、')}` : '',
-        sbc.frameworks?.length    ? `FW: ${sbc.frameworks.join('、')}` : '',
-        sbc.databases?.length     ? `DB: ${sbc.databases.join('、')}` : '',
-        sbc.clouds?.length        ? `クラウド: ${sbc.clouds.join('、')}` : '',
+        sbc.languages?.length      ? `言語: ${sbc.languages.join('、')}` : '',
+        sbc.frameworks?.length     ? `FW / ライブラリ: ${sbc.frameworks.join('、')}` : '',
+        sbc.databases?.length      ? `DB: ${sbc.databases.join('、')}` : '',
+        sbc.clouds?.length         ? `クラウド: ${sbc.clouds.join('、')}` : '',
         sbc.infrastructures?.length ? `インフラ: ${sbc.infrastructures.join('、')}` : '',
-        sbc.tools?.length         ? `ツール: ${sbc.tools.join('、')}` : '',
-        sbc.methodologies?.length ? `手法: ${sbc.methodologies.join('、')}` : '',
+        sbc.tools?.length          ? `ツール: ${sbc.tools.join('、')}` : '',
+        sbc.methodologies?.length  ? `開発手法: ${sbc.methodologies.join('、')}` : '',
         sbc.certifications?.length ? `資格: ${sbc.certifications.join('、')}` : '',
+        sbc.os?.length             ? `OS: ${sbc.os.join('、')}` : '',
       ].filter(Boolean)
     : [`スキル: ${c.skills.join('、')}`]
 
   const genders = ['男性', '女性']
   const age = 25 + (exp * 1.5 | 0) + (exp % 3)
   const gender = genders[exp % 2]!
+  const prevCompanyTypes = ['SIer', 'Webベンチャー', 'メガベンチャー', '事業会社（製造業）', 'ITコンサル', 'ソフトウェアベンチャー']
+  const prevCompany = prevCompanyTypes[exp % prevCompanyTypes.length]!
+  const startYear = new Date().getFullYear() - exp
+  const midYear = startYear + Math.floor(exp * 0.4)
+  const role = (c.roles ?? [])[0] ?? 'エンジニア'
+  const industries = c.industries ?? []
+
+  // 職歴ブロック（2〜3社分）
+  const careerBlock = [
+    `${startYear}年〜${midYear}年  ${prevCompany}（正社員）`,
+    `  ${role}として主に${industries[0] ?? 'IT'}業界の案件に従事。`,
+    `  ${c.summary.split('。')[1] ?? '設計・開発・テストまで一貫して対応。'}`,
+    ``,
+    `${midYear}年〜現在  フリーランス`,
+    `  独立後も${role}として複数社にて稼働継続。`,
+    `  ${c.summary.split('。')[0] ?? '直近は大手クライアント向けシステム開発を担当。'}`,
+  ].join('\n')
 
   return `お世話になっております。${agentCompany}の${agentName}でございます。
-弊社登録エンジニアをご紹介させていただきます。ご検討のほどよろしくお願いいたします。
+弊社にご登録いただいておりますエンジニアをご紹介させていただきます。
+ご検討のほどよろしくお願いいたします。
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-■ 候補者プロフィール
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ 候補者基本情報
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-氏名：${c.name}（${age}歳 / ${gender}）
-最寄駅：${c.nearestStation ?? ''}
-稼働可能エリア：${(c.availableRegions ?? []).join('・')}
-リモート：${c.remoteAvailable ? 'リモート可' : '基本常駐'}
-希望単価：${65 + exp}万〜${70 + exp}万円/月
-稼働開始：即日〜1ヶ月以内
-経験年数：${exp}年
-所属：フリーランス（前職: ${['SIer', 'Webベンチャー', 'メガベンチャー', '事業会社'][exp % 4]}）
+氏名　　　: ${c.name}（${age}歳・${gender}）
+最寄駅　　: ${c.nearestStation ?? '未記入'}
+稼働エリア: ${(c.availableRegions ?? []).join('・') || '要相談'}
+リモート　: ${c.remoteAvailable ? 'リモート可（週3〜フルリモート対応）' : '基本常駐（リモート相談可）'}
+希望単価　: ${65 + exp}万〜${70 + exp}万円/月（精算幅 ${140 + exp * 2}〜${180 + exp * 2}h）
+稼働開始　: 即日〜1ヶ月以内（調整可）
+経験年数　: 約${exp}年
+契約形態　: 業務委託（準委任）
 
-【職務経歴概要】
-${c.summary}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ 職務経歴概要
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-【主なスキル】
+${careerBlock}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ スキルセット
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 ${skillLines.join('\n')}
 
-【主な業種・役割】
-業種: ${(c.industries ?? []).join('、')}
-役割: ${(c.roles ?? []).join('、')}
+【対応業種】
+${industries.join('、') || '業種問わず対応可'}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-■ 弊社コメント
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【対応役割・ポジション】
+${(c.roles ?? []).join('、') || role}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+■ 弊社コメント・人物像
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ${agentComment}
 
-ご不明点がございましたらお気軽にご連絡ください。
-どうぞよろしくお願いいたします。
+ご不明な点やご要望がございましたら、お気軽にご連絡ください。
+面談のご調整もすぐに対応可能です。どうぞよろしくお願いいたします。
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ${agentCompany}
 担当: ${agentName}
-TEL: 03-XXXX-XXXX
+TEL: 03-XXXX-XXXX | FAX: 03-XXXX-YYYY
 Email: ${agentName.toLowerCase().replace(/\s/g, '.')}@${agentCompany.replace(/株式会社|合同会社|\s/g, '').toLowerCase()}.co.jp
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`.trim()
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`.trim()
 }
 
 function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateResponse; analyzedProject: AnalyzeProjectResponse; candidateEmailBody: string } {
