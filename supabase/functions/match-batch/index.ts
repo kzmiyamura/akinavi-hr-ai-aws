@@ -115,7 +115,10 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq): number {
 
   // ── 単価合致 ──
   const rate = parseRateWan(candidate.desiredRate)
-  if (rate !== null && project.budgetMax != null) {
+  if (project.budgetMax == null) {
+    // 予算上限未設定 → 制約なしとみなして全加点
+    score += 15
+  } else if (rate !== null) {
     const bMin = project.budgetMin ?? 0
     const bMax = project.budgetMax
     if (rate >= bMin && rate <= bMax) score += 15

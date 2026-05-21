@@ -86,6 +86,8 @@ export interface AnalyzeCandidateResponse {
   availableRegions?: string[] | null
   currentWorkLocation?: string | null
   remoteAvailable?: boolean
+  /** 希望単価（例: "55万", "60万円"）— マッチングスコア計算に使用 */
+  desiredRate?: string | null
 }
 
 /** 案件情報解析のリクエスト */
