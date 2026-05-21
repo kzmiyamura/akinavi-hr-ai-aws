@@ -921,15 +921,15 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                     </div>
                   </div>
                   <ProjectProfileFields p={selectedProject} isExpanded detailMode />
-                  {/* デモ人材生成（デモモード時のみ） */}
-                  {demoUiEnabled && dataEnv === 'demo' && (
+                  {/* デモ人材生成（デモUI解除時は常に表示・挿入先は常にdemo） */}
+                  {demoUiEnabled && (
                     <DemoProjectCandidateGen
                       project={selectedProject}
                       nickname={nickname}
-                      dataEnv={dataEnv}
+                      dataEnv="demo"
                       onDone={() => {
-                        queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
-                        queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
+                        queryClient.invalidateQueries({ queryKey: ['candidates', 'demo'] })
+                        queryClient.invalidateQueries({ queryKey: ['candidates-count', 'demo'] })
                       }}
                     />
                   )}
