@@ -759,6 +759,21 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   // サーバー側で絞り込み済みなのでそのまま使う
   const filteredCandidates = candidates
 
+  const onRegisterSuccess = (candidate: Candidate) => {
+    queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
+    setText('')
+    setImageFiles([])
+    setUploadedFileNames([])
+    setShowRegisterModal(false)
+    const msg = candidate.duplicate_flag
+      ? `登録完了（重複の疑いフラグあり）: ${candidate.name}`
+      : `登録完了: ${candidate.name}`
+    setMessage({ type: 'success', text: msg })
+    setSelectedId(candidate.id)
+  }
+
   const mutation = useMutation({
     mutationFn: async (rawText: string) => {
       const analyzed = await ai.analyzeCandidate({
@@ -767,23 +782,35 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
       })
       return upsertCandidate({ analyzed, rawText, createdBy: nickname, dataEnv })
     },
-    onSuccess: (candidate) => {
-      queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
-      queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
-      queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
-      setText('')
-      setImageFiles([])
-      setUploadedFileNames([])
-      setShowRegisterModal(false)
-      const msg = candidate.duplicate_flag
-        ? `登録完了（重複の疑いフラグあり）: ${candidate.name}`
-        : `登録完了: ${candidate.name}`
-      setMessage({ type: 'success', text: msg })
-      setSelectedId(candidate.id)
+    onSuccess: onRegisterSuccess,
+    onError: (e) => { setMessage({ type: 'error', text: String(e) }) },
+  })
+
+  const noAiMutation = useMutation({
+    mutationFn: async (rawText: string) => {
+      const { data, error } = await supabase.functions.invoke('inbound-email', {
+        body: {
+          subject: '手入力登録',
+          body: rawText,
+          from: `manual+${nickname}@manual.invalid`,
+          attachments: [],
+          type: 'candidate',
+          mode: dataEnv,
+        },
+      })
+      if (error) throw error
+      if (!data?.ok) throw new Error(data?.error ?? `解析に失敗しました（reason: ${data?.reason ?? '不明'}）`)
+      // 登録されたIDで候補者を取得
+      const { data: candidate, error: fetchErr } = await supabase
+        .from('candidates')
+        .select('*')
+        .eq('id', data.id)
+        .single()
+      if (fetchErr) throw new Error(fetchErr.message)
+      return candidate as Candidate
     },
-    onError: (e) => {
-      setMessage({ type: 'error', text: String(e) })
-    },
+    onSuccess: onRegisterSuccess,
+    onError: (e) => { setMessage({ type: 'error', text: String(e) }) },
   })
 
   const selectedCandidate = candidates.find((c: Candidate) => c.id === selectedId) ?? null
@@ -903,7 +930,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                 </p>
               )}
             </div>
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200">
+            <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-200 flex-wrap">
               <button
                 onClick={() => { setShowRegisterModal(false); setMessage(null) }}
                 className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
@@ -911,12 +938,21 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                 キャンセル
               </button>
               <button
+                onClick={() => { setMessage(null); noAiMutation.mutate(text) }}
+                disabled={!text.trim() || noAiMutation.isPending || mutation.isPending || fileLoading}
+                className="flex items-center gap-2 bg-green-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="AIを使わずregex+スキルマスターDBで解析（メール取込と同じ方式）"
+              >
+                {noAiMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <UserPlus size={16} />}
+                {noAiMutation.isPending ? '解析中...' : 'AIなしで登録'}
+              </button>
+              <button
                 onClick={() => { setMessage(null); mutation.mutate(text) }}
-                disabled={(!text.trim() && imageFiles.length === 0) || mutation.isPending || fileLoading}
-                className="flex items-center gap-2 bg-blue-600 text-white rounded-lg px-5 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                disabled={(!text.trim() && imageFiles.length === 0) || mutation.isPending || noAiMutation.isPending || fileLoading}
+                className="flex items-center gap-2 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {mutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <UserPlus size={16} />}
-                {mutation.isPending ? 'AI解析中...' : '解析して登録'}
+                {mutation.isPending ? 'AI解析中...' : 'AIで登録'}
               </button>
             </div>
           </div>

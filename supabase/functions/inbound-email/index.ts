@@ -2554,6 +2554,8 @@ Deno.serve(async (req: Request) => {
     console.log('[inbound] data_env=', inboundDataEnv, 'pickedMode=', pickedMode ?? '', 'raw.mode=', raw.mode ?? '', 'rid=', traceRid)
 
     const type: string = normalizeInboundType(raw.type)
+    /** 手動登録など、app_config フラグをバイパスして強制処理する場合は true */
+    const forceProcess: boolean = raw.force === true
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
     // Outlookがメールを実際に受信した日時（poll-emailから渡される）
@@ -3245,7 +3247,7 @@ Deno.serve(async (req: Request) => {
         .select('value')
         .eq('key', 'inbound_project_enabled')
         .maybeSingle()
-      if (projectEnabledRow?.value !== 'true') {
+      if (projectEnabledRow?.value !== 'true' && !forceProcess) {
         console.log('[inbound] 案件メール解析は無効のためスキップ', { rid: traceRid, subject })
         return new Response(
           JSON.stringify({ ok: true, skipped: true, reason: 'PROJECT_INBOUND_DISABLED' }),
