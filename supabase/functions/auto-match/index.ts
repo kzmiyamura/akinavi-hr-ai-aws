@@ -198,18 +198,21 @@ Deno.serve(async (req: Request) => {
           industry: project.industry ?? null,
         }
 
-        const batchInputs = targets.map(c => ({
-          id: c.id,
-          name: c.name,
-          skills: Array.isArray(c.skills) ? c.skills.map(String) : [],
-          experienceYears: c.experience_years ?? null,
-          desiredRate: (c.raw_profile as Record<string, unknown>)?.desiredRate as string | null ?? null,
-          summary: typeof (c.raw_profile as Record<string, unknown>)?.summary === 'string'
-            ? (c.raw_profile as Record<string, unknown>).summary as string
-            : '',
-          remoteAvailable: (c.raw_profile as Record<string, unknown>)?.remoteAvailable as boolean | null ?? null,
-          prefecture: (c.raw_profile as Record<string, unknown>)?.prefecture as string | null ?? null,
-        }))
+        const batchInputs = targets.map(c => {
+          const rp = (c.raw_profile as Record<string, unknown>) ?? {}
+          return {
+            id: c.id,
+            name: c.name,
+            skills: Array.isArray(c.skills) ? c.skills.map(String) : [],
+            experienceYears: c.experience_years ?? null,
+            desiredRate: rp.desiredRate as string | null ?? null,
+            summary: typeof rp.summary === 'string' ? rp.summary as string : '',
+            remoteAvailable: rp.remoteAvailable as boolean | null ?? null,
+            prefecture: rp.prefecture as string | null ?? null,
+            availableRegions: Array.isArray(rp.availableRegions) ? rp.availableRegions as string[] : null,
+            preferredJobTypes: Array.isArray(rp.roles) ? rp.roles as string[] : null,
+          }
+        })
 
         let resultMap: Map<string, { score: number; summary: string }> = new Map()
         try {

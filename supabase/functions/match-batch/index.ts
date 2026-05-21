@@ -39,6 +39,8 @@ interface CandidateInput {
   summary: string
   remoteAvailable?: boolean | null
   prefecture?: string | null
+  availableRegions?: string[] | null
+  preferredJobTypes?: string[] | null
   agentComment?: string | null
 }
 
@@ -75,9 +77,10 @@ function parseRateWan(rate: string | null | undefined): number | null {
 
 /**
  * ルールベーススコアを計算（0〜100）
- * - スキル重複率  : 0〜50 pt
- * - 経験年数      : 0〜20 pt
- * - 単価合致      : 0〜20 pt
+ * - スキル重複率  : 0〜40 pt
+ * - 経験年数      : 0〜15 pt
+ * - 単価合致      : 0〜15 pt
+ * - 勤務地一致    : 0〜20 pt
  * - リモート      : 0〜10 pt
  */
 function calcRuleScore(candidate: CandidateInput, project: ProjectReq): number {
@@ -91,25 +94,23 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq): number {
     for (const r of required) {
       const rt = r.toLowerCase().trim()
       if (!rt) continue
-      // 部分一致（完全一致が最高点、部分一致は 0.5 点）
       if (cSet.has(rt)) {
         hits += 1
       } else if ([...cSet].some(s => s.includes(rt) || rt.includes(s))) {
         hits += 0.5
       }
     }
-    score += Math.min(50, Math.round((hits / required.length) * 50))
+    score += Math.min(40, Math.round((hits / required.length) * 40))
   } else {
-    // 必須スキル未指定 → 経験年数で代替（25pt固定ベース）
-    score += 25
+    score += 20
   }
 
   // ── 経験年数 ──
   const exp = candidate.experienceYears ?? 0
-  if (exp >= 10) score += 20
-  else if (exp >= 7) score += 15
-  else if (exp >= 5) score += 10
-  else if (exp >= 3) score += 5
+  if (exp >= 10) score += 15
+  else if (exp >= 7) score += 12
+  else if (exp >= 5) score += 8
+  else if (exp >= 3) score += 4
   else if (exp >= 1) score += 2
 
   // ── 単価合致 ──
@@ -117,14 +118,34 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq): number {
   if (rate !== null && project.budgetMax != null) {
     const bMin = project.budgetMin ?? 0
     const bMax = project.budgetMax
-    if (rate >= bMin && rate <= bMax) score += 20
-    else if (rate <= bMax * 1.1) score += 10  // 10%超過まで許容
-    else if (rate <= bMax * 1.2) score += 5
+    if (rate >= bMin && rate <= bMax) score += 15
+    else if (rate <= bMax * 1.1) score += 8
+    else if (rate <= bMax * 1.2) score += 3
+  }
+
+  // ── 勤務地・居住地マッチング ──
+  const isFullRemote = /フルリモート|完全リモート|100[%％]リモート/.test(project.remotePolicy ?? '')
+  const loc = (project.workLocation ?? '').toLowerCase()
+  if (isFullRemote) {
+    // フルリモートならどこに住んでいても問題なし
+    score += 20
+  } else if (loc) {
+    const pref = (candidate.prefecture ?? '').toLowerCase()
+    const regions: string[] = Array.isArray(candidate.availableRegions)
+      ? candidate.availableRegions.map(r => r.toLowerCase())
+      : []
+    // 居住地（都道府県）が勤務地に含まれる or 勤務地が居住地に含まれる
+    const prefMatch = pref && (loc.includes(pref) || pref.includes(loc))
+    // 希望勤務地（availableRegions）に勤務地が含まれる
+    const regionMatch = regions.some(r => loc.includes(r) || r.includes(loc))
+    if (prefMatch && regionMatch) score += 20
+    else if (prefMatch || regionMatch) score += 12
+    // どちらも不明の場合はペナルティなし（情報不足）
+    else if (!pref && regions.length === 0) score += 5
   }
 
   // ── リモート対応 ──
-  const remote = project.remotePolicy ?? ''
-  if (candidate.remoteAvailable && /リモート|remote|在宅/i.test(remote)) {
+  if (!isFullRemote && candidate.remoteAvailable && /リモート|remote|在宅/i.test(project.remotePolicy ?? '')) {
     score += 10
   }
 
@@ -138,13 +159,17 @@ function buildBatchProjectToCandidatesPrompt(
   candidates: Array<CandidateInput & { ruleScore: number }>,
 ): string {
   const cList = candidates.map((c, i) =>
-    `[${i + 1}] id="${c.id}" name="${c.name}" skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" summary="${c.summary.slice(0, 80)}"` +
+    `[${i + 1}] id="${c.id}" name="${c.name}" skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}"` +
+    (c.availableRegions?.length ? ` regions=${JSON.stringify(c.availableRegions)}` : '') +
+    (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
+    ` summary="${c.summary.slice(0, 80)}"` +
     (c.agentComment ? ` comment="${c.agentComment.slice(0, 100)}"` : '')
   ).join('\n')
 
   return `人材と案件のマッチングコメント生成。JSON配列のみ返す。説明文・コードブロック禁止。
 
 案件: title="${project.title}" required=${JSON.stringify(project.requiredSkills)} budget=${project.budgetMin ?? '?'}〜${project.budgetMax ?? '?'}万 location="${project.workLocation ?? ''}" remote="${project.remotePolicy ?? ''}"
+${project.roleSummary ? `役割: ${project.roleSummary.slice(0, 150)}` : ''}
 ${project.description ? `説明: ${project.description.slice(0, 200)}` : ''}
 
 候補者${candidates.length}名:
@@ -164,7 +189,10 @@ function buildBatchCandidateToProjectsPrompt(
 
   return `人材と案件のマッチングコメント生成。JSON配列のみ返す。説明文・コードブロック禁止。
 
-人材: name="${candidate.name}" skills=${JSON.stringify(candidate.skills)} exp=${candidate.experienceYears}年 rate="${candidate.desiredRate ?? ''}" summary="${candidate.summary.slice(0, 100)}"` +
+人材: name="${candidate.name}" skills=${JSON.stringify(candidate.skills)} exp=${candidate.experienceYears}年 rate="${candidate.desiredRate ?? ''}" pref="${candidate.prefecture ?? ''}"` +
+    (candidate.availableRegions?.length ? ` regions=${JSON.stringify(candidate.availableRegions)}` : '') +
+    (candidate.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(candidate.preferredJobTypes)}` : '') +
+    ` summary="${candidate.summary.slice(0, 100)}"` +
     (candidate.agentComment ? ` comment="${candidate.agentComment.slice(0, 100)}"` : '') + `
 
 案件${projects.length}件:

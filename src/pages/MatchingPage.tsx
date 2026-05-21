@@ -58,6 +58,8 @@ type CandidateBatchInput = {
   summary: string
   remoteAvailable?: boolean | null
   prefecture?: string | null
+  availableRegions?: string[] | null
+  preferredJobTypes?: string[] | null
   agentComment?: string | null
 }
 
@@ -72,6 +74,8 @@ function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
     summary: typeof rp?.summary === 'string' ? rp.summary : '',
     remoteAvailable: (rp?.remoteAvailable as boolean | null) ?? null,
     prefecture: (rp?.prefecture as string | null) ?? null,
+    availableRegions: Array.isArray(rp?.availableRegions) ? (rp.availableRegions as string[]) : null,
+    preferredJobTypes: Array.isArray(rp?.roles) ? (rp.roles as string[]) : null,
     agentComment: (rp?.agentComment as string | null) ?? null,
   }
 }
