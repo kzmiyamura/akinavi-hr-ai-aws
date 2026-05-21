@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { Loader2, Users } from 'lucide-react'
-import { GoogleGenerativeAI } from '@google/generative-ai'
 import type { Project } from '../lib/db/projects'
 import type { DataEnv } from '../lib/dataEnv'
 import type { AnalyzeCandidateResponse } from '../lib/ai/types'
@@ -13,74 +12,112 @@ interface Props {
   onDone: () => void
 }
 
-interface DemoCandidate {
-  label: string
-  targetScore: number
-  name: string
-  skills: string[]
-  experienceYears: number
-  desiredRate: string
-  prefecture: string
-  availableRegions: string[]
-  remoteAvailable: boolean
-  summary: string
+// ─── 名前プール ───────────────────────────────────────────────────────────────
+const LAST_NAMES = ['田中', '鈴木', '佐藤', '高橋', '渡辺', '伊藤', '山本', '中村', '小林', '加藤']
+const FIRST_NAMES = ['健太', '翔太', '拓也', '雅人', '誠', '奈々', '明美', '裕子', '麻衣', '由美']
+
+// ─── スキルプール（ドメイン別） ──────────────────────────────────────────────
+const SKILL_POOLS: Record<string, string[]> = {
+  web:    ['React', 'Vue.js', 'Angular', 'TypeScript', 'JavaScript', 'HTML/CSS', 'Next.js', 'Nuxt.js'],
+  java:   ['Java', 'Spring Boot', 'Maven', 'JUnit', 'MyBatis', 'Struts', 'Hibernate'],
+  db:     ['SQL', 'Oracle Database', 'PostgreSQL', 'MySQL', 'SQLite', 'PL/SQL'],
+  infra:  ['AWS', 'Docker', 'Kubernetes', 'Terraform', 'Linux', 'Nginx', 'CI/CD', 'GitHub Actions'],
+  mobile: ['iOS', 'Android', 'Swift', 'Kotlin', 'Flutter', 'React Native'],
+  data:   ['Python', 'pandas', 'scikit-learn', 'BigQuery', 'Spark', 'Tableau', 'Power BI'],
+  cobol:  ['COBOL', 'JCL', 'VSAM', 'IBM Mainframe', 'CICS'],
+  net:    ['C#', '.NET', 'ASP.NET', 'Azure', 'WPF', 'Visual Studio'],
 }
 
-async function generateDemoCandidates(project: Project): Promise<DemoCandidate[]> {
-  const key = import.meta.env.VITE_GEMINI_API_KEY as string
-  if (!key) throw new Error('VITE_GEMINI_API_KEY が設定されていません')
-
-  const genAI = new GoogleGenerativeAI(key)
-  const model = genAI.getGenerativeModel({
-    model: (import.meta.env.VITE_GEMINI_MODEL as string | undefined)?.trim() ?? 'gemini-2.5-flash-lite',
-    generationConfig: { temperature: 0.7, maxOutputTokens: 4096, responseMimeType: 'application/json' },
+function pickRandom<T>(arr: T[], n: number, seed: number): T[] {
+  const shuffled = [...arr].sort((a, b) => {
+    const ha = String(a).split('').reduce((s, c) => s + c.charCodeAt(0), seed)
+    const hb = String(b).split('').reduce((s, c) => s + c.charCodeAt(0), seed + 1)
+    return (ha % 97) - (hb % 97)
   })
+  return shuffled.slice(0, n)
+}
 
-  const prompt = `以下の案件情報をもとに、マッチング度が異なる架空のITエンジニア5名を生成してください。
-人物は実在しない架空の日本人にしてください。
+function genName(seed: number): string {
+  return `${LAST_NAMES[seed % LAST_NAMES.length]} ${FIRST_NAMES[(seed + 3) % FIRST_NAMES.length]}`
+}
 
-【案件情報】
-タイトル: ${project.title}
-必須スキル: ${(project.required_skills as string[] ?? []).join(', ')}
-勤務地: ${project.work_location ?? '未指定'}
-リモートポリシー: ${project.remote_policy ?? '未指定'}
-予算: ${project.budget_min ?? '?'}〜${project.budget_max ?? '?'}万円
-説明: ${project.description ?? ''}
+// 案件の必須スキルに近い別ドメインのスキルを返す
+function getUnrelatedSkills(required: string[], n: number, seed: number): string[] {
+  // 必須スキルに含まれないドメインから選ぶ
+  const reqLower = required.map(s => s.toLowerCase())
+  const usable: string[] = []
+  for (const [, pool] of Object.entries(SKILL_POOLS)) {
+    for (const s of pool) {
+      if (!reqLower.some(r => r.includes(s.toLowerCase()) || s.toLowerCase().includes(r))) {
+        usable.push(s)
+      }
+    }
+  }
+  return pickRandom(usable, n, seed)
+}
 
-【生成ルール】
-1番目（90点相当 = 超マッチ）: 必須スキルをほぼすべて持ち、経験10年以上、単価も予算内
-2番目（70点相当 = まあまあ合う）: 必須スキルの7割程度を持ち、経験5〜8年、単価は少し高め
-3番目（50点相当 = 少し合う）: 必須スキルの半分程度を持ち、経験3〜5年、単価は予算上限付近
-4番目（30点相当 = あまり合わない）: 必須スキルと1〜2個だけ重複、別分野メイン、経験2〜3年
-5番目（10点相当 = 全く合わない）: 必須スキルとほぼ重複なし、全く別分野、経験1〜2年
+interface ScoreLevel {
+  label: string
+  score: number
+  skillRatio: number     // 必須スキルを何割持つか (0〜1)
+  extraUnrelated: number // 無関係スキルを何個追加するか
+  expYears: number
+  rateOffset: number     // 予算上限からの差分（万円）正=超過
+  prefecture: string
+  sameLocation: boolean
+  remoteAvailable: boolean
+}
 
-各人材のskillsは実際のITスキル名（Java, TypeScript等）を使ってください。
-desiredRateは「60万」「75万」のような形式で。
-prefectureは都道府県名のみ（例: 東京都、神奈川県）。
-availableRegionsは希望勤務地の都道府県リスト（1〜3件）。
-summaryは100字以内の職務要約。
+const SCORE_LEVELS: ScoreLevel[] = [
+  { label: '超マッチ',     score: 90, skillRatio: 1.0, extraUnrelated: 1, expYears: 12, rateOffset: -5,  prefecture: '', sameLocation: true,  remoteAvailable: true  },
+  { label: 'まあまあ合う', score: 70, skillRatio: 0.7, extraUnrelated: 2, expYears: 6,  rateOffset: 5,   prefecture: '', sameLocation: true,  remoteAvailable: true  },
+  { label: '少し合う',     score: 50, skillRatio: 0.5, extraUnrelated: 3, expYears: 4,  rateOffset: 10,  prefecture: '', sameLocation: false, remoteAvailable: false },
+  { label: 'あまり合わない', score: 30, skillRatio: 0.2, extraUnrelated: 5, expYears: 2,  rateOffset: 15,  prefecture: '', sameLocation: false, remoteAvailable: false },
+  { label: '全く合わない', score: 10, skillRatio: 0.0, extraUnrelated: 6, expYears: 1,  rateOffset: 30,  prefecture: '', sameLocation: false, remoteAvailable: false },
+]
 
-JSON配列のみ返す:
-[
-  {
-    "label": "超マッチ（90点相当）",
-    "targetScore": 90,
-    "name": "姓 名",
-    "skills": ["スキル1", "スキル2"],
-    "experienceYears": 12,
-    "desiredRate": "65万",
-    "prefecture": "東京都",
-    "availableRegions": ["東京都", "神奈川県"],
-    "remoteAvailable": true,
-    "summary": "職務要約100字以内"
-  },
-  ...
-]`
+const LOCATIONS = ['東京都', '神奈川県', '大阪府', '愛知県', '福岡県', '北海道', '宮城県', '広島県']
 
-  const result = await model.generateContent(prompt)
-  const raw = result.response.text()
-  const cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim()
-  return JSON.parse(cleaned) as DemoCandidate[]
+function buildCandidate(
+  level: ScoreLevel,
+  project: Project,
+  idx: number,
+): AnalyzeCandidateResponse & { desiredRate: string } {
+  const required: string[] = Array.isArray(project.required_skills) ? project.required_skills.map(String) : []
+  const seed = idx * 31 + (project.title?.charCodeAt(0) ?? 7)
+
+  // スキル構成
+  const matchCount = Math.max(0, Math.round(required.length * level.skillRatio))
+  const matchedSkills = pickRandom(required, matchCount, seed)
+  const extraSkills = getUnrelatedSkills(required, level.extraUnrelated, seed + 100)
+  const skills = [...new Set([...matchedSkills, ...extraSkills])]
+
+  // 単価
+  const budgetMax = project.budget_max ?? 60
+  const desiredRate = `${Math.max(20, budgetMax + level.rateOffset)}万`
+
+  // 勤務地
+  const projectPref = (project.work_location ?? '').replace(/[市区町村].*/g, '')
+  const prefecture = level.sameLocation && projectPref
+    ? projectPref
+    : LOCATIONS[(seed + idx * 3) % LOCATIONS.length]
+
+  // サマリー
+  const topSkills = skills.slice(0, 3).join('/')
+  const summary = `${topSkills}の経験${level.expYears}年。${level.expYears >= 8 ? '上流工程から対応可。' : ''}希望単価${desiredRate}。`
+
+  return {
+    name: genName(seed),
+    email: null,
+    phone: null,
+    skills,
+    experienceYears: level.expYears,
+    summary,
+    prefecture,
+    availableRegions: level.sameLocation ? [prefecture] : [prefecture, LOCATIONS[(seed + 5) % LOCATIONS.length]],
+    remoteAvailable: level.remoteAvailable,
+    desiredRate,
+  } as AnalyzeCandidateResponse & { desiredRate: string }
 }
 
 const SCORE_COLORS: Record<number, string> = {
@@ -92,55 +129,36 @@ const SCORE_COLORS: Record<number, string> = {
 }
 
 export function DemoProjectCandidateGen({ project, nickname, dataEnv, onDone }: Props) {
-  const [status, setStatus] = useState<'idle' | 'generating' | 'saving' | 'done' | 'error'>('idle')
+  const [status, setStatus] = useState<'idle' | 'saving' | 'done' | 'error'>('idle')
   const [message, setMessage] = useState<string | null>(null)
-  const [generatedNames, setGeneratedNames] = useState<Array<{ label: string; name: string; score: number }>>([])
+  const [results, setResults] = useState<Array<{ label: string; name: string; score: number }>>([])
 
   async function handleGenerate() {
-    setStatus('generating')
+    setStatus('saving')
     setMessage(null)
-    setGeneratedNames([])
+    setResults([])
 
     try {
-      const candidates = await generateDemoCandidates(project)
-      setStatus('saving')
+      const saved: typeof results = []
+      for (let i = 0; i < SCORE_LEVELS.length; i++) {
+        const level = SCORE_LEVELS[i]
+        const built = buildCandidate(level, project, i)
+        const { desiredRate, ...analyzed } = built
 
-      const results: typeof generatedNames = []
-      for (const c of candidates) {
-        const analyzed: AnalyzeCandidateResponse = {
-          name: c.name,
-          email: null,
-          phone: null,
-          skills: c.skills,
-          experienceYears: c.experienceYears,
-          summary: c.summary,
-          prefecture: c.prefecture,
-          availableRegions: c.availableRegions,
-          remoteAvailable: c.remoteAvailable,
-          roles: [],
-          industries: [],
-        }
-        // raw_profileにdesiredRateを含める
-        const rawProfile = {
-          text: `デモ人材: ${c.name}\nスキル: ${c.skills.join(', ')}\n経験: ${c.experienceYears}年\n希望単価: ${c.desiredRate}\n${c.summary}`,
-          summary: c.summary,
-          desiredRate: c.desiredRate,
-          prefecture: c.prefecture,
-          availableRegions: c.availableRegions,
-          remoteAvailable: c.remoteAvailable,
-        }
-
+        const rawText = `${analyzed.name}\nスキル: ${analyzed.skills.join(', ')}\n経験: ${analyzed.experienceYears}年\n希望単価: ${desiredRate}\n${analyzed.summary}`
+        // desiredRateはraw_profileに含める必要があるためrawTextに乗せる（upsertCandidate内でraw_profileを構築）
+        // raw_profileのdesiredRateはsummaryから抽出される想定のため、rawTextに明記
         await upsertCandidate({
-          analyzed,
-          rawText: rawProfile.text,
+          analyzed: { ...analyzed, summary: `${analyzed.summary} [希望単価:${desiredRate}]` },
+          rawText,
           createdBy: `${nickname}(demo-gen)`,
           dataEnv,
           duplicateSuspected: false,
         })
-        results.push({ label: c.label, name: c.name, score: c.targetScore })
+        saved.push({ label: level.label, name: analyzed.name, score: level.score })
       }
 
-      setGeneratedNames(results)
+      setResults(saved)
       setStatus('done')
       onDone()
     } catch (e) {
@@ -159,25 +177,23 @@ export function DemoProjectCandidateGen({ project, nickname, dataEnv, onDone }: 
         <button
           type="button"
           onClick={handleGenerate}
-          disabled={status === 'generating' || status === 'saving'}
+          disabled={status === 'saving'}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 transition-colors"
         >
-          {(status === 'generating' || status === 'saving') ? (
-            <><Loader2 size={12} className="animate-spin" />{status === 'generating' ? 'AI生成中...' : '保存中...'}</>
-          ) : (
-            <>スコア別5人を生成</>
-          )}
+          {status === 'saving'
+            ? <><Loader2 size={12} className="animate-spin" />保存中...</>
+            : <>スコア別5人を生成</>}
         </button>
       </div>
 
-      {status === 'done' && generatedNames.length > 0 && (
+      {status === 'done' && results.length > 0 && (
         <div className="space-y-1">
-          {generatedNames.map((r) => (
+          {results.map((r) => (
             <div key={r.name} className="flex items-center gap-2 text-xs">
               <span className={`px-1.5 py-0.5 rounded font-medium ${SCORE_COLORS[r.score] ?? 'bg-gray-100 text-gray-700'}`}>
                 {r.score}点
               </span>
-              <span className="text-gray-700">{r.label.replace(/（.*）/, '')} — {r.name}</span>
+              <span className="text-gray-700">{r.label} — {r.name}</span>
             </div>
           ))}
           <p className="text-xs text-purple-600 mt-1">人材タブに追加されました</p>
