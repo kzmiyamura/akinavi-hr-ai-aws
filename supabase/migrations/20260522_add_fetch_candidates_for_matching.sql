@@ -1,9 +1,9 @@
 -- マッチング用候補者取得 RPC
 -- 優先順位:
---   1. 直近30日以内に登録された人（全員・漏れなし）
---   2. それより古い人は経験年数が多い順（スコア高い候補の代理指標）
---   3. 同順位内は登録日が新しい順
+--   1. 登録日時が新しい順（最新の候補者が必ず先頭に来る）
+--   2. 同秒内は経験年数が多い順（スコア高い候補の代理指標）
 -- p_limit: 上限（デフォルト 800）
+-- ※一日数千件規模を想定。30日バケツ方式は件数が上限を超えるため不採用。
 CREATE OR REPLACE FUNCTION fetch_candidates_for_matching(
   p_data_env text,
   p_limit     int DEFAULT 800
@@ -15,11 +15,7 @@ LANGUAGE sql STABLE SECURITY INVOKER AS $$
   WHERE data_env   = p_data_env
     AND merged_into IS NULL
   ORDER BY
-    -- 直近30日を先頭に
-    (CASE WHEN created_at >= NOW() - INTERVAL '30 days' THEN 1 ELSE 0 END) DESC,
-    -- 次に経験年数降順（NULL は末尾）
-    COALESCE(experience_years, 0) DESC,
-    -- 同点は新しい登録順
-    created_at DESC
+    created_at DESC,
+    COALESCE(experience_years, 0) DESC
   LIMIT p_limit;
 $$;
