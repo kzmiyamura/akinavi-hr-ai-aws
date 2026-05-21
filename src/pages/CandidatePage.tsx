@@ -813,6 +813,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
       })
       if (error) throw error
       if (!data?.ok) throw new Error(data?.error ?? `解析に失敗しました（reason: ${data?.reason ?? '不明'}）`)
+      if (data?.skipped) throw new Error(`人材を登録できませんでした（reason: ${data?.reason ?? '不明'}）\n本文が短すぎる場合は50文字以上入力してください。`)
       // 登録されたIDで候補者を取得
       const { data: candidate, error: fetchErr } = await supabase
         .from('candidates')

@@ -617,6 +617,7 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
       })
       if (error) throw error
       if (!data?.ok) throw new Error(data?.error ?? `解析に失敗しました（reason: ${data?.reason ?? '不明'}）`)
+      if (data?.skipped) throw new Error(`案件を登録できませんでした（reason: ${data?.reason ?? '不明'}）\n本文が短すぎる場合は50文字以上入力してください。`)
       // 登録された案件を取得（複数insertの場合は先頭を使用）
       const insertedId = Array.isArray(data.ids) ? data.ids[0] : data.id
       if (!insertedId) throw new Error('案件IDが取得できませんでした')
