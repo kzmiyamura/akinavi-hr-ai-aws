@@ -3364,6 +3364,21 @@ Deno.serve(async (req: Request) => {
             }
           }
         }
+        // 区切り線が見つからない場合は本文の最初の非空行をタイトルとして使用
+        if (GENERIC_SUBJECTS.some(s => cleanTitle.toLowerCase() === s.toLowerCase())) {
+          const firstMeaningfulLine = bodyLines.find(l => {
+            const t = l.replace(/【[^】]*】/g, '').replace(/^[★☆●◆◇■□▼▲※・\s]+/, '').trim()
+            return t.length >= 5 && !sepRe.test(t)
+          })
+          if (firstMeaningfulLine) {
+            cleanTitle = firstMeaningfulLine
+              .replace(/【[^】]*】/g, '')
+              .replace(/^[★☆●◆◇■□▼▲※・\s]+/, '')
+              .replace(/[）\s]+$/, '')
+              .trim()
+              .slice(0, 80)
+          }
+        }
       }
 
       // description: 【案件背景・概要】等のセクションから抽出。なければ先頭300字（区切り線除去）
@@ -3373,7 +3388,13 @@ Deno.serve(async (req: Request) => {
         projectDescription = descSectionM[1].split(/\n(?=【)/)[0].trim().slice(0, 300)
       }
       if (!projectDescription) {
-        projectDescription = body.replace(/^[＝=━─*]{4,}.*\n?/gm, '').trim().split(/\n{2,}/)[0].trim().slice(0, 300)
+        // 区切り線を除去した本文から description を作る。
+        // cleanTitle が本文1行目から取られた場合は、その行を除いた残りの先頭段落を使用
+        const bodyStripped = body.replace(/^[＝=━─*]{4,}.*\n?/gm, '').trim()
+        const bodyForDesc = cleanTitle && bodyStripped.startsWith(cleanTitle.slice(0, 10))
+          ? bodyStripped.slice(cleanTitle.length).replace(/^[\s\n]+/, '')
+          : bodyStripped
+        projectDescription = bodyForDesc.split(/\n{2,}/)[0].trim().slice(0, 300)
       }
 
       const result = {
