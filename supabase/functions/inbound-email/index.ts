@@ -3351,7 +3351,12 @@ Deno.serve(async (req: Request) => {
         outer: for (let i = 0; i < bodyLines.length - 1; i++) {
           if (sepRe.test(bodyLines[i])) {
             for (let j = i + 1; j < Math.min(i + 6, bodyLines.length); j++) {
-              const cand = bodyLines[j].replace(/^[★☆●◆◇■□▼▲※・【】\s]+/, '').replace(/[】）\s]+$/, '').trim()
+              // 【xxx】 を完全に除去してからタイトル候補を取得
+              const cand = bodyLines[j]
+                .replace(/【[^】]*】/g, '')
+                .replace(/^[★☆●◆◇■□▼▲※・\s]+/, '')
+                .replace(/[）\s]+$/, '')
+                .trim()
               if (cand.length >= 5 && !sepRe.test(cand) && !/^[（(【]/.test(cand)) {
                 cleanTitle = cand.slice(0, 80)
                 break outer
@@ -3361,10 +3366,20 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      // description: 【案件背景・概要】等のセクションから抽出。なければ先頭300字（区切り線除去）
+      let projectDescription = ''
+      const descSectionM = body.match(/【(?:案件背景[・．]?概要?|案件概要|概要|背景|プロジェクト概要)】\s*\n?([\s\S]{10,400})/)
+      if (descSectionM) {
+        projectDescription = descSectionM[1].split(/\n(?=【)/)[0].trim().slice(0, 300)
+      }
+      if (!projectDescription) {
+        projectDescription = body.replace(/^[＝=━─*]{4,}.*\n?/gm, '').trim().split(/\n{2,}/)[0].trim().slice(0, 300)
+      }
+
       const result = {
         title: cleanTitle,
         client: null,
-        description: body.slice(0, 500),
+        description: projectDescription || body.slice(0, 300),
         requiredSkills: dbSkillNames,
         niceToHaveSkills: [],
         budgetMin,
