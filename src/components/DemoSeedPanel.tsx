@@ -194,7 +194,7 @@ function buildDemoPair(seed: number): { analyzedCandidate: AnalyzeCandidateRespo
     new Set([...s.langs.slice(0, 2), ...(s.fw.slice(0, 1)), ...(s.db.slice(0, 1))].filter(Boolean)),
   )
 
-  const requiredSkillsSet = new Set(requiredSkills)
+  const requiredSkillsSet = new Set<string>(requiredSkills)
   const niceToHaveSkills = Array.from(
     new Set([...(s.cloud.slice(0, 1)), ...(s.dwh.slice(0, 1)), 'Docker', 'GitHub Actions'].filter(Boolean)),
   ).filter(sk => !requiredSkillsSet.has(sk))
