@@ -2658,85 +2658,112 @@ Deno.serve(async (req: Request) => {
 
       const allProjectText = [subject, bodyClean].join('\n')
 
-      // 予算: 「60万」「50〜70万」「MAX80万」等
-      let budgetMin: number | null = null
-      let budgetMax: number | null = null
-      const budgetRangeM = allProjectText.match(/(\d{2,3})\s*[〜~～]\s*(\d{2,3})\s*万/)
-      if (budgetRangeM) {
-        budgetMin = parseInt(budgetRangeM[1], 10)
-        budgetMax = parseInt(budgetRangeM[2], 10)
-      } else {
-        const budgetSingleM = allProjectText.match(/(?:MAX|上限|予算|単価)[^\d]*(\d{2,3})\s*万/)
-          ?? allProjectText.match(/(\d{2,3})\s*万(?:円)?(?:\/月|程度|以内|まで|〜|~|）|$|\s)/)
-        if (budgetSingleM) {
-          const v = parseInt(budgetSingleM[1], 10)
-          if (v >= 20 && v <= 300) budgetMax = v
-        }
+      // ── セパレータ検出（1メール内では同一文字が使われる傾向） ────────────
+      // 最も多く出現するセパレータ文字を先頭で検出し、以降の処理で使い回す
+      const SEP_CHARS: Array<[RegExp, string]> = [
+        [/[＝=]{4,}/g, '[＝=]{4,}'],
+        [/━{4,}/g, '━{4,}'],
+        [/─{4,}/g, '─{4,}'],
+        [/\*{4,}/g, '\\*{4,}'],
+        [/={4,}/g, '={4,}'],
+        [/-{4,}/g, '-{4,}'],
+      ]
+      let dominantSepPat = '[＝=━─*-]{4,}'
+      let maxSepCount = 0
+      for (const [cRe, pat] of SEP_CHARS) {
+        const cnt = (bodyClean.match(cRe) ?? []).length
+        if (cnt > maxSepCount) { maxSepCount = cnt; dominantSepPat = pat }
       }
+      const SEP_LINE_RE = new RegExp(`^[ \\t\\u3000]*(${dominantSepPat})[ \\t\\u3000]*$`, 'm')
 
-      // 【X　Y】value 形式の抽出ヘルパー（全角スペース入りブラケット対応）
-      const extractBracket = (labels: string[]): string | null => {
-        for (const label of labels) {
-          const escaped = label.replace(/./g, (c) => `[${c}\u3000 ]?`.replace(/\[([^\u3000 ])\u3000 \]\?/g, c))
-          // シンプルに全角スペースを任意にした正規表現を生成
-          const labelPat = label.split('').join('[ \\t\\u3000]?')
-          const re = new RegExp(`【${labelPat}】[ \\t\\u3000]*([^\\n]{1,60})`)
-          const m = allProjectText.match(re)
-          if (m) return m[1].trim()
-        }
-        return null
-      }
+      // ── extractFieldTwoPhase で全フィールドを統一抽出 ──────────────────
+      // 候補者解析と同じ関数を使うことで【X　Y】形式・X：形式・次行形式すべてに対応
 
-      // 勤務地: 【場　所】 または 勤務地: 形式
-      const locationBracket = extractBracket(['場所', '場　所', '勤務地', '作業場所', '就業場所'])
-      const locationM = !locationBracket
-        ? allProjectText.match(/(?:勤務地|作業場所|就業場所|常駐先)[：:\s]*([^\s\n、。]{2,20})/)
-        : null
-      const workLocation = locationBracket
-        ?? (locationM ? locationM[1].trim() : null)
-        ?? (PREFECTURES.find(p => allProjectText.includes(p)) ?? null)
+      // 勤務地
+      const workLocation = extractFieldTwoPhase(
+        ['場所', '場　所', '勤務地', '作業場所', '就業場所', '常駐先', '勤務先'],
+        allProjectText, attachText,
+        v => v.length >= 2,
+        30,
+      ) ?? PREFECTURES.find(p => allProjectText.includes(p)) ?? null
 
-      // リモート
+      // リモート（条件分岐のためキーワード判定を維持）
       let remotePolicy: string | null = null
-      if (/フルリモート|完全リモート|100[%％]リモート/.test(allProjectText)) remotePolicy = 'フルリモート'
+      const remotePolicyRaw = extractFieldTwoPhase(
+        ['リモート', 'テレワーク', 'リモートワーク', '在宅', '出社'],
+        allProjectText, attachText, null, 30,
+      )
+      if (remotePolicyRaw) remotePolicy = remotePolicyRaw
+      else if (/フルリモート|完全リモート|100[%％]リモート/.test(allProjectText)) remotePolicy = 'フルリモート'
       else if (/リモート可|テレワーク可|在宅可/.test(allProjectText)) remotePolicy = 'リモート可'
       else if (/週[1-5１-５]日.*(?:リモート|在宅)|(?:リモート|在宅).*週[1-5１-５]日/.test(allProjectText)) remotePolicy = allProjectText.match(/週[1-5１-５]日.*(?:リモート|在宅)|(?:リモート|在宅).*週[1-5１-５]日/)?.[0] ?? 'リモート一部可'
       else if (/常駐|フル出社|出社必須/.test(allProjectText)) remotePolicy = '常駐'
 
       // 契約形態
-      let contractType: string | null = null
-      if (/業務委託/.test(allProjectText)) contractType = '業務委託'
-      else if (/派遣/.test(allProjectText)) contractType = '派遣'
-      else if (/準委任/.test(allProjectText)) contractType = '準委任'
-      else if (/請負/.test(allProjectText)) contractType = '請負'
-
-      // 予算: 【単　価】形式も対応
-      const budgetBracket = extractBracket(['単価', '単　価', '報酬', '単価・報酬'])
-      if (budgetBracket && budgetMin == null && budgetMax == null) {
-        const rangeM2 = budgetBracket.match(/(\d{2,3})\s*[〜~～]\s*(\d{2,3})\s*万/)
-        if (rangeM2) {
-          budgetMin = parseInt(rangeM2[1], 10)
-          budgetMax = parseInt(rangeM2[2], 10)
-        } else {
-          const singleM2 = budgetBracket.match(/(\d{2,3})\s*万/)
-          if (singleM2) {
-            const v = parseInt(singleM2[1], 10)
-            if (v >= 20 && v <= 300) budgetMax = v
-          }
-        }
+      const contractRaw = extractFieldTwoPhase(
+        ['契約形態', '契約', '就業形態', '雇用形態', '契約種別'],
+        allProjectText, attachText, null, 30,
+      )
+      let contractType: string | null = contractRaw ?? null
+      if (!contractType) {
+        if (/業務委託/.test(allProjectText)) contractType = '業務委託'
+        else if (/準委任/.test(allProjectText)) contractType = '準委任'
+        else if (/派遣/.test(allProjectText)) contractType = '派遣'
+        else if (/請負/.test(allProjectText)) contractType = '請負'
       }
 
-      // 開始時期（startDate: YYYY-MM-DD ISO文字列に変換して格納）
+      // クライアント（今まで null 固定だったが extractFieldTwoPhase で取得を試みる）
+      const client = extractFieldTwoPhase(
+        ['クライアント', 'エンド', 'クライアント名', '発注元', '顧客', 'エンドユーザー', '顧客名'],
+        allProjectText, attachText,
+        v => v.length >= 2 && !/^[0-9]+$/.test(v),
+        50,
+      ) ?? null
+
+      // 募集人数
+      const headcountRaw = extractFieldTwoPhase(
+        ['募集人数', '人数', '募集数', '採用人数', '募集'],
+        allProjectText, attachText,
+        v => /\d/.test(v),
+        10,
+      )
+      const headcount = headcountRaw
+        ? (parseInt(headcountRaw.match(/\d+/)?.[0] ?? '', 10) || null)
+        : null
+
+      // 予算: extractFieldTwoPhase で生文字列を取得してからパース
+      const budgetRaw = extractFieldTwoPhase(
+        ['単価', '単　価', '報酬', '月額', '予算', '報酬単価'],
+        allProjectText, attachText, null, 50,
+      )
+      let budgetMin: number | null = null
+      let budgetMax: number | null = null
+      const parseBudget = (raw: string) => {
+        const rangeM = raw.match(/(\d{2,3})\s*[〜~～]\s*(\d{2,3})\s*万/)
+        if (rangeM) { budgetMin = parseInt(rangeM[1], 10); budgetMax = parseInt(rangeM[2], 10); return }
+        const singleM = raw.match(/(\d{2,3})\s*万/)
+        if (singleM) { const v = parseInt(singleM[1], 10); if (v >= 20 && v <= 300) budgetMax = v }
+      }
+      if (budgetRaw) {
+        parseBudget(budgetRaw)
+      } else {
+        // フォールバック: 全文から数値パターンで探す
+        const fallbackRaw = allProjectText.match(/(\d{2,3})\s*[〜~～]\s*(\d{2,3})\s*万/)
+          ?? allProjectText.match(/(\d{2,3})\s*万(?:円)?(?:\/月|程度|以内|まで|〜|~|）|$|\s)/)
+        if (fallbackRaw) parseBudget(fallbackRaw[0])
+      }
+
+      // 開始時期・終了日: extractFieldTwoPhase で生文字列を取得してからパース
+      const timingRaw = extractFieldTwoPhase(
+        ['時期', '時　期', '開始時期', '参画時期', '稼働時期', '開始', '参画開始', 'スタート'],
+        allProjectText, attachText, null, 50,
+      )
       let startDate: string | null = null
       let endDate: string | null = null
-      // 【時　期】形式 or キーワード形式のどちらにも対応
-      const timingRaw = extractBracket(['時期', '時　期', '開始時期', '参画時期', '稼働時期'])
-        ?? allProjectText.match(/(?:開始時期|参画時期|参画予定|稼働開始|稼働予定|参画開始|開始予定|スタート)[：:\s　・]*([^\n]{2,30})/)?.[1]
-        ?? null
       if (timingRaw) {
         const rawNorm = timingRaw.trim().replace(/[　\s]+/g, '')
         // 「7月～2027年2月」→ startDate=7月, endDate=2027-02
-        const rangeM3 = rawNorm.match(/(\d{1,2})月[〜~～](\d{4})[年\/](\d{1,2})/)
+        const rangeM3 = rawNorm.match(/(\d{1,2})月[〜~～※]?[^\d]*(\d{4})[年\/](\d{1,2})/)
         if (rangeM3) {
           const mo = parseInt(rangeM3[1], 10)
           const now = new Date()
@@ -2744,7 +2771,6 @@ Deno.serve(async (req: Request) => {
           startDate = `${yr}-${String(mo).padStart(2, '0')}-01`
           endDate = `${rangeM3[2]}-${rangeM3[3].padStart(2, '0')}-01`
         } else {
-          // YYYY年MM月 or YYYY/MM/DD or YYYY-MM-DD
           const yearMonthM = rawNorm.match(/(\d{4})[年\/\-](\d{1,2})月?/)
           if (yearMonthM) {
             startDate = `${yearMonthM[1]}-${yearMonthM[2].padStart(2, '0')}-01`
@@ -2767,11 +2793,10 @@ Deno.serve(async (req: Request) => {
       let cleanTitle = subject.replace(/【[^】]*】/g, '').replace(/^[★☆●◆◇■□▼▲※・\s]+/, '').trim() || subject
       const GENERIC_SUBJECTS = ['手入力登録', '無題', 'no subject', 'test', 'テスト', '']
       if (GENERIC_SUBJECTS.some(s => cleanTitle.toLowerCase() === s.toLowerCase())) {
-        // ＝＝＝ / ━━━ 等の区切り線直後の最初の非空行をタイトルとして採用
-        const sepRe = /[＝=━─*]{4,}/
-        const bodyLines = body.split(/\r?\n/)
+        // 検出済みセパレータを使ってタイトルを抽出
+        const bodyLines = bodyClean.split(/\r?\n/)
         outer: for (let i = 0; i < bodyLines.length - 1; i++) {
-          if (sepRe.test(bodyLines[i])) {
+          if (SEP_LINE_RE.test(bodyLines[i])) {
             for (let j = i + 1; j < Math.min(i + 6, bodyLines.length); j++) {
               // 【xxx】 を完全に除去してからタイトル候補を取得
               const cand = bodyLines[j]
@@ -2907,7 +2932,7 @@ Deno.serve(async (req: Request) => {
 
       const result = {
         title: cleanTitle,
-        client: null,
+        client,
         description: projectDescription,
         requiredSkills: projectRequiredSkills,
         niceToHaveSkills: projectNiceToHaveSkills,
@@ -2918,7 +2943,7 @@ Deno.serve(async (req: Request) => {
         workLocation,
         remotePolicy,
         contractType,
-        headcount: null,
+        headcount,
         workload: null,
         settlementMin: null,
         settlementMax: null,
