@@ -2776,13 +2776,17 @@ Deno.serve(async (req: Request) => {
         const requiredText = niceIdx >= 0 ? skillText.slice(0, niceIdx) : skillText
         const niceText = niceIdx >= 0 ? skillText.slice(niceIdx) : ''
         const skillFiltered = dbSkillNames.filter(s => !PROJECT_PROCESS_NOISE.has(s))
-        const inRequired = skillFiltered.filter(s =>
-          requiredText.toLowerCase().includes(s.toLowerCase()),
-        )
+        // スペースなし比較も追加（"Spring Boot" vs "Springboot" 等の表記ゆれ対応）
+        const matchesText = (s: string, text: string) => {
+          const sl = s.toLowerCase()
+          const tl = text.toLowerCase()
+          return tl.includes(sl) || tl.includes(sl.replace(/\s+/g, ''))
+        }
+        const inRequired = skillFiltered.filter(s => matchesText(s, requiredText))
         projectRequiredSkills = inRequired.length > 0 ? inRequired : skillFiltered
         if (niceText) {
           projectNiceToHaveSkills = skillFiltered
-            .filter(s => niceText.toLowerCase().includes(s.toLowerCase()))
+            .filter(s => matchesText(s, niceText))
             .filter(s => !projectRequiredSkills.includes(s))
         }
       }
