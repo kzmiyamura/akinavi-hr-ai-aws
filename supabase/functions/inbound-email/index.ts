@@ -2647,7 +2647,16 @@ Deno.serve(async (req: Request) => {
       }
       tracePhase = 'project_regex_extract'
       const durationMs = 0
-      const allProjectText = [subject, body].join('\n')
+
+      // ── 人材解析と同様の前処理を適用 ──────────────────────────────────
+      // 1. HTMLエンティティデコード（&#31292; → 稼 等、HTML形式メール対策）
+      const bodyDecoded = decodeHtmlEntities(body)
+      // 2. URL除去（https://.../cc.php 等がPHP/HTTPSに誤マッチするのを防止）
+      const bodyNoUrl = stripUrlsForSkillMatching(bodyDecoded)
+      // 3. 送信者署名除去（━━━/─── 等の区切り線以降を除去して住所・電話番号の誤マッチを防止）
+      const bodyClean = stripSenderSignature(bodyNoUrl)
+
+      const allProjectText = [subject, bodyClean].join('\n')
 
       // 予算: 「60万」「50〜70万」「MAX80万」等
       let budgetMin: number | null = null
@@ -2840,15 +2849,15 @@ Deno.serve(async (req: Request) => {
       // ── description: 優先順で抽出 ─────────────────────────────────────
       let projectDescription = ''
       // 1. 【案件背景・概要】等のセクション
-      const descSectionM = body.match(/【(?:案件背景[・．]?概要?|案件概要|概要|背景|プロジェクト概要)】[ \t\u3000]*\n?([\s\S]{10,400})/)
+      const descSectionM = bodyClean.match(/【(?:案件背景[・．]?概要?|案件概要|概要|背景|プロジェクト概要)】[ \t\u3000]*\n?([\s\S]{10,400})/)
       if (descSectionM) {
         projectDescription = descSectionM[1].split(NEXT_HEADER_RE)[0].trim().slice(0, 300)
       }
       // 2. 【内　容】/【内容】セクション（日本語標準案件フォーマット）
       if (!projectDescription) {
-        const contentStart = body.search(/【内[ \t\u3000]?容[ \t\u3000]?】/)
+        const contentStart = bodyClean.search(/【内[ \t\u3000]?容[ \t\u3000]?】/)
         if (contentStart >= 0) {
-          const afterMarker = body.slice(contentStart)
+          const afterMarker = bodyClean.slice(contentStart)
           const markerEnd = afterMarker.indexOf('】') + 1
           const contentRest = afterMarker.slice(markerEnd)
           const nextHeader = contentRest.search(NEXT_HEADER_RE)
@@ -2862,22 +2871,22 @@ Deno.serve(async (req: Request) => {
       }
       // 3. 【備　考】セクション or 備考インライン
       if (!projectDescription) {
-        const bikoStart = body.search(/【備[ \t\u3000]?考[ \t\u3000]?】/)
+        const bikoStart = bodyClean.search(/【備[ \t\u3000]?考[ \t\u3000]?】/)
         if (bikoStart >= 0) {
-          const afterBiko = body.slice(bikoStart)
+          const afterBiko = bodyClean.slice(bikoStart)
           const markerEnd = afterBiko.indexOf('】') + 1
           const bikoRest = afterBiko.slice(markerEnd)
           const nextH = bikoRest.search(NEXT_HEADER_RE)
           projectDescription = (nextH >= 0 ? bikoRest.slice(0, nextH) : bikoRest)
             .replace(/^[ \t\u3000]+/gm, '').trim().slice(0, 300)
         } else {
-          const bikoMatch = body.match(/(?:備[ \t\u3000]?考|プロジェクト概要|案件概要)[：:]\s*([^\n]{10,200})/)
+          const bikoMatch = bodyClean.match(/(?:備[ \t\u3000]?考|プロジェクト概要|案件概要)[：:]\s*([^\n]{10,200})/)
           if (bikoMatch) projectDescription = bikoMatch[1].trim()
         }
       }
       // 4. 区切り線あり・スキルセクション除去後の先頭段落
-      if (!projectDescription && /[＝=━─*]{4,}/.test(body)) {
-        const bodyNoSkill = body.replace(new RegExp(`【スキル[^】]*】[\\s\\S]+?(?=${NEXT_HEADER_RE.source})`, 'm'), '')
+      if (!projectDescription && /[＝=━─*]{4,}/.test(bodyClean)) {
+        const bodyNoSkill = bodyClean.replace(new RegExp(`【スキル[^】]*】[\\s\\S]+?(?=${NEXT_HEADER_RE.source})`, 'm'), '')
         const bodyStripped = bodyNoSkill.replace(/^[＝=━─*]{4,}.*\n?/gm, '').trim()
         const noTitleBody = cleanTitle && bodyStripped.startsWith(cleanTitle.slice(0, 10))
           ? bodyStripped.slice(cleanTitle.length).replace(/^[\s\n]+/, '')
@@ -2886,6 +2895,15 @@ Deno.serve(async (req: Request) => {
         if (candidate.length >= 20) projectDescription = candidate
       }
       // 区切り線なし・内容セクションなしの場合は空（元メール本文アコーディオンで確認可能）
+
+      // ── 文章スキャン: 業界・役割を本文から補完（人材解析と同じ extractFromProse を流用）
+      const proseResult = extractFromProse(bodyClean, attachText)
+      const resolvedIndustry = proseResult.industries.length > 0
+        ? proseResult.industries.join('・')
+        : null
+      // roleSummary: PROSE_ROLES から案件に馴染む役割（PL/PM/SE等）のみ採用
+      const PROJECT_ROLE_LABELS = new Set(['PM・PMO', 'PL・テックリード', 'SE・設計', 'PG・実装', 'インフラ・SRE', 'データエンジニア', 'スクラムマスター'])
+      const resolvedRoleSummary = proseResult.roles.filter(r => PROJECT_ROLE_LABELS.has(r)).join('・') || null
 
       const result = {
         title: cleanTitle,
@@ -2904,8 +2922,8 @@ Deno.serve(async (req: Request) => {
         workload: null,
         settlementMin: null,
         settlementMax: null,
-        roleSummary: null,
-        industry: null,
+        roleSummary: resolvedRoleSummary,
+        industry: resolvedIndustry,
       }
       tracePhase = 'project_regex_done'
 
