@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates } from '../lib/db/candidates'
+import { logError } from '../lib/errorLog'
 import {
   fetchOpenProjects,
   projectToMatchRequirements,
@@ -761,7 +762,7 @@ export function MatchingPage({
       invalidateMatchingQueries()
       setMessage({ type: 'success', text: '参画確定にしました（同一人材の他案件は不採用に更新）' })
     },
-    onError: (e) => setMessage({ type: 'error', text: String(e) }),
+    onError: (e) => { logError(e, 'MatchingPage', undefined, { dataEnv, nickname }); setMessage({ type: 'error', text: String(e) }) },
   })
 
   const matchByProjectMutation = useMutation({
@@ -817,7 +818,7 @@ export function MatchingPage({
             : 'マッチングを更新しました（全件）',
       })
     },
-    onError: (e) => setMessage({ type: 'error', text: String(e) }),
+    onError: (e) => { logError(e, 'MatchingPage', undefined, { dataEnv, nickname }); setMessage({ type: 'error', text: String(e) }) },
   })
 
   const matchByCandidateMutation = useMutation({
@@ -869,7 +870,7 @@ export function MatchingPage({
             : 'マッチングを更新しました（この人材 × 募集中の全案件）',
       })
     },
-    onError: (e) => setMessage({ type: 'error', text: String(e) }),
+    onError: (e) => { logError(e, 'MatchingPage', undefined, { dataEnv, nickname }); setMessage({ type: 'error', text: String(e) }) },
   })
 
   const bulkAllProjectsMutation = useMutation({
@@ -956,7 +957,7 @@ export function MatchingPage({
       }
     },
     onSuccess: () => invalidateMatchingQueries(),
-    onError: (e) => setMessage({ type: 'error', text: String(e) }),
+    onError: (e) => { logError(e, 'MatchingPage', undefined, { dataEnv, nickname }); setMessage({ type: 'error', text: String(e) }) },
   })
 
   const bulkAllCandidatesMutation = useMutation({
@@ -1042,7 +1043,7 @@ export function MatchingPage({
       }
     },
     onSuccess: () => invalidateMatchingQueries(),
-    onError: (e) => setMessage({ type: 'error', text: String(e) }),
+    onError: (e) => { logError(e, 'MatchingPage', undefined, { dataEnv, nickname }); setMessage({ type: 'error', text: String(e) }) },
   })
 
   const scoreColor = (score: number) => {

@@ -139,30 +139,22 @@ export async function fetchCandidatesForMatching(dataEnv: DataEnv, limit = 800):
 }
 
 /**
- * 案件スキルで絞り込んだ候補者取得（プロジェクトマッチング専用）
- * - required_skills が1つ以上ある場合は skills && ARRAY[...] で絞り込む
+ * 案件スキルで絞り込んだ候補者取得（プロジェクトマッチング専用・RPC経由）
+ * - skills カラムは jsonb 型のため RPC 内で jsonb_array_elements_text を使用
+ * - required_skills が空の場合は絞り込みなし
  * - 順序: 登録日時 DESC → 経験年数 DESC（漏れ防止）
- * - required_skills が空の場合は絞り込みなし（fetchCandidatesForMatching 相当）
  */
 export async function fetchCandidatesForProject(
   requiredSkills: string[],
   dataEnv: DataEnv,
   limit = 500,
 ): Promise<Candidate[]> {
-  let query = supabase
-    .from('candidates')
-    .select('*')
-    .eq('data_env', dataEnv)
-    .is('merged_into', null)
-    .order('created_at', { ascending: false })
-    .order('experience_years', { ascending: false, nullsFirst: false })
-    .limit(limit)
-
-  if (requiredSkills.length > 0) {
-    query = query.overlaps('skills', requiredSkills)
-  }
-
-  const { data, error } = await query
+  const { data, error } = await supabase
+    .rpc('fetch_candidates_for_project', {
+      p_data_env: dataEnv,
+      p_skills: requiredSkills,
+      p_limit: limit,
+    })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
 }
