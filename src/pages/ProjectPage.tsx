@@ -739,6 +739,17 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
             <Briefcase size={15} />
             新規登録
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              invalidateProjectLists(queryClient, dataEnv)
+              queryClient.invalidateQueries({ queryKey: ['projects-count', dataEnv] })
+            }}
+            className="flex items-center gap-1.5 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
+            title="データを再読み込み"
+          >
+            <RefreshCw size={14} />
+          </button>
           <div className="relative flex-1 min-w-48">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
