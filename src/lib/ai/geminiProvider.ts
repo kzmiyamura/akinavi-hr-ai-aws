@@ -210,7 +210,7 @@ JSON:`.trim()
 抽出項目:
 - title: string（案件名。件名・本文から。不明なら "案件"）
 - client: string | null（クライアント名・エンド名。不明なら null）
-- description: string（案件概要・作業内容。箇条書き可）
+- description: string（案件概要・作業内容のみ。スキル要件はrequiredSkills/niceToHaveSkillsに入れるのでここには含めないこと。箇条書き可）
 - requiredSkills: string[]（必須スキル・技術。空なら[]）
 - niceToHaveSkills: string[]（尚可・歓迎。なければ[]）
 - budgetMin: number | null（月額最低単価・万円。不明ならnull）
