@@ -654,10 +654,10 @@ export function MatchingPage({
   })
 
   const projectList = projects as Project[]
-  // 同一人材疑い（duplicate_flag=true）かつ名前が「不明」の人材はマッチング対象外
-  // 名寄せ済み（merged_into != null）の人材もマッチング対象外（余った枠は別の人材が自動補充される）
+  // 同一人材疑い（duplicate_flag=true）の人材はマッチング対象外
+  // 名寄せ済み（merged_into != null）の人材もマッチング対象外
   const candidateList = useMemo(
-    () => (candidates as Candidate[]).filter((c) => !(c.duplicate_flag && c.name === '不明') && c.merged_into == null),
+    () => (candidates as Candidate[]).filter((c) => !c.duplicate_flag && c.merged_into == null),
     [candidates],
   )
 
