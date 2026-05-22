@@ -157,31 +157,34 @@ function buildBatchProjectToCandidatesPrompt(
   candidates: Array<CandidateInput & { ruleScore: number }>,
 ): string {
   const cList = candidates.map((c, i) =>
-    `[${i + 1}] id="${c.id}" name="${c.name}" score=${c.ruleScore} skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}"` +
+    `[${i + 1}] id="${c.id}" name="${c.name}" ruleScore=${c.ruleScore}` +
+    ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}"` +
     (c.availableRegions?.length ? ` regions=${JSON.stringify(c.availableRegions)}` : '') +
     (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
-    ` summary="${c.summary.slice(0, 80)}"` +
-    (c.agentComment ? ` comment="${c.agentComment.slice(0, 100)}"` : '')
+    ` summary="${c.summary.slice(0, 200)}"` +
+    (c.agentComment ? ` agentNote="${c.agentComment.slice(0, 150)}"` : '')
   ).join('\n')
 
-  return `人材と案件のマッチングコメント生成。JSON配列のみ返す。説明文・コードブロック禁止。
+  return `人材と案件のマッチング評価。JSON配列のみ返す。説明文・コードブロック禁止。
 
-案件: title="${project.title}" required=${JSON.stringify(project.requiredSkills)} budget=${project.budgetMin ?? '?'}〜${project.budgetMax ?? '?'}万 location="${project.workLocation ?? ''}" remote="${project.remotePolicy ?? ''}"
-${project.roleSummary ? `役割: ${project.roleSummary.slice(0, 150)}` : ''}
-${project.description ? `説明: ${project.description.slice(0, 200)}` : ''}
+案件:
+- タイトル: ${project.title}
+- 必須スキル: ${JSON.stringify(project.requiredSkills)}
+- 予算: ${project.budgetMin ?? '?'}〜${project.budgetMax ?? '?'}万
+- 勤務地: ${project.workLocation ?? '不明'} / リモート: ${project.remotePolicy ?? '不明'}
+${project.roleSummary ? `- 役割: ${project.roleSummary.slice(0, 200)}` : ''}
+${project.description ? `- 案件詳細: ${project.description.slice(0, 300)}` : ''}
 
-候補者${candidates.length}名（score はルールベース評価点）:
+候補者${candidates.length}名（ruleScore はスキル/経験/単価/場所のルールベース点）:
 ${cList}
 
-各候補者について50字以内のコメントを生成。**score の数値を最優先に従うこと。スキルや経験年数だけ見てコメントを書かないこと。**
+【指示】各候補者について以下を出力すること。
+1. score（0〜100の整数）: ruleScore を参考にしつつ、案件の役割・詳細・候補者の希望職種・経歴サマリーを加味して再採点する
+   - ruleScore が高くても案件の役割と経歴が合わなければ下げる
+   - ruleScore が低くても候補者の希望・経歴が案件に合っていれば上げる
+2. summary（100字以内）: スコアの根拠を具体的に述べる。スキル合致・経験・希望条件・懸念点を含める
 
-score別ルール（厳守）:
-- score≧80: 強みを具体的に褒める。「即戦力」「高度に合致」等の表現 OK
-- score 60〜79: 「概ね合致」程度の表現にとどめる。「即戦力」禁止
-- score 40〜59: 「部分的に合致」。ポジティブ断言禁止。合う点と足りない点を並記
-- score＜40: 懸念点を中心に指摘。ポジティブ表現禁止
-
-出力形式（配列のみ・改行なし）: [{"id":"...","summary":"50字以内"},...]`
+出力形式（配列のみ・改行なし）: [{"id":"...","score":整数,"summary":"100字以内"},...]`
 }
 
 function buildBatchCandidateToProjectsPrompt(
@@ -288,17 +291,24 @@ async function callAI(prompt: string): Promise<{ text: string; model: string }> 
   return { text, model: GEMINI_MODEL }
 }
 
-/** AI 応答テキストから JSON 配列を抽出（id + summary のみ。score は任意） */
-function parseArrayResponse(text: string): Array<{ id: string; summary: string }> {
+/** AI 応答テキストから JSON 配列を抽出 */
+function parseArrayResponse(text: string): Array<{ id: string; score: number | null; summary: string }> {
   const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
   const m = cleaned.match(/\[[\s\S]*\]/)
   if (!m) throw new Error(`JSON配列が見つかりません: ${cleaned.slice(0, 200)}`)
   const arr = JSON.parse(m[0])
   if (!Array.isArray(arr)) throw new Error('配列ではありません')
-  return arr.map(item => ({
-    id: String(item.id ?? ''),
-    summary: typeof item.summary === 'string' ? item.summary : '',
-  }))
+  return arr.map(item => {
+    const rawScore = item.score
+    const score = typeof rawScore === 'number' && rawScore >= 0 && rawScore <= 100
+      ? Math.round(rawScore)
+      : null
+    return {
+      id: String(item.id ?? ''),
+      score,
+      summary: typeof item.summary === 'string' ? item.summary : '',
+    }
+  })
 }
 
 // ─── メインハンドラー ──────────────────────────────────────────────────────────
@@ -333,7 +343,7 @@ Deno.serve(async (req) => {
       const ruleRest = scored.slice(topN)
 
       let usedModel = 'rule'
-      let aiResults: Array<{ id: string; summary: string }> = []
+      let aiResults: Array<{ id: string; score: number | null; summary: string }> = []
 
       if (aiTargets.length > 0) {
         const prompt = buildBatchProjectToCandidatesPrompt(projectRequirements, aiTargets)
@@ -348,15 +358,15 @@ Deno.serve(async (req) => {
         }
       }
 
-      // AI結果をidでマップ（summaryのみ）
+      // AI結果をidでマップ
       const aiMap = new Map(aiResults.map(r => [r.id, r]))
 
-      // topN: ruleScore をスコアとして使い、AI summaryがあれば付与
+      // topN: AIスコアを優先採用（取得できなければruleScoreで代替）
       const results: BatchResult[] = aiTargets.map(c => {
         const ai = aiMap.get(c.id)
         return {
           candidateId: c.id,
-          score: c.ruleScore,
+          score: ai?.score ?? c.ruleScore,
           summary: ai?.summary ?? '',
           method: ai ? 'ai' : 'rule',
           ruleScore: c.ruleScore,
@@ -397,7 +407,7 @@ Deno.serve(async (req) => {
       const ruleRest = scored.slice(topN)
 
       let usedModel = 'rule'
-      let aiResults: Array<{ id: string; summary: string }> = []
+      let aiResults: Array<{ id: string; score: number | null; summary: string }> = []
 
       if (aiTargets.length > 0) {
         const prompt = buildBatchCandidateToProjectsPrompt(candidateProfile, aiTargets)
@@ -414,13 +424,13 @@ Deno.serve(async (req) => {
 
       const aiMap = new Map(aiResults.map(r => [r.id, r]))
 
-      // topN: ruleScore をスコアとして使い、AI summaryがあれば付与
+      // topN: AIスコアを優先採用（取得できなければruleScoreで代替）
       const results: BatchResult[] = aiTargets.map(p => {
         const ai = aiMap.get(String(p.id ?? ''))
         return {
           candidateId: '',
           projectId: String(p.id ?? ''),
-          score: p.ruleScore,
+          score: ai?.score ?? p.ruleScore,
           summary: ai?.summary ?? '',
           method: ai ? 'ai' : 'rule',
           ruleScore: p.ruleScore,
