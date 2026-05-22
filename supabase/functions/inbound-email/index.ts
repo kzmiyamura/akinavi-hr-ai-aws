@@ -2665,9 +2665,27 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // 勤務地
-      const locationM = allProjectText.match(/(?:勤務地|作業場所|就業場所|常駐先)[：:\s]*([^\s\n、。]{2,20})/)
-      const workLocation = locationM ? locationM[1].trim() : (PREFECTURES.find(p => allProjectText.includes(p)) ?? null)
+      // 【X　Y】value 形式の抽出ヘルパー（全角スペース入りブラケット対応）
+      const extractBracket = (labels: string[]): string | null => {
+        for (const label of labels) {
+          const escaped = label.replace(/./g, (c) => `[${c}\u3000 ]?`.replace(/\[([^\u3000 ])\u3000 \]\?/g, c))
+          // シンプルに全角スペースを任意にした正規表現を生成
+          const labelPat = label.split('').join('[ \\t\\u3000]?')
+          const re = new RegExp(`【${labelPat}】[ \\t\\u3000]*([^\\n]{1,60})`)
+          const m = allProjectText.match(re)
+          if (m) return m[1].trim()
+        }
+        return null
+      }
+
+      // 勤務地: 【場　所】 または 勤務地: 形式
+      const locationBracket = extractBracket(['場所', '場　所', '勤務地', '作業場所', '就業場所'])
+      const locationM = !locationBracket
+        ? allProjectText.match(/(?:勤務地|作業場所|就業場所|常駐先)[：:\s]*([^\s\n、。]{2,20})/)
+        : null
+      const workLocation = locationBracket
+        ?? (locationM ? locationM[1].trim() : null)
+        ?? (PREFECTURES.find(p => allProjectText.includes(p)) ?? null)
 
       // リモート
       let remotePolicy: string | null = null
@@ -2683,28 +2701,55 @@ Deno.serve(async (req: Request) => {
       else if (/準委任/.test(allProjectText)) contractType = '準委任'
       else if (/請負/.test(allProjectText)) contractType = '請負'
 
+      // 予算: 【単　価】形式も対応
+      const budgetBracket = extractBracket(['単価', '単　価', '報酬', '単価・報酬'])
+      if (budgetBracket && budgetMin == null && budgetMax == null) {
+        const rangeM2 = budgetBracket.match(/(\d{2,3})\s*[〜~～]\s*(\d{2,3})\s*万/)
+        if (rangeM2) {
+          budgetMin = parseInt(rangeM2[1], 10)
+          budgetMax = parseInt(rangeM2[2], 10)
+        } else {
+          const singleM2 = budgetBracket.match(/(\d{2,3})\s*万/)
+          if (singleM2) {
+            const v = parseInt(singleM2[1], 10)
+            if (v >= 20 && v <= 300) budgetMax = v
+          }
+        }
+      }
+
       // 開始時期（startDate: YYYY-MM-DD ISO文字列に変換して格納）
       let startDate: string | null = null
-      const startDateM = allProjectText.match(
-        /(?:時[　\s]*期|開始時期|参画時期|参画予定|稼働開始|稼働予定|参画開始|開始予定|スタート)[：:\s　・]*([^\n]{2,30})/
-      )
-      if (startDateM) {
-        const rawDate = startDateM[1].trim().replace(/[　\s]+/g, '')
-        // YYYY年MM月 or YYYY/MM/DD or YYYY-MM-DD（年が明示されているパターン優先）
-        const yearMonthM = rawDate.match(/(\d{4})[年\/\-](\d{1,2})月?/)
-        if (yearMonthM) {
-          startDate = `${yearMonthM[1]}-${yearMonthM[2].padStart(2, '0')}-01`
+      let endDate: string | null = null
+      // 【時　期】形式 or キーワード形式のどちらにも対応
+      const timingRaw = extractBracket(['時期', '時　期', '開始時期', '参画時期', '稼働時期'])
+        ?? allProjectText.match(/(?:開始時期|参画時期|参画予定|稼働開始|稼働予定|参画開始|開始予定|スタート)[：:\s　・]*([^\n]{2,30})/)?.[1]
+        ?? null
+      if (timingRaw) {
+        const rawNorm = timingRaw.trim().replace(/[　\s]+/g, '')
+        // 「7月～2027年2月」→ startDate=7月, endDate=2027-02
+        const rangeM3 = rawNorm.match(/(\d{1,2})月[〜~～](\d{4})[年\/](\d{1,2})/)
+        if (rangeM3) {
+          const mo = parseInt(rangeM3[1], 10)
+          const now = new Date()
+          const yr = mo < now.getMonth() + 1 ? now.getFullYear() + 1 : now.getFullYear()
+          startDate = `${yr}-${String(mo).padStart(2, '0')}-01`
+          endDate = `${rangeM3[2]}-${rangeM3[3].padStart(2, '0')}-01`
         } else {
-          // 「7月〜」等、年なしの月表記 → 当該月の1日にマッピング
-          const moM = rawDate.match(/(\d{1,2})月/)
-          if (moM) {
-            const mo = parseInt(moM[1], 10)
-            const now = new Date()
-            const yr = mo < now.getMonth() + 1 ? now.getFullYear() + 1 : now.getFullYear()
-            startDate = `${yr}-${String(mo).padStart(2, '0')}-01`
-          } else if (/即日|即時|ASAP/i.test(rawDate)) {
-            const d2 = new Date()
-            startDate = `${d2.getFullYear()}-${String(d2.getMonth()+1).padStart(2,'0')}-01`
+          // YYYY年MM月 or YYYY/MM/DD or YYYY-MM-DD
+          const yearMonthM = rawNorm.match(/(\d{4})[年\/\-](\d{1,2})月?/)
+          if (yearMonthM) {
+            startDate = `${yearMonthM[1]}-${yearMonthM[2].padStart(2, '0')}-01`
+          } else {
+            const moM = rawNorm.match(/(\d{1,2})月/)
+            if (moM) {
+              const mo = parseInt(moM[1], 10)
+              const now = new Date()
+              const yr = mo < now.getMonth() + 1 ? now.getFullYear() + 1 : now.getFullYear()
+              startDate = `${yr}-${String(mo).padStart(2, '0')}-01`
+            } else if (/即日|即時|ASAP/i.test(rawNorm)) {
+              const d2 = new Date()
+              startDate = `${d2.getFullYear()}-${String(d2.getMonth()+1).padStart(2,'0')}-01`
+            }
           }
         }
       }
@@ -2815,11 +2860,19 @@ Deno.serve(async (req: Request) => {
             .slice(0, 300)
         }
       }
-      // 3. 備考・概要のインライン記述
+      // 3. 【備　考】セクション or 備考インライン
       if (!projectDescription) {
-        const bikoMatch = body.match(/(?:備[ \t\u3000]?考|プロジェクト概要|案件概要)[：:]\s*([^\n]{10,200})/)
-        if (bikoMatch) {
-          projectDescription = bikoMatch[1].trim()
+        const bikoStart = body.search(/【備[ \t\u3000]?考[ \t\u3000]?】/)
+        if (bikoStart >= 0) {
+          const afterBiko = body.slice(bikoStart)
+          const markerEnd = afterBiko.indexOf('】') + 1
+          const bikoRest = afterBiko.slice(markerEnd)
+          const nextH = bikoRest.search(NEXT_HEADER_RE)
+          projectDescription = (nextH >= 0 ? bikoRest.slice(0, nextH) : bikoRest)
+            .replace(/^[ \t\u3000]+/gm, '').trim().slice(0, 300)
+        } else {
+          const bikoMatch = body.match(/(?:備[ \t\u3000]?考|プロジェクト概要|案件概要)[：:]\s*([^\n]{10,200})/)
+          if (bikoMatch) projectDescription = bikoMatch[1].trim()
         }
       }
       // 4. 区切り線あり・スキルセクション除去後の先頭段落
@@ -2843,7 +2896,7 @@ Deno.serve(async (req: Request) => {
         budgetMin,
         budgetMax,
         startDate,
-        endDate: null,
+        endDate,
         workLocation,
         remotePolicy,
         contractType,
