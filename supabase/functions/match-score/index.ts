@@ -16,8 +16,15 @@ function buildPrompt(candidate: unknown, project: unknown): string {
 人材: ${JSON.stringify(candidate)}
 案件: ${JSON.stringify(project)}
 
+summaryには以下を優先順に含めること（150字以内）:
+- 必須スキルの合致状況（何が合っていて何が不足か）
+- 経験年数と案件要件の比較
+- 単価の合致・乖離
+- 勤務地・リモート希望の一致
+- 懸念点があれば明記
+
 出力形式（1行・改行なし）:
-{"score":数値0-100,"summary":"理由100字以内","duplicateSuspected":false}`.trim()
+{"score":数値0-100,"summary":"150字以内","duplicateSuspected":false}`.trim()
 }
 
 async function callGroq(key: string, prompt: string, model: string): Promise<string> {
