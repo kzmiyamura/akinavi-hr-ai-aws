@@ -2804,7 +2804,7 @@ Deno.serve(async (req: Request) => {
                 .replace(/^[★☆●◆◇■□▼▲※・\s]+/, '')
                 .replace(/[）\s]+$/, '')
                 .trim()
-              if (cand.length >= 5 && !sepRe.test(cand) && !/^[（(【]/.test(cand)) {
+              if (cand.length >= 5 && !SEP_LINE_RE.test(cand) && !/^[（(【]/.test(cand)) {
                 cleanTitle = cand.slice(0, 80)
                 break outer
               }
@@ -2815,7 +2815,7 @@ Deno.serve(async (req: Request) => {
         if (GENERIC_SUBJECTS.some(s => cleanTitle.toLowerCase() === s.toLowerCase())) {
           const firstMeaningfulLine = bodyLines.find(l => {
             const t = l.replace(/【[^】]*】/g, '').replace(/^[★☆●◆◇■□▼▲※・\s]+/, '').trim()
-            return t.length >= 5 && !sepRe.test(t)
+            return t.length >= 5 && !SEP_LINE_RE.test(t)
           })
           if (firstMeaningfulLine) {
             cleanTitle = firstMeaningfulLine
