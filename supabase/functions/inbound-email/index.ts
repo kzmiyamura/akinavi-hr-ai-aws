@@ -2758,9 +2758,20 @@ Deno.serve(async (req: Request) => {
       let projectRequiredSkills = dbSkillNames.filter(s => !PROJECT_PROCESS_NOISE.has(s))
       let projectNiceToHaveSkills: string[] = []
 
-      const skillSectionM2 = allProjectText.match(/【スキル[^】]*】([\s\S]+?)(?=\n\s*【[^】]{1,20}】|\n[＝=━─*]{4,}|$)/)
+      // \s は全角スペース(\u3000)にマッチしないため [ \t\u3000]* を使う
+      const WS = '[ \\t\\u3000]*'  // 行頭の空白（半角スペース・タブ・全角スペース）
+      const NEXT_HEADER_RE = new RegExp(`\\n${WS}【[^】]{1,20}】`)
+      // 【スキル】セクション: 次の【...】ヘッダーまで
+      const skillSectionM2 = (() => {
+        const start = allProjectText.search(/【スキル[^】]*】/)
+        if (start < 0) return null
+        const afterStart = allProjectText.slice(start)
+        const rest = afterStart.slice(afterStart.indexOf('】') + 1)
+        const end = rest.search(NEXT_HEADER_RE)
+        return { text: end >= 0 ? rest.slice(0, end) : rest }
+      })()
       if (skillSectionM2) {
-        const skillText = skillSectionM2[1]
+        const skillText = skillSectionM2.text
         const niceIdx = skillText.search(/[＜<]尚可[＞>]|尚可[：:]/)
         const requiredText = niceIdx >= 0 ? skillText.slice(0, niceIdx) : skillText
         const niceText = niceIdx >= 0 ? skillText.slice(niceIdx) : ''
@@ -2779,31 +2790,36 @@ Deno.serve(async (req: Request) => {
       // ── description: 優先順で抽出 ─────────────────────────────────────
       let projectDescription = ''
       // 1. 【案件背景・概要】等のセクション
-      const descSectionM = body.match(/【(?:案件背景[・．]?概要?|案件概要|概要|背景|プロジェクト概要)】\s*\n?([\s\S]{10,400})/)
+      const descSectionM = body.match(/【(?:案件背景[・．]?概要?|案件概要|概要|背景|プロジェクト概要)】[ \t\u3000]*\n?([\s\S]{10,400})/)
       if (descSectionM) {
-        projectDescription = descSectionM[1].split(/\n(?=【)/)[0].trim().slice(0, 300)
+        projectDescription = descSectionM[1].split(NEXT_HEADER_RE)[0].trim().slice(0, 300)
       }
       // 2. 【内　容】/【内容】セクション（日本語標準案件フォーマット）
       if (!projectDescription) {
-        const contentM = body.match(/【内[　\s]?容[　\s]?】([^\n]*(?:\n(?!\s*【)[^\n]*)*)/)
-        if (contentM) {
-          projectDescription = contentM[1]
+        const contentStart = body.search(/【内[ \t\u3000]?容[ \t\u3000]?】/)
+        if (contentStart >= 0) {
+          const afterMarker = body.slice(contentStart)
+          const markerEnd = afterMarker.indexOf('】') + 1
+          const contentRest = afterMarker.slice(markerEnd)
+          const nextHeader = contentRest.search(NEXT_HEADER_RE)
+          const raw = nextHeader >= 0 ? contentRest.slice(0, nextHeader) : contentRest
+          projectDescription = raw
             .replace(/[＜<][^＞>]+[＞>]/g, '')   // ＜体制＞等のサブ見出しを除去
-            .replace(/^\s+/gm, '')
+            .replace(/^[ \t\u3000]+/gm, '')
             .trim()
             .slice(0, 300)
         }
       }
       // 3. 備考・概要のインライン記述
       if (!projectDescription) {
-        const bikoMatch = body.match(/(?:備[　\s]?考|プロジェクト概要|案件概要)[：:]\s*([^\n]{10,200})/)
+        const bikoMatch = body.match(/(?:備[ \t\u3000]?考|プロジェクト概要|案件概要)[：:]\s*([^\n]{10,200})/)
         if (bikoMatch) {
           projectDescription = bikoMatch[1].trim()
         }
       }
       // 4. 区切り線あり・スキルセクション除去後の先頭段落
       if (!projectDescription && /[＝=━─*]{4,}/.test(body)) {
-        const bodyNoSkill = body.replace(/【スキル[^】]*】[\s\S]+?(?=\n\s*【[^】]{1,20}】)/m, '')
+        const bodyNoSkill = body.replace(new RegExp(`【スキル[^】]*】[\\s\\S]+?(?=${NEXT_HEADER_RE.source})`, 'm'), '')
         const bodyStripped = bodyNoSkill.replace(/^[＝=━─*]{4,}.*\n?/gm, '').trim()
         const noTitleBody = cleanTitle && bodyStripped.startsWith(cleanTitle.slice(0, 10))
           ? bodyStripped.slice(cleanTitle.length).replace(/^[\s\n]+/, '')
