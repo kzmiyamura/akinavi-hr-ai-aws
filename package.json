@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:ui": "vitest --ui",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "check:edge": "deno check --no-npm supabase/functions/inbound-email/index.ts",
+    "deploy:edge": "bash scripts/check-and-deploy-edge.sh inbound-email"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
