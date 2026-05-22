@@ -2749,36 +2749,76 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // description: 【案件背景・概要】等のセクションから抽出。なければ先頭300字（区切り線除去）
+      // ── 案件スキル: 【スキル】セクション内に絞り込み + 工程語除外 ─────────
+      // 「基本設計～テストの経験」等の工程記述からスキルが誤マッチするのを防ぐ
+      const PROJECT_PROCESS_NOISE = new Set([
+        'テスト', '基本設計', '詳細設計', '要件定義', '保守開発', 'テスト設計',
+        'システム開発', 'システム保守', '機能追加', '改修',
+      ])
+      let projectRequiredSkills = dbSkillNames.filter(s => !PROJECT_PROCESS_NOISE.has(s))
+      let projectNiceToHaveSkills: string[] = []
+
+      const skillSectionM2 = allProjectText.match(/【スキル[^】]*】([\s\S]+?)(?=\n\s*【[^】]{1,20}】|\n[＝=━─*]{4,}|$)/)
+      if (skillSectionM2) {
+        const skillText = skillSectionM2[1]
+        const niceIdx = skillText.search(/[＜<]尚可[＞>]|尚可[：:]/)
+        const requiredText = niceIdx >= 0 ? skillText.slice(0, niceIdx) : skillText
+        const niceText = niceIdx >= 0 ? skillText.slice(niceIdx) : ''
+        const skillFiltered = dbSkillNames.filter(s => !PROJECT_PROCESS_NOISE.has(s))
+        const inRequired = skillFiltered.filter(s =>
+          requiredText.toLowerCase().includes(s.toLowerCase()),
+        )
+        projectRequiredSkills = inRequired.length > 0 ? inRequired : skillFiltered
+        if (niceText) {
+          projectNiceToHaveSkills = skillFiltered
+            .filter(s => niceText.toLowerCase().includes(s.toLowerCase()))
+            .filter(s => !projectRequiredSkills.includes(s))
+        }
+      }
+
+      // ── description: 優先順で抽出 ─────────────────────────────────────
       let projectDescription = ''
+      // 1. 【案件背景・概要】等のセクション
       const descSectionM = body.match(/【(?:案件背景[・．]?概要?|案件概要|概要|背景|プロジェクト概要)】\s*\n?([\s\S]{10,400})/)
       if (descSectionM) {
         projectDescription = descSectionM[1].split(/\n(?=【)/)[0].trim().slice(0, 300)
       }
+      // 2. 【内　容】/【内容】セクション（日本語標準案件フォーマット）
       if (!projectDescription) {
-        // 備考・概要のインライン記述を探す
+        const contentM = body.match(/【内[　\s]?容[　\s]?】([^\n]*(?:\n(?!\s*【)[^\n]*)*)/)
+        if (contentM) {
+          projectDescription = contentM[1]
+            .replace(/[＜<][^＞>]+[＞>]/g, '')   // ＜体制＞等のサブ見出しを除去
+            .replace(/^\s+/gm, '')
+            .trim()
+            .slice(0, 300)
+        }
+      }
+      // 3. 備考・概要のインライン記述
+      if (!projectDescription) {
         const bikoMatch = body.match(/(?:備[　\s]?考|プロジェクト概要|案件概要)[：:]\s*([^\n]{10,200})/)
         if (bikoMatch) {
           projectDescription = bikoMatch[1].trim()
         }
       }
+      // 4. 区切り線あり・スキルセクション除去後の先頭段落
       if (!projectDescription && /[＝=━─*]{4,}/.test(body)) {
-        // 区切り線を含む構造化メールのみ先頭段落をフォールバックとして使用
-        const bodyStripped = body.replace(/^[＝=━─*]{4,}.*\n?/gm, '').trim()
+        const bodyNoSkill = body.replace(/【スキル[^】]*】[\s\S]+?(?=\n\s*【[^】]{1,20}】)/m, '')
+        const bodyStripped = bodyNoSkill.replace(/^[＝=━─*]{4,}.*\n?/gm, '').trim()
         const noTitleBody = cleanTitle && bodyStripped.startsWith(cleanTitle.slice(0, 10))
           ? bodyStripped.slice(cleanTitle.length).replace(/^[\s\n]+/, '')
           : bodyStripped
-        projectDescription = noTitleBody.split(/\n{2,}/)[0].trim().slice(0, 300)
+        const candidate = noTitleBody.split(/\n{2,}/)[0].trim().slice(0, 300)
+        if (candidate.length >= 20) projectDescription = candidate
       }
-      // 区切り線なしのフリーフォームテキストは description を空にする
-      // （生テキストは「元メール本文」アコーディオンで参照可能）
+      // 区切り線なし・内容セクションなしの場合は空（元メール本文アコーディオンで確認可能）
 
       const result = {
         title: cleanTitle,
         client: null,
-        description: projectDescription || body.slice(0, 300),
-        requiredSkills: dbSkillNames,
-        niceToHaveSkills: [],
+        description: projectDescription,
+        requiredSkills: projectRequiredSkills,
+        niceToHaveSkills: projectNiceToHaveSkills,
         budgetMin,
         budgetMax,
         startDate,
