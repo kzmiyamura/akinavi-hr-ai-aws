@@ -1,9 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, Briefcase, RefreshCw, Search, ChevronDown, ChevronUp, Pencil, Trash2, X, MapPin, Wifi, Mail, Paperclip, ChevronRight } from 'lucide-react'
-import { ai } from '../lib/ai'
 import {
-  insertProject,
   fetchProjectsPage,
   fetchProjectCount,
   searchProjects,
@@ -15,10 +13,9 @@ import {
 } from '../lib/db/projects'
 import type { Project } from '../lib/db/projects'
 import type { DataEnv } from '../lib/dataEnv'
-import type { ImageFileData } from '../lib/ai/types'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
 import { DemoProjectCandidateGen } from '../components/DemoProjectCandidateGen'
-import { extractTextFromExcel, extractTextFromWord, imageFileToBase64, getFileCategory } from '../lib/fileParser'
+import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../lib/fileParser'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import { supabase } from '../lib/supabase'
 
@@ -446,7 +443,6 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
   const [editingProject, setEditingProject] = useState<Project | null>(null)
-  const [imageFiles, setImageFiles] = useState<ImageFileData[]>([])
   const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([])
   const [fileLoading, setFileLoading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -458,7 +454,6 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
     setFileLoading(true)
     setMessage(null)
     try {
-      const newImages: ImageFileData[] = []
       const newNames: string[] = []
       for (const file of files) {
         const category = getFileCategory(file)
@@ -473,14 +468,11 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
           setText((prev) => prev ? `${prev}\n\n${extracted}` : extracted)
           newNames.push(`${file.name}（テキスト抽出済み）`)
         } else if (category === 'image') {
-          const imgData = await imageFileToBase64(file)
-          newImages.push(imgData)
-          newNames.push(file.name)
+          setMessage({ type: 'error', text: `${file.name}：画像はテキスト解析対象外です。テキストを手動で貼り付けてください` })
         } else {
-          setMessage({ type: 'error', text: `${file.name} はPDF・Excel・Word・画像ファイルを選択してください` })
+          setMessage({ type: 'error', text: `${file.name} はExcel・Wordファイルを選択してください` })
         }
       }
-      setImageFiles((prev) => [...prev, ...newImages])
       setUploadedFileNames((prev) => [...prev, ...newNames])
     } catch {
       setMessage({ type: 'error', text: 'ファイルの読み込みに失敗しました' })
@@ -492,12 +484,6 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
 
   function removeFile(index: number) {
     setUploadedFileNames((prev) => prev.filter((_, i) => i !== index))
-    setImageFiles((prev) => {
-      const namesBefore = uploadedFileNames.slice(0, index)
-      const imageIndexOffset = namesBefore.filter((n) => !n.includes('テキスト抽出済み')).length
-      if (uploadedFileNames[index]?.includes('テキスト抽出済み')) return prev
-      return prev.filter((_, i) => i !== imageIndexOffset)
-    })
   }
 
   const { data: isImportActive } = useQuery({
@@ -584,24 +570,11 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
     invalidateProjectLists(queryClient, dataEnv)
     queryClient.invalidateQueries({ queryKey: ['projects-count', dataEnv] })
     setText('')
-    setImageFiles([])
     setUploadedFileNames([])
     setShowRegisterModal(false)
     setMessage({ type: 'success', text: `登録完了: ${project.title}` })
     setSelectedId(project.id)
   }
-
-  const mutation = useMutation({
-    mutationFn: async (rawText: string) => {
-      const analyzed = await ai.analyzeProject({
-        rawText,
-        imageFiles: imageFiles.length > 0 ? imageFiles : undefined,
-      })
-      return insertProject({ analyzed, rawText, createdBy: nickname, dataEnv })
-    },
-    onSuccess: onProjectRegisterSuccess,
-    onError: (e) => { setMessage({ type: 'error', text: String(e) }) },
-  })
 
   const noAiMutation = useMutation({
     mutationFn: async (rawText: string) => {
@@ -710,7 +683,7 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={fileLoading || mutation.isPending}
+                  disabled={fileLoading || noAiMutation.isPending}
                   className="flex items-center gap-1.5 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {fileLoading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
@@ -740,20 +713,11 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
               </button>
               <button
                 onClick={() => { setMessage(null); noAiMutation.mutate(text) }}
-                disabled={!text.trim() || noAiMutation.isPending || mutation.isPending || fileLoading}
-                className="flex items-center gap-2 bg-green-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                title="AIを使わずregexで解析（メール取込と同じ方式）"
-              >
-                {noAiMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Briefcase size={16} />}
-                {noAiMutation.isPending ? '解析中...' : 'AIなしで登録'}
-              </button>
-              <button
-                onClick={() => { setMessage(null); mutation.mutate(text) }}
-                disabled={(!text.trim() && imageFiles.length === 0) || mutation.isPending || noAiMutation.isPending || fileLoading}
+                disabled={!text.trim() || noAiMutation.isPending || fileLoading}
                 className="flex items-center gap-2 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {mutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Briefcase size={16} />}
-                {mutation.isPending ? 'AI解析中...' : 'AIで登録'}
+                {noAiMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <Briefcase size={16} />}
+                {noAiMutation.isPending ? '解析中...' : '登録'}
               </button>
             </div>
           </div>

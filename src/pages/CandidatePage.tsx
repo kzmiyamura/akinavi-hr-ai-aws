@@ -1,17 +1,15 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply } from 'lucide-react'
-import { ai } from '../lib/ai'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { upsertCandidate, updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate } from '../lib/db/candidates'
+import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate } from '../lib/db/candidates'
 import type { SearchScope } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
 import type { DataEnv } from '../lib/dataEnv'
-import type { ImageFileData } from '../lib/ai/types'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
-import { extractTextFromExcel, extractTextFromWord, imageFileToBase64, getFileCategory } from '../lib/fileParser'
+import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../lib/fileParser'
 
 interface SkillsByCategory {
   languages: string[]
@@ -604,7 +602,6 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
   const [searchScope, setSearchScope] = useState<SearchScope>('tags')
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null)
-  const [imageFiles, setImageFiles] = useState<ImageFileData[]>([])
   const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([])
   const [fileLoading, setFileLoading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -616,7 +613,6 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     setFileLoading(true)
     setMessage(null)
     try {
-      const newImages: ImageFileData[] = []
       const newNames: string[] = []
       for (const file of files) {
         const category = getFileCategory(file)
@@ -631,14 +627,11 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           setText((prev) => prev ? `${prev}\n\n${extracted}` : extracted)
           newNames.push(`${file.name}（テキスト抽出済み）`)
         } else if (category === 'image') {
-          const imgData = await imageFileToBase64(file)
-          newImages.push(imgData)
-          newNames.push(file.name)
+          setMessage({ type: 'error', text: `${file.name}：画像はテキスト解析対象外です。テキストを手動で貼り付けてください` })
         } else {
-          setMessage({ type: 'error', text: `${file.name} はPDF・Excel・Word・画像ファイルを選択してください` })
+          setMessage({ type: 'error', text: `${file.name} はExcel・Wordファイルを選択してください` })
         }
       }
-      setImageFiles((prev) => [...prev, ...newImages])
       setUploadedFileNames((prev) => [...prev, ...newNames])
     } catch {
       setMessage({ type: 'error', text: 'ファイルの読み込みに失敗しました' })
@@ -650,12 +643,6 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   function removeFile(index: number) {
     setUploadedFileNames((prev) => prev.filter((_, i) => i !== index))
-    setImageFiles((prev) => {
-      const namesBefore = uploadedFileNames.slice(0, index)
-      const imageIndexOffset = namesBefore.filter((n) => !n.includes('テキスト抽出済み')).length
-      if (uploadedFileNames[index]?.includes('テキスト抽出済み')) return prev
-      return prev.filter((_, i) => i !== imageIndexOffset)
-    })
   }
 
   const deleteMutation = useMutation({
@@ -777,7 +764,6 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
     queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
     setText('')
-    setImageFiles([])
     setUploadedFileNames([])
     setShowRegisterModal(false)
     const msg = candidate.duplicate_flag
@@ -786,18 +772,6 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     setMessage({ type: 'success', text: msg })
     setSelectedId(candidate.id)
   }
-
-  const mutation = useMutation({
-    mutationFn: async (rawText: string) => {
-      const analyzed = await ai.analyzeCandidate({
-        rawText,
-        imageFiles: imageFiles.length > 0 ? imageFiles : undefined,
-      })
-      return upsertCandidate({ analyzed, rawText, createdBy: nickname, dataEnv })
-    },
-    onSuccess: onRegisterSuccess,
-    onError: (e) => { setMessage({ type: 'error', text: String(e) }) },
-  })
 
   const noAiMutation = useMutation({
     mutationFn: async (rawText: string) => {
@@ -923,7 +897,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={fileLoading || mutation.isPending}
+                  disabled={fileLoading || noAiMutation.isPending}
                   className="flex items-center gap-1.5 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {fileLoading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
@@ -953,20 +927,11 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
               </button>
               <button
                 onClick={() => { setMessage(null); noAiMutation.mutate(text) }}
-                disabled={!text.trim() || noAiMutation.isPending || mutation.isPending || fileLoading}
-                className="flex items-center gap-2 bg-green-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                title="AIを使わずregex+スキルマスターDBで解析（メール取込と同じ方式）"
-              >
-                {noAiMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <UserPlus size={16} />}
-                {noAiMutation.isPending ? '解析中...' : 'AIなしで登録'}
-              </button>
-              <button
-                onClick={() => { setMessage(null); mutation.mutate(text) }}
-                disabled={(!text.trim() && imageFiles.length === 0) || mutation.isPending || noAiMutation.isPending || fileLoading}
+                disabled={!text.trim() || noAiMutation.isPending || fileLoading}
                 className="flex items-center gap-2 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {mutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <UserPlus size={16} />}
-                {mutation.isPending ? 'AI解析中...' : 'AIで登録'}
+                {noAiMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <UserPlus size={16} />}
+                {noAiMutation.isPending ? '解析中...' : '登録'}
               </button>
             </div>
           </div>
