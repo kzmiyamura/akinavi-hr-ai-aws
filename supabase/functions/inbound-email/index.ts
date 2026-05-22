@@ -2730,6 +2730,7 @@ Deno.serve(async (req: Request) => {
       if (workLocationRaw && !PREFECTURES.some(p => workLocationRaw.includes(p))) {
         const pref = inferPrefectureFromStation(workLocationRaw)
         if (pref) workLocation = `${pref} ${workLocationRaw}`
+        else console.log('[station_unmapped]', workLocationRaw)
       }
 
       // リモート（条件分岐のためキーワード判定を維持）
