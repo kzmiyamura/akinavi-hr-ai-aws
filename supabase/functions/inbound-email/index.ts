@@ -2751,9 +2751,10 @@ Deno.serve(async (req: Request) => {
 
       // ── 案件スキル: 【スキル】セクション内に絞り込み + 工程語除外 ─────────
       // 「基本設計～テストの経験」等の工程記述からスキルが誤マッチするのを防ぐ
+      // 【スキル】セクション限定で照合するため、工程名の除外は最小限にする
+      // テスト/基本設計/保守開発 等はスキルとして有効なので除外しない
       const PROJECT_PROCESS_NOISE = new Set([
-        'テスト', '基本設計', '詳細設計', '要件定義', '保守開発', 'テスト設計',
-        'システム開発', 'システム保守', '機能追加', '改修',
+        'システム開発', '機能追加', '改修',
       ])
       let projectRequiredSkills = dbSkillNames.filter(s => !PROJECT_PROCESS_NOISE.has(s))
       let projectNiceToHaveSkills: string[] = []
