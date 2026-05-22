@@ -2940,20 +2940,25 @@ Deno.serve(async (req: Request) => {
             .slice(0, 300)
         }
       }
-      // 3. 【備　考】セクション or 備考インライン
-      if (!projectDescription) {
+      // 3. 【備　考】セクション: 【内容】があっても常に追記（マッチング有用情報を落とさない）
+      const extractBiko = (): string => {
         const bikoStart = bodyClean.search(/【備[ \t\u3000]?考[ \t\u3000]?】/)
         if (bikoStart >= 0) {
           const afterBiko = bodyClean.slice(bikoStart)
           const markerEnd = afterBiko.indexOf('】') + 1
           const bikoRest = afterBiko.slice(markerEnd)
           const nextH = bikoRest.search(NEXT_HEADER_RE)
-          projectDescription = (nextH >= 0 ? bikoRest.slice(0, nextH) : bikoRest)
-            .replace(/^[ \t\u3000]+/gm, '').trim().slice(0, 300)
-        } else {
-          const bikoMatch = bodyClean.match(/(?:備[ \t\u3000]?考|プロジェクト概要|案件概要)[：:]\s*([^\n]{10,200})/)
-          if (bikoMatch) projectDescription = bikoMatch[1].trim()
+          return (nextH >= 0 ? bikoRest.slice(0, nextH) : bikoRest)
+            .replace(/^[ \t\u3000]+/gm, '').trim().slice(0, 200)
         }
+        const bikoMatch = bodyClean.match(/(?:備[ \t\u3000]?考|プロジェクト概要|案件概要)[：:]\s*([^\n]{10,200})/)
+        return bikoMatch ? bikoMatch[1].trim() : ''
+      }
+      const bikoText = extractBiko()
+      if (!projectDescription) {
+        projectDescription = bikoText
+      } else if (bikoText) {
+        projectDescription = `${projectDescription}\n\n【備考】${bikoText}`.slice(0, 500)
       }
       // 4. 区切り線あり・スキルセクション除去後の先頭段落
       if (!projectDescription && /[＝=━─*]{4,}/.test(bodyClean)) {
