@@ -1,6 +1,6 @@
 ---
 name: quality-check
-description: AkiNavi HR-AIの品質チェック。skill_masterメンテ・駅名マッピング・取りこぼし調査・異常監視を順番に実施する。
+description: AkiNavi HR-AIの品質チェック。skill_masterメンテ・駅名マッピング・取りこぼし調査・異常監視・AIコスト監視を順番に実施する。
 ---
 
 以下の手順を順番に実施すること。各ステップで問題が見つかった場合は内容を報告し、修正が必要なものはユーザーに確認を取ってから実行する。
@@ -88,7 +88,7 @@ LIMIT 20;
 
 ```sql
 SELECT model, COUNT(*) AS total,
-       SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) AS errors,
+       SUM(CASE WHEN error_message IS NOT NULL THEN 1 ELSE 0 END) AS errors,
        ROUND(AVG(duration_ms)) AS avg_ms
 FROM ai_logs
 WHERE created_at > now() - interval '7 days'
@@ -98,6 +98,117 @@ ORDER BY total DESC;
 
 - エラー率が10%超のモデルがあれば報告する
 - 平均処理時間が異常に長いものがあれば報告する
+
+---
+
+## ⑤ AIコスト監視（費用削減）
+
+### 5-1. モデル別・日次呼び出し数の集計
+
+```sql
+SELECT
+  DATE(created_at AT TIME ZONE 'Asia/Tokyo') AS day,
+  SUM(CASE WHEN model ILIKE '%gemini%'   THEN 1 ELSE 0 END) AS gemini,
+  SUM(CASE WHEN model ILIKE '%gemini%' AND error_message IS NOT NULL THEN 1 ELSE 0 END) AS gemini_err,
+  SUM(CASE WHEN model ILIKE '%groq%' OR model ILIKE '%llama%' THEN 1 ELSE 0 END) AS groq,
+  SUM(CASE WHEN model ILIKE '%cerebras%' OR model = 'llama3.1-8b' THEN 1 ELSE 0 END) AS cerebras,
+  SUM(CASE WHEN model ILIKE '%bedrock%'  THEN 1 ELSE 0 END) AS bedrock,
+  SUM(CASE WHEN model = 'no-ai'          THEN 1 ELSE 0 END) AS no_ai
+FROM ai_logs
+WHERE created_at > now() - interval '14 days'
+GROUP BY day
+ORDER BY day DESC;
+```
+
+**チェックポイント:**
+- **Gemini 無料枠**: gemini-2.5-flash-lite は 1,500 RPD / 15 RPM、gemini-2.5-flash は 500 RPD / 10 RPM
+  - 1日の呼び出し数がこの値に近い/超えていれば「無料枠圧迫」として警告
+- **Gemini エラー率が高い** → `[429 Too Many Requests]` は無料枠超過 or prepaymentクレジット枯渇のサイン
+  - エラーメッセージ `"Your prepayment credits are depleted"` があれば即報告
+- **Bedrock 列が 0 以外** → AWS Bedrock は有料サービス。不明な使用が発生していれば即報告し原因を調査
+- **Groq**: 無料枠は llama-3.3-70b-versatile で約 1,000 RPD。超過は翌日リセット待ちか有料プランが必要
+- **no-ai 列のみ** が理想状態（inbound-email の AI 廃止が正常に機能している）
+
+### 5-2. フォールバック多発の検出
+
+match-score は Cerebras → Groq → Gemini の順にフォールバックする。失敗が連鎖すると高コストな Gemini が多用される。
+
+```sql
+SELECT
+  DATE(created_at AT TIME ZONE 'Asia/Tokyo') AS day,
+  SUM(CASE WHEN model = 'llama3.1-8b' AND error_message IS NOT NULL THEN 1 ELSE 0 END) AS cerebras_fail,
+  SUM(CASE WHEN (model ILIKE '%llama%' OR model ILIKE '%groq%') AND error_message IS NOT NULL THEN 1 ELSE 0 END) AS groq_fail,
+  SUM(CASE WHEN model ILIKE '%gemini%' THEN 1 ELSE 0 END) AS gemini_total,
+  SUM(CASE WHEN model ILIKE '%gemini%' AND error_message IS NOT NULL THEN 1 ELSE 0 END) AS gemini_fail
+FROM ai_logs
+WHERE created_at > now() - interval '7 days'
+  AND type != 'no-ai'
+GROUP BY day
+ORDER BY day DESC;
+```
+
+- Gemini 呼び出しが Groq 呼び出しを大幅に上回る日があればフォールバック多発と判断
+- 原因: Cerebras/Groq の無料枠枯渇、レート制限、API 障害
+
+### 5-3. Gemini クレジット枯渇エラーの確認
+
+```sql
+SELECT error_message, COUNT(*) AS cnt,
+       MIN(created_at)::date AS first_at, MAX(created_at)::date AS last_at
+FROM ai_logs
+WHERE model ILIKE '%gemini%'
+  AND error_message IS NOT NULL
+  AND created_at > now() - interval '30 days'
+GROUP BY error_message
+ORDER BY cnt DESC
+LIMIT 5;
+```
+
+- `"prepayment credits are depleted"` が出ていれば AI Studio で残高確認を案内する
+- `"429 Too Many Requests"` が続く場合は auto-match の実行頻度見直しを提案する
+
+### 5-4. auto-match の処理量チェック
+
+auto-match は毎日 JST 9:00 に動作し、直近 25 時間以内の案件に対して候補者を最大 40 名スコアリングする。
+
+```sql
+-- 直近14日の submissions 生成数（auto-match + 手動 match-score の合算）
+SELECT
+  DATE(created_at AT TIME ZONE 'Asia/Tokyo') AS day,
+  COUNT(*) AS new_submissions,
+  COUNT(DISTINCT candidate_id) AS unique_candidates,
+  COUNT(DISTINCT project_id) AS unique_projects
+FROM submissions
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days'
+GROUP BY day
+ORDER BY day DESC;
+```
+
+- 1日の submissions が急増している日は手動全件マッチングが実行された可能性がある
+- 同じ candidate_id × project_id ペアが複数件ある場合は重複スコアリングを確認
+
+```sql
+-- 重複スコアリング検出
+SELECT candidate_id, project_id, COUNT(*) AS score_count
+FROM submissions
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days'
+GROUP BY candidate_id, project_id
+HAVING COUNT(*) > 1
+ORDER BY score_count DESC
+LIMIT 10;
+```
+
+### 5-5. コスト削減の推奨アクション（判断基準）
+
+| 状態 | 推奨アクション |
+|---|---|
+| Gemini 1日 >1,000 回 | auto-match の対象案件・候補者数を削減を提案 |
+| Gemini エラー率 >30% | prepayment クレジット残高確認・Groq への切替検討を提案 |
+| Bedrock が登録されている | 即調査してコードから該当呼び出しを除去 |
+| Groq フォールバック多発 | Cerebras の無料枠リセット待ち or Groq 有料プランを案内 |
+| 重複スコアリング発見 | 対象ペアを削除し、`submissions` の UNIQUE 制約追加を検討 |
 
 ---
 
