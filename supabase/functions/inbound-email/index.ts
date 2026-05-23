@@ -266,7 +266,7 @@ function toExperienceYears(value: unknown): number | null {
 function extractSectionsByLabels(text: string, labels: string[]): string | null {
   if (!text.trim()) return null
   const prefix = '[【◆■●▼★◎※◇]?'
-  const suffix = '[】：: 　]+'
+  const suffix = '[】：: 　\n]+'
   const labelPattern = labels.map(l => `(?:${prefix}${l}${suffix})`).join('|')
   const sectionRe = new RegExp(`(?:${labelPattern})([\\s\\S]{1,600})`, 'gi')
   const found: string[] = []
@@ -497,7 +497,7 @@ const STATION_TO_PREFECTURE: Record<string, string> = {
   // 神奈川県
   '横浜': '神奈川県', '川崎': '神奈川県', '武蔵小杉': '神奈川県', '新横浜': '神奈川県',
   '関内': '神奈川県', '桜木町': '神奈川県', '上大岡': '神奈川県', '戸塚': '神奈川県',
-  '藤沢': '神奈川県', '茅ヶ崎': '神奈川県', '平塚': '神奈川県', '小田原': '神奈川県',
+  '藤沢': '神奈川県', '六会日大前': '神奈川県', '茅ヶ崎': '神奈川県', '平塚': '神奈川県', '小田原': '神奈川県',
   '鎌倉': '神奈川県', '逗子': '神奈川県', '横須賀': '神奈川県', '本厚木': '神奈川県',
   '海老名': '神奈川県', '相模大野': '神奈川県', '町田': '神奈川県', // 町田駅は東京都だが署名誤検出回避目的
   '鶴見': '神奈川県', '大船': '神奈川県', '東神奈川': '神奈川県',
@@ -837,7 +837,7 @@ function extractFieldTwoPhase(
   }
 
   const rSameLine = (sep: string) =>
-    new RegExp(`(?:${esc})[　 ]?${sep}[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
+    new RegExp(`(?:${esc})(?:（[^）]{1,20}）)?[　 ]?${sep}[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
 
   // ── Phase0: 本文ブロック絞り込み ──────────────────────────────
   // 空行2行以上でブロック分割し、ラベルを含む最初のブロック内で同行検索
@@ -1181,7 +1181,7 @@ function extractCandidateFieldsRegex(
 
   // ── 希望案件 ──────────────────────────────────────────────────
   const desiredProject = extractFieldTwoPhase(
-    ['希望案件','希望職種','希望業界','希望条件','希望業務','ご希望案件','ご希望'],
+    ['希望案件','希望職種','希望業界','希望条件','希望業務','ご希望案件','ご希望','希望'],
     bodyText, attachText,
     v => v.length >= 2,
     50,
