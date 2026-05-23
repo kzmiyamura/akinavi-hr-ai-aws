@@ -90,6 +90,8 @@ export interface AnalyzeCandidateResponse {
   desiredRate?: string | null
   /** 国籍（例: "中国籍", "日本"）- マッチングの懸念点判断に使用 */
   nationality?: string | null
+  /** 自己PR・アピールポイント - AIコメントの定性評価に使用 */
+  selfPR?: string | null
 }
 
 /** 案件情報解析のリクエスト */

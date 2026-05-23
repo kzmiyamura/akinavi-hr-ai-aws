@@ -65,6 +65,7 @@ function buildCandidateRawProfile(rawText: string, analyzed: AnalyzeCandidateRes
   if (analyzed.remoteAvailable != null) profile.remoteAvailable = analyzed.remoteAvailable
   if (analyzed.desiredRate != null) profile.desiredRate = analyzed.desiredRate
   if (analyzed.nationality != null) profile.nationality = analyzed.nationality
+  if (analyzed.selfPR != null) profile.selfPR = analyzed.selfPR
   return profile
 }
 
