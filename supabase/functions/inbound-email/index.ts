@@ -2274,7 +2274,7 @@ Deno.serve(async (req: Request) => {
     //   - 本文で既にマッチしたスキルは重複登録しない
     const masterSkills = await getSkillMasterFromDb(supabase)
 
-    const bodyText = [subject, body].join('\n')
+    const bodyText = decodeHtmlEntities([subject, body].join('\n'))
     const { matched: bodyMatched } = extractAndRemoveSkills(bodyText, masterSkills, { looseCert: false })
 
     const attachText = allTextContents.map(t => t.content ?? '').join('\n')
