@@ -62,6 +62,7 @@ type CandidateBatchInput = {
   availableRegions?: string[] | null
   preferredJobTypes?: string[] | null
   agentComment?: string | null
+  nationality?: string | null
 }
 
 function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
@@ -78,6 +79,7 @@ function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
     availableRegions: Array.isArray(rp?.availableRegions) ? (rp.availableRegions as string[]) : null,
     preferredJobTypes: Array.isArray(rp?.roles) ? (rp.roles as string[]) : null,
     agentComment: (rp?.agentComment as string | null) ?? null,
+    nationality: (rp?.nationality as string | null) ?? null,
   }
 }
 

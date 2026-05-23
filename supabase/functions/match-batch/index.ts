@@ -42,6 +42,7 @@ interface CandidateInput {
   availableRegions?: string[] | null
   preferredJobTypes?: string[] | null
   agentComment?: string | null
+  nationality?: string | null
 }
 
 interface ProjectReq {
@@ -162,7 +163,8 @@ function buildBatchProjectToCandidatesPrompt(
     (c.availableRegions?.length ? ` regions=${JSON.stringify(c.availableRegions)}` : '') +
     (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
     ` summary="${c.summary.slice(0, 200)}"` +
-    (c.agentComment ? ` agentNote="${c.agentComment.slice(0, 150)}"` : '')
+    (c.agentComment ? ` agentNote="${c.agentComment.slice(0, 150)}"` : '') +
+    (c.nationality ? ` nationality="${c.nationality}"` : '')
   ).join('\n')
 
   return `人材と案件のマッチング評価。JSON配列のみ返す。説明文・コードブロック禁止。
@@ -189,6 +191,7 @@ ${cList}
    - 単価の合致・乖離
    - 勤務地・リモート希望の一致
    - agentNote がある場合は人物評の特筆すべき点を1文で添える
+   - nationality がある場合、案件が日本国籍限定の可能性があれば懸念として明記
    - 懸念点や不足スキルがあれば明記
 
 出力形式（配列のみ・改行なし）: [{"id":"...","score":整数,"summary":"150字以内"},...]`

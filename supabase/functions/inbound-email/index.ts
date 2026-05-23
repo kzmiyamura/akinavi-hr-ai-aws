@@ -944,6 +944,7 @@ function extractCandidateFieldsRegex(
   name: string | null
   age: number | null
   gender: string | null
+  nationality: string | null
   nearestStation: string | null
   prefecture: string | null
   experienceYears: number | null
@@ -970,12 +971,14 @@ function extractCandidateFieldsRegex(
   let gender: string | null = null
   let nameStripped = cleanedName || ''
   // パターンA: (26歳/男性) (26歳/男性/日本) (26歳：男性) — 年齢が先・末尾に/国籍等があっても可
-  const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][ 　]*[/／：:][ 　]*(男性|女性|男|女)(?:[/／][^)）]*)?[\)）]/)
+  const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][ 　]*[/／：:][ 　]*(男性|女性|男|女)(?:[/／]([^)）]*))?[\)）]/)
   // パターンB: (男性/40歳) (女性/34歳) — 性別が先
   const genderAgeUnified = !agGenderUnified ? nameStripped.match(/[\(（](男性|女性|男|女)[ 　]*[/／][ 　]*(\d{2})[才歳][\)）]/) : null
+  let nationality: string | null = null
   if (agGenderUnified) {
     age = parseInt(agGenderUnified[1], 10)
     gender = agGenderUnified[2]
+    if (agGenderUnified[3]?.trim()) nationality = agGenderUnified[3].trim()
     nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][ 　]*[/／：:][ 　]*(?:男性|女性|男|女)(?:[/／][^)）]*)?[\)）]/, '').trim()
   } else if (genderAgeUnified) {
     gender = genderAgeUnified[1]
@@ -994,7 +997,6 @@ function extractCandidateFieldsRegex(
       nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[\)）]/, '').trim()
     }
   }
-  let name = nameStripped || null
 
   // ── ラベルなし 名前+年齢+性別 フォールバック ─────────────────────
   // 「■C-TN（44歳 / 男性）」のようにラベルなしで氏名・年齢・性別が記載されている場合
@@ -1018,7 +1020,17 @@ function extractCandidateFieldsRegex(
     }
   }
 
-  // ── ラベルあり別行フォールバック（年齢：30歳 / 性別：女性）─────────────
+  // 国籍 — 名前括弧内: （中国籍）（外国籍）（日本）等を抽出・除去
+  if (!nationality) {
+    const natInName = nameStripped.match(/[\s　]?[\(（]([^)）\d]{1,15}[籍人国][\)）]/)
+    if (natInName) {
+      nationality = natInName[1].trim()
+      nameStripped = nameStripped.replace(/[\s　]?[\(（][^)）\d]{1,15}[籍人国][\)）]/, '').trim()
+    }
+  }
+  let name = nameStripped || null
+
+  // ── ラベルあり別行フォールバック（年齢：30歳 / 性別：女性 / 国籍：中国）─
   // 名前から取れなかった場合に本文ラベルから補完する
   if (age === null) {
     const allText = bodyText + '\n' + attachText
@@ -1029,6 +1041,11 @@ function extractCandidateFieldsRegex(
     const allText = bodyText + '\n' + attachText
     const m = allText.match(/性\s*[　 ]*別\s*[：:]\s*(男性|女性|男|女)/)
     if (m) gender = m[1]
+  }
+  if (!nationality) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/国\s*[　 ]*籍\s*[：:]\s*([^\s\n、。]{1,15})/)
+    if (m) nationality = m[1].trim()
   }
 
   // ── 最寄駅 ────────────────────────────────────────────────────
@@ -1177,7 +1194,7 @@ function extractCandidateFieldsRegex(
     if (mPost) fromCompany = sanitizeFromCompany(`${mPost[1]}${mPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
   }
 
-  return { name, age, gender, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany }
+  return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany }
 }
 
 /**
@@ -2615,6 +2632,7 @@ Deno.serve(async (req: Request) => {
           desiredProject: regexFields.desiredProject,
           age: regexFields.age,
           gender: regexFields.gender,
+          nationality: regexFields.nationality,
           agentComment: extractAgentComment(body, attachText) ?? null,
           geminiParseFallback: parseFallback,
         },
