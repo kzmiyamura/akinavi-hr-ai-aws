@@ -13,6 +13,7 @@ const ProjectPage = lazy(() => import('./pages/ProjectPage').then(m => ({ defaul
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
 const CandidateDetailPage = lazy(() => import('./pages/CandidateDetailPage').then(m => ({ default: m.CandidateDetailPage })))
 const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage').then(m => ({ default: m.ProjectDetailPage })))
+const HeatmapPage = lazy(() => import('./pages/HeatmapPage').then(m => ({ default: m.HeatmapPage })))
 import type { DataEnv } from './lib/dataEnv'
 import {
   applyDemoKeyFromUrlToggle,
@@ -179,6 +180,9 @@ function AppInner() {
             )}
             {tabPage === 'settings' && (
               <SettingsPage demoUiEnabled={demoUiEnabled} />
+            )}
+            {tabPage === 'heatmap' && (
+              <HeatmapPage dataEnv={dataEnv} />
             )}
           </Suspense>
         </TabErrorBoundary>
