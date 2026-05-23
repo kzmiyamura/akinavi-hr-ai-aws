@@ -238,6 +238,8 @@ cd akinavi-hr-ai
 
 `supabase/migrations/` 配下の SQL ファイルを**ファイル名の昇順で全て**実行してください。代表的なファイルとその目的は以下のとおりです。
 
+**基本系（必須・name 順）**
+
 | 順番 | ファイル名 | 内容 |
 |---|---|---|
 | 1 | `add_ai_logs.sql` | AI解析のログテーブル |
@@ -251,20 +253,33 @@ cd akinavi-hr-ai
 | 9 | `add_resume_url.sql` | candidates に resume_url / drive_url / desired_rate / from_company を追加 |
 | 10 | `add_skill_master.sql` | スキルマスタテーブル + match_count RPC |
 | 11 | `seed_skill_master.sql` | スキルマスタ初期データ（約 1,600 件） |
-| 12 | `20260520121447_fix_skill_master_quality.sql` | JP1/Teraterm/Zabbix 等 32 件のスキル追加と alias 修正 |
-| 13 | `20260519090000_add_relevance_keywords.sql` ほか | 関連性キーワード辞書 + tighten 系（ファイル名順） |
-| 14 | `add_attachments_bucket.sql` | 添付ファイル用 Storage バケット |
-| 15 | `add_find_duplicate_candidates_rpc.sql` | 重複候補者検索 RPC |
-| 16 | `add_search_rpc.sql` | 検索用 RPC |
-| 17 | `add_email_polling_cron.sql` | 5分ごとのメールポーリング cron |
-| 18 | `add_auto_match_cron.sql` | 毎朝 JST 9:00 の自動マッチ cron |
-| 19 | `add_skill_cleanup_cron.sql` | 毎日 JST 3:00 のスキルマスタクリーンアップ cron |
-| 20 | `add_enrich_cron.sql` | Box 連携の再解析 cron（Box 運用時のみ必要） |
+| 12 | `add_attachments_bucket.sql` | 添付ファイル用 Storage バケット |
+| 13 | `add_find_duplicate_candidates_rpc.sql` | 重複候補者検索 RPC |
+| 14 | `add_search_rpc.sql` | 検索用 RPC |
+| 15 | `add_email_polling_cron.sql` | 5分ごとのメールポーリング cron |
+| 16 | `add_auto_match_cron.sql` | 毎朝 JST 9:00 の自動マッチ cron |
+| 17 | `add_skill_cleanup_cron.sql` | 毎日 JST 3:00 のスキルマスタクリーンアップ cron |
+| 18 | `add_enrich_cron.sql` | Box 連携の再解析 cron（Box 運用時のみ必要） |
 
-> ファイル名にタイムスタンプ（`YYYYMMDDHHMMSS_` プレフィックス）が付いているものはその順で。それ以外は `add_*.sql` の名前順で OK です。  
+**タイムスタンプ付き（Phase 4.9 以降の追加・必ずこの順で）**
+
+| 順番 | ファイル名 | 内容 |
+|---|---|---|
+| 19 | `20260519090000_add_relevance_keywords.sql` ほか | 関連性キーワード辞書 + tighten 系（ファイル名順） |
+| 20 | `20260520121447_fix_skill_master_quality.sql` | JP1/Teraterm/Zabbix 等 32 件のスキル追加と alias 修正 |
+| 21 | `20260520130000_add_work_phases.sql` | 構築/テスト/運用 等の工程系 + IBM AIX/DB2/WebSphere/Tivoli + NetApp/EMC/Hitachi 等 18 件追加 |
+| 22 | `20260521000000_add_search_scope.sql` | `search_candidates(p_scope)` に `tags / body / all` の 3 モードを追加 |
+| 23 | `20260521210000_add_bigquery_and_cloud_dwh.sql` | BigQuery/Redshift/Athena/Synapse/Databricks + Spark/Airflow/Looker Studio/Power BI/Tableau の 10 件追加 |
+| 24 | `20260522_add_error_logs.sql` | クライアントエラーログテーブル新規作成（フロントエラー追跡用） |
+| 25 | `20260522_add_fetch_candidates_for_matching.sql` | MatchingPage 用 RPC（人材→案件・直近30日順 800件） |
+| 26 | `20260522_add_fetch_candidates_for_project.sql` | 案件→人材方向の SQL 絞り込み RPC（jsonb skills の `&&` 演算子問題を回避） |
+| 27 | `20260523_add_process_skills.sql` | テスト / 保守開発 / 保守運用 / 調査分析 を methodologies に追加 |
+
+> ファイル名にタイムスタンプ（`YYYYMMDDHHMMSS_` プレフィックス）が付いているものはその順で。それ以外は `add_*.sql` の名前順で OK です。
 > `*_cron.sql` 系は `YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を実際の値に書き換えてから実行してください。
 
-> ⚠️ **重要**: `schema.sql` の `candidate_skills.check_category` は旧 11 カテゴリのまま残っています。`add_candidate_skills.sql` で 14 カテゴリへ上書きされるため、必ず migrations を全て流してください。
+> ⚠️ **重要**: `schema.sql` の `candidate_skills.check_category` は 14 カテゴリへ更新済みですが、`add_candidate_skills.sql` 等のマイグレーションも必ず流してください。
+> ⚠️ **重要**: `fetch_candidates_for_matching` / `fetch_candidates_for_project` RPC は MatchingPage の動作に必須です。これらを流さないとマッチング画面が空になります。
 
 ### 完了チェック
 
@@ -278,16 +293,18 @@ cd akinavi-hr-ai
 
 ## 第3章　AIの設定（APIキーの取得）
 
-> **重要**: 2026-05-19 のコミット `139a4f2` でメール解析（`inbound-email`）から AI 利用が完全に除去されました。  
-> 現在 AI を使うのは **マッチング処理（`match-score` / `auto-match`）** と **ブラウザでの入力解析** だけです。
+> **重要**: 2026-05-19 のコミット `139a4f2` でメール解析（`inbound-email`）から AI 利用が完全に除去され、コミット `a4dc3b4` でデッドコードも削除されました。
+> 2026-05-22 のコミット `b35df40` で新しい **`match-batch`** Edge Function が導入され、マッチング処理は「ルールベース事前フィルタ + バッチ AI 採点」方式になりました。
+> 現在 AI を使うのは **マッチング処理（`match-batch` / `match-score` / `auto-match`）** と **`poll-email` メール種別分類（任意・既定 OFF）** だけです。
 
 | AI | 主な用途 | 必須度 |
 |---|---|---|
-| Gemini | `auto-match`（毎朝 JST 9:00 自動マッチ）・ブラウザの入力解析・`match-score` 最終フォールバック | ◎ 必須 |
-| Groq | `match-score` の 2 段目（高精度モデル `llama-3.3-70b-versatile`） | ◎ 必須 |
-| Cerebras | `match-score` の 1 段目（軽量・実質無制限） | 推奨 |
+| Cerebras | `match-batch` / `match-score` の **1 段目**（軽量・実質無制限） | 推奨（高速化に寄与） |
+| Groq | `match-batch` / `match-score` の **2 段目**（高精度モデル `llama-3.3-70b-versatile`） | ◎ 必須 |
+| Gemini | `match-batch` / `match-score` の **最終フォールバック**・`poll-email` 種別分類 | ◎ 必須 |
 
 > **取得したAPIキーは第4章と第6章でまとめて登録します。ここではメモするだけでOKです。**
+> 3 段すべて失敗してもルールスコアで全代替されるため、システム自体は止まりませんが、AI 採点なしでは品質が落ちるので必ず Groq と Gemini は登録してください。
 
 ### 3-1. Gemini APIキーを取得する（必須）
 
@@ -352,8 +369,9 @@ Cerebras は `match-score` の 1 段目（軽量モデル `llama3.1-8b`）とし
 |---|---|
 | `inbound-email` | メール解析（AI 不使用・regex + DB 照合のみ） |
 | `poll-email` | Outlook のメール取得（5 分ごと cron） |
-| `auto-match` | 毎朝 JST 9:00 の自動マッチング |
-| `match-score` | UI から呼ばれるスコア計算 |
+| `auto-match` | 毎朝 JST 9:00 の自動マッチング（`match-batch` を内部呼び出し） |
+| `match-batch` | **バッチ AI 採点**（ルール事前フィルタ + topN を 1 コール採点・Phase 4.10 新規） |
+| `match-score` | UI から呼ばれる単発スコア計算（duplicate 検出付き） |
 | `microsoft-oauth` | Microsoft アカウント連携（OAuth コールバック） |
 | `enrich-candidate` | Box 連携・再解析（Box 運用時のみ） |
 | `skill-master-cleanup` | skill_master の毎日クリーンアップ |
@@ -381,6 +399,7 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 npx supabase functions deploy inbound-email
 npx supabase functions deploy poll-email
 npx supabase functions deploy auto-match
+npx supabase functions deploy match-batch         # Phase 4.10 新規
 npx supabase functions deploy match-score
 npx supabase functions deploy microsoft-oauth
 npx supabase functions deploy enrich-candidate
@@ -388,6 +407,8 @@ npx supabase functions deploy skill-master-cleanup
 ```
 
 それぞれ「Deployed」と表示されればOKです。
+
+> **デプロイ前に型検査したい場合**は `npm run check:edge <function>` を使うと `deno check` で TS2304（未定義変数）を検知し、エラーがあればデプロイを中止できます。`npm run deploy:edge <function>` で「型検査 + デプロイ」をまとめて実行できます。引数を省略すると `inbound-email` を対象とします。
 
 ### 4-4. Secrets（機密情報）を登録する
 
@@ -428,7 +449,7 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add
 
 - [ ] `supabase login` が完了した
 - [ ] `supabase link` でプロジェクトに接続した
-- [ ] 全Edge Functions（7つ）をデプロイした
+- [ ] 全Edge Functions（8つ）をデプロイした
 - [ ] `GEMINI_API_KEY`・`GROQ_API_KEY`・`CEREBRAS_API_KEY`・`INBOUND_CALL_KEY` を Secrets に登録した
 
 ---
@@ -667,9 +688,11 @@ Vercel ダッシュボード → プロジェクトを選択 → 「Settings」�
 全章が完了したら、以下を本番URLで確認してください。
 
 - [ ] 本番URLでブラウザにエラーなく画面が表示される
-- [ ] 人材登録タブでテキストを貼り付けて「解析して登録」が動く
+- [ ] 人材登録タブでテキストを貼り付けて「登録」が動く（Phase 4.11 で「AI で登録」は廃止・登録ボタンに統一）
 - [ ] マッチング結果タブでスコアが表示される
+- [ ] マッチング詳細パネルに案件サマリーが表示される
 - [ ] 専用のOutlookアドレスにメールを送って5分以内に人材/案件が登録される
+- [ ] `[station_unmapped]` ログが Supabase Functions Logs に流れていないか確認（月次レビュー）
 
 ---
 

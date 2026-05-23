@@ -9,11 +9,11 @@
 
 | 機能 | 説明 |
 |---|---|
-| AI マッチング | 案件と人材の相性スコア・理由をAIが自動生成（手動: `match-score` / 自動 cron: `auto-match`） |
-| 人材登録 | テキスト貼り付け・Excel・Word・画像をアップロードするだけで自動解析・登録（PDF は現状未対応） |
-| 案件登録 | 同上。メール本文や要件定義書をそのまま貼り付けてOK |
+| AI マッチング | 案件と人材の相性スコアと理由を AI が自動生成。手動 (`match-score`) / バッチ採点 (`match-batch`) / 自動 cron (`auto-match`) の 3 経路 |
+| 人材登録 | テキスト貼り付け・Excel・Word をアップロードするだけで自動解析・登録（PDF / 画像は現状未対応） |
+| 案件登録 | 同上。メール本文や要件定義書をそのまま貼り付け OK。【場所】【単価】【時期】【備考】等のブラケット形式にも対応 |
 | メール自動取り込み | 専用 Outlook アドレスを 5 分ごとにポーリング → 取得 → DB 保存（AI 不使用・ルールベース） |
-| デモ環境 | 本番データとは独立したデモ用データ環境（`?demo=KEY`でトグル） |
+| デモ環境 | 本番データとは独立したデモ用データ環境（`?demo=KEY` でトグル）。本番→デモコピー・スコア別 5 人生成 |
 
 ---
 
@@ -22,27 +22,29 @@
 ```mermaid
 flowchart TD
     A[営業担当者<br/>ブラウザ] -->|テキスト・ファイル入力| B[React フロントエンド<br/>Vercel]
-    B -->|入力解析リクエスト| C[Gemini 2.5 Flash Lite<br/>ブラウザ直呼び出し]
-    C -->|解析結果| B
-    B -->|upsert / fetch| D[(Supabase<br/>PostgreSQL)]
-    B -->|手動マッチ要求| MS[Edge Function<br/>match-score]
-    MS -->|Cerebras → Groq 70B → Gemini| AI[AI プロバイダー]
+    B -->|登録/再解析<br/>force=true| H[Edge Function<br/>inbound-email<br/>※ AI 不使用]
+    H -->|upsert| D[(Supabase<br/>PostgreSQL)]
+    B -->|upsert / fetch| D
+    B -->|手動マッチ要求| MS[Edge Function<br/>match-score<br/>単発スコア + duplicate判定]
+    B -->|高速/全件マッチ| MB[Edge Function<br/>match-batch<br/>ルール事前フィルタ + バッチ AI 採点]
+    MS -->|Cerebras → Groq 70B → Gemini<br/>3段失敗時はエラー| AI[AI プロバイダー]
+    MB -->|Cerebras → Groq 70B → Gemini<br/>3段失敗時は ruleScore で全代替| AI
     AI -->|スコア・理由| MS
-    MS -->|upsert| D
+    AI -->|スコア・理由| MB
+    MS -->|upsert submissions| D
+    MB -->|upsert submissions| D
 
     E[Outlook<br/>専用アカウント×4] -->|未読メール監視| F[pg_cron<br/>5分ごと起動]
     F -->|HTTP POST| G[Edge Function<br/>poll-email]
     G -->|OAuthトークン取得| M[Microsoft Graph API]
     M -->|未読メール最大50件/アカウント| G
     G -.->|メール種別分類<br/>Gemini バッチ| CLS[Gemini Flash Lite]
-    G -->|内部 POST| H[Edge Function<br/>inbound-email]
+    G -->|内部 POST| H
     H -->|Drive/Sheets URL検出→fetch| I[Google Drive<br/>共有リンク]
-    H -->|regex + 文章スキャン<br/>+ skill_master DB照合<br/>※AI不使用| H
-    H -->|upsert| D
+    H -->|regex + 文章スキャン<br/>+ skill_master DB照合<br/>+ STATION_TO_PREFECTURE| H
 
     CR[pg_cron<br/>毎朝 JST 9:00] -->|HTTP POST| AM[Edge Function<br/>auto-match]
-    AM -->|Gemini 2.5 Flash Lite 単発| AI2[Gemini]
-    AI2 -->|スコア・理由| AM
+    AM -->|match-batch を内部呼び出し| MB
     AM -->|insert submissions| D
 ```
 
@@ -54,28 +56,32 @@ flowchart TD
 |---|---|
 | フロントエンド | React 19, Vite 8, TypeScript, Tailwind CSS v4, TanStack Query v5 |
 | DB / バックエンド | Supabase（PostgreSQL, Edge Functions, pg_cron, pg_net） |
-| AI（ブラウザ・入力解析） | Gemini `gemini-2.5-flash-lite`（`VITE_GEMINI_MODEL` で変更可）・マルチモーダル対応 |
-| AI（サーバー・マッチング） | `match-score`: Cerebras `llama3.1-8b` → Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.5-flash`（フォールバック順）<br/>`auto-match`: Gemini `gemini-2.5-flash-lite` 単発 |
+| AI（ブラウザ） | Gemini `gemini-2.5-flash-lite`（`VITE_GEMINI_MODEL` で変更可）。**人材・案件登録 UI からは未使用**（Phase 4.11 で「AI で登録」廃止） |
+| AI（サーバー・マッチング新方式） | `match-batch`: ルールベース事前フィルタ (スキル40/経験15/単価15/勤務地20/リモート10 = 100pt) → topN を 1 コール バッチ採点。Cerebras `llama3.1-8b` → Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.5-flash` フォールバック。3 段失敗時はルールスコアで全代替 |
+| AI（サーバー・マッチング単発） | `match-score`: 上記と同じフォールバック順。`duplicateSuspected` フラグ込みの単発スコア。理由は **150 字以内** |
+| AI（サーバー・自動マッチング） | `auto-match`（毎朝 JST 9:00 cron）: `match-batch` を内部呼び出し → 同じフォールバック順を継承 |
 | AI（サーバー・メール種別分類） | `poll-email` の同一受信箱判別: Gemini `gemini-2.5-flash-lite` バッチ（任意・既定は無効） |
-| メール解析 | **AI 不使用**。regex（`extractCandidateFieldsRegex`） + 文章スキャン（`extractFromProse`） + `skill_master` DB 照合（約 1,600 件） |
-| ファイル解析 | `xlsx`（Excel）・`mammoth`（Word）・画像 base64（Gemini multimodal）。**PDF はテキスト解析対象外** |
+| メール解析 | **AI 不使用**。regex（`extractCandidateFieldsRegex` + `flexLabel`） + 文章スキャン（`extractFromProse`） + `skill_master` DB 照合（約 1,660 件） + 駅→都道府県マッピング（約 254 駅） |
+| ファイル解析 | `xlsx`（Excel）・`mammoth`（Word）。**PDF と画像はテキスト解析対象外** |
 | メール自動受信 | Microsoft Graph API + Supabase pg_cron（**完全無料・Make.com 不要**） |
+| Edge Function デプロイ事前検査 | `scripts/check-and-deploy-edge.sh`（`deno check` で TS2304 を検知 → デプロイ中止） |
 | デプロイ | Vercel（フロント）/ Supabase（バックエンド） |
-| テスト | Vitest, React Testing Library, MSW |
+| テスト | Vitest, React Testing Library, MSW + `scripts/verify_email_extraction.mjs`（メール抽出リグレッション） |
 
 ---
 
 ## 無料枠の限界（現状）
 
-メール解析が AI 非依存になったため、**メール取り込みは無料枠の影響を受けません**。AI を消費するのは「マッチング処理」と「メール種別分類（任意）」のみ。
+メール解析が AI 非依存になったため、**メール取り込みは無料枠の影響を受けません**。AI を消費するのは「マッチング処理」と「メール種別分類（任意）」のみ。さらに `match-batch` でルールベース事前フィルタを噛ませているため、1 案件 = 1 AI コールに圧縮されます。
 
 | AI | 役割 | 無料上限 | 備考 |
 |---|---|---|---|
-| Cerebras `llama3.1-8b` | `match-score`（手動マッチ）の 1 段目 | 実質無制限 | 軽量タスク向け |
-| Groq `llama-3.3-70b-versatile` | `match-score` の 2 段目（精度重視） | 500K tokens/日（JST 9:00 リセット） | マッチング数百〜千件/日が目安 |
-| Gemini `gemini-2.5-flash-lite` | `auto-match`（自動 cron）・ブラウザ入力解析・最終フォールバック | プリペイド制（要チャージ） | 1 マッチ ~1.5K tokens 程度 |
+| Cerebras `llama3.1-8b` | `match-batch` / `match-score` の 1 段目 | 実質無制限 | 軽量バッチ採点向け |
+| Groq `llama-3.3-70b-versatile` | `match-batch` / `match-score` の 2 段目（精度重視） | 500K tokens/日（JST 9:00 リセット） | マッチング数百〜千案件/日が目安 |
+| Gemini `gemini-2.5-flash` | `match-batch` / `match-score` の最終フォールバック | プリペイド制（要チャージ） | 1 バッチ ~3〜5K tokens 程度 |
+| Gemini `gemini-2.5-flash-lite` | `poll-email` メール種別分類（任意）・ブラウザ補助 | プリペイド制 | 既定 OFF |
 
-> マッチング処理が天井になる。メール処理は規模に関係なく無料で永続稼働。
+> マッチング処理が天井。3 段すべて失敗してもルールスコアで全代替されるので、システム自体は止まらない。メール処理は規模に関係なく無料で永続稼働。
 
 ---
 
@@ -128,10 +134,20 @@ VITE_DEMO_KEY=（任意の文字列）
 Supabase Dashboard → SQL Editor で以下を**順番に**実行:
 
 1. `supabase/schema.sql`
-2. `supabase/migrations/` 配下の SQL を **ファイル名の昇順で全て**実行  
-   （`skill_master` / `relevance_keywords` / `box_columns` / `resume_url` / `auto_match_cron` / `skill_cleanup_cron` / `attachments_bucket` / `find_duplicate_candidates_rpc` / `search_rpc` / `enrich_cron` などが順次必要）
+2. `supabase/migrations/` 配下の SQL を **ファイル名の昇順で全て**実行
+   - 基本系: `add_skill_master.sql` / `seed_skill_master.sql` / `add_relevance_keywords.sql` / `add_box_columns.sql` / `add_resume_url.sql` / `add_attachments_bucket.sql`
+   - RPC 系: `find_duplicate_candidates_rpc.sql` / `add_search_rpc.sql`
+   - cron 系: `add_email_polling_cron.sql` / `add_auto_match_cron.sql` / `add_skill_cleanup_cron.sql` / `add_enrich_cron.sql`（`YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を実値に書き換え）
+   - **Phase 4.10 / 4.11 で追加された新規 6 件**:
+     1. `20260520130000_add_work_phases.sql`（IBM 系・ストレージ系・工程系 18 件）
+     2. `20260521000000_add_search_scope.sql`（`search_candidates(p_scope)` 3 モード対応）
+     3. `20260521210000_add_bigquery_and_cloud_dwh.sql`（DWH 系 10 件）
+     4. `20260522_add_error_logs.sql`（フロント側エラーログ）
+     5. `20260522_add_fetch_candidates_for_matching.sql`（MatchingPage RPC）
+     6. `20260522_add_fetch_candidates_for_project.sql`（案件→人材 SQL 絞り込み RPC）
+     7. `20260523_add_process_skills.sql`（テスト / 保守開発 / 保守運用 / 調査分析 4 件追加）
 
-> `schema.sql` の `candidate_skills.check_category` は旧 11 カテゴリのまま放置されています。`add_candidate_skills.sql` で 14 カテゴリへ上書きされるため、必ず `migrations/` を全て流すこと。
+> `schema.sql` の `candidate_skills.check_category` は 14 カテゴリへ更新済み。すべての `migrations/` を昇順で流すこと（新規環境構築時の必須手順）。
 
 **5. 開発サーバーを起動**
 
@@ -164,17 +180,21 @@ supabase functions deploy inbound-email
 supabase functions deploy poll-email
 supabase functions deploy auto-match
 supabase functions deploy match-score
+supabase functions deploy match-batch        # Phase 4.10 新規（バッチ AI 採点）
 supabase functions deploy microsoft-oauth
 supabase functions deploy enrich-candidate
+supabase functions deploy skill-master-cleanup
 ```
+
+> **デプロイ前に型検査したい場合**は `npm run check:edge <function>`（`scripts/check-and-deploy-edge.sh`）を使うと `deno check` で TS2304（未定義変数）が出ていればデプロイを中止できる。`npm run deploy:edge <function>` で「型検査 + デプロイ」をまとめて実行。
 
 **Edge Functions Secrets**（Supabase Dashboard → Edge Functions → Secrets）
 
 | Secret 名 | 用途 | 必須 |
 |---|---|---|
-| `GROQ_API_KEY` | `match-score` 2 段目・`poll-email` 種別分類フォールバック | ◎ |
-| `CEREBRAS_API_KEY` | `match-score` 1 段目（軽量・無料） | 推奨 |
-| `GEMINI_API_KEY` | `auto-match` 単発・`match-score` 最終フォールバック・画像解析 | ◎ |
+| `GROQ_API_KEY` | `match-batch` / `match-score` の 2 段目・`poll-email` 種別分類 | ◎ |
+| `CEREBRAS_API_KEY` | `match-batch` / `match-score` の 1 段目（軽量・無料） | 推奨 |
+| `GEMINI_API_KEY` | `match-batch` / `match-score` の最終フォールバック・`poll-email` 補助 | ◎ |
 | `GRAPH_CLIENT_ID` | Azure AD アプリのクライアント ID | ◎ |
 | `GRAPH_CLIENT_SECRET` | Azure AD アプリのクライアントシークレット | ◎ |
 | `GRAPH_REFRESH_TOKEN_HUMAN` | 人材用メール（prod）のリフレッシュトークン | ◎ |
@@ -184,6 +204,8 @@ supabase functions deploy enrich-candidate
 | `INBOUND_CALL_KEY` | poll-email → inbound-email 呼び出し用 JWT（service_role キー） | ◎ |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Google Sheets/Drive（Box 連携キュー）アクセス用 | Box 連携時 |
 | `BOX_SPREADSHEET_ID` | Box 連携キュー用スプレッドシート ID | Box 連携時 |
+
+> `inbound-email` 自体は AI を使わないので、メール取り込みだけ動かしたいなら `GROQ_API_KEY` 等は不要。マッチング系を使うときに必須になる。
 
 **pg_cron スケジュール登録**
 
@@ -202,12 +224,17 @@ Edge Function 群の挙動はソースを書き換えずに app_config キーで
 | キー | 既定 | 内容 |
 |---|---|---|
 | `inbound_project_enabled` | `false` | **案件メールの解析と DB 保存を有効化**。`'true'` を設定すると `inbound-email` が type=project を処理（既定は人材メールのみ取り込み） |
+| `auto_match_enabled` | `true` | `auto-match` cron を有効化。`'false'` で毎朝のバッチ実行をスキップ |
 | `email_poll_mode` | `incremental` | `incremental`（未読のみ）か `full`（指定日以降全件） |
 | `email_full_import_since` | （未設定） | `email_poll_mode=full` 時に取得を開始する ISO 日時 |
 | `email_classify_enabled` | `false` | 同一受信箱に人材/案件が混在するとき、Gemini で `candidate`/`project`/`other` をバッチ分類 |
+| `matching_fast_max_candidates` | `20` | 高速モード時の案件あたり候補者上限 |
+| `matching_fast_max_projects` | `10` | 高速モード時の人材あたり案件上限 |
+| `candidate_retention_days` | `7` | 人材データ保持日数（旧データ自動削除用・運用判断で活用） |
+| `app_memo` | （未設定） | 営業引き継ぎ用フリーテキストメモ |
 | `graph_rt_human_prod` ほか | — | Microsoft OAuth 連携で保存されるリフレッシュトークン（4 アカウント分） |
 
-`auto-match` の挙動切替は環境変数（Supabase Secrets）で行う:
+`inbound-email` の即時マッチング切替は環境変数（Supabase Secrets）で行う:
 
 | Secret | 既定 | 内容 |
 |---|---|---|
@@ -222,11 +249,29 @@ npm run test:run   # 全テスト（CI向け）
 npm run test       # ウォッチモード（開発向け）
 ```
 
-`scripts/verify_email_extraction.mjs` はメール解析の品質を一発でチェックする Node スクリプト（要 Node 20+）。
+`scripts/verify_email_extraction.mjs` はメール解析の品質を一発でチェックする Node スクリプト（要 Node 20+）。Phoenix Technologies などの実メールフォーマットを使ったリグレッションケースを内蔵。
 
 ```bash
 node scripts/verify_email_extraction.mjs
 ```
+
+### Edge Function デプロイ前検査
+
+```bash
+npm run check:edge inbound-email   # deno check のみ（TS2304 検知）
+npm run deploy:edge inbound-email  # 型検査 + supabase functions deploy
+```
+
+`scripts/check-and-deploy-edge.sh` が `deno check` で TS2304（未定義変数）を検知したら deploy を中止する。引数省略時は `inbound-email` を対象とする。
+
+### 月次品質チェック
+
+`.claude/skills/quality-check/SKILL.md` / `/quality-check` コマンドの手順に従う:
+1. Supabase Dashboard → Functions → inbound-email → Logs で `[station_unmapped]` を検索 → 集計
+2. `STATION_TO_PREFECTURE` に追記 → `npm run deploy:edge`
+3. `python3 scripts/skill_master_review.py` → 怪しい `source='ai'` スキルの削除候補 SQL を出力
+4. `[SKIP_IRRELEVANT]` ログを確認（TRAINING_REPORT / PROJECT_SOLICITATION 等の誤投函パターン）
+5. **AI コスト監視**（`ai_logs` テーブル）: モデル別・日次呼び出し数を集計し、Gemini 無料枠超過 / プリペイドクレジット枯渇 / フォールバック多発を検知
 
 ---
 
@@ -261,6 +306,7 @@ poll-email Edge Function
   └─ 4アカウントを Promise.allSettled で並列処理
   ↓ 内部POST
 inbound-email Edge Function（※ AI は呼ばない）
+  ├─ TRAINING_REPORT / PROJECT_SOLICITATION フィルタ（人材メールボックスへの誤投函を 200 OK でスキップ）
   ├─ HTML → プレーンテキスト化 + HTML エンティティデコード
   ├─ URL 除去・送信者署名除去（誤マッチ対策）
   ├─ Google Drive / Sheets / Docs URL 検出・自動取得
@@ -278,21 +324,37 @@ inbound-email Edge Function（※ AI は呼ばない）
 
 | 方式 | トリガー | 対象人材数上限 | AI フォールバック順 |
 |---|---|---|---|
-| `match-score` | 手動（UI ボタン） | 高速モード: 案件あたり 20 / 人材あたり 10 | Cerebras → Groq 70B → Gemini |
-| `auto-match` | 毎朝 JST 9:00 cron | 直近 25 時間以内に登録された案件 ×最大 40 名 | Gemini 単発のみ（フォールバックなし） |
+| `match-batch` | UI ボタン（高速/全件）または `auto-match` から内部呼び出し | 高速モード: `matching_fast_max_candidates`（既定 20）<br>auto-match: 案件 1 件あたり最大 40 名（`BATCH_AI_SIZE=20` × 2 リクエスト） | Cerebras → Groq 70B → Gemini → 3 段失敗時はルールスコアで全代替 |
+| `match-score` | 手動（個別スコア確認・duplicate 検出） | 1 ペア | Cerebras → Groq 70B → Gemini |
+| `auto-match` | 毎朝 JST 9:00 cron。`auto_match_enabled='false'` でスキップ | 直近 25 時間以内に登録された `prod` 案件 ×最大 40 名 | `match-batch` 経由（Cerebras → Groq 70B → Gemini） |
+
+### ルールベーススコア（`match-batch` の `calcRuleScore`・0〜100pt）
+
+| 観点 | 配点 | 備考 |
+|---|---|---|
+| スキル一致 | 最大 40pt | required 空のときは固定 +20pt |
+| 経験年数 | 最大 15pt | 10年=15 / 7年=12 / 5年=8 / 3年=4 / 1年=2 |
+| 単価 | 最大 15pt | 予算未設定なら +15、範囲内 +15、上限+10% +8、上限+20% +3 |
+| 勤務地 | 最大 20pt | 同じ都道府県 / フルリモートで +20、居住地不明 +5 |
+| リモート | 最大 10pt | リモート可・希望時 +10 |
+
+AI 採点は **topN（既定 10）件のみ**バッチプロンプト 1 コールで実施し、残りはルールスコアのみで返す。マッチング理由は **150 字以内**で「必須スキル合致 → 経験年数 → 単価 → 勤務地リモート → 懸念点」の優先順。
 
 ### ブラウザからのファイル解析フロー
 
 ```
-ファイル選択（Excel / Word / 画像）
+ファイル選択（Excel / Word）
   ├─ Excel  → xlsx (SheetJS) で全シートを CSV 変換 → テキストエリアへ転記
-  ├─ Word   → mammoth で本文抽出 → テキストエリアへ転記
-  └─ 画像   → base64変換 → Gemini multimodal API（inlineData）で直接解析
+  └─ Word   → mammoth で本文抽出 → テキストエリアへ転記
   ↓
-Gemini 2.5 Flash Lite で解析 → Supabase に保存
+「登録」ボタン
+  ↓
+inbound-email Edge Function（force=true で DEDUP/SENDER_DAILY_LIMIT バイパス）
+  ↓
+regex + skill_master DB 照合 → candidates / projects に upsert
 ```
 
-> **PDF は現状未対応**。PDF を渡された場合は UI 側でエラー表示し処理を中断する。回避策: テキストを手動で貼り付ける、または PDF をページ画像化して添付する。
+> **PDF と画像は現状未対応**。PDF を渡された場合は UI 側でエラー表示し処理を中断する。回避策: テキストを手動で貼り付ける、または PDF をページ画像化したうえで OCR テキストを手で貼り付ける。
 
 ### データ環境（prod / demo）
 
@@ -309,11 +371,12 @@ Gemini 2.5 Flash Lite で解析 → Supabase に保存
 |---|---|
 | `candidates` | 人材マスタ（`data_env` で prod/demo 分離）。後述の主要カラム参照 |
 | `projects` | 案件マスタ（`data_env` で prod/demo 分離） |
-| `submissions` | マッチング提案履歴（スコア・AI要約） |
+| `submissions` | マッチング提案履歴（スコア・AI要約・`ai_raw` に source タグ） |
 | `candidate_skills` | スキルのカテゴリ別管理（14カテゴリ・CHECK制約） |
 | `ai_logs` | AI 解析実行ログ（モデル名・所要時間・結果・エラー。`model='no-ai'` でメール解析記録） |
-| `skill_master` | スキル辞書（約 1,600 件 + AI 自動登録分）。`aliases` で表記ゆれ吸収、`match_count` で実績管理 |
-| `relevance_keywords` | 関連度判定用キーワード（`exclude` / `candidate` / `project` の 3 種別） |
+| `error_logs` | フロントエンド側クライアントエラー（page/message/stack/context/data_env/nickname） |
+| `skill_master` | スキル辞書（約 1,660 件 + AI 自動登録分。DWH/IBM/工程系を Phase 4.10 で強化）。`aliases` で表記ゆれ吸収、`match_count` で実績管理 |
+| `relevance_keywords` | 関連度判定用キーワード（`exclude` / `candidate` / `project` の 3 種別。現状は未使用・Phase 4.9 で `classifyInboundRelevance` 削除済み） |
 | `app_config` | アプリ設定 / Graph API リフレッシュトークンのローテーション保存 |
 
 ### `candidates` テーブルの主要カラム
@@ -370,25 +433,28 @@ akinavi-hr-ai/
 │   │   │   ├── submissions.ts
 │   │   │   ├── emailSettings.ts
 │   │   │   └── matchingSettings.ts
-│   │   ├── fileParser.ts     # Excel / Word テキスト抽出、画像 base64 変換（PDF 非対応）
+│   │   ├── fileParser.ts     # Excel / Word テキスト抽出（PDF / 画像 非対応）
 │   │   ├── dataEnv.ts        # prod/demo 環境切替
 │   │   └── supabase.ts
 │   ├── pages/                # 各画面（Matching / Candidate / Project / Settings ほか）
 │   │                         # ※ History / Duplicate / Monitor は実装済みだがナビから非表示
-│   └── components/           # 共通 UI（DemoSeedPanel 等）
+│   └── components/           # 共通 UI（DemoSeedPanel / DemoProjectCandidateGen 等）
 ├── supabase/
 │   ├── schema.sql            # DB テーブル定義・RLS ポリシー
 │   ├── migrations/           # 追加マイグレーション SQL（昇順で全て実行）
 │   └── functions/
 │       ├── inbound-email/    # メール解析 Edge Function（AI 不使用・regex + DB 照合）
 │       ├── poll-email/       # Outlook ポーリング Edge Function（5 分ごと cron）
-│       ├── auto-match/       # 自動マッチング Edge Function（毎朝 JST 9:00 cron・Gemini 単発）
-│       ├── match-score/      # スコア計算 Edge Function（UI から呼び出し・Cerebras→Groq→Gemini）
+│       ├── auto-match/       # 自動マッチング Edge Function（毎朝 JST 9:00 cron・match-batch を内部呼び出し）
+│       ├── match-batch/      # バッチ AI 採点 Edge Function（ルール事前フィルタ + topN を 1 コール採点）
+│       ├── match-score/      # 単発スコア Edge Function（duplicate 検出付き・Cerebras→Groq→Gemini）
 │       ├── microsoft-oauth/  # Microsoft OAuth 認証 Edge Function
 │       ├── enrich-candidate/ # Box 連携・再解析 Edge Function（毎日 JST 3:00 cron）
 │       └── skill-master-cleanup/ # skill_master クリーンアップ Edge Function（毎日 cron）
 ├── scripts/
-│   └── verify_email_extraction.mjs  # メール解析の品質検証用 Node スクリプト
+│   ├── verify_email_extraction.mjs  # メール解析の品質検証用 Node スクリプト
+│   ├── check-and-deploy-edge.sh     # deno check で TS2304 検知 → デプロイ
+│   └── skill_master_review.py       # source='ai' スキルの月次レビュー
 └── docs/
     ├── Sales_Manual.md       # 営業担当者向け操作マニュアル
     ├── HandsOn_Setup.md      # 環境構築ガイド（後任エンジニア向け）
