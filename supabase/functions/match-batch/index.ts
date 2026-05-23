@@ -177,7 +177,7 @@ function buildBatchProjectToCandidatesPrompt(
 ): string {
   const cList = candidates.map((c, i) =>
     `[${i + 1}] id="${c.id}" name="${c.name}" ruleScore=${c.ruleScore}` +
-    ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}"` +
+    ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
     (c.availableRegions?.length ? ` regions=${JSON.stringify(c.availableRegions)}` : '') +
     (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
     ` summary="${c.summary.slice(0, 200)}"` +
@@ -208,7 +208,7 @@ ${cList}
    - 必須スキルの合致状況（何が合っていて何が不足か）
    - 経験年数と案件要件の比較
    - 単価の合致・乖離
-   - 勤務地・リモート希望の一致
+   - 勤務地・リモート希望の一致（案件がリモート可の場合、候補者 remote=可 なら場所不一致は問題なし／remote=不可なら懸念として明記）
    - selfPR がある場合は候補者自身の強み・経験を採点に反映し1文で添える
    - agentNote がある場合は人物評の特筆すべき点を1文で添える
    - nationality がある場合、案件が日本国籍限定の可能性があれば懸念として明記
