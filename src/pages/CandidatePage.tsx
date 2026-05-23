@@ -188,7 +188,7 @@ export function CandidateProfileFields({
     prefecture, nearestStation, availableRegions,
     currentWorkLocation, remoteAvailable,
     from: mailFrom, subject: mailSubject, emailReceivedAt,
-    age, gender, agentComment } = raw
+    age, gender, agentComment, selfPR } = raw
 
   const rawText = raw.text ?? ''
 
@@ -289,6 +289,12 @@ export function CandidateProfileFields({
           </div>
         )}
 
+        {selfPR && (
+          <div className="mt-1.5 rounded-md bg-blue-50 border border-blue-100 px-3 py-2">
+            <p className="text-xs font-medium text-blue-700 mb-0.5">自己PR</p>
+            <p className="text-xs text-blue-900 whitespace-pre-wrap leading-relaxed">{selfPR as string}</p>
+          </div>
+        )}
         {agentComment && (
           <div className="mt-1.5 rounded-md bg-amber-50 border border-amber-100 px-3 py-2">
             <p className="text-xs font-medium text-amber-700 mb-0.5">エージェントコメント</p>

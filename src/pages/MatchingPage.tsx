@@ -80,6 +80,7 @@ function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
     preferredJobTypes: Array.isArray(rp?.roles) ? (rp.roles as string[]) : null,
     agentComment: (rp?.agentComment as string | null) ?? null,
     nationality: (rp?.nationality as string | null) ?? null,
+    selfPR: (rp?.selfPR as string | null) ?? null,
   }
 }
 

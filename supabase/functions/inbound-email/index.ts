@@ -260,47 +260,47 @@ function toExperienceYears(value: unknown): number | null {
 }
 
 /**
- * メール本文・添付テキストからエージェントコメント（担当者所感・推薦コメント等）を抽出する。
+ * セクション見出しリストからテキストを抽出するユーティリティ。
  * 最大500文字・複数セクション発見時は \n\n で結合。見つからない場合は null。
  */
-function extractAgentComment(body: string, attachText: string): string | null {
-  const text = [body, attachText].filter(Boolean).join('\n')
+function extractSectionsByLabels(text: string, labels: string[]): string | null {
   if (!text.trim()) return null
-
-  // コメントセクションの見出しパターン
-  const LABELS = [
-    '弊社コメント', 'エージェントコメント', '担当者コメント', 'コーディネーターコメント',
-    '営業コメント', '推薦コメント', '備考', '所感', '評価', '推薦理由', '特記事項',
-    '人物像', '人物', '所見', '印象',
-    '自己PR', 'PR', 'アピールポイント', '特徴・強み', '強み',
-    '弊社担当者から一言',
-  ]
-  const prefix = '[【◆■●▼★◎※]?'
+  const prefix = '[【◆■●▼★◎※◇]?'
   const suffix = '[】：: 　]+'
-  const labelPattern = LABELS.map(l => `(?:${prefix}${l}${suffix})`).join('|')
-  const sectionRe = new RegExp(
-    `(?:${labelPattern})([\\s\\S]{1,600})`,
-    'gi',
-  )
-
+  const labelPattern = labels.map(l => `(?:${prefix}${l}${suffix})`).join('|')
+  const sectionRe = new RegExp(`(?:${labelPattern})([\\s\\S]{1,600})`, 'gi')
   const found: string[] = []
   let match: RegExpExecArray | null
   while ((match = sectionRe.exec(text)) !== null) {
-    // セクション内容：次の見出しっぽいパターンまたは空行2連続で切る
     let content = match[1]
-    // 次のラベル行で切る
     const nextLabel = new RegExp(`(?:${labelPattern})`, 'i')
     const cutIdx = content.search(nextLabel)
     if (cutIdx > 0) content = content.slice(0, cutIdx)
-    // 空行2連続で切る
     const blankIdx = content.search(/\n\s*\n/)
     if (blankIdx > 0 && blankIdx < 300) content = content.slice(0, blankIdx)
     content = content.trim().slice(0, 500)
     if (content.length >= 5) found.push(content)
   }
-
   if (found.length === 0) return null
   return found.join('\n\n').slice(0, 500)
+}
+
+/** 候補者本人の自己PR（自己PR / PR / アピールポイント / 強み 等）を抽出する。 */
+function extractSelfPR(body: string, attachText: string): string | null {
+  const text = [body, attachText].filter(Boolean).join('\n')
+  return extractSectionsByLabels(text, [
+    '自己PR', 'PR', 'アピールポイント', '特徴・強み', '強み', '紹介文',
+  ])
+}
+
+/** エージェントコメント（担当者所感・推薦コメント・人物評等）を抽出する。 */
+function extractAgentComment(body: string, attachText: string): string | null {
+  const text = [body, attachText].filter(Boolean).join('\n')
+  return extractSectionsByLabels(text, [
+    '弊社コメント', 'エージェントコメント', '担当者コメント', 'コーディネーターコメント',
+    '営業コメント', '推薦コメント', '備考', '所感', '評価', '推薦理由', '特記事項',
+    '人物像', '人物', '所見', '印象', '弊社担当者から一言',
+  ])
 }
 
 /** 自社名（受信側）として登録されてしまうことを防ぐ会社名リスト */
@@ -2641,6 +2641,7 @@ Deno.serve(async (req: Request) => {
           age: regexFields.age,
           gender: regexFields.gender,
           nationality: regexFields.nationality,
+          selfPR: extractSelfPR(body, attachText) ?? null,
           agentComment: extractAgentComment(body, attachText) ?? null,
           geminiParseFallback: parseFallback,
         },
