@@ -85,6 +85,7 @@ export async function upsertCandidate(input: UpsertCandidateInput): Promise<Cand
     phone: analyzed.phone,
     skills,
     experience_years: analyzed.experienceYears,
+    desired_rate: analyzed.desiredRate ?? null,
     raw_profile: buildCandidateRawProfile(rawText, analyzed),
     duplicate_flag: duplicateSuspected,
     created_by: createdBy,
