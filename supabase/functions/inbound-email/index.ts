@@ -271,7 +271,7 @@ function extractAgentComment(body: string, attachText: string): string | null {
   const LABELS = [
     '弊社コメント', 'エージェントコメント', '担当者コメント', 'コーディネーターコメント',
     '営業コメント', '推薦コメント', '備考', '所感', '評価', '推薦理由', '特記事項',
-    '人物像', '所見', '印象',
+    '人物像', '人物', '所見', '印象',
   ]
   const prefix = '[【◆■●▼★◎※]?'
   const suffix = '[】：: 　]+'
