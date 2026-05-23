@@ -70,18 +70,43 @@ interface ScoreLevel {
 
 // スコア設計（calcRuleScore 準拠・勤務地は同県=+20 / 不一致=0 の二値）:
 //   スキル40pt + 経験15pt + 単価15pt（予算未設定は+15固定）+ 勤務地20pt + リモート10pt
-//   90pt: 40+15+15+20+0 = 90  (全スキル, 12年, 予算内, 同県)
-//   70pt: 27+8+15+20+0  = 70  (7割スキル, 6年, 予算内, 同県)
-//   50pt: 27+8+15+0+0   = 50  (7割スキル, 6年, 予算内, 県外)  ← 場所だけ違う
-//   30pt: 13+2+15+0+0   = 30  (3.5割スキル, 2年, 予算内, 県外)
-//   10pt: 0+2+0+0+0     = 2   (スキル0, 1年, 予算超過, 県外)  ※予算未設定時は17pt
-const SCORE_LEVELS: ScoreLevel[] = [
-  { label: '超マッチ',       score: 90, skillRatio: 1.0,  extraUnrelated: 1, expYears: 12, rateOffset: -5, prefecture: '', sameLocation: true,  remoteAvailable: true  },
-  { label: 'まあまあ合う',   score: 70, skillRatio: 0.7,  extraUnrelated: 2, expYears: 6,  rateOffset: -3, prefecture: '', sameLocation: true,  remoteAvailable: true  },
+//
+// リモート案件（remotePolicy に「リモート」を含む）の場合:
+//   100pt: 40+15+15+20+10 = 100 (全スキル, 12年, 予算内, 同県, リモート可)
+//    80pt: 27+8+15+20+10  = 80  (7割スキル, 6年, 予算内, 同県, リモート可)
+//    50pt: 27+8+15+0+0    = 50  (7割スキル, 6年, 予算内, 県外, リモート不可)
+//    30pt: 13+2+15+0+0    = 30  (3.5割スキル, 2年, 予算内, 県外)
+//    10pt: 0+2+0+0+0      = 2   (スキル0, 1年, 予算超過, 県外)
+//
+// 非リモート案件の場合:
+//    90pt: 40+15+15+20+0  = 90  (全スキル, 12年, 予算内, 同県)
+//    70pt: 27+8+15+20+0   = 70  (7割スキル, 6年, 予算内, 同県)
+//    50pt: 27+8+15+0+0    = 50  (7割スキル, 6年, 予算内, 県外)
+//    30pt: 13+2+15+0+0    = 30  (3.5割スキル, 2年, 予算内, 県外)
+//    10pt: 0+2+0+0+0      = 2   (スキル0, 1年, 予算超過, 県外)
+
+const SCORE_LEVELS_REMOTE: ScoreLevel[] = [
+  { label: '超マッチ',       score: 100, skillRatio: 1.0,  extraUnrelated: 1, expYears: 12, rateOffset: -5, prefecture: '', sameLocation: true,  remoteAvailable: true  },
+  { label: 'まあまあ合う',   score: 80,  skillRatio: 0.7,  extraUnrelated: 2, expYears: 6,  rateOffset: -3, prefecture: '', sameLocation: true,  remoteAvailable: true  },
+  { label: '少し合う',       score: 50,  skillRatio: 0.7,  extraUnrelated: 3, expYears: 6,  rateOffset: -3, prefecture: '', sameLocation: false, remoteAvailable: false },
+  { label: 'あまり合わない', score: 30,  skillRatio: 0.35, extraUnrelated: 5, expYears: 2,  rateOffset: -3, prefecture: '', sameLocation: false, remoteAvailable: false },
+  { label: '全く合わない',   score: 10,  skillRatio: 0.0,  extraUnrelated: 6, expYears: 1,  rateOffset: 30, prefecture: '', sameLocation: false, remoteAvailable: false },
+]
+
+const SCORE_LEVELS_NO_REMOTE: ScoreLevel[] = [
+  { label: '超マッチ',       score: 90, skillRatio: 1.0,  extraUnrelated: 1, expYears: 12, rateOffset: -5, prefecture: '', sameLocation: true,  remoteAvailable: false },
+  { label: 'まあまあ合う',   score: 70, skillRatio: 0.7,  extraUnrelated: 2, expYears: 6,  rateOffset: -3, prefecture: '', sameLocation: true,  remoteAvailable: false },
   { label: '少し合う',       score: 50, skillRatio: 0.7,  extraUnrelated: 3, expYears: 6,  rateOffset: -3, prefecture: '', sameLocation: false, remoteAvailable: false },
   { label: 'あまり合わない', score: 30, skillRatio: 0.35, extraUnrelated: 5, expYears: 2,  rateOffset: -3, prefecture: '', sameLocation: false, remoteAvailable: false },
   { label: '全く合わない',   score: 10, skillRatio: 0.0,  extraUnrelated: 6, expYears: 1,  rateOffset: 30, prefecture: '', sameLocation: false, remoteAvailable: false },
 ]
+
+function getScoreLevels(project: Project): ScoreLevel[] {
+  const remotePolicy = project.remote_policy ?? ''
+  const hasRemote = /リモート|remote|在宅/i.test(remotePolicy)
+  const isFullRemote = /フルリモート|完全リモート|100[%％]リモート/.test(remotePolicy)
+  return (hasRemote && !isFullRemote) ? SCORE_LEVELS_REMOTE : SCORE_LEVELS_NO_REMOTE
+}
 
 const LOCATIONS = ['東京都', '神奈川県', '大阪府', '愛知県', '福岡県', '北海道', '宮城県', '広島県']
 
@@ -129,7 +154,9 @@ function buildCandidate(
 }
 
 const SCORE_COLORS: Record<number, string> = {
+  100: 'bg-green-200 text-green-900',
   90: 'bg-green-100 text-green-800',
+  80: 'bg-blue-200 text-blue-900',
   70: 'bg-blue-100 text-blue-800',
   50: 'bg-yellow-100 text-yellow-800',
   30: 'bg-orange-100 text-orange-800',
@@ -147,9 +174,10 @@ export function DemoProjectCandidateGen({ project, nickname, dataEnv, onDone }: 
     setResults([])
 
     try {
+      const scoreLevels = getScoreLevels(project)
       const saved: typeof results = []
-      for (let i = 0; i < SCORE_LEVELS.length; i++) {
-        const level = SCORE_LEVELS[i]
+      for (let i = 0; i < scoreLevels.length; i++) {
+        const level = scoreLevels[i]
         const built = buildCandidate(level, project, i)
         const { desiredRate, ...analyzed } = built
 
