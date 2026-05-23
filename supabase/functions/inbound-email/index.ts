@@ -2074,6 +2074,34 @@ Deno.serve(async (req: Request) => {
       )
     }
 
+    // ② 研修報告・案件紹介メールをスキップ（人材メールボックスの誤登録対策）
+    if (type === 'candidate' && !forceProcess) {
+      const TRAINING_KEYWORDS = [
+        '研修内容について報告します',
+        '【本日の作業進捗】',
+        '【研修名】',
+        '【週明けの作業予定】',
+        '【明日の作業予定】',
+      ]
+      const PROJECT_SOLICITATION_KEYWORDS = [
+        '対応可能な人材がいらっしゃいましたら',
+        '案件情報のご紹介でございます',
+        '要員様のご提案をお願いいたします',
+        '厚意顧客の注力案件のご紹介',
+        'チョータツ',
+      ]
+      const isTraining = TRAINING_KEYWORDS.some(kw => body.includes(kw))
+      const isSolicitation = PROJECT_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))
+      if (isTraining || isSolicitation) {
+        const skipReason = isTraining ? 'TRAINING_REPORT' : 'PROJECT_SOLICITATION'
+        console.warn(`[SKIP_IRRELEVANT] ${skipReason}`, { rid: traceRid, subject })
+        return new Response(
+          JSON.stringify({ ok: true, skipped: true, reason: skipReason }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        )
+      }
+    }
+
     if (!body.trim() && attachments.length === 0) {
       tracePhase = 'skip_empty_body_attachments'
       // Make.com は HTTP エラーでシナリオが止まるため、明らかな空メールは 200 でスキップし後続フローを継続させる
