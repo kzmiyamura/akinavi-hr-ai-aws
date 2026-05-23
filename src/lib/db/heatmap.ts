@@ -6,42 +6,20 @@ export interface PrefectureCount {
   count: number
 }
 
-/** 都道府県別の人材数を取得。skillFilter 指定時は candidate_skills と INNER JOIN で絞り込む */
+/** 都道府県別の人材数を取得。skillFilter 指定時はスキルで絞り込む（DB側でJOIN・集計） */
 export async function fetchPrefectureCounts(
   dataEnv: DataEnv,
   skillFilter: string | null
 ): Promise<PrefectureCount[]> {
-  let rows: { raw_profile: unknown }[] = []
-
-  if (skillFilter) {
-    // candidate_skills → candidates を INNER JOIN して一発取得
-    // （candidate_id の配列を .in() に渡すと URL が長すぎて失敗するため）
-    const { data, error } = await supabase
-      .from('candidates')
-      .select('raw_profile, candidate_skills!inner(skill)')
-      .eq('data_env', dataEnv)
-      .ilike('candidate_skills.skill', `%${skillFilter}%`)
-    if (error) throw error
-    rows = data ?? []
-  } else {
-    const { data, error } = await supabase
-      .from('candidates')
-      .select('raw_profile')
-      .eq('data_env', dataEnv)
-    if (error) throw error
-    rows = data ?? []
-  }
-
-  const counts: Record<string, number> = {}
-  for (const row of rows) {
-    const pref = (row.raw_profile as Record<string, unknown>)?.prefecture as string | undefined
-    if (!pref || pref === '不明') continue
-    counts[pref] = (counts[pref] ?? 0) + 1
-  }
-
-  return Object.entries(counts)
-    .map(([prefecture, count]) => ({ prefecture, count }))
-    .sort((a, b) => b.count - a.count)
+  const { data, error } = await supabase.rpc('prefecture_counts', {
+    p_data_env: dataEnv,
+    p_skill: skillFilter ?? null,
+  })
+  if (error) throw error
+  return (data ?? []).map((r: { prefecture: string; cnt: number }) => ({
+    prefecture: r.prefecture,
+    count: r.cnt,
+  }))
 }
 
 /** skill_master からスキル名一覧を取得（フィルター用ドロップダウン） */
