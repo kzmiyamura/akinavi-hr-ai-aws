@@ -88,6 +88,8 @@ export interface AnalyzeCandidateResponse {
   remoteAvailable?: boolean
   /** 希望単価（例: "55万", "60万円"）— マッチングスコア計算に使用 */
   desiredRate?: string | null
+  /** 国籍（例: "中国籍", "日本"）- マッチングの懸念点判断に使用 */
+  nationality?: string | null
 }
 
 /** 案件情報解析のリクエスト */

@@ -77,6 +77,11 @@ function parseRateWan(rate: string | null | undefined): number | null {
   return m ? parseFloat(m[1]) : null
 }
 
+interface RuleResult {
+  total: number
+  breakdown: string
+}
+
 /**
  * ルールベーススコアを計算（0〜100）
  * - スキル重複率  : 0〜40 pt
@@ -85,15 +90,13 @@ function parseRateWan(rate: string | null | undefined): number | null {
  * - 勤務地一致    : 0〜20 pt
  * - リモート      : 0〜10 pt
  */
-function calcRuleScore(candidate: CandidateInput, project: ProjectReq): number {
-  let score = 0
-
+function calcRuleScore(candidate: CandidateInput, project: ProjectReq): RuleResult {
   // ── スキル重複（必須 + 歓迎）最大 40pt ──
   const required = project.requiredSkills ?? []
   const cSet = new Set(candidate.skills.map(s => s.toLowerCase().trim()))
   let skillScore = 0
+  let hits = 0
   if (required.length > 0) {
-    let hits = 0
     for (const r of required) {
       const rt = r.toLowerCase().trim()
       if (!rt) continue
@@ -122,61 +125,103 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq): number {
     }
     skillScore += Math.round(niceHits)
   }
-  score += Math.min(40, skillScore)
+  const cappedSkillScore = Math.min(40, skillScore)
+  const skillDetail = required.length > 0
+    ? `スキル${cappedSkillScore}/40(必須${required.length}中${Math.round(hits)}合致)`
+    : `スキル${cappedSkillScore}/40(必須スキル未設定)`
 
   // ── 経験年数 ──
   const exp = candidate.experienceYears ?? 0
-  if (exp >= 10) score += 15
-  else if (exp >= 7) score += 12
-  else if (exp >= 5) score += 8
-  else if (exp >= 3) score += 4
-  else if (exp >= 1) score += 2
+  let expScore = 0
+  if (exp >= 10) expScore = 15
+  else if (exp >= 7) expScore = 12
+  else if (exp >= 5) expScore = 8
+  else if (exp >= 3) expScore = 4
+  else if (exp >= 1) expScore = 2
+  const expDetail = `経験${expScore}/15(${exp}年)`
 
   // ── 単価合致 ──
   const rate = parseRateWan(candidate.desiredRate)
+  let rateScore = 0
+  let rateDetail: string
   if (project.budgetMax == null) {
-    // 予算上限未設定 → 制約なしとみなして全加点
-    score += 15
+    rateScore = 15
+    rateDetail = `単価15/15(予算未設定)`
   } else if (rate !== null) {
     const bMin = project.budgetMin ?? 0
     const bMax = project.budgetMax
-    if (rate >= bMin && rate <= bMax) score += 15
-    else if (rate <= bMax * 1.1) score += 8
-    else if (rate <= bMax * 1.2) score += 3
+    if (rate >= bMin && rate <= bMax) {
+      rateScore = 15
+      rateDetail = `単価${rateScore}/15(${candidate.desiredRate})`
+    } else if (rate <= bMax * 1.1) {
+      rateScore = 8
+      rateDetail = `単価${rateScore}/15(${candidate.desiredRate}・上限超過)`
+    } else if (rate <= bMax * 1.2) {
+      rateScore = 3
+      rateDetail = `単価${rateScore}/15(${candidate.desiredRate}・上限超過)`
+    } else {
+      rateScore = 0
+      rateDetail = `単価${rateScore}/15(${candidate.desiredRate}・上限超過)`
+    }
+  } else {
+    rateScore = 0
+    rateDetail = `単価0/15(単価不明)`
   }
 
   // ── 勤務地・居住地マッチング ──
   const isFullRemote = /フルリモート|完全リモート|100[%％]リモート/.test(project.remotePolicy ?? '')
   const projLoc = (project.workLocation ?? '').toLowerCase()
+  let locationScore = 0
+  let locationDetail: string
   if (isFullRemote) {
-    // フルリモートならどこに住んでいても問題なし
-    score += 20
+    locationScore = 20
+    locationDetail = `勤務地20/20(フルリモート)`
   } else if (projLoc) {
     const candPref = (candidate.prefecture ?? '').toLowerCase()
-    // 都道府県の末尾（都/道/府/県）を除いたコア部分で照合
-    // 例: "東京都" → "東京" が "東京都港区田町" に含まれるか
     const prefCore = candPref.replace(/[都道府県]$/, '')
-    if (prefCore && projLoc.includes(prefCore)) score += 20
-    // 居住地不明の場合はペナルティなし
-    else if (!candPref) score += 5
+    if (prefCore && projLoc.includes(prefCore)) {
+      locationScore = 20
+      locationDetail = `勤務地20/20(${candidate.prefecture ?? ''}・一致)`
+    } else if (!candPref) {
+      locationScore = 5
+      locationDetail = `勤務地5/20(居住地不明)`
+    } else {
+      locationScore = 0
+      locationDetail = `勤務地0/20(${candidate.prefecture ?? '不明'}・不一致)`
+    }
+  } else {
+    locationScore = 5
+    locationDetail = `勤務地5/20(居住地不明)`
   }
 
   // ── リモート対応 ──
+  let remoteScore = 0
+  let remoteDetail: string
   if (!isFullRemote && candidate.remoteAvailable && /リモート|remote|在宅/i.test(project.remotePolicy ?? '')) {
-    score += 10
+    remoteScore = 10
+    remoteDetail = `リモート10/10(可・週リモート案件)`
+  } else if (candidate.remoteAvailable) {
+    remoteScore = 0
+    remoteDetail = `リモート0/10(可だがフルリモート案件のため対象外)`
+  } else {
+    remoteScore = 0
+    remoteDetail = `リモート0/10(不可)`
   }
 
-  return Math.min(100, score)
+  const total = Math.min(100, cappedSkillScore + expScore + rateScore + locationScore + remoteScore)
+  const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt`
+
+  return { total, breakdown }
 }
 
 // ─── AI バッチ呼び出し ────────────────────────────────────────────────────────
 
 function buildBatchProjectToCandidatesPrompt(
   project: ProjectReq,
-  candidates: Array<CandidateInput & { ruleScore: number }>,
+  candidates: Array<CandidateInput & { ruleScore: number; ruleBreakdown?: string }>,
 ): string {
   const cList = candidates.map((c, i) =>
-    `[${i + 1}] id="${c.id}" name="${c.name}" ruleScore=${c.ruleScore}` +
+    `[${i + 1}] id="${c.id}" name="${c.name}" ruleScore=${c.ruleScore} ruleBreakdown="${(c as { ruleBreakdown?: string }).ruleBreakdown ?? ''}"` +
     ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
     (c.availableRegions?.length ? ` regions=${JSON.stringify(c.availableRegions)}` : '') +
     (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
@@ -196,24 +241,16 @@ function buildBatchProjectToCandidatesPrompt(
 ${project.roleSummary ? `- 役割: ${project.roleSummary.slice(0, 200)}` : ''}
 ${project.description ? `- 案件詳細: ${project.description.slice(0, 300)}` : ''}
 
-候補者${candidates.length}名（ruleScore はスキル/経験/単価/場所のルールベース点）:
+候補者${candidates.length}名（ruleScore はスキル/経験/単価/場所のルールベース点、ruleBreakdown は各項目の内訳）:
 ${cList}
 
 【指示】各候補者について以下を出力すること。
-1. score（0〜100の整数）: ruleScore を基準に ±15pt の範囲で再採点する
-   - ruleScore は勤務地・リモートの不一致をすでに織り込んでいるため、それを理由にさらに下げないこと
-   - 案件の役割・詳細と候補者の経歴・希望が合わない場合のみ下げる
-   - 逆に希望職種や経歴が強く合致する場合は上げてよい
-   - agentNote（人物評）がある場合、案件の求める人物像との相性を反映する
-2. summary（150字以内）: スコアの根拠を具体的に記述する。以下の観点を優先順に含めること
-   - 必須スキルの合致状況（何が合っていて何が不足か）
-   - 経験年数と案件要件の比較
-   - 単価の合致・乖離
-   - 勤務地とリモート可否を必ずセットで言及すること（例:「北海道在住・リモート不可のため出社困難」「地方在住だがリモート可のため問題なし」）
-   - selfPR がある場合は候補者自身の強み・経験を採点に反映し1文で添える
-   - agentNote がある場合は人物評の特筆すべき点を1文で添える
+1. score（整数）: ruleBreakdown の末尾「→ 計Xpt」の数値をそのまま使うこと（変更禁止）
+2. summary（100〜150字）: ruleBreakdown の各項目を自然な日本語に変換して説明すること
+   例: "スキル3/5合致(Java・Spring Boot・テストが一致)。経験6年で要件を満たす。単価75万は予算内。北海道在住のためリモート不可では出社困難。"
+   - 定性的な懸念（希望職種ミスマッチ・国籍問題等）があれば末尾に1文追加
    - nationality がある場合、案件が日本国籍限定の可能性があれば懸念として明記
-   - 懸念点や不足スキルがあれば明記
+   - selfPR や agentNote があれば特筆点を1文追加
 
 出力形式（配列のみ・改行なし）: [{"id":"...","score":整数,"summary":"150字以内"},...]`
 }
@@ -367,7 +404,7 @@ Deno.serve(async (req) => {
       }
 
       // ルールスコアで全員採点 → ソート
-      const scored = candidates.map(c => ({ ...c, ruleScore: calcRuleScore(c, projectRequirements) }))
+      const scored = candidates.map(c => { const r = calcRuleScore(c, projectRequirements); return { ...c, ruleScore: r.total, ruleBreakdown: r.breakdown } })
       scored.sort((a, b) => b.ruleScore - a.ruleScore)
 
       const aiTargets = scored.slice(0, topN)
@@ -431,7 +468,7 @@ Deno.serve(async (req) => {
         })
       }
 
-      const scored = projects.map(p => ({ ...p, ruleScore: calcRuleScore(candidateProfile, p) }))
+      const scored = projects.map(p => { const r = calcRuleScore(candidateProfile, p); return { ...p, ruleScore: r.total, ruleBreakdown: r.breakdown } })
       scored.sort((a, b) => b.ruleScore - a.ruleScore)
 
       const aiTargets = scored.slice(0, topN)

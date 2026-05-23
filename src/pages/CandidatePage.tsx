@@ -9,6 +9,7 @@ import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
 import type { DataEnv } from '../lib/dataEnv'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
+import { DemoMatchingTestPanel } from '../components/DemoMatchingTestPanel'
 import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../lib/fileParser'
 
 interface SkillsByCategory {
@@ -859,6 +860,20 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
             queryClient.invalidateQueries({ queryKey: ['submission-stats', dataEnv] })
             queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-projects', dataEnv] })
             queryClient.invalidateQueries({ queryKey: ['matching-submissions-by-candidates', dataEnv] })
+          }}
+        />
+      )}
+
+      {demoUiEnabled && dataEnv === 'demo' && (
+        <DemoMatchingTestPanel
+          nickname={nickname}
+          dataEnv={dataEnv}
+          onDone={() => {
+            queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['projects', 'all', dataEnv] })
+            queryClient.invalidateQueries({ queryKey: ['projects', 'open', dataEnv] })
           }}
         />
       )}
