@@ -220,8 +220,15 @@ function buildBatchProjectToCandidatesPrompt(
   project: ProjectReq,
   candidates: Array<CandidateInput & { ruleScore: number; ruleBreakdown?: string }>,
 ): string {
+  const projectRoleText = `${project.title} ${project.roleSummary ?? ''} ${project.description ?? ''}`.toLowerCase()
+  const NEGATION_KEYWORDS = ['希望しない', '希望せず', 'したくない', '不可', '避けたい']
+
   const cList = candidates.map((c, i) => {
     const isNonJapanese = c.nationality && !['日本', '日本人'].includes(c.nationality)
+    // wantedJobsが全て案件テキストに含まれない場合はミスマッチ
+    const mismatchedJobs = (c.preferredJobTypes ?? []).filter(j => !projectRoleText.includes(j.toLowerCase()))
+    const hasJobMismatch = mismatchedJobs.length > 0 && mismatchedJobs.length === (c.preferredJobTypes?.length ?? 0)
+    const selfPRHasNegation = c.selfPR && NEGATION_KEYWORDS.some(k => c.selfPR!.includes(k))
     return (
       `[${i + 1}] id="${c.id}" name="${c.name}" ruleScore=${c.ruleScore} ruleBreakdown="${(c as { ruleBreakdown?: string }).ruleBreakdown ?? ''}"` +
       ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
@@ -230,6 +237,8 @@ function buildBatchProjectToCandidatesPrompt(
       ` summary="${c.summary.slice(0, 200)}"` +
       (c.selfPR ? ` selfPR="${c.selfPR.slice(0, 200)}"` : '') +
       (c.agentComment ? ` agentNote="${c.agentComment.slice(0, 150)}"` : '') +
+      (hasJobMismatch ? ` [必須注記:希望職種(${mismatchedJobs.join('・')})が案件の役割と不一致のため要確認]` : '') +
+      (selfPRHasNegation ? ` [必須注記:selfPRに否定的希望あり→案件との矛盾を確認してsummaryに記載すること]` : '') +
       (isNonJapanese ? ` [必須注記:${c.nationality}のため就労ビザ・日本語要件の確認が必要]` : '')
     )
   }).join('\n')
