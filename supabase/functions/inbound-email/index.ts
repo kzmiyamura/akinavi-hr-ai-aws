@@ -1032,7 +1032,7 @@ function extractCandidateFieldsRegex(
 
   // 国籍 — 名前括弧内: （中国籍）（外国籍）（日本）等を抽出・除去
   if (!nationality) {
-    const natInName = nameStripped.match(/[\s　]?[\(（]([^)）\d]{1,15}[籍人国][\)）]/)
+    const natInName = nameStripped.match(/[\s　]?[\(（]([^)）\d]{1,15}[籍人国])[\)）]/)
     if (natInName) {
       nationality = natInName[1].trim()
       nameStripped = nameStripped.replace(/[\s　]?[\(（][^)）\d]{1,15}[籍人国][\)）]/, '').trim()
