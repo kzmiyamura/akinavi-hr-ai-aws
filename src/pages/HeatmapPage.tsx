@@ -4,7 +4,7 @@ import { geoMercator, geoPath } from 'd3-geo'
 import type { GeoPermissibleObjects } from 'd3-geo'
 import { feature } from 'topojson-client'
 import type { Topology } from 'topojson-specification'
-import { fetchPrefectureCounts, fetchSkillNames } from '../lib/db/heatmap'
+import { fetchPrefectureCounts, fetchSkillNames, fetchCandidatesByPrefecture } from '../lib/db/heatmap'
 import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
@@ -18,13 +18,23 @@ interface GeoFeature {
 }
 
 /** count に応じた塗り色（薄青〜濃青） */
-function getColor(count: number, max: number): string {
+function getColor(count: number, max: number, selected: boolean): string {
+  if (selected) return '#f59e0b'
   if (count === 0 || max === 0) return '#e5e7eb'
   const ratio = Math.sqrt(count / max)
   const r = Math.round(219 - ratio * 174)
   const g = Math.round(234 - ratio * 145)
   const b = Math.round(254 - ratio * 55)
   return `rgb(${r},${g},${b})`
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${d.getFullYear()}/${mm}/${dd} ${hh}:${min}`
 }
 
 const MAP_W = 700
@@ -35,6 +45,7 @@ export function HeatmapPage({ dataEnv }: Props) {
   const [inputValue, setInputValue] = useState<string>('')
   const [period, setPeriod] = useState<'7d' | 'all'>('7d')
   const [hovered, setHovered] = useState<{ name: string; count: number; x: number; y: number } | null>(null)
+  const [selectedPref, setSelectedPref] = useState<string | null>(null)
   const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([])
   const svgRef = useRef<SVGSVGElement>(null)
 
@@ -59,6 +70,13 @@ export function HeatmapPage({ dataEnv }: Props) {
     queryKey: ['skill-names-heatmap'],
     queryFn: fetchSkillNames,
     staleTime: 5 * 60_000,
+  })
+
+  const { data: prefCandidates = [], isLoading: candLoading } = useQuery({
+    queryKey: ['heatmap-candidates', dataEnv, selectedPref, skillFilter],
+    queryFn: () => fetchCandidatesByPrefecture(dataEnv, selectedPref!, skillFilter || null),
+    enabled: !!selectedPref,
+    staleTime: 30_000,
   })
 
   const countMap = useMemo(() => {
@@ -109,6 +127,10 @@ export function HeatmapPage({ dataEnv }: Props) {
     setHovered({ name, count, x: e.clientX - rect.left, y: e.clientY - rect.top })
   }
 
+  function handlePrefClick(name: string) {
+    setSelectedPref(prev => prev === name ? null : name)
+  }
+
   const top10 = useMemo(() => prefData.slice(0, 10), [prefData])
 
   return (
@@ -117,7 +139,7 @@ export function HeatmapPage({ dataEnv }: Props) {
       <div className="mb-4 flex flex-col sm:flex-row sm:items-end gap-3">
         <div>
           <h2 className="text-lg font-bold text-gray-800 mb-0.5">人材分布マップ</h2>
-          <p className="text-xs text-gray-500">都道府県別の人材数を地図上に表示します</p>
+          <p className="text-xs text-gray-500">都道府県をクリックすると受信メール一覧を表示します</p>
         </div>
 
         {/* 期間トグル */}
@@ -214,16 +236,18 @@ export function HeatmapPage({ dataEnv }: Props) {
                 const count = countMap[name] ?? 0
                 const d = pathGenerator(geo.geometry as GeoPermissibleObjects)
                 if (!d) return null
+                const isSelected = selectedPref === name
                 return (
                   <path
                     key={geo.properties.id}
                     d={d}
-                    fill={getColor(count, maxCount)}
-                    stroke="#fff"
-                    strokeWidth={0.5}
+                    fill={getColor(count, maxCount, isSelected)}
+                    stroke={isSelected ? '#d97706' : '#fff'}
+                    strokeWidth={isSelected ? 1.5 : 0.5}
                     style={{ cursor: 'pointer', transition: 'fill 0.15s' }}
                     onMouseMove={(e) => handleMouseMove(e, name, count)}
                     onMouseLeave={() => setHovered(null)}
+                    onClick={() => handlePrefClick(name)}
                   />
                 )
               })}
@@ -237,6 +261,7 @@ export function HeatmapPage({ dataEnv }: Props) {
               >
                 <span className="font-bold">{hovered.name}</span>
                 　{hovered.count.toLocaleString()}人
+                {hovered.name !== selectedPref && <span className="ml-1 text-gray-400">（クリックで詳細）</span>}
               </div>
             )}
           </div>
@@ -249,7 +274,7 @@ export function HeatmapPage({ dataEnv }: Props) {
                 <div
                   key={r}
                   className="flex-1"
-                  style={{ background: getColor(Math.round(r * maxCount), maxCount) }}
+                  style={{ background: getColor(Math.round(r * maxCount), maxCount, false) }}
                 />
               ))}
             </div>
@@ -267,16 +292,20 @@ export function HeatmapPage({ dataEnv }: Props) {
           ) : (
             <ol className="space-y-1.5">
               {top10.map(({ prefecture, count }, i) => (
-                <li key={prefecture} className="flex items-center gap-2 text-sm">
+                <li
+                  key={prefecture}
+                  className={`flex items-center gap-2 text-sm cursor-pointer rounded px-1 -mx-1 transition-colors ${selectedPref === prefecture ? 'bg-amber-50' : 'hover:bg-gray-50'}`}
+                  onClick={() => handlePrefClick(prefecture)}
+                >
                   <span className="w-5 text-right text-xs text-gray-400 shrink-0">{i + 1}</span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between mb-0.5">
-                      <span className="text-gray-800 text-xs truncate">{prefecture}</span>
+                      <span className={`text-xs truncate ${selectedPref === prefecture ? 'text-amber-700 font-medium' : 'text-gray-800'}`}>{prefecture}</span>
                       <span className="text-xs text-gray-500 ml-1 shrink-0">{count.toLocaleString()}人</span>
                     </div>
                     <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-blue-400 rounded-full"
+                        className={`h-full rounded-full ${selectedPref === prefecture ? 'bg-amber-400' : 'bg-blue-400'}`}
                         style={{ width: `${(count / maxCount) * 100}%` }}
                       />
                     </div>
@@ -290,6 +319,52 @@ export function HeatmapPage({ dataEnv }: Props) {
           )}
         </div>
       </div>
+
+      {/* 都道府県クリック時の人材リスト */}
+      {selectedPref && (
+        <div className="mt-4 bg-white rounded-xl border border-amber-200 shadow-sm">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-800">{selectedPref}</span>
+              {skillFilter && (
+                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{skillFilter}</span>
+              )}
+              <span className="text-xs text-gray-400">直近受信メール（最大10件）</span>
+            </div>
+            <button
+              onClick={() => setSelectedPref(null)}
+              className="text-gray-400 hover:text-gray-600 text-lg leading-none"
+            >
+              ×
+            </button>
+          </div>
+
+          {candLoading ? (
+            <div className="px-4 py-6 text-center text-sm text-gray-400">読み込み中...</div>
+          ) : prefCandidates.length === 0 ? (
+            <div className="px-4 py-6 text-center text-sm text-gray-400">
+              {skillFilter ? `${selectedPref}に${skillFilter}を持つ人材は現在DBにいません` : `${selectedPref}の人材は現在DBにいません`}
+              {period === 'all' && <div className="text-xs mt-1 text-gray-400">※ アーカイブ済み人材のメール詳細は表示できません</div>}
+            </div>
+          ) : (
+            <ul className="divide-y divide-gray-50">
+              {prefCandidates.map((c) => (
+                <li key={c.id} className="px-4 py-2.5 flex items-start gap-3">
+                  <div className="shrink-0 text-xs text-gray-400 mt-0.5 whitespace-nowrap">
+                    {formatDate(c.created_at)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium text-gray-700 mb-0.5">{c.name}</div>
+                    <div className="text-xs text-gray-500 truncate" title={c.subject ?? ''}>
+                      {c.subject ?? '（件名なし）'}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   )
 }

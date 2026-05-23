@@ -24,6 +24,44 @@ export async function fetchPrefectureCounts(
   }))
 }
 
+export interface PrefectureCandidate {
+  id: string
+  name: string
+  subject: string | null
+  created_at: string
+}
+
+/** 都道府県クリック時に最大10件の人材を取得（件名・受信日時・氏名） */
+export async function fetchCandidatesByPrefecture(
+  dataEnv: DataEnv,
+  prefecture: string,
+  skillFilter: string | null,
+  limit = 10
+): Promise<PrefectureCandidate[]> {
+  let query = supabase
+    .from('candidates')
+    .select('id, name, raw_profile->subject, created_at')
+    .eq('data_env', dataEnv)
+    .eq('raw_profile->>prefecture', prefecture)
+    .is('merged_into', null)
+    .eq('duplicate_flag', false)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  if (skillFilter) {
+    query = query.ilike('skills::text', `%${skillFilter}%`)
+  }
+
+  const { data, error } = await query
+  if (error) throw error
+  return (data ?? []).map((r: Record<string, unknown>) => ({
+    id: r.id as string,
+    name: (r.name as string) || '不明',
+    subject: (r.subject as string | null) ?? null,
+    created_at: r.created_at as string,
+  }))
+}
+
 /** skill_master からスキル名一覧を取得（フィルター用ドロップダウン） */
 export async function fetchSkillNames(): Promise<string[]> {
   const { data, error } = await supabase
