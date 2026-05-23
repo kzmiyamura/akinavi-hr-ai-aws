@@ -6,39 +6,34 @@ export interface PrefectureCount {
   count: number
 }
 
-/** 都道府県別の人材数を取得。skillFilter 指定時は候補者をスキルで絞り込む */
+/** 都道府県別の人材数を取得。skillFilter 指定時は candidate_skills と INNER JOIN で絞り込む */
 export async function fetchPrefectureCounts(
   dataEnv: DataEnv,
   skillFilter: string | null
 ): Promise<PrefectureCount[]> {
-  let candidateIds: string[] | null = null
+  let rows: { raw_profile: unknown }[] = []
 
   if (skillFilter) {
-    // スキルに一致する candidate_id を取得
+    // candidate_skills → candidates を INNER JOIN して一発取得
+    // （candidate_id の配列を .in() に渡すと URL が長すぎて失敗するため）
     const { data, error } = await supabase
-      .from('candidate_skills')
-      .select('candidate_id')
-      .ilike('skill', `%${skillFilter}%`)
+      .from('candidates')
+      .select('raw_profile, candidate_skills!inner(skill)')
+      .eq('data_env', dataEnv)
+      .ilike('candidate_skills.skill', `%${skillFilter}%`)
     if (error) throw error
-    candidateIds = (data ?? []).map((r) => r.candidate_id as string)
-    if (candidateIds.length === 0) return []
+    rows = data ?? []
+  } else {
+    const { data, error } = await supabase
+      .from('candidates')
+      .select('raw_profile')
+      .eq('data_env', dataEnv)
+    if (error) throw error
+    rows = data ?? []
   }
-
-  // candidates から都道府県を取得
-  let query = supabase
-    .from('candidates')
-    .select('id, raw_profile')
-    .eq('data_env', dataEnv)
-
-  if (candidateIds) {
-    query = query.in('id', candidateIds)
-  }
-
-  const { data, error } = await query
-  if (error) throw error
 
   const counts: Record<string, number> = {}
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const pref = (row.raw_profile as Record<string, unknown>)?.prefecture as string | undefined
     if (!pref || pref === '不明') continue
     counts[pref] = (counts[pref] ?? 0) + 1
