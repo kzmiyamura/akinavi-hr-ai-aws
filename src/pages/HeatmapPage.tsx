@@ -236,8 +236,8 @@ export function HeatmapPage({ dataEnv }: Props) {
             {skillFilter ? (
               <><span className="font-medium text-blue-600">{skillFilter}</span> を持つ人材：</>
             ) : '全人材：'}
-            <span className="font-bold text-gray-800 ml-1">{totalCount.toLocaleString()}人</span>
-            　{prefData.length}都道府県に分布
+            <span className="font-bold text-gray-800 ml-1">{totalCount.toLocaleString()} 人</span>
+            　{prefData.length} 都道府県に分布
           </span>
         )}
       </div>
