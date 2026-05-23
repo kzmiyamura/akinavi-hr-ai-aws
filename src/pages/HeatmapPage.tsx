@@ -17,7 +17,14 @@ interface GeoFeature {
   geometry: GeoPermissibleObjects
 }
 
-/** count に応じた塗り色（薄青〜濃青） */
+interface ZoomState {
+  scale: number
+  tx: number
+  ty: number
+}
+
+const ZOOM_NONE: ZoomState = { scale: 1, tx: 0, ty: 0 }
+
 function getColor(count: number, max: number, selected: boolean): string {
   if (selected) return '#f59e0b'
   if (count === 0 || max === 0) return '#e5e7eb'
@@ -46,10 +53,10 @@ export function HeatmapPage({ dataEnv }: Props) {
   const [period, setPeriod] = useState<'7d' | 'all'>('7d')
   const [hovered, setHovered] = useState<{ name: string; count: number; x: number; y: number } | null>(null)
   const [selectedPref, setSelectedPref] = useState<string | null>(null)
+  const [zoom, setZoom] = useState<ZoomState>(ZOOM_NONE)
   const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([])
   const svgRef = useRef<SVGSVGElement>(null)
 
-  // Japan TopoJSON を fetch
   useEffect(() => {
     fetch('/japan.topojson')
       .then((r) => r.json())
@@ -85,17 +92,9 @@ export function HeatmapPage({ dataEnv }: Props) {
     return m
   }, [prefData])
 
-  const maxCount = useMemo(
-    () => Math.max(1, ...prefData.map((p) => p.count)),
-    [prefData]
-  )
+  const maxCount = useMemo(() => Math.max(1, ...prefData.map((p) => p.count)), [prefData])
+  const totalCount = useMemo(() => prefData.reduce((s, p) => s + p.count, 0), [prefData])
 
-  const totalCount = useMemo(
-    () => prefData.reduce((s, p) => s + p.count, 0),
-    [prefData]
-  )
-
-  // d3-geo Mercator プロジェクション
   const pathGenerator = useMemo(() => {
     const projection = geoMercator()
       .center([136.5, 35.5])
@@ -104,7 +103,13 @@ export function HeatmapPage({ dataEnv }: Props) {
     return geoPath(projection)
   }, [])
 
-  // オートコンプリート候補
+  // geoFeature を名前で引けるマップ
+  const geoByName = useMemo(() => {
+    const m: Record<string, GeoFeature> = {}
+    for (const geo of geoFeatures) m[geo.properties.nam_ja] = geo
+    return m
+  }, [geoFeatures])
+
   const suggestions = useMemo(() => {
     if (!inputValue || inputValue === skillFilter) return []
     const lower = inputValue.toLowerCase()
@@ -127,8 +132,33 @@ export function HeatmapPage({ dataEnv }: Props) {
     setHovered({ name, count, x: e.clientX - rect.left, y: e.clientY - rect.top })
   }
 
+  function zoomToPref(name: string) {
+    const geo = geoByName[name]
+    if (!geo) return
+    const [[x0, y0], [x1, y1]] = pathGenerator.bounds(geo.geometry as GeoPermissibleObjects)
+    const dx = x1 - x0
+    const dy = y1 - y0
+    const cx = (x0 + x1) / 2
+    const cy = (y0 + y1) / 2
+    const scale = Math.min((MAP_W / dx) * 0.75, (MAP_H / dy) * 0.75, 8)
+    const tx = MAP_W / 2 - scale * cx
+    const ty = MAP_H / 2 - scale * cy
+    setZoom({ scale, tx, ty })
+  }
+
   function handlePrefClick(name: string) {
-    setSelectedPref(prev => prev === name ? null : name)
+    if (selectedPref === name) {
+      setSelectedPref(null)
+      setZoom(ZOOM_NONE)
+    } else {
+      setSelectedPref(name)
+      zoomToPref(name)
+    }
+  }
+
+  function handleReset() {
+    setSelectedPref(null)
+    setZoom(ZOOM_NONE)
   }
 
   const top10 = useMemo(() => prefData.slice(0, 10), [prefData])
@@ -139,7 +169,7 @@ export function HeatmapPage({ dataEnv }: Props) {
       <div className="mb-4 flex flex-col sm:flex-row sm:items-end gap-3">
         <div>
           <h2 className="text-lg font-bold text-gray-800 mb-0.5">人材分布マップ</h2>
-          <p className="text-xs text-gray-500">都道府県をクリックすると受信メール一覧を表示します</p>
+          <p className="text-xs text-gray-500">都道府県をクリックするとズームして受信メール一覧を表示します</p>
         </div>
 
         {/* 期間トグル */}
@@ -188,10 +218,7 @@ export function HeatmapPage({ dataEnv }: Props) {
               )}
             </div>
             {skillFilter && (
-              <button
-                onClick={clearFilter}
-                className="text-xs text-gray-400 hover:text-gray-600 underline whitespace-nowrap"
-              >
+              <button onClick={clearFilter} className="text-xs text-gray-400 hover:text-gray-600 underline whitespace-nowrap">
                 クリア
               </button>
             )}
@@ -225,32 +252,59 @@ export function HeatmapPage({ dataEnv }: Props) {
               </div>
             )}
 
+            {/* ズームリセットボタン */}
+            {selectedPref && (
+              <button
+                onClick={handleReset}
+                className="absolute top-2 right-2 z-10 bg-white border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-500 hover:text-gray-800 shadow-sm flex items-center gap-1"
+              >
+                ← 全体表示
+              </button>
+            )}
+
             <svg
               ref={svgRef}
               viewBox={`0 0 ${MAP_W} ${MAP_H}`}
-              style={{ width: '100%', height: 'auto', display: 'block' }}
+              style={{ width: '100%', height: 'auto', display: 'block', cursor: selectedPref ? 'zoom-out' : 'default' }}
               onMouseLeave={() => setHovered(null)}
+              onClick={(e) => {
+                // SVG背景クリックでリセット
+                if (e.target === svgRef.current) handleReset()
+              }}
             >
-              {geoFeatures.map((geo) => {
-                const name = geo.properties.nam_ja
-                const count = countMap[name] ?? 0
-                const d = pathGenerator(geo.geometry as GeoPermissibleObjects)
-                if (!d) return null
-                const isSelected = selectedPref === name
-                return (
-                  <path
-                    key={geo.properties.id}
-                    d={d}
-                    fill={getColor(count, maxCount, isSelected)}
-                    stroke={isSelected ? '#d97706' : '#fff'}
-                    strokeWidth={isSelected ? 1.5 : 0.5}
-                    style={{ cursor: 'pointer', transition: 'fill 0.15s' }}
-                    onMouseMove={(e) => handleMouseMove(e, name, count)}
-                    onMouseLeave={() => setHovered(null)}
-                    onClick={() => handlePrefClick(name)}
-                  />
-                )
-              })}
+              <g
+                style={{
+                  transform: `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.scale})`,
+                  transformOrigin: '0 0',
+                  transition: 'transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
+                }}
+              >
+                {geoFeatures.map((geo) => {
+                  const name = geo.properties.nam_ja
+                  const count = countMap[name] ?? 0
+                  const d = pathGenerator(geo.geometry as GeoPermissibleObjects)
+                  if (!d) return null
+                  const isSelected = selectedPref === name
+                  const strokeW = isSelected ? 2 / zoom.scale : 0.5 / zoom.scale
+                  return (
+                    <path
+                      key={geo.properties.id}
+                      d={d}
+                      fill={getColor(count, maxCount, isSelected)}
+                      stroke={isSelected ? '#d97706' : '#fff'}
+                      strokeWidth={strokeW}
+                      style={{
+                        cursor: 'pointer',
+                        transition: 'fill 0.3s',
+                        filter: isSelected ? 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' : undefined,
+                      }}
+                      onMouseMove={(e) => handleMouseMove(e, name, count)}
+                      onMouseLeave={() => setHovered(null)}
+                      onClick={(e) => { e.stopPropagation(); handlePrefClick(name) }}
+                    />
+                  )
+                })}
+              </g>
             </svg>
 
             {/* ツールチップ */}
@@ -261,7 +315,6 @@ export function HeatmapPage({ dataEnv }: Props) {
               >
                 <span className="font-bold">{hovered.name}</span>
                 　{hovered.count.toLocaleString()}人
-                {hovered.name !== selectedPref && <span className="ml-1 text-gray-400">（クリックで詳細）</span>}
               </div>
             )}
           </div>
@@ -271,11 +324,7 @@ export function HeatmapPage({ dataEnv }: Props) {
             <span>少</span>
             <div className="flex h-3 flex-1 max-w-32 rounded overflow-hidden">
               {[0.05, 0.2, 0.4, 0.6, 0.8, 1.0].map((r) => (
-                <div
-                  key={r}
-                  className="flex-1"
-                  style={{ background: getColor(Math.round(r * maxCount), maxCount, false) }}
-                />
+                <div key={r} className="flex-1" style={{ background: getColor(Math.round(r * maxCount), maxCount, false) }} />
               ))}
             </div>
             <span>多</span>
@@ -305,7 +354,7 @@ export function HeatmapPage({ dataEnv }: Props) {
                     </div>
                     <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full ${selectedPref === prefecture ? 'bg-amber-400' : 'bg-blue-400'}`}
+                        className={`h-full rounded-full transition-all duration-500 ${selectedPref === prefecture ? 'bg-amber-400' : 'bg-blue-400'}`}
                         style={{ width: `${(count / maxCount) * 100}%` }}
                       />
                     </div>
@@ -331,12 +380,7 @@ export function HeatmapPage({ dataEnv }: Props) {
               )}
               <span className="text-xs text-gray-400">受信メール一覧（最大10件・新しい順）</span>
             </div>
-            <button
-              onClick={() => setSelectedPref(null)}
-              className="text-gray-400 hover:text-gray-600 text-lg leading-none"
-            >
-              ×
-            </button>
+            <button onClick={handleReset} className="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
           </div>
 
           {candLoading ? (
