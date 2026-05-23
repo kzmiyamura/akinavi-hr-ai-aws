@@ -285,20 +285,21 @@ function extractSectionsByLabels(text: string, labels: string[]): string | null 
   return found.join('\n\n').slice(0, 500)
 }
 
-/** 候補者本人の自己PR（自己PR / PR / アピールポイント / 強み 等）を抽出する。 */
-function extractSelfPR(body: string, attachText: string): string | null {
-  const text = [body, attachText].filter(Boolean).join('\n')
-  return extractSectionsByLabels(text, [
+/** 候補者本人の自己PR（自己PR / PR / アピールポイント / 強み 等）を抽出する。
+ * スプレッドシート等の添付データは対象外（誤マッチ防止）。 */
+function extractSelfPR(body: string, _attachText: string): string | null {
+  return extractSectionsByLabels(body, [
     '自己PR', 'PR', 'アピールポイント', '特徴・強み', '強み', '紹介文',
   ])
 }
 
-/** エージェントコメント（担当者所感・推薦コメント・人物評等）を抽出する。 */
-function extractAgentComment(body: string, attachText: string): string | null {
-  const text = [body, attachText].filter(Boolean).join('\n')
-  return extractSectionsByLabels(text, [
+/** エージェントコメント（担当者所感・推薦コメント・人物評等）を抽出する。
+ * スプレッドシート等の添付データは対象外（誤マッチ防止）。
+ * 「備考」はメール内での用途が曖昧（候補者自身のメモにも使われる）ため除外。 */
+function extractAgentComment(body: string, _attachText: string): string | null {
+  return extractSectionsByLabels(body, [
     '弊社コメント', 'エージェントコメント', '担当者コメント', 'コーディネーターコメント',
-    '営業コメント', '推薦コメント', '備考', '所感', '評価', '推薦理由', '特記事項',
+    '営業コメント', '推薦コメント', '所感', '推薦理由', '特記事項',
     '人物像', '人物', '所見', '印象', '弊社担当者から一言',
   ])
 }
