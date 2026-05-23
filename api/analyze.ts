@@ -6,7 +6,7 @@
 //   attachment[data], attachment[mimeType], attachment[name]    ← 旧形式（後方互換）
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import { GoogleGenerativeAI, type Part } from '@google/generative-ai'
 import { createClient } from '@supabase/supabase-js'
 
 interface Attachment {
@@ -59,7 +59,7 @@ async function generateJSON(
   const genAI = new GoogleGenerativeAI(getEnv('GEMINI_API_KEY'))
   const model = genAI.getGenerativeModel({ model: AI_MODEL, generationConfig: { temperature: 0 } })
 
-  const parts: object[] = []
+  const parts: Part[] = []
   for (const att of attachments) {
     if (att.data && SUPPORTED_MIME.includes(att.mimeType)) {
       parts.push({ inlineData: { data: att.data, mimeType: att.mimeType } })
@@ -265,7 +265,7 @@ JSON:`.trim()
 - スキル列の区切り（「/」「・」,「、」）は分割し、重複を除き表記を統一（例: Javascript→JavaScript）。
 - budgetMin / budgetMax は月額万円。曖昧なら null。
 - startDate / endDate は YYYY-MM-DD のみ。確定日がなければ null。
-- headcount / settlementMin / settlementMax / workLocation 等は Edge `inbound-email` と同様のルール。
+- headcount / settlementMin / settlementMax / workLocation 等は Edge \`inbound-email\` と同様のルール。
 
 件名: ${subject}
 
