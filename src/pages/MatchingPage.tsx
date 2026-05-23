@@ -88,8 +88,8 @@ async function matchBatchProjectToCandidates(
   projectReq: unknown,
   targets: Candidate[],
   onProgress: (done: number, total: number) => void,
-): Promise<Map<string, { score: number; summary: string }>> {
-  const resultMap = new Map<string, { score: number; summary: string }>()
+): Promise<Map<string, { score: number; summary: string; ruleScore: number }>> {
+  const resultMap = new Map<string, { score: number; summary: string; ruleScore: number }>()
   const batchInputs = targets.map(toCandidateBatchInput)
   let done = 0
   const total = targets.length
@@ -101,7 +101,7 @@ async function matchBatchProjectToCandidates(
       candidates: chunk,
     }, chunk.length)
     for (const r of [...results, ...ruleOnly]) {
-      resultMap.set(r.candidateId, { score: r.score, summary: r.summary })
+      resultMap.set(r.candidateId, { score: r.score, summary: r.summary, ruleScore: r.ruleScore })
     }
     done = Math.min(i + BATCH_AI_SIZE, total)
     onProgress(done, total)
@@ -113,8 +113,8 @@ async function matchBatchCandidateToProjects(
   candidateInput: CandidateBatchInput,
   targetProjects: Project[],
   onProgress: (done: number, total: number) => void,
-): Promise<Map<string, { score: number; summary: string }>> {
-  const resultMap = new Map<string, { score: number; summary: string }>()
+): Promise<Map<string, { score: number; summary: string; ruleScore: number }>> {
+  const resultMap = new Map<string, { score: number; summary: string; ruleScore: number }>()
   const projectInputs = targetProjects.map(p => ({
     id: p.id,
     title: p.title,
@@ -137,7 +137,7 @@ async function matchBatchCandidateToProjects(
       projects: chunk,
     }, chunk.length)
     for (const r of [...results, ...ruleOnly]) {
-      if (r.projectId) resultMap.set(r.projectId, { score: r.score, summary: r.summary })
+      if (r.projectId) resultMap.set(r.projectId, { score: r.score, summary: r.summary, ruleScore: r.ruleScore })
     }
     done = Math.min(i + BATCH_AI_SIZE, total)
     onProgress(done, total)
@@ -799,7 +799,7 @@ export function MatchingPage({
             await upsertSubmission({
               candidateId: candidate.id,
               projectId,
-              matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false },
+              matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
               createdBy: nickname,
               dataEnv,
             })
@@ -851,7 +851,7 @@ export function MatchingPage({
             await upsertSubmission({
               candidateId: candidate.id,
               projectId: project.id,
-              matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false },
+              matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
               createdBy: nickname,
               dataEnv,
             })
@@ -908,7 +908,7 @@ export function MatchingPage({
             inner: candTotal > 0 ? { current: 0, total: candTotal, unit: '候補者' } : undefined,
           })
 
-          let resultMap: Map<string, { score: number; summary: string }> = new Map()
+          let resultMap: Map<string, { score: number; summary: string; ruleScore: number }> = new Map()
           try {
             resultMap = await matchBatchProjectToCandidates(
               projectReq,
@@ -936,7 +936,7 @@ export function MatchingPage({
                 await upsertSubmission({
                   candidateId: candidate.id,
                   projectId: project.id,
-                  matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false },
+                  matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
                   createdBy: nickname,
                   dataEnv,
                 })
@@ -994,7 +994,7 @@ export function MatchingPage({
           })
 
           const candidateInput = toCandidateBatchInput(candidate)
-          let resultMap: Map<string, { score: number; summary: string }> = new Map()
+          let resultMap: Map<string, { score: number; summary: string; ruleScore: number }> = new Map()
           try {
             resultMap = await matchBatchCandidateToProjects(
               candidateInput,
@@ -1022,7 +1022,7 @@ export function MatchingPage({
                 await upsertSubmission({
                   candidateId: candidate.id,
                   projectId: project.id,
-                  matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false },
+                  matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
                   createdBy: nickname,
                   dataEnv,
                 })

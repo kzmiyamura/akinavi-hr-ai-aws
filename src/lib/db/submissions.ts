@@ -39,7 +39,10 @@ export async function upsertSubmission(input: UpsertSubmissionInput): Promise<Su
         project_id: projectId,
         match_score: matchResult.score,
         ai_summary: matchResult.summary,
-        ai_raw: { duplicateSuspected: matchResult.duplicateSuspected },
+        ai_raw: {
+          duplicateSuspected: matchResult.duplicateSuspected,
+          ...(matchResult.ruleScore !== undefined && { ruleScore: matchResult.ruleScore }),
+        },
         created_by: createdBy,
       },
       { onConflict: 'candidate_id,project_id' },

@@ -141,6 +141,7 @@ export interface MatchResponse {
   score: number       // 0〜100
   summary: string     // マッチング理由
   duplicateSuspected: boolean // 他候補との類似疑い
+  ruleScore?: number  // ルールベーススコア（AIスコアとの比較用）
 }
 
 /** AIプロバイダー共通インターフェース */

@@ -235,7 +235,7 @@ Deno.serve(async (req: Request) => {
                 project_id: project.id,
                 match_score: r.score,
                 ai_summary: r.summary,
-                ai_raw: { autoMatched: true, source: 'auto-match-cron' },
+                ai_raw: { autoMatched: true, source: 'auto-match-cron', ruleScore: r.ruleScore },
                 created_by: 'auto-match-cron',
               },
               { onConflict: 'candidate_id,project_id' },
