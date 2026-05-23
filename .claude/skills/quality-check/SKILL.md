@@ -1,6 +1,6 @@
 ---
 name: quality-check
-description: AkiNavi HR-AIの品質チェック。skill_masterメンテ・駅名マッピング・取りこぼし調査・異常監視・AIコスト監視を順番に実施する。
+description: AkiNavi HR-AIの品質チェック。skill_masterメンテ・駅名マッピング・取りこぼし調査・異常監視・AIコスト監視・年齢性別取得率・フィールド充足率・名前汚染・非人材混入・分割失敗を順番に実施する。
 ---
 
 以下の手順を順番に実施すること。各ステップで問題が見つかった場合は内容を報告し、修正が必要なものはユーザーに確認を取ってから実行する。
@@ -209,6 +209,161 @@ LIMIT 10;
 | Bedrock が登録されている | 即調査してコードから該当呼び出しを除去 |
 | Groq フォールバック多発 | Cerebras の無料枠リセット待ち or Groq 有料プランを案内 |
 | 重複スコアリング発見 | 対象ペアを削除し、`submissions` の UNIQUE 制約追加を検討 |
+
+---
+
+## ⑥ 年齢・性別取得率チェック
+
+年齢はマッチングスコアに、性別は重複チェックに活用するため、取得率を定期確認する。
+
+### 6-1. 取得率の集計（直近14日）
+
+```sql
+SELECT
+  COUNT(*) AS total,
+  SUM(CASE WHEN (raw_profile->>'age') IS NOT NULL THEN 1 ELSE 0 END) AS age_filled,
+  SUM(CASE WHEN (raw_profile->>'gender') IS NOT NULL THEN 1 ELSE 0 END) AS gender_filled,
+  ROUND(100.0 * SUM(CASE WHEN (raw_profile->>'age') IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS age_rate_pct,
+  ROUND(100.0 * SUM(CASE WHEN (raw_profile->>'gender') IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS gender_rate_pct
+FROM candidates
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days';
+```
+
+- 取得率が **50% 未満** の場合は「低取得率」として次の調査に進む
+- 取得率が **80% 以上** なら「正常」と報告して終了
+
+### 6-2. 未取得サンプルの確認
+
+```sql
+SELECT
+  id, name,
+  raw_profile->>'age' AS age,
+  raw_profile->>'gender' AS gender,
+  LEFT(raw_profile->>'text', 300) AS body_head
+FROM candidates
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days'
+  AND (raw_profile->>'age' IS NULL OR raw_profile->>'gender' IS NULL)
+  AND name != '不明'
+ORDER BY created_at DESC
+LIMIT 10;
+```
+
+- `body_head` を目視確認し、年齢・性別が本文に記載されているのに取れていないパターンを抽出する
+- 新たなパターンが見つかれば `inbound-email/index.ts` の `extractCandidateFieldsRegex` に正規表現を追加 → ユーザー確認後に `npm run deploy:edge`
+
+### 6-3. よくある未取得パターン（参考）
+
+| 本文の書き方 | 対応状況 |
+|---|---|
+| `（34歳/男性）` | ✅ 対応済み |
+| `（34才：男性）` | ✅ 対応済み |
+| `YS(26歳)` | ✅ 対応済み |
+| `■C-TN（44歳 / 男性）` | ✅ 対応済み |
+| `年齢: 34歳` `性別: 男性`（ラベルあり別行） | ❓ 要確認 |
+| `34歳 男性`（括弧なし） | ❓ 要確認 |
+| 1行形式の一括紹介メール | ❌ 取得不可（情報なし） |
+
+---
+
+## ⑦ フィールド充足率チェック（国籍・自己PR・agentComment）
+
+新規フィールドが実際に取れているかを確認する。
+
+```sql
+SELECT
+  COUNT(*) AS total,
+  SUM(CASE WHEN raw_profile->>'nationality' IS NOT NULL THEN 1 ELSE 0 END) AS nationality_filled,
+  SUM(CASE WHEN raw_profile->>'selfPR'      IS NOT NULL THEN 1 ELSE 0 END) AS selfpr_filled,
+  SUM(CASE WHEN raw_profile->>'agentComment' IS NOT NULL THEN 1 ELSE 0 END) AS agent_filled,
+  ROUND(100.0 * SUM(CASE WHEN raw_profile->>'nationality'  IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS nationality_pct,
+  ROUND(100.0 * SUM(CASE WHEN raw_profile->>'selfPR'       IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS selfpr_pct,
+  ROUND(100.0 * SUM(CASE WHEN raw_profile->>'agentComment' IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) AS agent_pct
+FROM candidates
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days';
+```
+
+- `nationality` は外国籍エンジニアが多い場合に取得率が上がる。0% に近くても異常ではないが、取れているべき候補者がいれば本文を確認する
+- `selfPR` / `agentComment` は **20% 未満** なら取りこぼしが多いとして⑥-2 と同様にサンプル確認する
+
+---
+
+## ⑧ 名前汚染チェック（性別・年齢・記号が残っている）
+
+名前フィールドに性別・年齢・記号が混入しているレコードを検出する。
+
+```sql
+SELECT id, name, created_at, LEFT(raw_profile->>'text', 200) AS body_head
+FROM candidates
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days'
+  AND (
+    name ~ '男性|女性|男$|女$'
+    OR name ~ '\d+歳|\d+才'
+    OR name ~ '[（(]\d+[）)]'
+    OR name ~ '重複|不明|NULL'
+  )
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+- 「K.T女性」「YS(26歳)」のように名前に性別・年齢が残っている場合は `inbound-email/index.ts` の名前抽出 regex を修正する
+- 修正後、該当レコードは「再解析」ボタンで更新できることをユーザーに案内する
+
+---
+
+## ⑨ 非人材メール混入チェック
+
+契約確認・連絡・報告等の業務メールが人材として登録されていないかを確認する。
+
+```sql
+SELECT id, name, created_at,
+       raw_profile->>'subject' AS subject,
+       raw_profile->>'from'    AS from_email,
+       LEFT(raw_profile->>'text', 150) AS body_head
+FROM candidates
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days'
+  AND (
+    raw_profile->>'subject' ~* '契約|確認|ご連絡|報告|請求|お知らせ|案内|返信|RE:|Fwd:'
+    OR (name = '不明' AND raw_profile->>'text' ~* '契約|請求|報告')
+  )
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+- 該当レコードの本文を確認し、人材情報でないと判断した場合は削除を案内する
+- 件名パターンが再発しそうであれば `inbound-email/index.ts` の `PROJECT_SOLICITATION_KEYWORDS` に追加する
+- 例: `'契約確認'`, `'契約のご連絡'`, `'今回の注力エンジニア'`（一括紹介メール）
+
+---
+
+## ⑩ 複数人メール分割失敗チェック
+
+1通のメールに複数人が含まれているのに1件しか登録されていないケースを検出する。
+
+```sql
+-- 同一送信元・同日に1件しか登録されていないのに本文が長いレコードを抽出
+SELECT
+  raw_profile->>'from'    AS from_email,
+  DATE(created_at AT TIME ZONE 'Asia/Tokyo') AS day,
+  COUNT(*)                AS registered_count,
+  MAX(LENGTH(raw_profile->>'text')) AS max_body_len
+FROM candidates
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days'
+GROUP BY from_email, day
+HAVING COUNT(*) = 1
+   AND MAX(LENGTH(raw_profile->>'text')) > 2000
+ORDER BY max_body_len DESC
+LIMIT 20;
+```
+
+- `max_body_len > 2000` かつ登録数 = 1 の場合、複数人分の情報が1レコードに混入している疑いがある
+- 該当レコードの `raw_profile->>'text'` を確認し、区切り線のパターンを調査する
+- `splitMultiCandidateBody` の `DELIM_RE` や `CANDIDATE_FIELD_RE` を調整して対応する
 
 ---
 
