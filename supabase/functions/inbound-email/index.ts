@@ -996,6 +996,14 @@ function extractCandidateFieldsRegex(
       gender = genderMatch[1]
       nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[\)）]/, '').trim()
     }
+    // 括弧なしで末尾に gender が残るケース: K.T（32才）女性 → K.T
+    if (gender === null) {
+      const bareGenderMatch = nameStripped.match(/[ 　]?(男性|女性|男|女)$/)
+      if (bareGenderMatch) {
+        gender = bareGenderMatch[1]
+        nameStripped = nameStripped.replace(/[ 　]?(?:男性|女性|男|女)$/, '').trim()
+      }
+    }
   }
 
   // ── ラベルなし 名前+年齢+性別 フォールバック ─────────────────────
@@ -1952,9 +1960,9 @@ function splitMultiCandidateBody(body: string): string[] | null {
     if (block.length >= 50) blocks.push(block)
   }
 
-  // 【〇〇】形式の構造化フィールドを含むブロックのみ採用
-  // （メール署名の区切り線や通常の --- 区切りによる誤発動を防ぐ）
-  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】/
+  // 構造化フィールドを含むブロックのみ採用
+  // 【氏名】形式 または ◇名前： / ◆スキルセット 等の ◇◆ ラベル形式 の両方を検出
+  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]/
   const validBlocks = blocks.filter(b => CANDIDATE_FIELD_RE.test(b))
 
   return validBlocks.length >= 2 ? validBlocks : null
