@@ -85,6 +85,8 @@ Deno.serve(async (req) => {
       prefecture: (c.raw_profile as Record<string, string> | null)?.prefecture ?? null,
       skills: c.skills ?? [],
       created_at: c.created_at as string,
+      name: (c.name as string | null) ?? null,
+      subject: (c.raw_profile as Record<string, string> | null)?.subject ?? null,
     }))
 
     const { error: lightError } = await supabase

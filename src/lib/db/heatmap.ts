@@ -29,6 +29,7 @@ export interface PrefectureCandidate {
   name: string
   subject: string | null
   created_at: string
+  is_archived: boolean
 }
 
 /** 都道府県クリック時に最大10件の人材を取得（件名・受信日時・氏名） */
@@ -36,6 +37,7 @@ export async function fetchCandidatesByPrefecture(
   dataEnv: DataEnv,
   prefecture: string,
   skillFilter: string | null,
+  period: '7d' | 'all' = '7d',
   limit = 10
 ): Promise<PrefectureCandidate[]> {
   const { data, error } = await supabase.rpc('candidates_by_prefecture', {
@@ -43,13 +45,15 @@ export async function fetchCandidatesByPrefecture(
     p_prefecture: prefecture,
     p_skill: skillFilter ?? null,
     p_limit: limit,
+    p_period: period,
   })
   if (error) throw error
-  return (data ?? []).map((r: { id: string; name: string; subject: string | null; created_at: string }) => ({
+  return (data ?? []).map((r: { id: string; name: string; subject: string | null; created_at: string; is_archived: boolean }) => ({
     id: r.id,
     name: r.name || '不明',
     subject: r.subject,
     created_at: r.created_at,
+    is_archived: r.is_archived,
   }))
 }
 

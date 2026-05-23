@@ -73,8 +73,8 @@ export function HeatmapPage({ dataEnv }: Props) {
   })
 
   const { data: prefCandidates = [], isLoading: candLoading } = useQuery({
-    queryKey: ['heatmap-candidates', dataEnv, selectedPref, skillFilter],
-    queryFn: () => fetchCandidatesByPrefecture(dataEnv, selectedPref!, skillFilter || null),
+    queryKey: ['heatmap-candidates', dataEnv, selectedPref, skillFilter, period],
+    queryFn: () => fetchCandidatesByPrefecture(dataEnv, selectedPref!, skillFilter || null, period),
     enabled: !!selectedPref,
     staleTime: 30_000,
   })
@@ -329,11 +329,7 @@ export function HeatmapPage({ dataEnv }: Props) {
               {skillFilter && (
                 <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{skillFilter}</span>
               )}
-              <span className="text-xs text-gray-400">
-                {period === 'all' && (countMap[selectedPref] ?? 0) > prefCandidates.length
-                  ? `直近受信メール（${prefCandidates.length}件表示 / ${countMap[selectedPref]}人中 ${(countMap[selectedPref] ?? 0) - prefCandidates.length}人はアーカイブ済み）`
-                  : '直近受信メール（最大10件）'}
-              </span>
+              <span className="text-xs text-gray-400">受信メール一覧（最大10件・新しい順）</span>
             </div>
             <button
               onClick={() => setSelectedPref(null)}
@@ -347,20 +343,9 @@ export function HeatmapPage({ dataEnv }: Props) {
             <div className="px-4 py-6 text-center text-sm text-gray-400">読み込み中...</div>
           ) : prefCandidates.length === 0 ? (
             <div className="px-4 py-6 text-center text-sm text-gray-400">
-              {(() => {
-                const archivedCount = countMap[selectedPref] ?? 0
-                if (period === 'all' && archivedCount > 0) {
-                  return (
-                    <>
-                      <div>{selectedPref}の{archivedCount}人は全員アーカイブ済みです</div>
-                      <div className="text-xs mt-1">アーカイブ済み人材のメール詳細は保存されていません</div>
-                    </>
-                  )
-                }
-                return skillFilter
-                  ? `${selectedPref}に${skillFilter}を持つ人材は現在DBにいません`
-                  : `${selectedPref}の人材は現在DBにいません`
-              })()}
+              {skillFilter
+                ? `${selectedPref}に${skillFilter}を持つ人材は見つかりません`
+                : `${selectedPref}の人材は見つかりません`}
             </div>
           ) : (
             <ul className="divide-y divide-gray-50">
@@ -370,7 +355,12 @@ export function HeatmapPage({ dataEnv }: Props) {
                     {formatDate(c.created_at)}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium text-gray-700 mb-0.5">{c.name}</div>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="text-xs font-medium text-gray-700">{c.name}</span>
+                      {c.is_archived && (
+                        <span className="text-xs bg-gray-100 text-gray-400 px-1 rounded">アーカイブ</span>
+                      )}
+                    </div>
                     <div className="text-xs text-gray-500 truncate" title={c.subject ?? ''}>
                       {c.subject ?? '（件名なし）'}
                     </div>
