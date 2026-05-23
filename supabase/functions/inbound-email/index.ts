@@ -967,12 +967,18 @@ function extractCandidateFieldsRegex(
   let age: number | null = null
   let gender: string | null = null
   let nameStripped = cleanedName || ''
-  // (26歳/男性) (26歳：男性) (26歳:男性) — 区切り文字はスラッシュまたはコロン
-  const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][/／：:](男性|女性|男|女)[\)）]/)
+  // パターンA: (26歳/男性) (26歳/男性/日本) (26歳：男性) — 年齢が先・末尾に/国籍等があっても可
+  const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][ 　]*[/／：:][ 　]*(男性|女性|男|女)(?:[/／][^)）]*)?[\)）]/)
+  // パターンB: (男性/40歳) (女性/34歳) — 性別が先
+  const genderAgeUnified = !agGenderUnified ? nameStripped.match(/[\(（](男性|女性|男|女)[ 　]*[/／][ 　]*(\d{2})[才歳][\)）]/) : null
   if (agGenderUnified) {
     age = parseInt(agGenderUnified[1], 10)
     gender = agGenderUnified[2]
-    nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][/／：:](?:男性|女性|男|女)[\)）]/, '').trim()
+    nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][ 　]*[/／：:][ 　]*(?:男性|女性|男|女)(?:[/／][^)）]*)?[\)）]/, '').trim()
+  } else if (genderAgeUnified) {
+    gender = genderAgeUnified[1]
+    age = parseInt(genderAgeUnified[2], 10)
+    nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[ 　]*[/／][ 　]*\d{2}[才歳][\)）]/, '').trim()
   } else {
     // スペースなしで括弧が直後に来るケース: YS(26歳) → スペース不要で拾う
     const ageMatch = nameStripped.match(/[\s　]?[\(（](\d{2})[才歳][\)）]?/)
@@ -993,15 +999,34 @@ function extractCandidateFieldsRegex(
   // name/age/gender のいずれかが未取得なら全文スキャンで補完する
   if (!name || age === null || gender === null) {
     const allTextForName = bodyText + '\n' + attachText
-    // 行頭デコレータ（任意）＋名前＋（年齢 / 性別）パターン
-    // 名前部分: 数字・空白・括弧・改行・【 を除く 1〜20文字
-    const noLabelPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([^\d\s　（(\n【]{1,20})[ 　]?[（(](\d{2})[才歳][ 　]*[/／：: ][ 　]*(男性|女性|男|女)[）)]/m
+    // 行頭デコレータ（任意）＋名前＋（年齢 / 性別）パターン — 年齢先
+    const noLabelPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([^\d\s　（(\n【]{1,20})[ 　]?[（(](\d{2})[才歳][ 　]*[/／：: ][ 　]*(男性|女性|男|女)(?:[/／][^)）]*)?[）)]/m
+    // 行頭デコレータ（任意）＋名前＋（性別 / 年齢）パターン — 性別先
+    const noLabelPatGF = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([^\d\s　（(\n【]{1,20})[ 　]?[（(](男性|女性|男|女)[ 　]*[/／][ 　]*(\d{2})[才歳][）)]/m
     const nlM = allTextForName.match(noLabelPat)
+    const nlMGF = !nlM ? allTextForName.match(noLabelPatGF) : null
     if (nlM) {
-      if (!name)        name   = nlM[1].trim() || null
-      if (age === null)  age    = parseInt(nlM[2], 10)
+      if (!name)           name   = nlM[1].trim() || null
+      if (age === null)    age    = parseInt(nlM[2], 10)
       if (gender === null) gender = nlM[3]
+    } else if (nlMGF) {
+      if (!name)           name   = nlMGF[1].trim() || null
+      if (gender === null) gender = nlMGF[2]
+      if (age === null)    age    = parseInt(nlMGF[3], 10)
     }
+  }
+
+  // ── ラベルあり別行フォールバック（年齢：30歳 / 性別：女性）─────────────
+  // 名前から取れなかった場合に本文ラベルから補完する
+  if (age === null) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/年\s*[　 ]*齢\s*[：:]\s*(\d{2})[才歳]/)
+    if (m) age = parseInt(m[1], 10)
+  }
+  if (gender === null) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/性\s*[　 ]*別\s*[：:]\s*(男性|女性|男|女)/)
+    if (m) gender = m[1]
   }
 
   // ── 最寄駅 ────────────────────────────────────────────────────
