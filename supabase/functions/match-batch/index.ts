@@ -220,16 +220,19 @@ function buildBatchProjectToCandidatesPrompt(
   project: ProjectReq,
   candidates: Array<CandidateInput & { ruleScore: number; ruleBreakdown?: string }>,
 ): string {
-  const cList = candidates.map((c, i) =>
-    `[${i + 1}] id="${c.id}" name="${c.name}" ruleScore=${c.ruleScore} ruleBreakdown="${(c as { ruleBreakdown?: string }).ruleBreakdown ?? ''}"` +
-    ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
-    (c.availableRegions?.length ? ` regions=${JSON.stringify(c.availableRegions)}` : '') +
-    (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
-    ` summary="${c.summary.slice(0, 200)}"` +
-    (c.selfPR ? ` selfPR="${c.selfPR.slice(0, 200)}"` : '') +
-    (c.agentComment ? ` agentNote="${c.agentComment.slice(0, 150)}"` : '') +
-    (c.nationality ? ` nationality="${c.nationality}"` : '')
-  ).join('\n')
+  const cList = candidates.map((c, i) => {
+    const isNonJapanese = c.nationality && !['日本', '日本人'].includes(c.nationality)
+    return (
+      `[${i + 1}] id="${c.id}" name="${c.name}" ruleScore=${c.ruleScore} ruleBreakdown="${(c as { ruleBreakdown?: string }).ruleBreakdown ?? ''}"` +
+      ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
+      (c.availableRegions?.length ? ` regions=${JSON.stringify(c.availableRegions)}` : '') +
+      (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
+      ` summary="${c.summary.slice(0, 200)}"` +
+      (c.selfPR ? ` selfPR="${c.selfPR.slice(0, 200)}"` : '') +
+      (c.agentComment ? ` agentNote="${c.agentComment.slice(0, 150)}"` : '') +
+      (isNonJapanese ? ` [必須注記:${c.nationality}のため就労ビザ・日本語要件の確認が必要]` : '')
+    )
+  }).join('\n')
 
   return `人材と案件のマッチング評価。JSON配列のみ返す。説明文・コードブロック禁止。
 
@@ -252,9 +255,10 @@ ${cList}
    b) 案件の役割・人物像（roleSummary/description）と候補者の特徴（summary・selfPR・agentNote）の適合度を1文で述べること
       - selfPR や summary に「希望しない」「不可」「避けたい」等の否定表現がある場合、案件との矛盾を必ず指摘すること
       例: "案件が求めるリーダー経験に対し、本人も PM 希望で意欲的。" / "selfPR にバックエンド業務を希望しないとあり、案件の役割と明確にミスマッチ。"
-   c) wantedJobs がある場合、案件の役割と合致するか1文追加
-      - 合致しない場合は「希望職種(XX)と案件の役割(YY)が不一致のため要確認。」と明記すること
-   d) nationality が日本・日本人・null 以外の場合（例: 中国籍・韓国籍・外国籍等）、国籍を明記して「就労ビザや日本語要件の確認が必要」と必ず1文追加すること（案件の記載に関わらず無条件で出力）
+   c) wantedJobs がある場合、案件タイトル・roleSummary との合致を確認し1文追加
+      - 合致しない場合は必ず「希望職種(XX)と案件(YY)が不一致のため要確認。」と出力すること
+      - selfPR に「希望しない」「不可」等の否定語があれば案件との矛盾として必ず指摘すること
+   d) 候補者データに [必須注記:...] が含まれる場合、その内容をsummaryに必ず含めること
 
 出力形式（配列のみ・改行なし）: [{"id":"...","score":整数,"summary":"150字以内"},...]`
 }
