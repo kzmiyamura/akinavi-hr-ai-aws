@@ -1,11 +1,8 @@
 /**
  * archive-candidates Edge Function
  *
- * 7日以上経過した prod 人材データを Supabase Storage に JSONL 形式でアーカイブしてから DB 削除する。
- * pg_cron から毎日 JST 0:00 に呼び出される（delete-old-candidates cron の後継）。
- *
- * Storage パス: candidates-archive/archive/YYYY/MM/YYYY-MM-DD.jsonl
- * JSONL 1行 = 候補者 1 件の全フィールド JSON
+ * 7日以上経過した prod 人材データを candidates_archive_light に保存してから DB 削除する。
+ * pg_cron から毎日 JST 0:00 に呼び出される。
  */
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
@@ -36,7 +33,7 @@ Deno.serve(async (req) => {
     // ① アーカイブ対象を取得
     const { data: candidates, error: fetchError } = await supabase
       .from('candidates')
-      .select('*')
+      .select('id, data_env, name, raw_profile, skills, created_at')
       .eq('data_env', 'prod')
       .lt('created_at', cutoff.toISOString())
       .order('created_at', { ascending: true })
@@ -49,36 +46,9 @@ Deno.serve(async (req) => {
       )
     }
 
-    // ② JSONL 生成（1行1件）
-    const jsonl = candidates.map((c) => JSON.stringify(c)).join('\n')
-    const bytes = new TextEncoder().encode(jsonl)
-
-    // ③ Storage にアップロード（パス: archive/YYYY/MM/YYYY-MM-DD.jsonl）
-    const now = new Date()
-    const yyyy = now.getUTCFullYear()
-    const mm = String(now.getUTCMonth() + 1).padStart(2, '0')
-    const dd = String(now.getUTCDate()).padStart(2, '0')
-    const storagePath = `archive/${yyyy}/${mm}/${yyyy}-${mm}-${dd}.jsonl`
-
-    const { error: uploadError } = await supabase.storage
-      .from('candidates-archive')
-      .upload(storagePath, bytes, {
-        contentType: 'application/x-ndjson',
-        upsert: true,            // 同日再実行で上書き可
-      })
-
-    if (uploadError) throw new Error(`Storage upload failed: ${uploadError.message}`)
-
-    // ④ アップロード成功後に DB 削除（submissions → candidates の順）
     const ids = candidates.map((c) => c.id as string)
 
-    const { error: subError } = await supabase
-      .from('submissions')
-      .delete()
-      .in('candidate_id', ids)
-    if (subError) throw new Error(`submissions delete failed: ${subError.message}`)
-
-    // ⑤ candidates_archive_light にサマリーを保存（ヒートマップ全期間集計用）
+    // ② candidates_archive_light にサマリーを保存（ヒートマップ全期間集計用）
     const lightRows = candidates.map((c) => ({
       id: c.id as string,
       data_env: c.data_env as string,
@@ -94,16 +64,23 @@ Deno.serve(async (req) => {
       .upsert(lightRows, { onConflict: 'id' })
     if (lightError) throw new Error(`candidates_archive_light upsert failed: ${lightError.message}`)
 
+    // ③ DB 削除（submissions → candidates の順）
+    const { error: subError } = await supabase
+      .from('submissions')
+      .delete()
+      .in('candidate_id', ids)
+    if (subError) throw new Error(`submissions delete failed: ${subError.message}`)
+
     const { error: delError } = await supabase
       .from('candidates')
       .delete()
       .in('id', ids)
     if (delError) throw new Error(`candidates delete failed: ${delError.message}`)
 
-    console.log(`[archive-candidates] archived=${candidates.length} path=${storagePath}`)
+    console.log(`[archive-candidates] archived=${candidates.length}`)
 
     return new Response(
-      JSON.stringify({ ok: true, archived: candidates.length, path: storagePath }),
+      JSON.stringify({ ok: true, archived: candidates.length }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     )
   } catch (e) {
