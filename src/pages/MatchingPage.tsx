@@ -63,6 +63,7 @@ type CandidateBatchInput = {
   preferredJobTypes?: string[] | null
   agentComment?: string | null
   nationality?: string | null
+  selfPR?: string | null
 }
 
 function toCandidateBatchInput(c: Candidate): CandidateBatchInput {

@@ -45,6 +45,7 @@ interface RawProfile {
   age?: number | null
   gender?: string | null
   agentComment?: string | null
+  selfPR?: string | null
 }
 
 function getRaw(c: Candidate): RawProfile {
