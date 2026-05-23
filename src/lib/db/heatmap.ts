@@ -38,27 +38,18 @@ export async function fetchCandidatesByPrefecture(
   skillFilter: string | null,
   limit = 10
 ): Promise<PrefectureCandidate[]> {
-  let query = supabase
-    .from('candidates')
-    .select('id, name, raw_profile->subject, created_at')
-    .eq('data_env', dataEnv)
-    .eq('raw_profile->>prefecture', prefecture)
-    .is('merged_into', null)
-    .eq('duplicate_flag', false)
-    .order('created_at', { ascending: false })
-    .limit(limit)
-
-  if (skillFilter) {
-    query = query.ilike('skills::text', `%${skillFilter}%`)
-  }
-
-  const { data, error } = await query
+  const { data, error } = await supabase.rpc('candidates_by_prefecture', {
+    p_data_env: dataEnv,
+    p_prefecture: prefecture,
+    p_skill: skillFilter ?? null,
+    p_limit: limit,
+  })
   if (error) throw error
-  return (data ?? []).map((r: Record<string, unknown>) => ({
-    id: r.id as string,
-    name: (r.name as string) || '不明',
-    subject: (r.subject as string | null) ?? null,
-    created_at: r.created_at as string,
+  return (data ?? []).map((r: { id: string; name: string; subject: string | null; created_at: string }) => ({
+    id: r.id,
+    name: r.name || '不明',
+    subject: r.subject,
+    created_at: r.created_at,
   }))
 }
 
