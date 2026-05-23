@@ -88,10 +88,11 @@ function parseRateWan(rate: string | null | undefined): number | null {
 function calcRuleScore(candidate: CandidateInput, project: ProjectReq): number {
   let score = 0
 
-  // ── スキル重複 ──
+  // ── スキル重複（必須 + 歓迎）最大 40pt ──
   const required = project.requiredSkills ?? []
+  const cSet = new Set(candidate.skills.map(s => s.toLowerCase().trim()))
+  let skillScore = 0
   if (required.length > 0) {
-    const cSet = new Set(candidate.skills.map(s => s.toLowerCase().trim()))
     let hits = 0
     for (const r of required) {
       const rt = r.toLowerCase().trim()
@@ -102,10 +103,26 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq): number {
         hits += 0.5
       }
     }
-    score += Math.min(40, Math.round((hits / required.length) * 40))
+    skillScore = Math.round((hits / required.length) * 40)
   } else {
-    score += 20
+    skillScore = 20
   }
+  // 歓迎スキル: 一致ごとに +1pt（部分一致 +0.5pt）、上乗せして 40pt キャップ
+  const niceToHave = project.niceToHaveSkills ?? []
+  if (niceToHave.length > 0) {
+    let niceHits = 0
+    for (const n of niceToHave) {
+      const nt = n.toLowerCase().trim()
+      if (!nt) continue
+      if (cSet.has(nt)) {
+        niceHits += 1
+      } else if ([...cSet].some(s => s.includes(nt) || nt.includes(s))) {
+        niceHits += 0.5
+      }
+    }
+    skillScore += Math.round(niceHits)
+  }
+  score += Math.min(40, skillScore)
 
   // ── 経験年数 ──
   const exp = candidate.experienceYears ?? 0
