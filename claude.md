@@ -474,6 +474,53 @@ Cerebras `llama3.1-8b`（タイムアウト 20s）→ Groq `llama-3.3-70b-versat
 - 表示条件は `demoUiEnabled === true` のみ（dataEnv 不問・コミット `95120c1`）
 - 本番→デモコピー（`copyProdCandidatesToDemo`）: `email` を `demo.prod+<uuid>@demo.invalid` に差し替え、`resume_url` / `box_url` を落として保存
 
+### 【Phase 4.12】人材マップ（ヒートマップ）と 7 日アーカイブ機構（コミット群: 2026-05-23）
+
+#### 背景
+- 「どの都道府県に何人いるか」を視覚的に把握したいという営業要望
+- 単純集計だと過去データ（7 日で削除される人材）が見えないため、アーカイブ機構を併設
+
+#### 新規ファイル
+| ファイル | 内容 |
+|---|---|
+| `src/pages/HeatmapPage.tsx` | 5 タブ目「人材マップ」。`d3-geo`（Mercator） + 生 SVG `<path>` + `topojson-client` で日本地図描画 |
+| `src/lib/db/heatmap.ts` | RPC ラッパ（`fetchPrefectureCounts` / `fetchCandidatesByPrefecture` / `fetchSkillNames`） |
+| `public/japan.topojson` | 47 都道府県の TopoJSON（約 416 KB・`properties.nam_ja` 使用） |
+| `supabase/functions/archive-candidates/index.ts` | 7 日経過した prod 人材を `candidates_archive_light` にサマリー化してから DB 削除 |
+| `supabase/migrations/20260523_prefecture_counts_rpc.sql` | 初版 RPC |
+| `supabase/migrations/20260523_archive_light_table.sql` | `candidates_archive_light` テーブル + 期間対応版 RPC |
+| `supabase/migrations/20260523_normalize_prefecture.sql` | `normalize_prefecture` 関数 + 最終版 RPC `prefecture_counts` / `candidates_by_prefecture` |
+| `supabase/migrations/add_archive_candidates_cron.sql` | 旧 `delete-old-candidates` を unschedule → 新 `archive-candidates-daily`（毎日 JST 0:00）を schedule |
+
+#### 改修ファイル
+- `src/components/Layout.tsx` / `src/App.tsx`: 5 タブ目「人材マップ」追加（`Map` アイコン）
+- `package.json`: `d3-geo` / `topojson-client` / `topojson-specification` / `@types/topojson-client` / `react-simple-maps` / `@types/topojson-client` を追加
+
+#### 主要機能
+- **期間トグル**: 「直近 7 日」（既定）= `candidates` のみ / 「全期間」= `candidates_archive_light` も合算
+- **スキルフィルター**: `skill_master` から `match_count` 降順 200 件をオートコンプリート → `cs.skill ILIKE '%skill%'` で部分一致
+- **塗り色**: `sqrt(count/max)` ベースの薄青〜濃青グラデーション。選択中はオレンジ
+- **詳細パネル**: 都道府県クリックで `candidates_by_prefecture` RPC を呼び、最大 10 件を `created_at DESC` で表示（`merged_into IS NULL` かつ `duplicate_flag = false`）。アーカイブ済みは「アーカイブ」バッジ
+- **キャッシュ**: TanStack Query の `staleTime` で 60s / 5min / 30s
+
+#### `normalize_prefecture` 関数
+表記ゆれを吸収して都道府県名を正規化:
+- `'日本'` / `'関東'` / `'全国'` / `'リモート'` / 英字含む → NULL
+- `'東京都 大森'` → `'東京都'`（regex で切り出し）
+- `'茨城'` → `'茨城県'`（39 県分の固定リストで接尾辞補完）
+- `'東京'` → `'東京都'`、`'大阪'` → `'大阪府'`、`'京都'` → `'京都府'`、`'北海'` → `'北海道'`
+
+#### 既知の migration 漏れ
+`20260523_archive_light_table.sql` は `name` / `subject` カラムを定義していないが、`archive-candidates` Edge Function と `candidates_by_prefecture` RPC が両カラムを参照する。新規環境では以下の手動 ALTER が必要:
+
+```sql
+ALTER TABLE candidates_archive_light
+  ADD COLUMN IF NOT EXISTS name text,
+  ADD COLUMN IF NOT EXISTS subject text;
+```
+
+詳細は `docs/Heatmap.md` を参照。
+
 ### 【Phase 5】最終納品ドキュメント作成（一部進行中）
 1. **[Claude] 作業**: システム構成図のメンテナンス（README.md に Mermaid 図あり・コミット `2026-05-20` で更新）
 2. **[Claude] 作業**: 操作マニュアルのメンテナンス（`docs/Sales_Manual.md` / `docs/Sales_Manual.pdf`・営業担当者向け）
@@ -502,6 +549,7 @@ Cerebras `llama3.1-8b`（タイムアウト 20s）→ Groq `llama-3.3-70b-versat
 | `projects` | 案件マスタ。必要スキル・予算・raw_data を保持。**`data_env`** 同上 |
 | `submissions` | マッチング提案履歴。スコア・AI要約を保持。**`data_env`** 同上 |
 | `candidate_skills` | スキルをカテゴリ別に分解して保持（検索最適化・14カテゴリ） |
+| `candidates_archive_light` | **人材マップ用サマリーテーブル**（Phase 4.12）。7 日経過した prod 人材の `id`/`data_env`/`prefecture`/`skills`/`created_at`/`archived_at` + `name`/`subject` を保持。`archive-candidates` Edge Function が毎日 JST 0:00 に upsert + 元データ削除 |
 | `ai_logs` | AI解析の実行ログ（モデル・所要時間・結果・エラー）。メール解析の AI 廃止後、`inbound-email` 由来のレコードは `model='no-ai'` で保存される |
 | `error_logs` | フロントエンド側のクライアントエラーを記録（コミット `a2c0e96`）。`page`/`message`/`stack`/`context`/`data_env`/`nickname` を保持。`saveErrorLog`/`logError` ユーティリティから呼び出し。30 日自動削除 cron は未実装（要追加） |
 | `skill_master` | ITスキルマスタ。約 1,660 件規模（acf9d31 で +32 件、Phase 4.10 で DWH/工程/IBM 系を +32 件追加）。aliases で表記ゆれ吸収・match_count / last_matched_at でマッチ実績管理 |
@@ -683,8 +731,9 @@ AI 採点は **topN 件（既定 10 件）のみ**バッチプロンプト 1 コ
 - 挿入先は常に `dataEnv='demo'`
 
 ### 画面構成
-- タブは **4 つ**（`マッチング結果` / `人材登録` / `案件登録` / `設定`）。`src/components/Layout.tsx` の `NAV_ITEMS` を正とする
+- タブは **5 つ**（`マッチング結果` / `人材登録` / `案件登録` / `設定` / `人材マップ`）。`src/components/Layout.tsx` の `NAV_ITEMS` を正とする
 - `設定` タブは Microsoft アカウント連携・案件メール解析の有効化トグル・自動マッチング ON/OFF・人材データ保持日数・マッチング高速モード上限・アプリメモなどをまとめる
+- `人材マップ` タブは Phase 4.12 で追加。`src/pages/HeatmapPage.tsx` で `d3-geo` + `public/japan.topojson` を使った日本地図ヒートマップを表示。詳細は [`docs/Heatmap.md`](docs/Heatmap.md) 参照
 - `提案履歴` / `重複管理` / `解析監視` は実装済みだがナビから非表示（`src/pages/HistoryPage.tsx`, `DuplicatePage.tsx`, `MonitorPage.tsx` は存在するが `App.tsx` 経由で参照されていない）
 
 ### 人材・案件ページの追加機能（Phase 4.11）

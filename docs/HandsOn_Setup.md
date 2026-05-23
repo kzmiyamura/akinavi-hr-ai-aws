@@ -260,26 +260,41 @@ cd akinavi-hr-ai
 | 16 | `add_auto_match_cron.sql` | 毎朝 JST 9:00 の自動マッチ cron |
 | 17 | `add_skill_cleanup_cron.sql` | 毎日 JST 3:00 のスキルマスタクリーンアップ cron |
 | 18 | `add_enrich_cron.sql` | Box 連携の再解析 cron（Box 運用時のみ必要） |
+| 19 | `add_archive_candidates_cron.sql` | **Phase 4.12**：7 日アーカイブ cron（毎日 JST 0:00・人材マップ全期間集計用）。旧 `delete-old-candidates` を自動 unschedule |
 
 **タイムスタンプ付き（Phase 4.9 以降の追加・必ずこの順で）**
 
 | 順番 | ファイル名 | 内容 |
 |---|---|---|
-| 19 | `20260519090000_add_relevance_keywords.sql` ほか | 関連性キーワード辞書 + tighten 系（ファイル名順） |
-| 20 | `20260520121447_fix_skill_master_quality.sql` | JP1/Teraterm/Zabbix 等 32 件のスキル追加と alias 修正 |
-| 21 | `20260520130000_add_work_phases.sql` | 構築/テスト/運用 等の工程系 + IBM AIX/DB2/WebSphere/Tivoli + NetApp/EMC/Hitachi 等 18 件追加 |
-| 22 | `20260521000000_add_search_scope.sql` | `search_candidates(p_scope)` に `tags / body / all` の 3 モードを追加 |
-| 23 | `20260521210000_add_bigquery_and_cloud_dwh.sql` | BigQuery/Redshift/Athena/Synapse/Databricks + Spark/Airflow/Looker Studio/Power BI/Tableau の 10 件追加 |
-| 24 | `20260522_add_error_logs.sql` | クライアントエラーログテーブル新規作成（フロントエラー追跡用） |
-| 25 | `20260522_add_fetch_candidates_for_matching.sql` | MatchingPage 用 RPC（人材→案件・直近30日順 800件） |
-| 26 | `20260522_add_fetch_candidates_for_project.sql` | 案件→人材方向の SQL 絞り込み RPC（jsonb skills の `&&` 演算子問題を回避） |
-| 27 | `20260523_add_process_skills.sql` | テスト / 保守開発 / 保守運用 / 調査分析 を methodologies に追加 |
+| 20 | `20260519090000_add_relevance_keywords.sql` ほか | 関連性キーワード辞書 + tighten 系（ファイル名順） |
+| 21 | `20260520121447_fix_skill_master_quality.sql` | JP1/Teraterm/Zabbix 等 32 件のスキル追加と alias 修正 |
+| 22 | `20260520130000_add_work_phases.sql` | 構築/テスト/運用 等の工程系 + IBM AIX/DB2/WebSphere/Tivoli + NetApp/EMC/Hitachi 等 18 件追加 |
+| 23 | `20260521000000_add_search_scope.sql` | `search_candidates(p_scope)` に `tags / body / all` の 3 モードを追加 |
+| 24 | `20260521210000_add_bigquery_and_cloud_dwh.sql` | BigQuery/Redshift/Athena/Synapse/Databricks + Spark/Airflow/Looker Studio/Power BI/Tableau の 10 件追加 |
+| 25 | `20260522_add_error_logs.sql` | クライアントエラーログテーブル新規作成（フロントエラー追跡用） |
+| 26 | `20260522_add_fetch_candidates_for_matching.sql` | MatchingPage 用 RPC（人材→案件・直近30日順 800件） |
+| 27 | `20260522_add_fetch_candidates_for_project.sql` | 案件→人材方向の SQL 絞り込み RPC（jsonb skills の `&&` 演算子問題を回避） |
+| 28 | `20260523_add_process_skills.sql` | テスト / 保守開発 / 保守運用 / 調査分析 を methodologies に追加 |
+| 29 | `20260523_prefecture_counts_rpc.sql` | **Phase 4.12 / 人材マップ**：初版 `prefecture_counts` RPC（後段で上書き） |
+| 30 | `20260523_archive_light_table.sql` | **Phase 4.12 / 人材マップ**：`candidates_archive_light` テーブル + 期間対応 `prefecture_counts(text, text, text)` RPC |
+| 31 | `20260523_normalize_prefecture.sql` | **Phase 4.12 / 人材マップ**：`normalize_prefecture()` 関数 + 最終版 `prefecture_counts` / `candidates_by_prefecture` RPC |
+
+**人材マップ用の追加 SQL（migration 漏れ対応）**
+
+`20260523_archive_light_table.sql` には `name` / `subject` カラムが含まれていないが、`archive-candidates` Edge Function と `candidates_by_prefecture` RPC は両カラムを参照する。SQL Editor で以下を 1 回だけ実行すること:
+
+```sql
+ALTER TABLE candidates_archive_light
+  ADD COLUMN IF NOT EXISTS name text,
+  ADD COLUMN IF NOT EXISTS subject text;
+```
 
 > ファイル名にタイムスタンプ（`YYYYMMDDHHMMSS_` プレフィックス）が付いているものはその順で。それ以外は `add_*.sql` の名前順で OK です。
 > `*_cron.sql` 系は `YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を実際の値に書き換えてから実行してください。
 
 > ⚠️ **重要**: `schema.sql` の `candidate_skills.check_category` は 14 カテゴリへ更新済みですが、`add_candidate_skills.sql` 等のマイグレーションも必ず流してください。
 > ⚠️ **重要**: `fetch_candidates_for_matching` / `fetch_candidates_for_project` RPC は MatchingPage の動作に必須です。これらを流さないとマッチング画面が空になります。
+> ⚠️ **重要**: 人材マップ機能を使う場合は `prefecture_counts` / `candidates_by_prefecture` / `normalize_prefecture` の 3 つを流したうえで、上記の `ALTER TABLE` も必須です。
 
 ### 完了チェック
 
@@ -399,8 +414,9 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 npx supabase functions deploy inbound-email
 npx supabase functions deploy poll-email
 npx supabase functions deploy auto-match
-npx supabase functions deploy match-batch         # Phase 4.10 新規
+npx supabase functions deploy match-batch          # Phase 4.10 新規
 npx supabase functions deploy match-score
+npx supabase functions deploy archive-candidates   # Phase 4.12 新規（人材マップの 7 日アーカイブ用）
 npx supabase functions deploy microsoft-oauth
 npx supabase functions deploy enrich-candidate
 npx supabase functions deploy skill-master-cleanup
@@ -692,6 +708,10 @@ Vercel ダッシュボード → プロジェクトを選択 → 「Settings」�
 - [ ] マッチング結果タブでスコアが表示される
 - [ ] マッチング詳細パネルに案件サマリーが表示される
 - [ ] 専用のOutlookアドレスにメールを送って5分以内に人材/案件が登録される
+- [ ] **人材マップタブ**で日本地図が表示され、登録済み人材の都道府県が色付けされる
+- [ ] **人材マップ**で都道府県をクリックすると下部にメール一覧が出る
+- [ ] **人材マップ**でスキル名（例: `Java`）を入力するとオートコンプリート候補が出る
+- [ ] **人材マップ**の「全期間」モードに切り替えてもエラーが出ない（`candidates_archive_light` の `name` / `subject` カラムが必要）
 - [ ] `[station_unmapped]` ログが Supabase Functions Logs に流れていないか確認（月次レビュー）
 
 ---
@@ -735,3 +755,6 @@ Supabase の「Edge Functions」→「Logs」→「poll-email」のログを確�
 | `README.md` | システム全体の概要・技術スタック |
 | `docs/Sales_Manual.md` | 営業担当者向けの操作マニュアル |
 | `docs/DataEnv_Demo_Prod.md` | 本番・デモ環境の切替方法 |
+| `docs/Heatmap.md` | 人材マップ（ヒートマップ）機能の詳細仕様 |
+| `docs/matching_candidate_selection.md` | マッチング選定ロジック |
+| `docs/ai_fallback_flow.md` | AI フォールバックフロー詳細 |
