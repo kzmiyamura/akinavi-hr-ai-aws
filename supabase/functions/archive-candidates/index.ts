@@ -78,6 +78,20 @@ Deno.serve(async (req) => {
       .in('candidate_id', ids)
     if (subError) throw new Error(`submissions delete failed: ${subError.message}`)
 
+    // ⑤ candidates_archive_light にサマリーを保存（ヒートマップ全期間集計用）
+    const lightRows = candidates.map((c) => ({
+      id: c.id as string,
+      data_env: c.data_env as string,
+      prefecture: (c.raw_profile as Record<string, string> | null)?.prefecture ?? null,
+      skills: c.skills ?? [],
+      created_at: c.created_at as string,
+    }))
+
+    const { error: lightError } = await supabase
+      .from('candidates_archive_light')
+      .upsert(lightRows, { onConflict: 'id' })
+    if (lightError) throw new Error(`candidates_archive_light upsert failed: ${lightError.message}`)
+
     const { error: delError } = await supabase
       .from('candidates')
       .delete()

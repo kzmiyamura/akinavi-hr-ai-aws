@@ -33,6 +33,7 @@ const MAP_H = 500
 export function HeatmapPage({ dataEnv }: Props) {
   const [skillFilter, setSkillFilter] = useState<string>('')
   const [inputValue, setInputValue] = useState<string>('')
+  const [period, setPeriod] = useState<'7d' | 'all'>('7d')
   const [hovered, setHovered] = useState<{ name: string; count: number; x: number; y: number } | null>(null)
   const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([])
   const svgRef = useRef<SVGSVGElement>(null)
@@ -49,8 +50,8 @@ export function HeatmapPage({ dataEnv }: Props) {
   }, [])
 
   const { data: prefData = [], isLoading: prefLoading } = useQuery({
-    queryKey: ['heatmap', dataEnv, skillFilter],
-    queryFn: () => fetchPrefectureCounts(dataEnv, skillFilter || null),
+    queryKey: ['heatmap', dataEnv, skillFilter, period],
+    queryFn: () => fetchPrefectureCounts(dataEnv, skillFilter || null, period),
     staleTime: 60_000,
   })
 
@@ -119,6 +120,22 @@ export function HeatmapPage({ dataEnv }: Props) {
           <p className="text-xs text-gray-500">都道府県別の人材数を地図上に表示します</p>
         </div>
 
+        {/* 期間トグル */}
+        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5 text-xs">
+          <button
+            onClick={() => setPeriod('7d')}
+            className={`px-3 py-1 rounded-md transition-colors ${period === '7d' ? 'bg-white text-gray-800 shadow-sm font-medium' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            直近7日
+          </button>
+          <button
+            onClick={() => setPeriod('all')}
+            className={`px-3 py-1 rounded-md transition-colors ${period === 'all' ? 'bg-white text-gray-800 shadow-sm font-medium' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            全期間
+          </button>
+        </div>
+
         {/* スキルフィルター */}
         <div className="relative sm:ml-auto">
           <div className="flex items-center gap-2">
@@ -166,6 +183,7 @@ export function HeatmapPage({ dataEnv }: Props) {
           <span>集計中...</span>
         ) : (
           <span>
+            {period === 'all' && <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded mr-2">全期間</span>}
             {skillFilter ? (
               <><span className="font-medium text-blue-600">{skillFilter}</span> を持つ人材：</>
             ) : '全人材：'}

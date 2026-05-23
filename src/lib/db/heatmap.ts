@@ -9,11 +9,13 @@ export interface PrefectureCount {
 /** 都道府県別の人材数を取得。skillFilter 指定時はスキルで絞り込む（DB側でJOIN・集計） */
 export async function fetchPrefectureCounts(
   dataEnv: DataEnv,
-  skillFilter: string | null
+  skillFilter: string | null,
+  period: '7d' | 'all' = '7d'
 ): Promise<PrefectureCount[]> {
   const { data, error } = await supabase.rpc('prefecture_counts', {
     p_data_env: dataEnv,
     p_skill: skillFilter ?? null,
+    p_period: period,
   })
   if (error) throw error
   return (data ?? []).map((r: { prefecture: string; cnt: number }) => ({
