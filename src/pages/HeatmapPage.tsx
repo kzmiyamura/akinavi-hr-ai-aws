@@ -329,7 +329,11 @@ export function HeatmapPage({ dataEnv }: Props) {
               {skillFilter && (
                 <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{skillFilter}</span>
               )}
-              <span className="text-xs text-gray-400">直近受信メール（最大10件）</span>
+              <span className="text-xs text-gray-400">
+                {period === 'all' && (countMap[selectedPref] ?? 0) > prefCandidates.length
+                  ? `直近受信メール（${prefCandidates.length}件表示 / ${countMap[selectedPref]}人中 ${(countMap[selectedPref] ?? 0) - prefCandidates.length}人はアーカイブ済み）`
+                  : '直近受信メール（最大10件）'}
+              </span>
             </div>
             <button
               onClick={() => setSelectedPref(null)}
@@ -343,8 +347,20 @@ export function HeatmapPage({ dataEnv }: Props) {
             <div className="px-4 py-6 text-center text-sm text-gray-400">読み込み中...</div>
           ) : prefCandidates.length === 0 ? (
             <div className="px-4 py-6 text-center text-sm text-gray-400">
-              {skillFilter ? `${selectedPref}に${skillFilter}を持つ人材は現在DBにいません` : `${selectedPref}の人材は現在DBにいません`}
-              {period === 'all' && <div className="text-xs mt-1 text-gray-400">※ アーカイブ済み人材のメール詳細は表示できません</div>}
+              {(() => {
+                const archivedCount = countMap[selectedPref] ?? 0
+                if (period === 'all' && archivedCount > 0) {
+                  return (
+                    <>
+                      <div>{selectedPref}の{archivedCount}人は全員アーカイブ済みです</div>
+                      <div className="text-xs mt-1">アーカイブ済み人材のメール詳細は保存されていません</div>
+                    </>
+                  )
+                }
+                return skillFilter
+                  ? `${selectedPref}に${skillFilter}を持つ人材は現在DBにいません`
+                  : `${selectedPref}の人材は現在DBにいません`
+              })()}
             </div>
           ) : (
             <ul className="divide-y divide-gray-50">
