@@ -229,6 +229,11 @@ function buildBatchProjectToCandidatesPrompt(
     const mismatchedJobs = (c.preferredJobTypes ?? []).filter(j => !projectRoleText.includes(j.toLowerCase()))
     const hasJobMismatch = mismatchedJobs.length > 0 && mismatchedJobs.length === (c.preferredJobTypes?.length ?? 0)
     const selfPRHasNegation = c.selfPR && NEGATION_KEYWORDS.some(k => c.selfPR!.includes(k))
+    // 警告文を事前生成（AIはそのままコピーするだけでよい）
+    const warnings: string[] = []
+    if (hasJobMismatch) warnings.push(`希望職種(${mismatchedJobs.join('・')})と案件の役割が不一致のため要確認。`)
+    if (selfPRHasNegation) warnings.push(`selfPRに「${c.selfPR!.slice(0, 30)}」とあり案件との矛盾を要確認。`)
+    if (isNonJapanese) warnings.push(`${c.nationality}のため就労ビザ・日本語要件の確認が必要。`)
     return (
       `[${i + 1}] id="${c.id}" name="${c.name}" ruleScore=${c.ruleScore} ruleBreakdown="${(c as { ruleBreakdown?: string }).ruleBreakdown ?? ''}"` +
       ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
@@ -237,9 +242,7 @@ function buildBatchProjectToCandidatesPrompt(
       ` summary="${c.summary.slice(0, 200)}"` +
       (c.selfPR ? ` selfPR="${c.selfPR.slice(0, 200)}"` : '') +
       (c.agentComment ? ` agentNote="${c.agentComment.slice(0, 150)}"` : '') +
-      (hasJobMismatch ? ` [必須注記:希望職種(${mismatchedJobs.join('・')})が案件の役割と不一致のため要確認]` : '') +
-      (selfPRHasNegation ? ` [必須注記:selfPRに否定的希望あり→案件との矛盾を確認してsummaryに記載すること]` : '') +
-      (isNonJapanese ? ` [必須注記:${c.nationality}のため就労ビザ・日本語要件の確認が必要]` : '')
+      (warnings.length > 0 ? ` [警告・必ずsummaryに含めること: ${warnings.join(' ')}]` : '')
     )
   }).join('\n')
 
@@ -264,10 +267,7 @@ ${cList}
    b) 案件の役割・人物像（roleSummary/description）と候補者の特徴（summary・selfPR・agentNote）の適合度を1文で述べること
       - selfPR や summary に「希望しない」「不可」「避けたい」等の否定表現がある場合、案件との矛盾を必ず指摘すること
       例: "案件が求めるリーダー経験に対し、本人も PM 希望で意欲的。" / "selfPR にバックエンド業務を希望しないとあり、案件の役割と明確にミスマッチ。"
-   c) wantedJobs がある場合、案件タイトル・roleSummary との合致を確認し1文追加
-      - 合致しない場合は必ず「希望職種(XX)と案件(YY)が不一致のため要確認。」と出力すること
-      - selfPR に「希望しない」「不可」等の否定語があれば案件との矛盾として必ず指摘すること
-   d) 候補者データに [必須注記:...] が含まれる場合、その内容をsummaryに必ず含めること
+   c) 候補者データに [警告・必ずsummaryに含めること: ...] がある場合、その警告文をsummaryの末尾にそのままコピーすること（改変禁止）
 
 出力形式（配列のみ・改行なし）: [{"id":"...","score":整数,"summary":"150字以内"},...]`
 }
