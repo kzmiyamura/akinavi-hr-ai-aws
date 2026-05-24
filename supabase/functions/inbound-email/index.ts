@@ -2145,10 +2145,25 @@ Deno.serve(async (req: Request) => {
         '厚意顧客の注力案件のご紹介',
         'チョータツ',
       ]
+      // 営業・広告・メルマガメールのスキップ（研修販売・サービス紹介等）
+      const COMMERCIAL_SOLICITATION_KEYWORDS = [
+        'メール配信解除',
+        '配信停止はこちら',
+        '配信解除はこちら',
+        'メルマガ登録',
+        '受信拒否はこちら',
+        'このメールは配信専用',
+        'こちらのメールは送信専用',
+        '新人向けインフラ研修',
+        '新人エンジニア育成',
+        '助成金の活用も可能',
+        '定員に達し次第受付を締め切',
+      ]
       const isTraining = TRAINING_KEYWORDS.some(kw => body.includes(kw))
       const isSolicitation = PROJECT_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))
-      if (isTraining || isSolicitation) {
-        const skipReason = isTraining ? 'TRAINING_REPORT' : 'PROJECT_SOLICITATION'
+      const isCommercial = COMMERCIAL_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))
+      if (isTraining || isSolicitation || isCommercial) {
+        const skipReason = isTraining ? 'TRAINING_REPORT' : isSolicitation ? 'PROJECT_SOLICITATION' : 'COMMERCIAL_SOLICITATION'
         console.warn(`[SKIP_IRRELEVANT] ${skipReason}`, { rid: traceRid, subject })
         return new Response(
           JSON.stringify({ ok: true, skipped: true, reason: skipReason }),
