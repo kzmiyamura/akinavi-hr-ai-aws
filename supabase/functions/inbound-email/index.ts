@@ -2405,7 +2405,7 @@ Deno.serve(async (req: Request) => {
               skills: blockSkillNames,
               experience_years: toExperienceYears(blockRegexFields.experienceYears),
               raw_profile: {
-                text: block.slice(0, 5000),
+                text: effectiveBody.slice(0, 10000),
                 summary: '',
                 skillsByCategory: blockDbMatchedSkills.reduce((acc, s) => {
                   if (!acc[s.category]) acc[s.category] = []
