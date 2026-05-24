@@ -178,7 +178,9 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq): RuleResu
     locationDetail = `勤務地20/20(フルリモート)`
   } else if (projLoc) {
     const candPref = (candidate.prefecture ?? '').toLowerCase()
-    const prefCore = candPref.replace(/[都道府県]$/, '')
+    // '東京都 大森' → '東京都' → '東京' のように都道府県名だけ抽出
+    const prefOnly = (candPref.match(/^(.+?[都道府県])/) ?? [])[1] ?? candPref.split(/[\s　]/)[0]
+    const prefCore = prefOnly.replace(/[都道府県]$/, '')
     if (prefCore && projLoc.includes(prefCore)) {
       locationScore = 20
       locationDetail = `勤務地20/20(${candidate.prefecture ?? ''}・一致)`
