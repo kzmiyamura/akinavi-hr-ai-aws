@@ -156,7 +156,7 @@ export interface ProjectScoreParams {
 export async function fetchCandidatesForProject(
   params: ProjectScoreParams,
   dataEnv: DataEnv,
-  limit = 2000,
+  limit = 500,
 ): Promise<Candidate[]> {
   const { data, error } = await supabase
     .rpc('fetch_candidates_for_project', {

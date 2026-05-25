@@ -845,12 +845,14 @@ export function MatchingPage({
       if (!project) throw new Error('案件が見つかりません')
 
       const projectReq = projectToMatchRequirements(project)
-      // SQL側でルールスコア計算・スコア降順→日付降順でソート済み
-      const sqlFiltered = await fetchCandidatesForProject(
+      // fast: SQL で上位 BATCH_TOP_N 件のみ取得してそのまま全件 AI 採点
+      // full: SQL で上位 500 件を取得し、match-batch 内で先頭 BATCH_TOP_N だけ AI 採点
+      const sqlLimit = matchingRunMode === 'fast' ? BATCH_TOP_N : 500
+      const targets = await fetchCandidatesForProject(
         { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy },
         dataEnv,
+        sqlLimit,
       )
-      const targets = pickCandidatesForProjectMatch(project, sqlFiltered, matchingRunMode, fastMaxCandidates)
       const total = targets.length
       if (total === 0) return
 
@@ -967,12 +969,13 @@ export function MatchingPage({
           }
           const project = plist[pi]
           const projectReq = projectToMatchRequirements(project)
-          // SQL側でルールスコア計算・スコア降順→日付降順でソート済み
-          const sqlFiltered = await fetchCandidatesForProject(
+          // fast: SQL で上位 BATCH_TOP_N 件のみ取得してそのまま全件 AI 採点
+          const sqlLimit2 = matchingRunMode === 'fast' ? BATCH_TOP_N : 500
+          const targets = await fetchCandidatesForProject(
             { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy },
             dataEnv,
+            sqlLimit2,
           )
-          const targets = pickCandidatesForProjectMatch(project, sqlFiltered, matchingRunMode, fastMaxCandidates)
           const candTotal = targets.length
 
           setMatchRunProgressNow({
@@ -1188,7 +1191,7 @@ export function MatchingPage({
     const maxCalls =
       matchingRunMode === 'full'
         ? plist.length * clist.length
-        : plist.reduce((sum, p) => sum + pickCandidatesForProjectMatch(p, clist, 'fast', fastMaxCandidates).length, 0)
+        : plist.length * BATCH_TOP_N
     if (
       !window.confirm(
         matchingRunMode === 'full'
