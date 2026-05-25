@@ -268,7 +268,7 @@ function buildBatchProjectToCandidatesPrompt(
     const rule = calcRuleScore(c, project)
     return (
       `[${i + 1}] id="${c.id}" score=${c.ruleScore} breakdown="${rule.breakdown}"` +
-      ` skills=${JSON.stringify(skills)} remote=${c.remoteAvailable ? '可' : '不可'}` +
+      ` matchedSkills=${JSON.stringify(skills)}` +
       (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
       (c.summary ? ` summary="${c.summary.slice(0, 80)}"` : '') +
       (c.selfPR ? ` selfPR="${c.selfPR.slice(0, 80)}"` : '') +
@@ -292,9 +292,11 @@ ${cList}
 
 【指示】各候補者について以下を出力すること。
 1. score（整数）: 各候補者の score をそのまま使うこと（変更禁止）
-2. summary（80〜120字）: breakdown の事実のみを自然な日本語で記述すること（スコア数値・分数は出力しない）
-   - breakdownにない情報を推測・追加しないこと
-   - 不明なデータは「不明」とだけ書き、推測しないこと
+2. summary（80〜120字）: 以下のルールで日本語コメントを生成すること
+   - breakdown の内容（スキル合致・経験・単価・勤務地）を自然な日本語で1〜2文にまとめる
+   - スコア数値・分数は出力しない
+   - matchedSkills があれば具体的なスキル名を含める（ない場合は「スキル不一致」）
+   - breakdown に「勤務地XX/20」と記載があればその事実のみ書く（「リモート不可」等の推測追記禁止）
    - summary/selfPR/agentNote がある場合は案件との適合を1文追加
    - wantedJobs がある場合は案件との合致を1文追加
    - nationality がある場合はビザ・日本語要件の確認を1文追加
