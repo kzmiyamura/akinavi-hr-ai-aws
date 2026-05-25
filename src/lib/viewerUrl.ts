@@ -29,9 +29,9 @@ export function toViewerUrl(url: string): string {
     }
     return url
   }
-  // Supabase Storage URL はそのまま返す（直接ダウンロード）
+  // Supabase Storage URL はGoogle Docs Viewerでラップしてブラウザ内表示（ダウンロードではなく別タブで開く）
   if (url.includes('supabase.co/storage')) {
-    return url
+    return `https://docs.google.com/viewer?url=${encodeURIComponent(url)}`
   }
   return `https://docs.google.com/viewer?url=${encodeURIComponent(url)}`
 }
