@@ -24,11 +24,12 @@ export interface UpsertSubmissionInput {
   matchResult: MatchResponse
   createdBy: string
   dataEnv?: DataEnv
+  breakdown?: string
 }
 
 /** マッチング結果を保存（同一ペアは上書き） */
 export async function upsertSubmission(input: UpsertSubmissionInput): Promise<Submission> {
-  const { candidateId, projectId, matchResult, createdBy, dataEnv = 'prod' } = input
+  const { candidateId, projectId, matchResult, createdBy, dataEnv = 'prod', breakdown } = input
 
   const { data, error } = await supabase
     .from('submissions')
@@ -42,6 +43,7 @@ export async function upsertSubmission(input: UpsertSubmissionInput): Promise<Su
         ai_raw: {
           duplicateSuspected: matchResult.duplicateSuspected,
           ...(matchResult.ruleScore !== undefined && { ruleScore: matchResult.ruleScore }),
+          ...(breakdown && { breakdown }),
         },
         created_by: createdBy,
       },

@@ -64,6 +64,7 @@ interface BatchResult {
   projectId?: string   // candidate_to_projects（projectにidがある場合）
   score: number
   summary: string
+  breakdown: string    // ルールスコアの内訳（AIなし時のフォールバック表示用）
   method: 'ai' | 'rule'
   ruleScore: number
 }
@@ -444,6 +445,7 @@ Deno.serve(async (req) => {
           candidateId: c.id,
           score: ai?.score ?? c.ruleScore,
           summary: ai?.summary ?? '',
+          breakdown: c.ruleBreakdown,
           method: ai ? 'ai' : 'rule',
           ruleScore: c.ruleScore,
         }
@@ -454,6 +456,7 @@ Deno.serve(async (req) => {
         candidateId: c.id,
         score: c.ruleScore,
         summary: '',
+        breakdown: c.ruleBreakdown,
         method: 'rule' as const,
         ruleScore: c.ruleScore,
       }))
@@ -508,6 +511,7 @@ Deno.serve(async (req) => {
           projectId: String(p.id ?? ''),
           score: ai?.score ?? p.ruleScore,
           summary: ai?.summary ?? '',
+          breakdown: p.ruleBreakdown,
           method: ai ? 'ai' : 'rule',
           ruleScore: p.ruleScore,
         }
@@ -519,6 +523,7 @@ Deno.serve(async (req) => {
         projectId: String(p.id ?? ''),
         score: p.ruleScore,
         summary: '',
+        breakdown: p.ruleBreakdown,
         method: 'rule' as const,
         ruleScore: p.ruleScore,
       }))

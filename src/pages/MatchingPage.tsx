@@ -89,8 +89,8 @@ async function matchBatchProjectToCandidates(
   projectReq: unknown,
   targets: Candidate[],
   onProgress: (done: number, total: number) => void,
-): Promise<Map<string, { score: number; summary: string; ruleScore: number }>> {
-  const resultMap = new Map<string, { score: number; summary: string; ruleScore: number }>()
+): Promise<Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>> {
+  const resultMap = new Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>()
   const batchInputs = targets.map(toCandidateBatchInput)
   let done = 0
   const total = targets.length
@@ -102,7 +102,7 @@ async function matchBatchProjectToCandidates(
       candidates: chunk,
     }, chunk.length)
     for (const r of [...results, ...ruleOnly]) {
-      resultMap.set(r.candidateId, { score: r.score, summary: r.summary, ruleScore: r.ruleScore })
+      resultMap.set(r.candidateId, { score: r.score, summary: r.summary, breakdown: (r as { breakdown?: string }).breakdown ?? '', ruleScore: r.ruleScore })
     }
     done = Math.min(i + BATCH_AI_SIZE, total)
     onProgress(done, total)
@@ -114,8 +114,8 @@ async function matchBatchCandidateToProjects(
   candidateInput: CandidateBatchInput,
   targetProjects: Project[],
   onProgress: (done: number, total: number) => void,
-): Promise<Map<string, { score: number; summary: string; ruleScore: number }>> {
-  const resultMap = new Map<string, { score: number; summary: string; ruleScore: number }>()
+): Promise<Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>> {
+  const resultMap = new Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>()
   const projectInputs = targetProjects.map(p => ({
     id: p.id,
     title: p.title,
@@ -138,7 +138,7 @@ async function matchBatchCandidateToProjects(
       projects: chunk,
     }, chunk.length)
     for (const r of [...results, ...ruleOnly]) {
-      if (r.projectId) resultMap.set(r.projectId, { score: r.score, summary: r.summary, ruleScore: r.ruleScore })
+      if (r.projectId) resultMap.set(r.projectId, { score: r.score, summary: r.summary, breakdown: (r as { breakdown?: string }).breakdown ?? '', ruleScore: r.ruleScore })
     }
     done = Math.min(i + BATCH_AI_SIZE, total)
     onProgress(done, total)
@@ -450,11 +450,36 @@ function ProjectModeRankCard({
               )}
             </div>
           )}
+          {(() => {
+            const rp = s.candidate.raw_profile as Record<string, unknown>
+            const from = rp?.from as string | null
+            const receivedAt = rp?.emailReceivedAt as string | null
+            if (!from && !receivedAt) return null
+            return (
+              <p className="text-[10px] text-gray-400 mt-1">
+                {from && <span>{from}</span>}
+                {from && receivedAt && <span className="mx-1">／</span>}
+                {receivedAt && <span>{new Date(receivedAt).toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
+              </p>
+            )
+          })()}
           <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
-            <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words leading-relaxed">
-              {s.ai_summary || '（理由テキストなし）'}
-            </p>
+            {s.ai_summary ? (
+              <>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
+                <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words leading-relaxed">{s.ai_summary}</p>
+              </>
+            ) : (s.ai_raw as Record<string, unknown>)?.breakdown ? (
+              <>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">スコア内訳（ルールベース）</p>
+                <p className="text-xs text-gray-600 mt-1 break-words leading-relaxed font-mono">{String((s.ai_raw as Record<string, unknown>).breakdown)}</p>
+              </>
+            ) : (
+              <>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
+                <p className="text-xs text-gray-400 mt-1">（理由テキストなし）</p>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -564,10 +589,22 @@ function CandidateModeRankCard({
             <p className="text-xs text-gray-400 mt-0.5 break-words">{p.work_location}</p>
           )}
           <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0">
-            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
-            <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words leading-relaxed">
-              {s.ai_summary || '（理由テキストなし）'}
-            </p>
+            {s.ai_summary ? (
+              <>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
+                <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words leading-relaxed">{s.ai_summary}</p>
+              </>
+            ) : (s.ai_raw as Record<string, unknown>)?.breakdown ? (
+              <>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">スコア内訳（ルールベース）</p>
+                <p className="text-xs text-gray-600 mt-1 break-words leading-relaxed font-mono">{String((s.ai_raw as Record<string, unknown>).breakdown)}</p>
+              </>
+            ) : (
+              <>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
+                <p className="text-xs text-gray-400 mt-1">（理由テキストなし）</p>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -801,6 +838,7 @@ export function MatchingPage({
               candidateId: candidate.id,
               projectId,
               matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
+              breakdown: r.breakdown,
               createdBy: nickname,
               dataEnv,
             })
@@ -853,6 +891,7 @@ export function MatchingPage({
               candidateId: candidate.id,
               projectId: project.id,
               matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
+              breakdown: r.breakdown,
               createdBy: nickname,
               dataEnv,
             })
@@ -938,6 +977,7 @@ export function MatchingPage({
                   candidateId: candidate.id,
                   projectId: project.id,
                   matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
+              breakdown: r.breakdown,
                   createdBy: nickname,
                   dataEnv,
                 })
@@ -1024,6 +1064,7 @@ export function MatchingPage({
                   candidateId: candidate.id,
                   projectId: project.id,
                   matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
+              breakdown: r.breakdown,
                   createdBy: nickname,
                   dataEnv,
                 })
