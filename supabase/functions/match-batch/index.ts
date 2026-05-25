@@ -219,20 +219,55 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq): RuleResu
 
 // ─── AI バッチ呼び出し ────────────────────────────────────────────────────────
 
+/**
+ * 候補者のスキルを案件関連スキルで絞り込む。
+ * 必須・歓迎スキルに合致するものを優先し、最大 maxTotal 件に絞る。
+ */
+function filterRelevantSkills(
+  candidateSkills: string[],
+  requiredSkills: string[],
+  niceToHaveSkills: string[],
+  maxTotal = 10,
+): string[] {
+  const projectSkillSet = new Set(
+    [...requiredSkills, ...niceToHaveSkills].map(s => s.toLowerCase().trim()),
+  )
+  const matching: string[] = []
+  const others: string[] = []
+  for (const skill of candidateSkills) {
+    const st = skill.toLowerCase().trim()
+    const isMatch = projectSkillSet.has(st) ||
+      [...projectSkillSet].some(ps => st.includes(ps) || ps.includes(st))
+    if (isMatch) matching.push(skill)
+    else others.push(skill)
+  }
+  // 合致スキルを全件 + 残り枠を非合致で埋める
+  const result = [...matching]
+  for (const s of others) {
+    if (result.length >= maxTotal) break
+    result.push(s)
+  }
+  return result
+}
+
 function buildBatchProjectToCandidatesPrompt(
   project: ProjectReq,
   candidates: Array<CandidateInput & { ruleScore: number; ruleBreakdown?: string }>,
 ): string {
   const cList = candidates.map((c, i) => {
     const isNonJapanese = c.nationality && !['日本', '日本人'].includes(c.nationality)
+    const skills = filterRelevantSkills(
+      c.skills,
+      project.requiredSkills ?? [],
+      project.niceToHaveSkills ?? [],
+    )
     return (
-      `[${i + 1}] id="${c.id}" name="${c.name}" ruleScore=${c.ruleScore} ruleBreakdown="${(c as { ruleBreakdown?: string }).ruleBreakdown ?? ''}"` +
-      ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears != null ? c.experienceYears + '年' : '不明'} rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
-      (c.availableRegions?.length ? ` regions=${JSON.stringify(c.availableRegions)}` : '') +
+      `[${i + 1}] id="${c.id}" score=${c.ruleScore}` +
+      ` skills=${JSON.stringify(skills)} exp=${c.experienceYears != null ? c.experienceYears + '年' : '不明'} rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
       (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
-      ` summary="${c.summary.slice(0, 200)}"` +
-      (c.selfPR ? ` selfPR="${c.selfPR.slice(0, 200)}"` : '') +
-      (c.agentComment ? ` agentNote="${c.agentComment.slice(0, 150)}"` : '') +
+      (c.summary ? ` summary="${c.summary.slice(0, 80)}"` : '') +
+      (c.selfPR ? ` selfPR="${c.selfPR.slice(0, 80)}"` : '') +
+      (c.agentComment ? ` agentNote="${c.agentComment.slice(0, 80)}"` : '') +
       (isNonJapanese ? ` nationality="${c.nationality}"` : '')
     )
   }).join('\n')
@@ -244,22 +279,19 @@ function buildBatchProjectToCandidatesPrompt(
 - 必須スキル: ${JSON.stringify(project.requiredSkills)}
 - 予算: ${project.budgetMin ?? '?'}〜${project.budgetMax ?? '?'}万
 - 勤務地: ${project.workLocation ?? '不明'} / リモート: ${project.remotePolicy ?? '不明'}
-${project.roleSummary ? `- 役割: ${project.roleSummary.slice(0, 200)}` : ''}
-${project.description ? `- 案件詳細: ${project.description.slice(0, 300)}` : ''}
+${project.roleSummary ? `- 役割: ${project.roleSummary.slice(0, 150)}` : ''}
+${project.description ? `- 案件詳細: ${project.description.slice(0, 200)}` : ''}
 
-候補者${candidates.length}名（ruleScore はスキル/経験/単価/場所のルールベース点、ruleBreakdown は各項目の内訳）:
+候補者${candidates.length}名（score はルールベース点）:
 ${cList}
 
 【指示】各候補者について以下を出力すること。
-1. score（整数）: ruleBreakdown の末尾「→ 計Xpt」の数値をそのまま使うこと（変更禁止）
-2. summary（100〜150字）: 以下の順で必ず含めること
-   a) スキル合致状況・経験年数・単価・勤務地・リモートを自然な日本語で説明すること（スコア数値・分数・括弧内の内訳は出力しない）
-      例: "必須スキルはすべて合致。経験12年で要件を十分満たす。単価75万は予算内。東京都在住のため出社可能。"
-   b) 案件の役割・人物像（roleSummary/description）と候補者の特徴（summary・selfPR・agentNote）の適合度を1文で述べること
-      - selfPR や summary に「希望しない」「不可」「避けたい」等の否定表現がある場合、案件との矛盾を必ず指摘すること
-      例: "案件が求めるリーダー経験に対し、本人も PM 希望で意欲的。" / "selfPR にバックエンド業務を希望しないとあり、案件の役割と明確にミスマッチ。"
-   c) wantedJobs がある場合、案件の役割と合致するか簡潔に1文追加
-   d) nationality がある場合、就労ビザ・日本語要件の確認が必要な旨を1文追加
+1. score（整数）: 各候補者の score をそのまま使うこと（変更禁止）
+2. summary（100〜150字）: 以下の順で自然な日本語で書くこと（スコア数値・分数は出力しない）
+   a) スキル合致状況・経験年数・単価・勤務地
+   b) summary/selfPR/agentNote と案件の適合度を1文（否定表現があれば矛盾を指摘）
+   c) wantedJobs がある場合は案件との合致を1文
+   d) nationality がある場合はビザ・日本語要件の確認を1文
 
 出力形式（配列のみ・改行なし）: [{"id":"...","score":整数,"summary":"150字以内"},...]`
 }
