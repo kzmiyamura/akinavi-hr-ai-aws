@@ -103,7 +103,10 @@ async function matchBatchProjectToCandidates(
   })
 
   // ② グローバルソートして上位 BATCH_TOP_N 人を AI 採点対象に
-  scored.sort((a, b) => b.ruleScore - a.ruleScore)
+  scored.sort((a, b) =>
+    b.ruleScore - a.ruleScore ||
+    new Date(b.candidate.created_at).getTime() - new Date(a.candidate.created_at).getTime()
+  )
   const aiTargets = scored.slice(0, BATCH_TOP_N)
   const ruleOnlyRest = scored.slice(BATCH_TOP_N)
 
