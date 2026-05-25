@@ -45,11 +45,12 @@ LANGUAGE sql STABLE SECURITY INVOKER AS $$
     )
     -- ── 経験年数 (0〜15pt) ──
     + CASE
-        WHEN c.experience_years >= 10 THEN 15
-        WHEN c.experience_years >= 7  THEN 12
-        WHEN c.experience_years >= 5  THEN 8
-        WHEN c.experience_years >= 3  THEN 4
-        WHEN c.experience_years >= 1  THEN 2
+        WHEN c.experience_years IS NULL THEN 5  -- 不明 → 中間点（1〜3年相当）
+        WHEN c.experience_years >= 10   THEN 15
+        WHEN c.experience_years >= 7    THEN 12
+        WHEN c.experience_years >= 5    THEN 8
+        WHEN c.experience_years >= 3    THEN 4
+        WHEN c.experience_years >= 1    THEN 2
         ELSE 0
       END
     -- ── 単価合致 (0〜15pt) ──

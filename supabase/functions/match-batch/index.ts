@@ -132,14 +132,17 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq): RuleResu
     : `スキル${cappedSkillScore}/40(必須スキル未設定)`
 
   // ── 経験年数 ──
-  const exp = candidate.experienceYears ?? 0
+  const exp = candidate.experienceYears
   let expScore = 0
-  if (exp >= 10) expScore = 15
+  if (exp == null) expScore = 5        // 不明 → 中間点（1〜3年相当）
+  else if (exp >= 10) expScore = 15
   else if (exp >= 7) expScore = 12
   else if (exp >= 5) expScore = 8
   else if (exp >= 3) expScore = 4
   else if (exp >= 1) expScore = 2
-  const expDetail = `経験${expScore}/15(${exp}年)`
+  const expDetail = exp == null
+    ? `経験${expScore}/15(不明)`
+    : `経験${expScore}/15(${exp}年)`
 
   // ── 単価合致 ──
   const rate = parseRateWan(candidate.desiredRate)
