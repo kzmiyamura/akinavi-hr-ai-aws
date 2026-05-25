@@ -30,6 +30,22 @@ const GEMINI_MODEL = 'gemini-2.5-flash'
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
+interface ScoringWeights {
+  skill: number
+  exp: number
+  rate: number
+  location: number
+  remote: number
+}
+
+const DEFAULT_WEIGHTS: ScoringWeights = {
+  skill: 40,
+  exp: 15,
+  rate: 15,
+  location: 20,
+  remote: 10,
+}
+
 interface CandidateInput {
   id: string
   name: string
@@ -84,18 +100,19 @@ interface RuleResult {
 }
 
 /**
- * ルールベーススコアを計算（0〜100）
- * - スキル重複率  : 0〜40 pt
- * - 経験年数      : 0〜15 pt
- * - 単価合致      : 0〜15 pt
- * - 勤務地一致    : 0〜20 pt
- * - リモート      : 0〜10 pt
+ * ルールベーススコアを計算（合計はウェイト合計に依存）
+ * ウェイトが指定されない場合はデフォルト（スキル40/経験15/単価15/勤務地20/リモート10）を使用
  */
-function calcRuleScore(candidate: CandidateInput, project: ProjectReq): RuleResult {
-  // ── スキル重複（必須 + 歓迎）最大 40pt ──
+function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: ScoringWeights = DEFAULT_WEIGHTS): RuleResult {
+  const wSkill = weights.skill
+  const wExp = weights.exp
+  const wRate = weights.rate
+  const wLoc = weights.location
+  const wRemote = weights.remote
+
+  // ── スキル重複（必須 + 歓迎）──
   const required = project.requiredSkills ?? []
   const cSet = new Set(candidate.skills.map(s => s.toLowerCase().trim()))
-  let skillScore = 0
   let hits = 0
   if (required.length > 0) {
     for (const r of required) {
@@ -107,114 +124,110 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq): RuleResu
         hits += 0.5
       }
     }
-    skillScore = Math.round((hits / required.length) * 40)
-  } else {
-    skillScore = 20
   }
-  // 歓迎スキル: 一致ごとに +1pt（部分一致 +0.5pt）、上乗せして 40pt キャップ
+  // 歓迎スキル: 一致ごとに +1pt（部分一致 +0.5pt）
   const niceToHave = project.niceToHaveSkills ?? []
+  let niceHits = 0
   if (niceToHave.length > 0) {
-    let niceHits = 0
     for (const n of niceToHave) {
       const nt = n.toLowerCase().trim()
       if (!nt) continue
-      if (cSet.has(nt)) {
-        niceHits += 1
-      } else if ([...cSet].some(s => s.includes(nt) || nt.includes(s))) {
-        niceHits += 0.5
-      }
+      if (cSet.has(nt)) niceHits += 1
+      else if ([...cSet].some(s => s.includes(nt) || nt.includes(s))) niceHits += 0.5
     }
-    skillScore += Math.round(niceHits)
   }
-  const cappedSkillScore = Math.min(40, skillScore)
+  let skillRatio = required.length > 0 ? hits / required.length : 0.5
+  skillRatio = Math.min(1.0, skillRatio + (niceToHave.length > 0 ? niceHits / niceToHave.length * 0.1 : 0))
+  const cappedSkillScore = Math.min(wSkill, Math.round(skillRatio * wSkill))
   const skillDetail = required.length > 0
-    ? `スキル${cappedSkillScore}/40(必須${required.length}中${Math.round(hits)}合致)`
-    : `スキル${cappedSkillScore}/40(必須スキル未設定)`
+    ? `スキル${cappedSkillScore}/${wSkill}(必須${required.length}中${Math.round(hits)}合致)`
+    : `スキル${cappedSkillScore}/${wSkill}(必須スキル未設定)`
 
   // ── 経験年数 ──
   const exp = candidate.experienceYears
-  let expScore = 0
-  if (exp == null) expScore = 5        // 不明 → 中間点（1〜3年相当）
-  else if (exp >= 10) expScore = 15
-  else if (exp >= 7) expScore = 12
-  else if (exp >= 5) expScore = 8
-  else if (exp >= 3) expScore = 4
-  else if (exp >= 1) expScore = 2
+  let expRatio = 0
+  if (exp == null) expRatio = 5.0 / 15.0
+  else if (exp >= 10) expRatio = 1.0
+  else if (exp >= 7) expRatio = 12.0 / 15.0
+  else if (exp >= 5) expRatio = 8.0 / 15.0
+  else if (exp >= 3) expRatio = 4.0 / 15.0
+  else if (exp >= 1) expRatio = 2.0 / 15.0
+  const expScore = Math.round(expRatio * wExp)
   const expDetail = exp == null
-    ? `経験${expScore}/15(不明)`
-    : `経験${expScore}/15(${exp}年)`
+    ? `経験${expScore}/${wExp}(不明)`
+    : `経験${expScore}/${wExp}(${exp}年)`
 
   // ── 単価合致 ──
   const rate = parseRateWan(candidate.desiredRate)
-  let rateScore = 0
+  let rateRatio = 0
   let rateDetail: string
   if (project.budgetMax == null) {
-    rateScore = 15
-    rateDetail = `単価15/15(予算未設定)`
+    rateRatio = 1.0
+    rateDetail = `単価${Math.round(rateRatio * wRate)}/${wRate}(予算未設定)`
   } else if (rate !== null) {
-    const bMin = project.budgetMin ?? 0
     const bMax = project.budgetMax
-    if (rate >= bMin && rate <= bMax) {
-      rateScore = 15
-      rateDetail = `単価${rateScore}/15(${candidate.desiredRate})`
+    if (rate <= bMax) {
+      rateRatio = 1.0
+      rateDetail = `単価${Math.round(rateRatio * wRate)}/${wRate}(${candidate.desiredRate})`
     } else if (rate <= bMax * 1.1) {
-      rateScore = 8
-      rateDetail = `単価${rateScore}/15(${candidate.desiredRate}・上限超過)`
+      rateRatio = 8.0 / 15.0
+      rateDetail = `単価${Math.round(rateRatio * wRate)}/${wRate}(${candidate.desiredRate}・上限超過)`
     } else if (rate <= bMax * 1.2) {
-      rateScore = 3
-      rateDetail = `単価${rateScore}/15(${candidate.desiredRate}・上限超過)`
+      rateRatio = 3.0 / 15.0
+      rateDetail = `単価${Math.round(rateRatio * wRate)}/${wRate}(${candidate.desiredRate}・上限超過)`
     } else {
-      rateScore = 0
-      rateDetail = `単価${rateScore}/15(${candidate.desiredRate}・上限超過)`
+      rateRatio = 0
+      rateDetail = `単価0/${wRate}(${candidate.desiredRate}・上限超過)`
     }
   } else {
-    rateScore = 0
-    rateDetail = `単価0/15(単価不明)`
+    rateRatio = 0
+    rateDetail = `単価0/${wRate}(単価不明)`
   }
+  const rateScore = Math.round(rateRatio * wRate)
 
   // ── 勤務地・居住地マッチング ──
   const isFullRemote = /フルリモート|完全リモート|100[%％]リモート/.test(project.remotePolicy ?? '')
   const projLoc = (project.workLocation ?? '').toLowerCase()
-  let locationScore = 0
+  let locRatio = 0
   let locationDetail: string
   if (isFullRemote) {
-    locationScore = 20
-    locationDetail = `勤務地20/20(フルリモート)`
+    locRatio = 1.0
+    locationDetail = `勤務地${wLoc}/${wLoc}(フルリモート)`
   } else if (projLoc) {
     const candPref = (candidate.prefecture ?? '').toLowerCase()
-    // '東京都 大森' → '東京都' → '東京' のように都道府県名だけ抽出
     const prefOnly = (candPref.match(/^(.+?[都道府県])/) ?? [])[1] ?? candPref.split(/[\s　]/)[0]
     const prefCore = prefOnly.replace(/[都道府県]$/, '')
     if (prefCore && projLoc.includes(prefCore)) {
-      locationScore = 20
-      locationDetail = `勤務地20/20(${candidate.prefecture ?? ''}・一致)`
+      locRatio = 1.0
+      locationDetail = `勤務地${wLoc}/${wLoc}(${candidate.prefecture ?? ''}・一致)`
     } else if (!candPref) {
-      locationScore = 5
-      locationDetail = `勤務地5/20(居住地不明)`
+      locRatio = 5.0 / 20.0
+      locationDetail = `勤務地${Math.round(locRatio * wLoc)}/${wLoc}(居住地不明)`
     } else {
-      locationScore = 0
-      locationDetail = `勤務地0/20(${candidate.prefecture ?? '不明'}・不一致)`
+      locRatio = 0
+      locationDetail = `勤務地0/${wLoc}(${candidate.prefecture ?? '不明'}・不一致)`
     }
   } else {
-    locationScore = 5
-    locationDetail = `勤務地5/20(居住地不明)`
+    locRatio = 5.0 / 20.0
+    locationDetail = `勤務地${Math.round(locRatio * wLoc)}/${wLoc}(居住地不明)`
   }
+  const locationScore = Math.round(locRatio * wLoc)
 
   // ── リモート対応 ──
   let remoteScore = 0
   let remoteDetail: string
   if (!isFullRemote && candidate.remoteAvailable && /リモート|remote|在宅/i.test(project.remotePolicy ?? '')) {
-    remoteScore = 10
-    remoteDetail = `リモート10/10(可・週リモート案件)`
+    remoteScore = wRemote
+    remoteDetail = `リモート${wRemote}/${wRemote}(可・週リモート案件)`
   } else if (candidate.remoteAvailable) {
     remoteScore = 0
-    remoteDetail = `リモート0/10(可だがフルリモート案件のため対象外)`
+    remoteDetail = `リモート0/${wRemote}(可だがフルリモート案件のため対象外)`
   } else {
     remoteScore = 0
-    remoteDetail = `リモート0/10(不可)`
+    remoteDetail = `リモート0/${wRemote}(不可)`
   }
 
-  const total = Math.min(100, cappedSkillScore + expScore + rateScore + locationScore + remoteScore)
+  const total = Math.min(wSkill + wExp + wRate + wLoc + wRemote, cappedSkillScore + expScore + rateScore + locationScore + remoteScore)
   const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt`
 
   return { total, breakdown }
@@ -440,9 +453,17 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json()
-    const { mode = 'project_to_candidates', topN = 10 } = body as {
+    const { mode = 'project_to_candidates', topN = 10, weights: rawWeights } = body as {
       mode?: string
       topN?: number
+      weights?: Partial<ScoringWeights>
+    }
+    const weights: ScoringWeights = {
+      skill:    rawWeights?.skill    ?? DEFAULT_WEIGHTS.skill,
+      exp:      rawWeights?.exp      ?? DEFAULT_WEIGHTS.exp,
+      rate:     rawWeights?.rate     ?? DEFAULT_WEIGHTS.rate,
+      location: rawWeights?.location ?? DEFAULT_WEIGHTS.location,
+      remote:   rawWeights?.remote   ?? DEFAULT_WEIGHTS.remote,
     }
 
     // ── project → candidates ──────────────────────────────────────────────────
@@ -458,7 +479,7 @@ Deno.serve(async (req) => {
       }
 
       // ルールスコアで全員採点 → ソート
-      const scored = candidates.map(c => { const r = calcRuleScore(c, projectRequirements); return { ...c, ruleScore: r.total, ruleBreakdown: r.breakdown } })
+      const scored = candidates.map(c => { const r = calcRuleScore(c, projectRequirements, weights); return { ...c, ruleScore: r.total, ruleBreakdown: r.breakdown } })
       scored.sort((a, b) => b.ruleScore - a.ruleScore)
 
       const aiTargets = scored.slice(0, topN)
@@ -514,6 +535,7 @@ Deno.serve(async (req) => {
 
     // ── candidate → projects ──────────────────────────────────────────────────
     if (mode === 'candidate_to_projects') {
+
       const { candidateProfile, projects } = body as {
         candidateProfile: CandidateInput
         projects: ProjectReq[]
@@ -524,7 +546,7 @@ Deno.serve(async (req) => {
         })
       }
 
-      const scored = projects.map(p => { const r = calcRuleScore(candidateProfile, p); return { ...p, ruleScore: r.total, ruleBreakdown: r.breakdown } })
+      const scored = projects.map(p => { const r = calcRuleScore(candidateProfile, p, weights); return { ...p, ruleScore: r.total, ruleBreakdown: r.breakdown } })
       scored.sort((a, b) => b.ruleScore - a.ruleScore)
 
       const aiTargets = scored.slice(0, topN)

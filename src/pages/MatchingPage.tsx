@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail } from 'lucide-react'
+import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail, SlidersHorizontal, RotateCcw } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates } from '../lib/db/candidates'
+import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates, DEFAULT_SCORING_WEIGHTS } from '../lib/db/candidates'
+import type { ScoringWeights } from '../lib/db/candidates'
 import { logError } from '../lib/errorLog'
 import {
   fetchOpenProjects,
@@ -90,6 +91,7 @@ async function matchBatchProjectToCandidates(
   projectReq: unknown,
   targets: Candidate[],
   onProgress: (done: number, total: number) => void,
+  weights?: ScoringWeights,
 ): Promise<Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>> {
   const resultMap = new Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>()
 
@@ -101,6 +103,7 @@ async function matchBatchProjectToCandidates(
   const { results } = await callMatchBatch('project_to_candidates', {
     projectRequirements: projectReq,
     candidates: aiTargets.map(toCandidateBatchInput),
+    weights,
   }, BATCH_TOP_N)
   onProgress(targets.length, targets.length)
 
@@ -128,6 +131,7 @@ async function matchBatchCandidateToProjects(
   candidateInput: CandidateBatchInput,
   targetProjects: Project[],
   onProgress: (done: number, total: number) => void,
+  weights?: ScoringWeights,
 ): Promise<Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>> {
   const resultMap = new Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>()
   const projectInputs = targetProjects.map(p => ({
@@ -150,6 +154,7 @@ async function matchBatchCandidateToProjects(
     const { results, ruleOnly } = await callMatchBatch('candidate_to_projects', {
       candidateProfile: candidateInput,
       projects: chunk,
+      weights,
     }, Math.min(BATCH_TOP_N, chunk.length))
     for (const r of [...results, ...ruleOnly]) {
       if (r.projectId) resultMap.set(r.projectId, { score: r.score, summary: r.summary, breakdown: (r as { breakdown?: string }).breakdown ?? '', ruleScore: r.ruleScore })
@@ -677,6 +682,8 @@ export function MatchingPage({
   onOpenProjectDetail,
 }: Props) {
   const [mode, setMode] = useState<MatchMode>('project')
+  const [scoringWeights, setScoringWeights] = useState<ScoringWeights>({ ...DEFAULT_SCORING_WEIGHTS })
+  const [showWeightsPanel, setShowWeightsPanel] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -849,7 +856,7 @@ export function MatchingPage({
       // full: SQL で上位 500 件を取得し、match-batch 内で先頭 BATCH_TOP_N だけ AI 採点
       const sqlLimit = matchingRunMode === 'fast' ? BATCH_TOP_N : 500
       const targets = await fetchCandidatesForProject(
-        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy },
+        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy, weights: scoringWeights },
         dataEnv,
         sqlLimit,
       )
@@ -863,6 +870,7 @@ export function MatchingPage({
           projectReq,
           targets,
           (done, t) => setMatchRunProgressNow({ overall: { done, total: t }, inner: { current: done, total: t, unit: '候補者' } }),
+          scoringWeights,
         )
 
         for (const candidate of targets) {
@@ -916,6 +924,7 @@ export function MatchingPage({
           candidateInput,
           targetProjects,
           (done, t) => setMatchRunProgressNow({ overall: { done, total: t }, inner: { current: done, total: t, unit: '案件' } }),
+          scoringWeights,
         )
 
         for (const project of targetProjects) {
@@ -972,7 +981,7 @@ export function MatchingPage({
           // fast: SQL で上位 BATCH_TOP_N 件のみ取得してそのまま全件 AI 採点
           const sqlLimit2 = matchingRunMode === 'fast' ? BATCH_TOP_N : 500
           const targets = await fetchCandidatesForProject(
-            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy },
+            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy, weights: scoringWeights },
             dataEnv,
             sqlLimit2,
           )
@@ -996,6 +1005,7 @@ export function MatchingPage({
                   inner: batchTotal > 0 ? { current: batchDone, total: batchTotal, unit: '候補者' } : undefined,
                 })
               },
+              scoringWeights,
             )
           } catch (err) {
             console.warn(`[bulk-match] ${project.title} バッチ失敗: ${err}`)
@@ -1083,6 +1093,7 @@ export function MatchingPage({
                   inner: batchTotal > 0 ? { current: batchDone, total: batchTotal, unit: '案件' } : undefined,
                 })
               },
+              scoringWeights,
             )
           } catch (err) {
             console.warn(`[bulk-match] ${candidate.name} バッチ失敗: ${err}`)
@@ -1286,6 +1297,56 @@ export function MatchingPage({
         <p className="text-xs text-gray-400">
           高速モード上限：案件ごと最大 {fastMaxCandidates} 名／人材ごと最大 {fastMaxProjects} 案件（必須スキル重複が多い順）
         </p>
+      </div>
+
+      {/* スコアウェイト調整パネル */}
+      <div className="bg-white rounded-xl border border-gray-200 min-w-0">
+        <button
+          type="button"
+          onClick={() => setShowWeightsPanel(v => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-gray-800 hover:bg-gray-50 rounded-xl transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <SlidersHorizontal size={15} className="text-blue-600" />
+            スコアウェイト調整（合計 {scoringWeights.skill + scoringWeights.exp + scoringWeights.rate + scoringWeights.location + scoringWeights.remote}pt）
+          </span>
+          <ChevronDown size={15} className={`text-gray-400 transition-transform ${showWeightsPanel ? 'rotate-180' : ''}`} />
+        </button>
+        {showWeightsPanel && (
+          <div className="border-t border-gray-100 px-4 pb-4 pt-3 space-y-3">
+            <p className="text-xs text-gray-500">マッチング実行前にここで重みを変更してください。変更は次回のマッチング実行時に反映されます。</p>
+            {(
+              [
+                { key: 'skill', label: 'スキル一致', max: 100 },
+                { key: 'exp', label: '経験年数', max: 50 },
+                { key: 'rate', label: '単価合致', max: 50 },
+                { key: 'location', label: '勤務地', max: 50 },
+                { key: 'remote', label: 'リモート', max: 30 },
+              ] as { key: keyof ScoringWeights; label: string; max: number }[]
+            ).map(({ key, label, max }) => (
+              <div key={key} className="flex items-center gap-3 min-w-0">
+                <span className="text-xs text-gray-600 w-20 shrink-0">{label}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={max}
+                  step={1}
+                  value={scoringWeights[key]}
+                  onChange={e => setScoringWeights(w => ({ ...w, [key]: Number(e.target.value) }))}
+                  className="flex-1 accent-blue-600"
+                />
+                <span className="text-xs font-mono text-blue-700 w-8 text-right shrink-0">{scoringWeights[key]}pt</span>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setScoringWeights({ ...DEFAULT_SCORING_WEIGHTS })}
+              className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors"
+            >
+              <RotateCcw size={11} />デフォルトに戻す（スキル40/経験15/単価15/勤務地20/リモート10）
+            </button>
+          </div>
+        )}
       </div>
 
       {matchRunProgress && (

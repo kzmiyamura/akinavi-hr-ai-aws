@@ -141,12 +141,29 @@ export async function fetchCandidatesForMatching(dataEnv: DataEnv, limit = 2000)
   return (data ?? []) as Candidate[]
 }
 
+export interface ScoringWeights {
+  skill: number
+  exp: number
+  rate: number
+  location: number
+  remote: number
+}
+
+export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
+  skill: 40,
+  exp: 15,
+  rate: 15,
+  location: 20,
+  remote: 10,
+}
+
 export interface ProjectScoreParams {
   requiredSkills?: string[]
   budgetMin?: number | null
   budgetMax?: number | null
   workLocation?: string | null
   remotePolicy?: string | null
+  weights?: ScoringWeights
 }
 
 /**
@@ -158,6 +175,7 @@ export async function fetchCandidatesForProject(
   dataEnv: DataEnv,
   limit = 500,
 ): Promise<Candidate[]> {
+  const w = params.weights ?? DEFAULT_SCORING_WEIGHTS
   const { data, error } = await supabase
     .rpc('fetch_candidates_for_project', {
       p_data_env:        dataEnv,
@@ -167,6 +185,11 @@ export async function fetchCandidatesForProject(
       p_work_location:   params.workLocation ?? null,
       p_remote_policy:   params.remotePolicy ?? null,
       p_limit:           limit,
+      p_weight_skill:    w.skill,
+      p_weight_exp:      w.exp,
+      p_weight_rate:     w.rate,
+      p_weight_location: w.location,
+      p_weight_remote:   w.remote,
     })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as (Candidate & { rule_score: number })[]
