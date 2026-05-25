@@ -157,7 +157,7 @@ export async function fetchCandidatesForProject(
   params: ProjectScoreParams,
   dataEnv: DataEnv,
   limit = 2000,
-): Promise<(Candidate & { rule_score: number })[]> {
+): Promise<Candidate[]> {
   const { data, error } = await supabase
     .rpc('fetch_candidates_for_project', {
       p_data_env:        dataEnv,

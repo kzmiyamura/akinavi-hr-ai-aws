@@ -88,7 +88,7 @@ function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
 
 async function matchBatchProjectToCandidates(
   projectReq: unknown,
-  targets: (Candidate & { rule_score?: number })[],
+  targets: Candidate[],
   onProgress: (done: number, total: number) => void,
 ): Promise<Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>> {
   const resultMap = new Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>()
@@ -108,7 +108,7 @@ async function matchBatchProjectToCandidates(
 
   for (const c of aiTargets) {
     const ai = aiMap.get(c.id)
-    const ruleScore = c.rule_score ?? 0
+    const ruleScore = ai?.ruleScore ?? 0
     resultMap.set(c.id, {
       score: ai?.score ?? ruleScore,
       summary: ai?.summary ?? '',
@@ -118,7 +118,7 @@ async function matchBatchProjectToCandidates(
   }
 
   for (const c of ruleOnlyRest) {
-    resultMap.set(c.id, { score: c.rule_score ?? 0, summary: '', breakdown: '', ruleScore: c.rule_score ?? 0 })
+    resultMap.set(c.id, { score: 0, summary: '', breakdown: '', ruleScore: 0 })
   }
 
   return resultMap
