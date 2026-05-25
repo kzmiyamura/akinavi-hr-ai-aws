@@ -295,7 +295,7 @@ async function callGroq(key: string, prompt: string): Promise<string> {
       model: GROQ_MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
-      max_tokens: 2000,
+      max_tokens: 8000,
     }),
     signal: AbortSignal.timeout(25_000),
   })
@@ -314,7 +314,7 @@ async function callCerebras(prompt: string): Promise<string> {
       model: CEREBRAS_MODEL,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
-      max_tokens: 2000,
+      max_tokens: 4096,
     }),
     signal: AbortSignal.timeout(20_000),
   })
@@ -333,7 +333,7 @@ async function callGemini(prompt: string): Promise<string> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 2000 },
+        generationConfig: { temperature: 0.1, maxOutputTokens: 8000 },
       }),
       signal: AbortSignal.timeout(30_000),
     },
