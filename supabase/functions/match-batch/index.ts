@@ -227,7 +227,7 @@ function buildBatchProjectToCandidatesPrompt(
     const isNonJapanese = c.nationality && !['日本', '日本人'].includes(c.nationality)
     return (
       `[${i + 1}] id="${c.id}" name="${c.name}" ruleScore=${c.ruleScore} ruleBreakdown="${(c as { ruleBreakdown?: string }).ruleBreakdown ?? ''}"` +
-      ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears}年 rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
+      ` skills=${JSON.stringify(c.skills)} exp=${c.experienceYears != null ? c.experienceYears + '年' : '不明'} rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
       (c.availableRegions?.length ? ` regions=${JSON.stringify(c.availableRegions)}` : '') +
       (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
       ` summary="${c.summary.slice(0, 200)}"` +
@@ -348,13 +348,18 @@ async function callAI(prompt: string): Promise<{ text: string; model: string }> 
   const groqKey = Deno.env.get('GROQ_API_KEY')
   const cerebrasKey = Deno.env.get('CEREBRAS_API_KEY')
 
-  if (cerebrasKey) {
+  // Cerebras の上限は 8192 トークン（1トークン≒3文字で概算）
+  // 7500 トークン相当（22500 文字）を超える場合はスキップして Groq へ
+  const CEREBRAS_CHAR_LIMIT = 22500
+  if (cerebrasKey && prompt.length <= CEREBRAS_CHAR_LIMIT) {
     try {
       const text = await callCerebras(prompt)
       return { text, model: CEREBRAS_MODEL }
     } catch (e) {
       console.warn(`[match-batch] Cerebras失敗: ${e}`)
     }
+  } else if (cerebrasKey && prompt.length > CEREBRAS_CHAR_LIMIT) {
+    console.log(`[match-batch] Cerebrasスキップ: プロンプト${prompt.length}文字 > 上限${CEREBRAS_CHAR_LIMIT}文字`)
   }
   if (groqKey) {
     try {
