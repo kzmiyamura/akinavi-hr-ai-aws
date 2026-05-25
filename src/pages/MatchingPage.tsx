@@ -3,7 +3,6 @@ import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { calcRuleScore } from '../lib/matchRuleScore'
 import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates } from '../lib/db/candidates'
 import { logError } from '../lib/errorLog'
 import {
@@ -89,59 +88,37 @@ function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
 
 async function matchBatchProjectToCandidates(
   projectReq: unknown,
-  targets: Candidate[],
+  targets: (Candidate & { rule_score?: number })[],
   onProgress: (done: number, total: number) => void,
 ): Promise<Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>> {
   const resultMap = new Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>()
-  const pr = projectReq as { requiredSkills?: string[]; niceToHaveSkills?: string[]; budgetMin?: number | null; budgetMax?: number | null; workLocation?: string | null; remotePolicy?: string | null }
 
-  // ① フロント JS で全員ルールスコア計算（Edge Function 不要・高速）
-  const scored = targets.map(c => {
-    const input = toCandidateBatchInput(c)
-    const { total, breakdown } = calcRuleScore(input, pr)
-    return { candidate: c, input, ruleScore: total, breakdown }
-  })
+  // SQL 側でスコア順・日付順ソート済み。上位 BATCH_TOP_N 人だけ AI 採点。
+  const aiTargets = targets.slice(0, BATCH_TOP_N)
+  const ruleOnlyRest = targets.slice(BATCH_TOP_N)
 
-  // ② グローバルソートして上位 BATCH_TOP_N 人を AI 採点対象に
-  scored.sort((a, b) =>
-    b.ruleScore - a.ruleScore ||
-    new Date(b.candidate.created_at).getTime() - new Date(a.candidate.created_at).getTime()
-  )
-  const aiTargets = scored.slice(0, BATCH_TOP_N)
-  const ruleOnlyRest = scored.slice(BATCH_TOP_N)
-
-  // ③ 上位 N 人だけ Edge Function へ送って AI 採点（1回のみ）
   onProgress(0, targets.length)
-  const { results, ruleOnly: edgeRuleOnly } = await callMatchBatch('project_to_candidates', {
+  const { results } = await callMatchBatch('project_to_candidates', {
     projectRequirements: projectReq,
-    candidates: aiTargets.map(x => x.input),
+    candidates: aiTargets.map(toCandidateBatchInput),
   }, BATCH_TOP_N)
   onProgress(targets.length, targets.length)
 
-  // AI 結果を id でマップ
   const aiMap = new Map(results.map(r => [r.candidateId, r]))
 
-  // AI 採点対象: AI スコア優先、なければルールスコア
-  for (const { candidate, input, ruleScore, breakdown } of aiTargets) {
-    const ai = aiMap.get(input.id)
-    resultMap.set(candidate.id, {
+  for (const c of aiTargets) {
+    const ai = aiMap.get(c.id)
+    const ruleScore = c.rule_score ?? 0
+    resultMap.set(c.id, {
       score: ai?.score ?? ruleScore,
       summary: ai?.summary ?? '',
-      breakdown: (ai as { breakdown?: string } | undefined)?.breakdown ?? breakdown,
+      breakdown: (ai as { breakdown?: string } | undefined)?.breakdown ?? '',
       ruleScore,
     })
   }
 
-  // ルールスコアのみの残り
-  for (const { candidate, ruleScore, breakdown } of ruleOnlyRest) {
-    resultMap.set(candidate.id, { score: ruleScore, summary: '', breakdown, ruleScore })
-  }
-
-  // Edge Function が返した ruleOnly も念のとりこむ
-  for (const r of edgeRuleOnly) {
-    if (!resultMap.has(r.candidateId)) {
-      resultMap.set(r.candidateId, { score: r.score, summary: '', breakdown: (r as { breakdown?: string }).breakdown ?? '', ruleScore: r.ruleScore })
-    }
+  for (const c of ruleOnlyRest) {
+    resultMap.set(c.id, { score: c.rule_score ?? 0, summary: '', breakdown: '', ruleScore: c.rule_score ?? 0 })
   }
 
   return resultMap
@@ -848,9 +825,9 @@ export function MatchingPage({
       if (!project) throw new Error('案件が見つかりません')
 
       const projectReq = projectToMatchRequirements(project)
-      // SQLでスキルオーバーラップ絞り込み → 高速モードはJSでさらに上位N名に絞る
+      // SQL側でルールスコア計算・スコア降順→日付降順でソート済み
       const sqlFiltered = await fetchCandidatesForProject(
-        project.required_skills as string[],
+        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy },
         dataEnv,
       )
       const targets = pickCandidatesForProjectMatch(project, sqlFiltered, matchingRunMode, fastMaxCandidates)
@@ -970,9 +947,9 @@ export function MatchingPage({
           }
           const project = plist[pi]
           const projectReq = projectToMatchRequirements(project)
-          // 案件スキルでSQL絞り込み → 高速モードはJSでさらに上位N名に絞る
+          // SQL側でルールスコア計算・スコア降順→日付降順でソート済み
           const sqlFiltered = await fetchCandidatesForProject(
-            project.required_skills as string[],
+            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy },
             dataEnv,
           )
           const targets = pickCandidatesForProjectMatch(project, sqlFiltered, matchingRunMode, fastMaxCandidates)

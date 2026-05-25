@@ -141,25 +141,35 @@ export async function fetchCandidatesForMatching(dataEnv: DataEnv, limit = 2000)
   return (data ?? []) as Candidate[]
 }
 
+export interface ProjectScoreParams {
+  requiredSkills?: string[]
+  budgetMin?: number | null
+  budgetMax?: number | null
+  workLocation?: string | null
+  remotePolicy?: string | null
+}
+
 /**
- * 案件スキルで絞り込んだ候補者取得（プロジェクトマッチング専用・RPC経由）
- * - skills カラムは jsonb 型のため RPC 内で jsonb_array_elements_text を使用
- * - required_skills が空の場合は絞り込みなし
- * - 順序: 登録日時 DESC → 経験年数 DESC（漏れ防止）
+ * 案件パラメータを SQL に渡してルールスコア順・登録日時順で候補者を取得。
+ * SQL 内でスコア計算・ソートまで完結するため JS 側の再ソートは不要。
  */
 export async function fetchCandidatesForProject(
-  requiredSkills: string[],
+  params: ProjectScoreParams,
   dataEnv: DataEnv,
-  limit = 500,
-): Promise<Candidate[]> {
+  limit = 2000,
+): Promise<(Candidate & { rule_score: number })[]> {
   const { data, error } = await supabase
     .rpc('fetch_candidates_for_project', {
-      p_data_env: dataEnv,
-      p_skills: requiredSkills,
-      p_limit: limit,
+      p_data_env:        dataEnv,
+      p_required_skills: params.requiredSkills ?? [],
+      p_budget_min:      params.budgetMin ?? null,
+      p_budget_max:      params.budgetMax ?? null,
+      p_work_location:   params.workLocation ?? null,
+      p_remote_policy:   params.remotePolicy ?? null,
+      p_limit:           limit,
     })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
-  return (data ?? []) as Candidate[]
+  return (data ?? []) as (Candidate & { rule_score: number })[]
 }
 
 /** 全候補者を取得（マージ済みを除外） */
