@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
+import { calcRuleScore } from '../lib/matchRuleScore'
 import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates } from '../lib/db/candidates'
 import { logError } from '../lib/errorLog'
 import {
@@ -48,8 +49,8 @@ async function callMatchBatch(
 }
 
 /** 案件→複数候補者のバッチマッチング（全件モード時はBATCH_SIZEごとに分割） */
-const BATCH_AI_SIZE = 20
-const BATCH_TOP_N = 10  // 1バッチ内で AI 採点する上位件数
+const BATCH_AI_SIZE = 20   // candidate_to_projects のチャンクサイズ（案件数が多い場合のみ使用）
+const BATCH_TOP_N = 10    // 全候補者の中から AI 採点するグローバル上位件数
 
 type CandidateBatchInput = {
   id: string
@@ -92,22 +93,54 @@ async function matchBatchProjectToCandidates(
   onProgress: (done: number, total: number) => void,
 ): Promise<Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>> {
   const resultMap = new Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>()
-  const batchInputs = targets.map(toCandidateBatchInput)
-  let done = 0
-  const total = targets.length
+  const pr = projectReq as { requiredSkills?: string[]; niceToHaveSkills?: string[]; budgetMin?: number | null; budgetMax?: number | null; workLocation?: string | null; remotePolicy?: string | null }
 
-  for (let i = 0; i < batchInputs.length; i += BATCH_AI_SIZE) {
-    const chunk = batchInputs.slice(i, i + BATCH_AI_SIZE)
-    const { results, ruleOnly } = await callMatchBatch('project_to_candidates', {
-      projectRequirements: projectReq,
-      candidates: chunk,
-    }, Math.min(BATCH_TOP_N, chunk.length))
-    for (const r of [...results, ...ruleOnly]) {
-      resultMap.set(r.candidateId, { score: r.score, summary: r.summary, breakdown: (r as { breakdown?: string }).breakdown ?? '', ruleScore: r.ruleScore })
-    }
-    done = Math.min(i + BATCH_AI_SIZE, total)
-    onProgress(done, total)
+  // ① フロント JS で全員ルールスコア計算（Edge Function 不要・高速）
+  const scored = targets.map(c => {
+    const input = toCandidateBatchInput(c)
+    const { total, breakdown } = calcRuleScore(input, pr)
+    return { candidate: c, input, ruleScore: total, breakdown }
+  })
+
+  // ② グローバルソートして上位 BATCH_TOP_N 人を AI 採点対象に
+  scored.sort((a, b) => b.ruleScore - a.ruleScore)
+  const aiTargets = scored.slice(0, BATCH_TOP_N)
+  const ruleOnlyRest = scored.slice(BATCH_TOP_N)
+
+  // ③ 上位 N 人だけ Edge Function へ送って AI 採点（1回のみ）
+  onProgress(0, targets.length)
+  const { results, ruleOnly: edgeRuleOnly } = await callMatchBatch('project_to_candidates', {
+    projectRequirements: projectReq,
+    candidates: aiTargets.map(x => x.input),
+  }, BATCH_TOP_N)
+  onProgress(targets.length, targets.length)
+
+  // AI 結果を id でマップ
+  const aiMap = new Map(results.map(r => [r.candidateId, r]))
+
+  // AI 採点対象: AI スコア優先、なければルールスコア
+  for (const { candidate, input, ruleScore, breakdown } of aiTargets) {
+    const ai = aiMap.get(input.id)
+    resultMap.set(candidate.id, {
+      score: ai?.score ?? ruleScore,
+      summary: ai?.summary ?? '',
+      breakdown: (ai as { breakdown?: string } | undefined)?.breakdown ?? breakdown,
+      ruleScore,
+    })
   }
+
+  // ルールスコアのみの残り
+  for (const { candidate, ruleScore, breakdown } of ruleOnlyRest) {
+    resultMap.set(candidate.id, { score: ruleScore, summary: '', breakdown, ruleScore })
+  }
+
+  // Edge Function が返した ruleOnly も念のとりこむ
+  for (const r of edgeRuleOnly) {
+    if (!resultMap.has(r.candidateId)) {
+      resultMap.set(r.candidateId, { score: r.score, summary: '', breakdown: (r as { breakdown?: string }).breakdown ?? '', ruleScore: r.ruleScore })
+    }
+  }
+
   return resultMap
 }
 
@@ -948,7 +981,7 @@ export function MatchingPage({
             inner: candTotal > 0 ? { current: 0, total: candTotal, unit: '候補者' } : undefined,
           })
 
-          let resultMap: Map<string, { score: number; summary: string; ruleScore: number }> = new Map()
+          let resultMap: Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }> = new Map()
           try {
             resultMap = await matchBatchProjectToCandidates(
               projectReq,
@@ -1035,7 +1068,7 @@ export function MatchingPage({
           })
 
           const candidateInput = toCandidateBatchInput(candidate)
-          let resultMap: Map<string, { score: number; summary: string; ruleScore: number }> = new Map()
+          let resultMap: Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }> = new Map()
           try {
             resultMap = await matchBatchCandidateToProjects(
               candidateInput,

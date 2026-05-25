@@ -132,9 +132,9 @@ export async function fetchCandidateById(id: string, dataEnv: DataEnv): Promise<
 /**
  * マッチング用候補者取得（RPC経由）
  * 優先順位: 登録日時 DESC → 経験年数 DESC
- * limit デフォルト 800
+ * limit デフォルト 2000（7日分の全候補者を取りこぼさないよう余裕を持たせる）
  */
-export async function fetchCandidatesForMatching(dataEnv: DataEnv, limit = 800): Promise<Candidate[]> {
+export async function fetchCandidatesForMatching(dataEnv: DataEnv, limit = 2000): Promise<Candidate[]> {
   const { data, error } = await supabase
     .rpc('fetch_candidates_for_matching', { p_data_env: dataEnv, p_limit: limit })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)

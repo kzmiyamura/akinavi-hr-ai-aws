@@ -1,9 +1,12 @@
 -- duplicate_flag=true の人材をマッチング対象から SQL 側で除外する
 -- （従来は JS 側でフィルターしていた）
 
+-- fetch_candidates_for_matching:
+--   全候補者取得（案件を指定しない人材→案件マッチング用）
+--   上限 2000 に引き上げ（7日分 × 日次件数の上限として十分な余裕）
 CREATE OR REPLACE FUNCTION fetch_candidates_for_matching(
   p_data_env text,
-  p_limit     int DEFAULT 800
+  p_limit     int DEFAULT 2000
 )
 RETURNS SETOF candidates
 LANGUAGE sql STABLE SECURITY INVOKER AS $$
@@ -18,10 +21,14 @@ LANGUAGE sql STABLE SECURITY INVOKER AS $$
   LIMIT p_limit;
 $$;
 
+-- fetch_candidates_for_project:
+--   案件スキルで絞り込んだ候補者取得（案件→候補者マッチング用）
+--   スキルフィルター後の全員を返す（上限 2000）
+--   ルールスコアによるグローバルソートは match-batch 側で実施
 CREATE OR REPLACE FUNCTION fetch_candidates_for_project(
   p_data_env text,
   p_skills   text[],
-  p_limit    int DEFAULT 500
+  p_limit    int DEFAULT 2000
 )
 RETURNS SETOF candidates
 LANGUAGE sql STABLE SECURITY INVOKER AS $$
