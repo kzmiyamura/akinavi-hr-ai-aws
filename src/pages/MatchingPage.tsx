@@ -49,6 +49,7 @@ async function callMatchBatch(
 
 /** 案件→複数候補者のバッチマッチング（全件モード時はBATCH_SIZEごとに分割） */
 const BATCH_AI_SIZE = 20
+const BATCH_TOP_N = 10  // 1バッチ内で AI 採点する上位件数
 
 type CandidateBatchInput = {
   id: string
@@ -100,7 +101,7 @@ async function matchBatchProjectToCandidates(
     const { results, ruleOnly } = await callMatchBatch('project_to_candidates', {
       projectRequirements: projectReq,
       candidates: chunk,
-    }, chunk.length)
+    }, Math.min(BATCH_TOP_N, chunk.length))
     for (const r of [...results, ...ruleOnly]) {
       resultMap.set(r.candidateId, { score: r.score, summary: r.summary, breakdown: (r as { breakdown?: string }).breakdown ?? '', ruleScore: r.ruleScore })
     }
@@ -136,7 +137,7 @@ async function matchBatchCandidateToProjects(
     const { results, ruleOnly } = await callMatchBatch('candidate_to_projects', {
       candidateProfile: candidateInput,
       projects: chunk,
-    }, chunk.length)
+    }, Math.min(BATCH_TOP_N, chunk.length))
     for (const r of [...results, ...ruleOnly]) {
       if (r.projectId) resultMap.set(r.projectId, { score: r.score, summary: r.summary, breakdown: (r as { breakdown?: string }).breakdown ?? '', ruleScore: r.ruleScore })
     }
@@ -695,10 +696,9 @@ export function MatchingPage({
   })
 
   const projectList = projects as Project[]
-  // 同一人材疑い（duplicate_flag=true）の人材はマッチング対象外
-  // 名寄せ済み（merged_into != null）の人材もマッチング対象外
+  // duplicate_flag / merged_into のフィルターは RPC 側（fetch_candidates_for_matching）で実施済み
   const candidateList = useMemo(
-    () => (candidates as Candidate[]).filter((c) => !c.duplicate_flag && c.merged_into == null),
+    () => candidates as Candidate[],
     [candidates],
   )
 
