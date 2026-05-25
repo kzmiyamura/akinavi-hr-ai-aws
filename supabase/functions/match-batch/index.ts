@@ -264,9 +264,11 @@ function buildBatchProjectToCandidatesPrompt(
       project.requiredSkills ?? [],
       project.niceToHaveSkills ?? [],
     )
+    // calcRuleScore の breakdown をそのまま渡してAIが事実記述できるようにする
+    const rule = calcRuleScore(c, project)
     return (
-      `[${i + 1}] id="${c.id}" score=${c.ruleScore}` +
-      ` skills=${JSON.stringify(skills)} exp=${c.experienceYears != null ? c.experienceYears + '年' : '不明'} rate="${c.desiredRate ?? ''}" pref="${c.prefecture ?? ''}" remote=${c.remoteAvailable ? '可' : '不可'}` +
+      `[${i + 1}] id="${c.id}" score=${c.ruleScore} breakdown="${rule.breakdown}"` +
+      ` skills=${JSON.stringify(skills)} remote=${c.remoteAvailable ? '可' : '不可'}` +
       (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
       (c.summary ? ` summary="${c.summary.slice(0, 80)}"` : '') +
       (c.selfPR ? ` selfPR="${c.selfPR.slice(0, 80)}"` : '') +
@@ -285,18 +287,19 @@ function buildBatchProjectToCandidatesPrompt(
 ${project.roleSummary ? `- 役割: ${project.roleSummary.slice(0, 150)}` : ''}
 ${project.description ? `- 案件詳細: ${project.description.slice(0, 200)}` : ''}
 
-候補者${candidates.length}名（score はルールベース点）:
+候補者${candidates.length}名（score・breakdown はルールベース算出済み）:
 ${cList}
 
 【指示】各候補者について以下を出力すること。
 1. score（整数）: 各候補者の score をそのまま使うこと（変更禁止）
-2. summary（100〜150字）: 以下の順で自然な日本語で書くこと（スコア数値・分数は出力しない）
-   a) スキル合致状況・経験年数・単価・勤務地
-   b) summary/selfPR/agentNote と案件の適合度を1文（否定表現があれば矛盾を指摘）
-   c) wantedJobs がある場合は案件との合致を1文
-   d) nationality がある場合はビザ・日本語要件の確認を1文
+2. summary（80〜120字）: breakdown の事実のみを自然な日本語で記述すること（スコア数値・分数は出力しない）
+   - breakdownにない情報を推測・追加しないこと
+   - 不明なデータは「不明」とだけ書き、推測しないこと
+   - summary/selfPR/agentNote がある場合は案件との適合を1文追加
+   - wantedJobs がある場合は案件との合致を1文追加
+   - nationality がある場合はビザ・日本語要件の確認を1文追加
 
-出力形式（配列のみ・改行なし）: [{"id":"...","score":整数,"summary":"150字以内"},...]`
+出力形式（配列のみ・改行なし）: [{"id":"...","score":整数,"summary":"120字以内"},...]`
 }
 
 function buildBatchCandidateToProjectsPrompt(
