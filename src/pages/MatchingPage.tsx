@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText } from 'lucide-react'
+import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates } from '../lib/db/candidates'
 import { logError } from '../lib/errorLog'
@@ -405,6 +405,8 @@ function ProjectModeRankCard({
   onDecide?: (submission: Submission) => void
   duplicates?: DuplicateCandidate[]
 }) {
+  const [showEmail, setShowEmail] = useState(false)
+  const rawText = (s.candidate.raw_profile as Record<string, unknown>)?.text as string | undefined
   return (
     <div className="border border-gray-100 rounded-lg overflow-hidden bg-white min-w-0">
     <div className="p-3 sm:p-4 flex flex-col gap-3 sm:flex-row sm:items-start">
@@ -495,6 +497,24 @@ function ProjectModeRankCard({
               </>
             )}
           </div>
+          {rawText && (
+            <div className="mt-1.5">
+              <button
+                type="button"
+                onClick={() => setShowEmail(v => !v)}
+                className="inline-flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <Mail size={10} />
+                {showEmail ? '元メールを閉じる' : '元メールを見る'}
+                <ChevronDown size={10} className={`transition-transform ${showEmail ? 'rotate-180' : ''}`} />
+              </button>
+              {showEmail && (
+                <pre className="mt-1 text-[10px] text-gray-600 bg-gray-50 border border-gray-200 rounded p-2 whitespace-pre-wrap break-words leading-relaxed max-h-60 overflow-y-auto">
+                  {rawText}
+                </pre>
+              )}
+            </div>
+          )}
         </div>
       </div>
       <div className="shrink-0 self-stretch sm:self-start flex flex-col gap-2">
