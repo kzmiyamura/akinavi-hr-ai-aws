@@ -445,7 +445,7 @@ function ProjectModeRankCard({
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-2 py-0.5 hover:bg-blue-100 transition-colors"
                 >
-                  <FileText size={11} />経歴書(2)
+                  <FileText size={11} />{s.candidate.drive_url ? '経歴書(2)' : '経歴書'}
                 </a>
               )}
             </div>
