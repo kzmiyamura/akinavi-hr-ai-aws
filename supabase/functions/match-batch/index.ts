@@ -61,6 +61,7 @@ interface CandidateInput {
   nationality?: string | null
   selfPR?: string | null
   skillYears?: Record<string, number> | null  // スキル別経験月数（Excelから抽出）
+  desiredProject?: string | null              // 希望案件・希望分野（raw_profile.desiredProject）
 }
 
 interface ProjectReq {
@@ -145,10 +146,15 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
     : `スキル${cappedSkillScore}/${wSkill}(必須スキル未設定)`
 
   // ── 経験年数 ──
-  // 案件の必須スキルに対応する skillYears が存在する場合は、その最大値を優先使用
-  // （例: Java必須案件で skillYears["Java"]=139ヶ月 なら 11.6年として計算）
+  // 優先順位:
+  //   1. skillYears（Excel経歴書から取得した per-skill 月数） → 最も正確
+  //   2. 必須スキルを「希望」と明示している人 → 5年相当(8/15)の部分クレジット
+  //   3. 総経験年数（experienceYears） → スキル特化情報なし
   let exp = candidate.experienceYears
   let expLabel = exp == null ? '不明' : `${exp}年`
+  let skillYearsUsed = false
+
+  // 1. skillYears チェック
   if (candidate.skillYears && required.length > 0) {
     let maxSkillMonths = 0
     for (const r of required) {
@@ -161,13 +167,36 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
     }
     if (maxSkillMonths > 0) {
       const skillExpYears = maxSkillMonths / 12
-      // skillYears が総経験年数より有用な情報の場合（研修2ヶ月 vs 実務10年の差を反映）
       if (exp == null || skillExpYears < exp) {
         exp = skillExpYears
-        expLabel = `${(skillExpYears).toFixed(1)}年(スキル別)`
+        expLabel = `${skillExpYears.toFixed(1)}年(スキル別)`
+        skillYearsUsed = true
       }
     }
   }
+
+  // 2. 希望チェック（skillYears がない場合のみ）
+  // desiredProject / selfPR / agentComment に必須スキルが含まれていれば
+  // 「そのスキルを希望・得意としている」とみなして 5年相当(8/15) の部分クレジットを付与
+  if (!skillYearsUsed && required.length > 0) {
+    const wishText = [
+      candidate.desiredProject ?? '',
+      candidate.selfPR ?? '',
+      candidate.agentComment ?? '',
+    ].join(' ').toLowerCase()
+    for (const r of required) {
+      const rt = r.toLowerCase().trim()
+      if (rt.length >= 2 && cSet.has(rt) && wishText.includes(rt)) {
+        // 希望あり → 5年相当(8/15)。確認済み7年(12/15)より低く、経験不明(5/15)より高い
+        if (exp == null || exp < 5) {
+          exp = 5
+          expLabel = `${r}希望`
+        }
+        break
+      }
+    }
+  }
+
   let expRatio = 0
   if (exp == null) expRatio = 5.0 / 15.0
   else if (exp >= 10) expRatio = 1.0
