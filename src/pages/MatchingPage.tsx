@@ -77,7 +77,7 @@ function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
     name: c.name,
     skills: c.skills as string[],
     experienceYears: c.experience_years,
-    desiredRate: (rp?.desiredRate as string | null) ?? null,
+    desiredRate: c.desired_rate ?? (rp?.desiredRate as string | null) ?? null,
     summary: typeof rp?.summary === 'string' ? rp.summary : '',
     remoteAvailable: (rp?.remoteAvailable as boolean | null) ?? null,
     prefecture: (rp?.prefecture as string | null) ?? null,
