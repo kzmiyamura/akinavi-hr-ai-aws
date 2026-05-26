@@ -2567,7 +2567,7 @@ Deno.serve(async (req: Request) => {
             let blockExistingId: string | null = null
             if (blockResolvedName && blockResolvedName !== '不明') {
               const { data: similar } = await supabase
-                .from('candidates').select('id, name, skills, raw_profile')
+                .from('candidates').select('id, name, skills, raw_profile, experience_years')
                 .eq('data_env', inboundDataEnv)
                 .eq('name', blockResolvedName)
                 .eq('duplicate_flag', false)
@@ -2579,6 +2579,10 @@ Deno.serve(async (req: Request) => {
                   const myStation = blockRegexFields.nearestStation ?? null
                   const theirStation = (s.raw_profile as any)?.nearestStation ?? null
                   if (myStation && theirStation && myStation !== theirStation) continue
+                  // 経験年数の差が5年以上の場合は別人と判断
+                  const myBlockExp = toExperienceYears(blockRegexFields.experienceYears)
+                  const theirBlockExp = (s as any).experience_years ?? null
+                  if (myBlockExp != null && theirBlockExp != null && Math.abs(myBlockExp - theirBlockExp) >= 5) continue
                   const mySet = new Set(blockSkillNames.map(sk => sk.toLowerCase()))
                   const theirSet = new Set(((s.skills as string[]) || []).map(sk => sk.toLowerCase()))
                   const intersection = [...mySet].filter(sk => theirSet.has(sk)).length
@@ -2833,7 +2837,7 @@ Deno.serve(async (req: Request) => {
       if (resolvedName && resolvedName !== '不明') {
         const { data: similar } = await supabase
           .from('candidates')
-          .select('id, name, skills, raw_profile')
+          .select('id, name, skills, raw_profile, experience_years')
           .eq('data_env', inboundDataEnv)
           .eq('name', resolvedName)
           .eq('duplicate_flag', false)
@@ -2847,6 +2851,13 @@ Deno.serve(async (req: Request) => {
             // 駅が両方存在して異なる場合は別人と判断
             if (myStation && theirStation && myStation !== theirStation) {
               console.log(`[dedup] 駅が異なるため別人: ${resolvedName} my=${myStation} their=${theirStation}`)
+              continue
+            }
+            // 経験年数の差が5年以上の場合は別人と判断
+            const myExp = toExperienceYears(resolvedExperienceYears)
+            const theirExp = (s as any).experience_years ?? null
+            if (myExp != null && theirExp != null && Math.abs(myExp - theirExp) >= 5) {
+              console.log(`[dedup] 経験年数が大きく異なるため別人: ${resolvedName} my=${myExp} their=${theirExp}`)
               continue
             }
             const mySkillSet = new Set(skills.map((sk: string) => sk.toLowerCase()))

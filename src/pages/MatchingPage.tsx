@@ -240,13 +240,22 @@ function normalizeSkillToken(s: string): string {
   return s.trim().toLowerCase()
 }
 
-/** 同一人物スコアを計算する（名前一致はDB側で保証済み→+50固定） */
+/** 同一人物スコアを計算する（名前一致はDB側で保証済み→+50固定）
+ * -1 を返した場合は「明らかに別人」として表示から除外する */
 function calcDuplicateScore(dup: Omit<DuplicateCandidate, 'duplicateScore'>, ref: Candidate): number {
+  const dupStation = (dup.raw_profile?.nearestStation as string | undefined) ?? ''
+  const refStation = (ref.raw_profile?.nearestStation as string | undefined) ?? ''
+
+  // 最寄り駅が両方存在して異なる → 別人（除外）
+  if (dupStation && refStation && dupStation !== refStation) return -1
+
+  // 経験年数の差が5年以上 → 別人（除外）
+  if (dup.experience_years != null && ref.experience_years != null &&
+      Math.abs(dup.experience_years - ref.experience_years) >= 5) return -1
+
   let score = 50 // 名前一致はRPCで保証済み
 
   // 最寄り駅一致 (+30)
-  const dupStation = (dup.raw_profile?.nearestStation as string | undefined) ?? ''
-  const refStation = (ref.raw_profile?.nearestStation as string | undefined) ?? ''
   if (dupStation && refStation && dupStation === refStation) score += 30
 
   // メール一致 (+50)
