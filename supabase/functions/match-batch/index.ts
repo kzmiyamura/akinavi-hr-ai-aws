@@ -274,7 +274,8 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
     const candPref = (candidate.prefecture ?? '').toLowerCase()
     const prefOnly = (candPref.match(/^(.+?[都道府県])/) ?? [])[1] ?? candPref.split(/[\s　]/)[0]
     const prefCore = prefOnly.replace(/[都道府県]$/, '')
-    if (prefCore && projLoc.includes(prefCore)) {
+    const projPrefCoreForMatch = extractPrefCore(project.workLocation ?? '')
+    if (prefCore && projPrefCoreForMatch && prefCore === projPrefCoreForMatch) {
       locRatio = 1.0
       locationDetail = `勤務地${wLoc}/${wLoc}(${candidate.prefecture ?? ''}・一致)`
     } else if (!candPref) {
@@ -282,9 +283,8 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
       locationDetail = `勤務地${Math.round(locRatio * wLoc)}/${wLoc}(居住地不明)`
     } else {
       // 同一地方チェック（例: 千葉→関東、東京→関東 → 同一地方で10pt）
-      const projPrefCore = extractPrefCore(project.workLocation ?? '')
       const candRegion = getRegion(prefCore)
-      const projRegion = getRegion(projPrefCore)
+      const projRegion = getRegion(projPrefCoreForMatch)
       if (candRegion && projRegion && candRegion === projRegion) {
         locRatio = 10.0 / 20.0
         locationDetail = `勤務地${Math.round(locRatio * wLoc)}/${wLoc}(${candidate.prefecture ?? ''}・同一地方${candRegion})`
