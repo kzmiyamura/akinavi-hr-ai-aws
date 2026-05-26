@@ -2579,6 +2579,10 @@ Deno.serve(async (req: Request) => {
                   const myStation = blockRegexFields.nearestStation ?? null
                   const theirStation = (s.raw_profile as any)?.nearestStation ?? null
                   if (myStation && theirStation && myStation !== theirStation) continue
+                  // 都道府県が両方存在して異なる場合は別人と判断
+                  const myBlockPref = blockRegexFields.prefecture ?? null
+                  const theirBlockPref = (s.raw_profile as any)?.prefecture ?? null
+                  if (myBlockPref && theirBlockPref && myBlockPref !== theirBlockPref) continue
                   // 経験年数の差が5年以上の場合は別人と判断
                   const myBlockExp = toExperienceYears(blockRegexFields.experienceYears)
                   const theirBlockExp = (s as any).experience_years ?? null
@@ -2851,6 +2855,13 @@ Deno.serve(async (req: Request) => {
             // 駅が両方存在して異なる場合は別人と判断
             if (myStation && theirStation && myStation !== theirStation) {
               console.log(`[dedup] 駅が異なるため別人: ${resolvedName} my=${myStation} their=${theirStation}`)
+              continue
+            }
+            // 都道府県が両方存在して異なる場合は別人と判断
+            const myPref = resolvedPrefecture ?? null
+            const theirPref = (s.raw_profile as any)?.prefecture ?? null
+            if (myPref && theirPref && myPref !== theirPref) {
+              console.log(`[dedup] 都道府県が異なるため別人: ${resolvedName} my=${myPref} their=${theirPref}`)
               continue
             }
             // 経験年数の差が5年以上の場合は別人と判断

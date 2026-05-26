@@ -245,9 +245,14 @@ function normalizeSkillToken(s: string): string {
 function calcDuplicateScore(dup: Omit<DuplicateCandidate, 'duplicateScore'>, ref: Candidate): number {
   const dupStation = (dup.raw_profile?.nearestStation as string | undefined) ?? ''
   const refStation = (ref.raw_profile?.nearestStation as string | undefined) ?? ''
+  const dupPref = (dup.raw_profile?.prefecture as string | undefined) ?? ''
+  const refPref = (ref.raw_profile?.prefecture as string | undefined) ?? ''
 
   // 最寄り駅が両方存在して異なる → 別人（除外）
   if (dupStation && refStation && dupStation !== refStation) return -1
+
+  // 都道府県が両方存在して異なる → 別人（除外）
+  if (dupPref && refPref && dupPref !== refPref) return -1
 
   // 経験年数の差が5年以上 → 別人（除外）
   if (dup.experience_years != null && ref.experience_years != null &&
