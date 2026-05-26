@@ -2563,20 +2563,15 @@ Deno.serve(async (req: Request) => {
               from_company: sanitizeFromCompany(blockRegexFields.fromCompany),
             }
 
-            const { data: blockData, error: blockError } = await supabase
-              .from('candidates').insert(blockPayload).select().single()
-            if (blockError) {
-              console.error(`[multi-candidate] 保存エラー "${blockResolvedName}":`, blockError.message)
-              continue
-            }
-
-            // 重複判定
-            if (blockResolvedName !== '不明') {
+            // INSERT前に重複チェック（同一人物なら UPDATE してスキップ）
+            let blockExistingId: string | null = null
+            if (blockResolvedName && blockResolvedName !== '不明') {
               const { data: similar } = await supabase
                 .from('candidates').select('id, name, skills, raw_profile')
                 .eq('data_env', inboundDataEnv)
                 .eq('name', blockResolvedName)
-                .neq('id', blockData.id)
+                .eq('duplicate_flag', false)
+                .is('merged_into', null)
                 .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
                 .limit(5)
               if (similar && similar.length > 0) {
@@ -2589,21 +2584,48 @@ Deno.serve(async (req: Request) => {
                   const intersection = [...mySet].filter(sk => theirSet.has(sk)).length
                   const union = new Set([...mySet, ...theirSet]).size
                   if (union > 0 && intersection / union >= 0.4) {
-                    await supabase.from('candidates').update({ duplicate_flag: true })
-                      .eq('id', blockData.id).eq('data_env', inboundDataEnv)
-                    console.log(`[multi-candidate duplicate] ${blockResolvedName} jaccard=${(intersection / union).toFixed(2)}`)
+                    blockExistingId = s.id
+                    console.log(`[multi-candidate dedup] 同一人物 → UPDATE: ${blockResolvedName} jaccard=${(intersection / union).toFixed(2)}`)
                     break
                   }
                 }
               }
             }
 
+            let blockSavedId: string
+            if (blockExistingId) {
+              const blockUpdatePayload: Record<string, unknown> = {
+                skills: blockSkillNames,
+                raw_profile: blockPayload.raw_profile,
+                desired_rate: blockRegexFields.desiredRate ?? null,
+                created_at: new Date().toISOString(),
+              }
+              if (resumeUrl) blockUpdatePayload.resume_url = resumeUrl
+              if (blockPayload.from_company) blockUpdatePayload.from_company = blockPayload.from_company
+              const { error: blockUpdateError } = await supabase
+                .from('candidates').update(blockUpdatePayload)
+                .eq('id', blockExistingId).eq('data_env', inboundDataEnv)
+              if (blockUpdateError) {
+                console.error(`[multi-candidate] 更新エラー "${blockResolvedName}":`, blockUpdateError.message)
+                continue
+              }
+              blockSavedId = blockExistingId
+            } else {
+              const { data: blockData, error: blockError } = await supabase
+                .from('candidates').insert(blockPayload).select().single()
+              if (blockError) {
+                console.error(`[multi-candidate] 保存エラー "${blockResolvedName}":`, blockError.message)
+                continue
+              }
+              blockSavedId = blockData.id
+            }
+
             // candidate_skills INSERT
             const blockSkillsPayload = blockDbMatchedSkills
               .filter(s => s.name?.trim())
-              .map(s => ({ candidate_id: blockData.id, category: s.category, skill: s.name.trim() }))
+              .map(s => ({ candidate_id: blockSavedId, category: s.category, skill: s.name.trim() }))
             if (blockSkillsPayload.length > 0) {
-              await supabase.from('candidate_skills').delete().eq('candidate_id', blockData.id)
+              await supabase.from('candidate_skills').delete().eq('candidate_id', blockSavedId)
               await supabase.from('candidate_skills').insert(blockSkillsPayload)
             }
 
@@ -2625,12 +2647,12 @@ Deno.serve(async (req: Request) => {
               prompt_length: 0,
               status: 'success',
               duration_ms: 0,
-              linked_id: blockData.id,
+              linked_id: blockSavedId,
               raw_body: block.slice(0, 3000),
             })
 
-            results.push({ id: blockData.id, name: blockData.name, skills: blockSkillNames.length })
-            console.log(`[multi-candidate] 登録完了: ${blockData.name} skills=${blockSkillNames.length}`)
+            results.push({ id: blockSavedId, name: blockResolvedName, skills: blockSkillNames.length })
+            console.log(`[multi-candidate] 登録完了: ${blockResolvedName} skills=${blockSkillNames.length}`)
           } catch (blockErr) {
             console.error(`[multi-candidate] ブロック処理エラー:`, String(blockErr))
           }
@@ -2796,27 +2818,27 @@ Deno.serve(async (req: Request) => {
         from_company: sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany),
       }
 
-      const { data, error } = await supabase.from('candidates').insert(dbPayload).select().single()
-
-      if (error) throw new Error(`候補者保存エラー: ${error.message}`)
-
-      // ライブラリ重複判定（AI不使用・名前+スキルJaccard類似度）
+      // ── INSERT前の重複チェック（同一人物なら UPDATE して INSERT をスキップ）──
+      // 従来: INSERT後にフラグを立てる → 古いレコードが7日でアーカイブされると誰も残らない問題
+      // 新方式: INSERT前にチェック → 同一人物なら既存レコードを最新情報で更新 + created_at をリセット
+      let existingCandidateId: string | null = null
       if (resolvedName && resolvedName !== '不明') {
         const { data: similar } = await supabase
           .from('candidates')
           .select('id, name, skills, raw_profile')
           .eq('data_env', inboundDataEnv)
           .eq('name', resolvedName)
-          .neq('id', data.id)
+          .eq('duplicate_flag', false)
+          .is('merged_into', null)
           .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
           .limit(5)
         if (similar && similar.length > 0) {
           for (const s of similar) {
-            // 駅が両方存在して異なる場合は別人と判断
             const myStation = resolvedStation ?? null
             const theirStation = (s.raw_profile as any)?.nearestStation ?? null
+            // 駅が両方存在して異なる場合は別人と判断
             if (myStation && theirStation && myStation !== theirStation) {
-              console.log(`[duplicate] 駅が異なるため別人: ${resolvedName} my=${myStation} their=${theirStation}`)
+              console.log(`[dedup] 駅が異なるため別人: ${resolvedName} my=${myStation} their=${theirStation}`)
               continue
             }
             const mySkillSet = new Set(skills.map((sk: string) => sk.toLowerCase()))
@@ -2824,23 +2846,50 @@ Deno.serve(async (req: Request) => {
             const intersection = [...mySkillSet].filter(sk => theirSkills.has(sk)).length
             const union = new Set([...mySkillSet, ...theirSkills]).size
             if (union > 0 && intersection / union >= 0.4) {
-              await supabase.from('candidates').update({ duplicate_flag: true }).eq('id', data.id).eq('data_env', inboundDataEnv)
-              console.log(`[duplicate] 名前+スキル類似 → duplicate_flag=true: ${resolvedName} jaccard=${(intersection / union).toFixed(2)}`)
+              existingCandidateId = s.id
+              console.log(`[dedup] 同一人物と判断 → UPDATE: ${resolvedName} jaccard=${(intersection / union).toFixed(2)} id=${s.id}`)
               break
             }
           }
         }
       }
 
+      let savedCandidateId: string
+      if (existingCandidateId) {
+        // 既存レコードを最新情報で UPDATE（created_at をリセットして7日カウントを延長）
+        const updatePayload: Record<string, unknown> = {
+          skills,
+          experience_years: toExperienceYears(resolvedExperienceYears),
+          raw_profile: dbPayload.raw_profile,
+          desired_rate: resolvedDesiredRate ?? null,
+          created_at: new Date().toISOString(),
+        }
+        if (resumeUrl) updatePayload.resume_url = resumeUrl
+        if (dbPayload.from_company) updatePayload.from_company = dbPayload.from_company
+        if (boxUrls.length > 0) { updatePayload.box_url = boxUrls[0]; updatePayload.box_status = 'pending' }
+        const { error: updateError } = await supabase
+          .from('candidates')
+          .update(updatePayload)
+          .eq('id', existingCandidateId)
+          .eq('data_env', inboundDataEnv)
+        if (updateError) throw new Error(`候補者更新エラー: ${updateError.message}`)
+        savedCandidateId = existingCandidateId
+      } else {
+        // 新規 INSERT
+        const { data, error } = await supabase.from('candidates').insert(dbPayload).select().single()
+        if (error) throw new Error(`候補者保存エラー: ${error.message}`)
+        savedCandidateId = data.id
+      }
+
       // candidate_skills に一括INSERT（DB照合結果のカテゴリを使用）
       const skillsPayload: { candidate_id: string; category: string; skill: string }[] = []
       for (const matched of dbMatchedSkills) {
         if (matched.name && matched.name.trim()) {
-          skillsPayload.push({ candidate_id: data.id, category: matched.category, skill: matched.name.trim() })
+          skillsPayload.push({ candidate_id: savedCandidateId, category: matched.category, skill: matched.name.trim() })
         }
       }
       if (skillsPayload.length > 0) {
-        await supabase.from('candidate_skills').delete().eq('candidate_id', data.id)
+        await supabase.from('candidate_skills').delete().eq('candidate_id', savedCandidateId)
         const { error: skillsError } = await supabase.from('candidate_skills').insert(skillsPayload)
         if (skillsError) console.error('[candidate_skills INSERT error]', skillsError)
         else { /* スキル登録完了 */ }
@@ -2867,7 +2916,7 @@ Deno.serve(async (req: Request) => {
         prompt_length: 0,
         status: 'success',
         duration_ms: durationMs,
-        linked_id: data.id,
+        linked_id: savedCandidateId,
         raw_body: body.slice(0, 3000),
       })
       if (logError) console.error('[ai_logs INSERT error]', logError)
@@ -2877,14 +2926,14 @@ Deno.serve(async (req: Request) => {
         await appendToBoxSpreadsheet(boxUrls)
       }
 
-      console.log(`[inbound] 人材登録完了: ${data.name}`)
+      console.log(`[inbound] 人材登録完了: ${resolvedName} id=${savedCandidateId}`)
       await markEmailProcessed(supabase, dedupConfigKey)
       return new Response(
         JSON.stringify({
           ok: true,
           type: 'candidate',
-          id: data.id,
-          name: data.name,
+          id: savedCandidateId,
+          name: resolvedName,
           geminiParseFallback: parseFallback,
           boxUrls: boxUrls.length > 0 ? boxUrls : undefined,
         }),
