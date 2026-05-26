@@ -87,6 +87,33 @@ interface BatchResult {
   ruleScore: number
 }
 
+// ─── 地方マップ ───────────────────────────────────────────────────────────────
+
+const REGION_MAP: Record<string, string> = {
+  '北海道': '北海道',
+  '青森': '東北', '岩手': '東北', '宮城': '東北', '秋田': '東北', '山形': '東北', '福島': '東北',
+  '茨城': '関東', '栃木': '関東', '群馬': '関東', '埼玉': '関東', '千葉': '関東', '東京': '関東', '神奈川': '関東',
+  '新潟': '甲信越', '山梨': '甲信越', '長野': '甲信越',
+  '富山': '北陸', '石川': '北陸', '福井': '北陸',
+  '岐阜': '東海', '静岡': '東海', '愛知': '東海', '三重': '東海',
+  '滋賀': '近畿', '京都': '近畿', '大阪': '近畿', '兵庫': '近畿', '奈良': '近畿', '和歌山': '近畿',
+  '鳥取': '中国', '島根': '中国', '岡山': '中国', '広島': '中国', '山口': '中国',
+  '徳島': '四国', '香川': '四国', '愛媛': '四国', '高知': '四国',
+  '福岡': '九州', '佐賀': '九州', '長崎': '九州', '熊本': '九州', '大分': '九州', '宮崎': '九州', '鹿児島': '九州', '沖縄': '九州',
+}
+
+/** 都道府県名・勤務地文字列から都道府県コア（接尾辞なし）を抽出 */
+function extractPrefCore(location: string): string {
+  const lower = location.toLowerCase()
+  const m = lower.match(/^(.+?)[都道府県]/)
+  if (m) return m[1]
+  return lower.split(/[\s\u3000]/)[0]
+}
+
+function getRegion(prefCore: string): string | null {
+  return REGION_MAP[prefCore] ?? null
+}
+
 // ─── ルールベーススコアリング ─────────────────────────────────────────────────
 
 /** 希望単価文字列を月額万円に変換 */
@@ -254,8 +281,17 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
       locRatio = 5.0 / 20.0
       locationDetail = `勤務地${Math.round(locRatio * wLoc)}/${wLoc}(居住地不明)`
     } else {
-      locRatio = 0
-      locationDetail = `勤務地0/${wLoc}(${candidate.prefecture ?? '不明'}・不一致)`
+      // 同一地方チェック（例: 千葉→関東、東京→関東 → 同一地方で10pt）
+      const projPrefCore = extractPrefCore(project.workLocation ?? '')
+      const candRegion = getRegion(prefCore)
+      const projRegion = getRegion(projPrefCore)
+      if (candRegion && projRegion && candRegion === projRegion) {
+        locRatio = 10.0 / 20.0
+        locationDetail = `勤務地${Math.round(locRatio * wLoc)}/${wLoc}(${candidate.prefecture ?? ''}・同一地方${candRegion})`
+      } else {
+        locRatio = 0
+        locationDetail = `勤務地0/${wLoc}(${candidate.prefecture ?? '不明'}・地方不一致)`
+      }
     }
   } else {
     locRatio = 5.0 / 20.0
