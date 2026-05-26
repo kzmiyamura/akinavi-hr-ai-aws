@@ -124,8 +124,30 @@ async function matchBatchProjectToCandidates(
     })
   }
 
-  for (const c of ruleOnlyRest) {
-    resultMap.set(c.id, { score: 0, summary: '', breakdown: '', ruleScore: 0 })
+  // ruleOnlyRest: ルールスコアのみ（AI 不使用・topN=0 で全員 ruleOnly 扱い）
+  for (let i = 0; i < ruleOnlyRest.length; i += BATCH_AI_SIZE) {
+    const chunk = ruleOnlyRest.slice(i, i + BATCH_AI_SIZE)
+    try {
+      const { ruleOnly } = await callMatchBatch('project_to_candidates', {
+        projectRequirements: projectReq,
+        candidates: chunk.map(toCandidateBatchInput),
+        weights,
+      }, 0)
+      const ruleMap = new Map(ruleOnly.map(r => [r.candidateId, r]))
+      for (const c of chunk) {
+        const r = ruleMap.get(c.id)
+        resultMap.set(c.id, {
+          score: r?.ruleScore ?? 0,
+          summary: '',
+          breakdown: (r as { breakdown?: string } | undefined)?.breakdown ?? '',
+          ruleScore: r?.ruleScore ?? 0,
+        })
+      }
+    } catch {
+      for (const c of chunk) {
+        resultMap.set(c.id, { score: 0, summary: '', breakdown: '', ruleScore: 0 })
+      }
+    }
   }
 
   return resultMap
@@ -856,9 +878,9 @@ export function MatchingPage({
       if (!project) throw new Error('案件が見つかりません')
 
       const projectReq = projectToMatchRequirements(project)
-      // fast: SQL で上位 BATCH_TOP_N 件のみ取得してそのまま全件 AI 採点
+      // fast: SQL で上位 fastMaxCandidates 件を取得。先頭 BATCH_TOP_N だけ AI 採点、残りはルールスコアのみ
       // full: SQL で上位 500 件を取得し、match-batch 内で先頭 BATCH_TOP_N だけ AI 採点
-      const sqlLimit = matchingRunMode === 'fast' ? BATCH_TOP_N : 500
+      const sqlLimit = matchingRunMode === 'fast' ? fastMaxCandidates : 500
       const targets = await fetchCandidatesForProject(
         { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy, weights: scoringWeights },
         dataEnv,
