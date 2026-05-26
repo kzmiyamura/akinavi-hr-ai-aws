@@ -2720,7 +2720,15 @@ Deno.serve(async (req: Request) => {
       // AI空項目にregexフォールバックを適用
       const resolvedStation = analyzed.nearestStation || regexFields.nearestStation
       const resolvedPrefecture = analyzed.prefecture || regexFields.prefecture
-      const resolvedExperienceYears = analyzed.experienceYears ?? regexFields.experienceYears
+      let resolvedExperienceYears = analyzed.experienceYears ?? regexFields.experienceYears
+      // skillYearsフォールバック: メール本文に経験年数が書かれていない場合、Excelのスキル別経験月数の最大値で補完
+      if (resolvedExperienceYears == null && Object.keys(excelSkillYears).length > 0) {
+        const maxMonths = Math.max(...Object.values(excelSkillYears))
+        if (maxMonths > 0) {
+          resolvedExperienceYears = maxMonths / 12
+          console.log(`[inbound] skillYearsから経験年数推定: ${resolvedExperienceYears.toFixed(1)}年 (最大${maxMonths}ヶ月)`)
+        }
+      }
       const resolvedDesiredRate = analyzed.desiredRate || regexFields.desiredRate
       const resolvedAvailableFrom = analyzed.availableFrom || regexFields.availableFrom
 
