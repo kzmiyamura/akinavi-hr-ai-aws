@@ -588,12 +588,19 @@ function ProjectModeRankCard({
       </div>
     </div>
     {duplicates && duplicates.length > 0 && (() => {
-      // 同一内容（名前・会社・単価の組み合わせ）の重複を除去
+      // 同一内容の重複を除去（差出人+件名が同じ、または名前+会社+単価が同じ）
       const seenKeys = new Set<string>()
       const deduped = duplicates.filter(d => {
-        const key = `${d.name}|${d.from_company ?? ''}|${d.desired_rate ?? ''}`
-        if (seenKeys.has(key)) return false
-        seenKeys.add(key)
+        const fromAddr = d.raw_profile?.from as string | undefined
+        const subjectStr = d.raw_profile?.subject as string | undefined
+        // 差出人+件名が同じなら確実に同一メール
+        const mailKey = fromAddr && subjectStr ? `mail:${fromAddr}|${subjectStr}` : null
+        if (mailKey && seenKeys.has(mailKey)) return false
+        // 名前+会社+単価も重複チェック
+        const infoKey = `info:${d.name}|${d.from_company ?? ''}|${d.desired_rate ?? ''}`
+        if (seenKeys.has(infoKey)) return false
+        if (mailKey) seenKeys.add(mailKey)
+        seenKeys.add(infoKey)
         return true
       })
       return (
@@ -607,7 +614,7 @@ function ProjectModeRankCard({
               const subjectStr = d.raw_profile?.subject as string | undefined
               const receivedAt = d.raw_profile?.emailReceivedAt as string | undefined
               const receivedLabel = receivedAt
-                ? new Date(receivedAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                ? new Date(receivedAt).toLocaleString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
                 : null
               return (
                 <div key={d.id} className="flex flex-col gap-0.5 text-xs bg-white rounded px-2.5 py-1.5 border border-amber-200">
