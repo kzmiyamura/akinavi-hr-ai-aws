@@ -66,6 +66,7 @@ type CandidateBatchInput = {
   agentComment?: string | null
   nationality?: string | null
   selfPR?: string | null
+  skillYears?: Record<string, number> | null
 }
 
 function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
@@ -84,6 +85,7 @@ function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
     agentComment: (rp?.agentComment as string | null) ?? null,
     nationality: (rp?.nationality as string | null) ?? null,
     selfPR: (rp?.selfPR as string | null) ?? null,
+    skillYears: (rp?.skillYears as Record<string, number> | null) ?? null,
   }
 }
 

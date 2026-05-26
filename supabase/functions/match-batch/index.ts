@@ -60,6 +60,7 @@ interface CandidateInput {
   agentComment?: string | null
   nationality?: string | null
   selfPR?: string | null
+  skillYears?: Record<string, number> | null  // スキル別経験月数（Excelから抽出）
 }
 
 interface ProjectReq {
@@ -144,7 +145,29 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
     : `スキル${cappedSkillScore}/${wSkill}(必須スキル未設定)`
 
   // ── 経験年数 ──
-  const exp = candidate.experienceYears
+  // 案件の必須スキルに対応する skillYears が存在する場合は、その最大値を優先使用
+  // （例: Java必須案件で skillYears["Java"]=139ヶ月 なら 11.6年として計算）
+  let exp = candidate.experienceYears
+  let expLabel = exp == null ? '不明' : `${exp}年`
+  if (candidate.skillYears && required.length > 0) {
+    let maxSkillMonths = 0
+    for (const r of required) {
+      const rt = r.toLowerCase().trim()
+      for (const [skill, months] of Object.entries(candidate.skillYears)) {
+        if (skill.toLowerCase().trim().includes(rt) || rt.includes(skill.toLowerCase().trim())) {
+          if (months > maxSkillMonths) maxSkillMonths = months
+        }
+      }
+    }
+    if (maxSkillMonths > 0) {
+      const skillExpYears = maxSkillMonths / 12
+      // skillYears が総経験年数より有用な情報の場合（研修2ヶ月 vs 実務10年の差を反映）
+      if (exp == null || skillExpYears < exp) {
+        exp = skillExpYears
+        expLabel = `${(skillExpYears).toFixed(1)}年(スキル別)`
+      }
+    }
+  }
   let expRatio = 0
   if (exp == null) expRatio = 5.0 / 15.0
   else if (exp >= 10) expRatio = 1.0
@@ -153,9 +176,7 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
   else if (exp >= 3) expRatio = 4.0 / 15.0
   else if (exp >= 1) expRatio = 2.0 / 15.0
   const expScore = Math.round(expRatio * wExp)
-  const expDetail = exp == null
-    ? `経験${expScore}/${wExp}(不明)`
-    : `経験${expScore}/${wExp}(${exp}年)`
+  const expDetail = `経験${expScore}/${wExp}(${expLabel})`
 
   // ── 単価合致 ──
   const rate = parseRateWan(candidate.desiredRate)

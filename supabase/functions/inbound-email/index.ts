@@ -1521,6 +1521,121 @@ function cleanseWordText(text: string, maxChars = 6000): string {
   return result.length > maxChars ? result.slice(0, maxChars) + '\n...(省略)' : result
 }
 
+/** 期間テキスト（"10年9ヶ月" "10ヶ月" "1年" 等）を月数に変換 */
+function parseDurationToMonths(text: string): number | null {
+  if (!text || typeof text !== 'string') return null
+  const t = text.trim()
+  let months = 0
+  const yearMatch = t.match(/(\d+)\s*年/)
+  const monthMatch = t.match(/(\d+)\s*[ヶか]月/)
+  if (yearMatch) months += parseInt(yearMatch[1]) * 12
+  if (monthMatch) months += parseInt(monthMatch[1])
+  return months > 0 ? months : null
+}
+
+/** "2025/06" と "2026/03" のような開始・終了年月から月数を計算 */
+function calcMonthsFromDates(start: string, end: string): number | null {
+  const parseYM = (s: string) => {
+    const m = s.match(/(\d{4})[\/\-年](\d{1,2})/)
+    return m ? { year: parseInt(m[1]), month: parseInt(m[2]) } : null
+  }
+  const s = parseYM(start)
+  const e = parseYM(end)
+  if (!s || !e) return null
+  const months = (e.year - s.year) * 12 + (e.month - s.month) + 1
+  return months > 0 ? months : null
+}
+
+/** Excel シートデータ（2D 配列）からスキル別経験月数を抽出
+ * Method1: プロジェクト経歴型（「使用言語」列ヘッダーを持つ形式）
+ * Method2: スキル一覧型（スキル名 | X年 が近接している形式）
+ */
+function extractSkillYearsFromSheetData(data: string[][]): Record<string, number> {
+  // ── Method 1: プロジェクト経歴型 ──
+  let langColIdx = -1
+  let fwColIdx = -1
+  let headerRowIdx = -1
+  for (let i = 0; i < Math.min(40, data.length); i++) {
+    const row = data[i]
+    for (let j = 0; j < row.length; j++) {
+      const v = String(row[j] ?? '').trim()
+      if ((v.includes('使用言語') || v === '言語') && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
+      if ((v.includes('FW') || v.includes('ツール') || v.includes('フレームワーク') || v.includes('ミドル')) && fwColIdx < 0) fwColIdx = j
+    }
+    if (langColIdx >= 0) break
+  }
+  if (langColIdx >= 0) {
+    const skillMonths: Record<string, number> = {}
+    for (let i = headerRowIdx + 1; i < data.length; i++) {
+      const row = data[i]
+      const noCell = String(row[0] ?? '').trim().replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+      if (!noCell || !/^\d+$/.test(noCell)) continue
+      const langCell = String(row[langColIdx] ?? '').trim()
+      const fwCell = fwColIdx >= 0 ? String(row[fwColIdx] ?? '').trim() : ''
+      // 期間は次の行 index=1 の "10年9ヶ月" テキストから取得、なければ開始・終了日時から計算
+      let months: number | null = null
+      if (i + 1 < data.length) months = parseDurationToMonths(String(data[i + 1][1] ?? ''))
+      if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), String(row[5] ?? ''))
+      if (!months || months <= 0) continue
+      const skillTexts = (langCell + '\n' + fwCell).split(/[\n\r、，,]+/).map(s => s.trim())
+        .filter(s => s && s !== '-' && s !== '－' && !/^[\s\-－]+$/.test(s))
+      for (const skill of skillTexts) {
+        skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+      }
+    }
+    if (Object.keys(skillMonths).length > 0) return skillMonths
+  }
+  // ── Method 2: スキル一覧型 ──
+  const skillMonths2: Record<string, number> = {}
+  for (const row of data) {
+    if (!row || row.length < 2) continue
+    for (let j = 0; j < row.length; j++) {
+      const months = parseDurationToMonths(String(row[j] ?? ''))
+      if (!months) continue
+      for (let k = Math.max(0, j - 3); k <= Math.min(row.length - 1, j + 3); k++) {
+        if (k === j) continue
+        const candidate = String(row[k] ?? '').trim()
+        if (candidate.length >= 2 && !/^\d+$/.test(candidate) && !/^[\s\-－◎○●▲×]+$/.test(candidate)) {
+          skillMonths2[candidate] = Math.max(skillMonths2[candidate] ?? 0, months)
+          break
+        }
+      }
+    }
+  }
+  return skillMonths2
+}
+
+/** スキル別経験月数を Excel ファイル（base64）から抽出 */
+async function extractSkillYearsFromExcel(base64: string): Promise<Record<string, number>> {
+  try {
+    const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
+      read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
+      utils: { sheet_to_json: (sheet: unknown, opts: object) => unknown[][] }
+    }
+    const bytes = base64ToUint8Array(base64)
+    const workbook = XLSX.read(bytes, { type: 'array' })
+    const PRIORITY_KEYWORDS = ['スキル', '経歴', '職務', 'スキルシート', 'skill', 'career', 'profile', '人材']
+    const sortedNames = [...workbook.SheetNames].sort((a, b) => {
+      const ap = PRIORITY_KEYWORDS.some(kw => a.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
+      const bp = PRIORITY_KEYWORDS.some(kw => b.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
+      return ap - bp
+    })
+    for (const sheetName of sortedNames.slice(0, 3)) {
+      const ws = workbook.Sheets[sheetName]
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as string[][]
+      const result = extractSkillYearsFromSheetData(data)
+      if (Object.keys(result).length > 0) {
+        console.log(`[skillYears] sheet=${sheetName} skills=${Object.keys(result).length}`)
+        return result
+      }
+    }
+    return {}
+  } catch (e) {
+    console.warn('[skillYears] 抽出失敗', e)
+    return {}
+  }
+}
+
 /** Excel(.xlsx/.xls)をCSVテキストに変換してクレンジング（最初の3シートまで） */
 async function extractExcelText(base64: string): Promise<string> {
   try {
@@ -2100,6 +2215,7 @@ Deno.serve(async (req: Request) => {
 
     // Word/Excelのテキスト抽出（MIMEタイプ + 拡張子の両方で判定）
     const officeTextContents: { label: string; content: string }[] = []
+    let excelSkillYears: Record<string, number> = {}
     for (const att of attachments) {
       const attNameLower = (att.name ?? '').toLowerCase()
       const isWordByMime = WORD_MIME.includes(att.mimeType)
@@ -2116,6 +2232,11 @@ Deno.serve(async (req: Request) => {
         const text = await extractExcelText(att.data)
         if (text.trim()) officeTextContents.push({ label: `Excelファイル(${att.name ?? 'spreadsheet'})`, content: text })
         else console.warn(`[Excel] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
+        // スキル別経験年数を抽出（プロジェクト経歴型 / スキル一覧型の両対応）
+        if (Object.keys(excelSkillYears).length === 0) {
+          const years = await extractSkillYearsFromExcel(att.data)
+          if (Object.keys(years).length > 0) excelSkillYears = years
+        }
       }
     }
     tracePhase = 'step3_office_done'
@@ -2664,6 +2785,7 @@ Deno.serve(async (req: Request) => {
           selfPR: extractSelfPR(body, attachText) ?? null,
           agentComment: extractAgentComment(body, attachText) ?? null,
           geminiParseFallback: parseFallback,
+          skillYears: Object.keys(excelSkillYears).length > 0 ? excelSkillYears : undefined,
         },
         duplicate_flag: false,
         created_by: 'make-inbound',
