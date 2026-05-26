@@ -587,34 +587,61 @@ function ProjectModeRankCard({
         ) : null}
       </div>
     </div>
-    {duplicates && duplicates.length > 0 && (
-      <div className="border-t border-amber-100 bg-amber-50 px-3 py-2.5">
-        <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide mb-1.5">
-          別ルートの同一人物候補（{duplicates.length}件）
-        </p>
-        <div className="space-y-1.5">
-          {duplicates.map(d => (
-            <div key={d.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs bg-white rounded px-2.5 py-1.5 border border-amber-200">
-              {onOpenCandidateDetail ? (
-                <button
-                  type="button"
-                  onClick={() => onOpenCandidateDetail(d.id)}
-                  className="font-medium text-gray-800 hover:text-blue-700 hover:underline"
-                >
-                  {d.name}
-                </button>
-              ) : (
-                <span className="font-medium text-gray-800">{d.name}</span>
-              )}
-              {d.from_company && <span className="text-amber-700">{d.from_company}</span>}
-              {d.desired_rate && <span className="text-green-700 font-medium">{d.desired_rate}</span>}
-              {d.experience_years != null && <span className="text-gray-500">経験{d.experience_years}年</span>}
-              <span className="ml-auto text-[10px] text-amber-500">同一スコア {d.duplicateScore}</span>
-            </div>
-          ))}
+    {duplicates && duplicates.length > 0 && (() => {
+      // 同一内容（名前・会社・単価の組み合わせ）の重複を除去
+      const seenKeys = new Set<string>()
+      const deduped = duplicates.filter(d => {
+        const key = `${d.name}|${d.from_company ?? ''}|${d.desired_rate ?? ''}`
+        if (seenKeys.has(key)) return false
+        seenKeys.add(key)
+        return true
+      })
+      return (
+        <div className="border-t border-amber-100 bg-amber-50 px-3 py-2.5">
+          <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide mb-1.5">
+            別ルートの同一人物候補（{deduped.length}件）
+          </p>
+          <div className="space-y-1.5">
+            {deduped.map(d => {
+              const fromAddr = d.raw_profile?.from as string | undefined
+              const subjectStr = d.raw_profile?.subject as string | undefined
+              const receivedAt = d.raw_profile?.emailReceivedAt as string | undefined
+              const receivedLabel = receivedAt
+                ? new Date(receivedAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                : null
+              return (
+                <div key={d.id} className="flex flex-col gap-0.5 text-xs bg-white rounded px-2.5 py-1.5 border border-amber-200">
+                  <div className="flex flex-wrap items-center gap-x-2">
+                    {onOpenCandidateDetail ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenCandidateDetail(d.id)}
+                        className="font-medium text-gray-800 hover:text-blue-700 hover:underline"
+                      >
+                        {d.name}
+                      </button>
+                    ) : (
+                      <span className="font-medium text-gray-800">{d.name}</span>
+                    )}
+                    {d.from_company && <span className="text-amber-700">{d.from_company}</span>}
+                    {d.desired_rate && <span className="text-green-700 font-medium">{d.desired_rate}</span>}
+                    {d.experience_years != null && <span className="text-gray-500">経験{d.experience_years}年</span>}
+                    <span className="ml-auto text-[10px] text-amber-500">同一スコア {d.duplicateScore}</span>
+                  </div>
+                  {(fromAddr || subjectStr || receivedLabel) && (
+                    <div className="flex flex-wrap gap-x-2 gap-y-0 text-[10px] text-gray-400">
+                      {receivedLabel && <span>{receivedLabel}</span>}
+                      {fromAddr && <span className="truncate max-w-[200px]" title={fromAddr}>{fromAddr}</span>}
+                      {subjectStr && <span className="truncate max-w-[240px] text-gray-500" title={subjectStr}>「{subjectStr}」</span>}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
-      </div>
-    )}
+      )
+    })()}
     </div>
   )
 }
