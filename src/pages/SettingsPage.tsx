@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Save, RefreshCw, CheckCircle, Circle, FileText, Trash2 } from 'lucide-react'
+import { Loader2, Save, RefreshCw, CheckCircle, Circle, FileText, Trash2, GitPullRequest, ExternalLink } from 'lucide-react'
 import { deleteAllCandidates } from '../lib/db/candidates'
 import { deleteAllProjects } from '../lib/db/projects'
 import { deleteAllSubmissions } from '../lib/db/submissions'
@@ -120,6 +120,45 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   const memoMutation = useMutation({
     mutationFn: (text: string) => saveAppMemo(text),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['appMemo'] }),
+  })
+
+  // GitHub Issues
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
+  const ghEndpoint = `${supabaseUrl}/functions/v1/create-github-issue`
+
+  interface GhIssue { number: number; title: string; state: string; html_url: string; created_at: string }
+  const { data: ghIssues = [], refetch: refetchIssues } = useQuery<GhIssue[]>({
+    queryKey: ['ghIssues'],
+    queryFn: async () => {
+      const res = await fetch(ghEndpoint, { headers: { Authorization: `Bearer ${supabaseAnonKey}` } })
+      if (!res.ok) return []
+      return res.json()
+    },
+    staleTime: 60_000,
+  })
+  const [issueUrl, setIssueUrl] = useState<string | null>(null)
+  const issueMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const nickname = localStorage.getItem('nickname') ?? ''
+      const res = await fetch(ghEndpoint, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${supabaseAnonKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          memo: text,
+          url: window.location.href,
+          userAgent: navigator.userAgent,
+          nickname,
+          timestamp: new Date().toISOString(),
+        }),
+      })
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error ?? `HTTP ${res.status}`) }
+      return res.json() as Promise<GhIssue>
+    },
+    onSuccess: (issue) => {
+      setIssueUrl(issue.html_url)
+      refetchIssues()
+    },
   })
 
   const saveMatchingMutation = useMutation({
@@ -690,7 +729,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
             placeholder={'例)\n・マッチングスコアが低い案件の原因を調査\n・モバイルで○○ボタンが押しにくい\n・スキル「React」と「React.js」が別扱いになっている'}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-base text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
           />
-          <div className="mt-2 flex items-center gap-3">
+          <div className="mt-2 flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={() => memoMutation.mutate(memo)}
@@ -700,9 +739,48 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
               {memoMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
               保存
             </button>
+            <button
+              type="button"
+              onClick={() => { setIssueUrl(null); issueMutation.mutate(memo) }}
+              disabled={issueMutation.isPending || !memo.trim()}
+              className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60 transition-colors"
+            >
+              {issueMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <GitPullRequest size={14} />}
+              Issue登録
+            </button>
             {memoMutation.isSuccess && <span className="text-sm text-green-600">保存しました</span>}
             {memoMutation.isError && <span className="text-sm text-red-600">保存に失敗しました</span>}
+            {issueMutation.isError && <span className="text-sm text-red-600">Issue登録失敗: {issueMutation.error?.message}</span>}
+            {issueUrl && (
+              <a href={issueUrl} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline">
+                <ExternalLink size={13} />Issue登録しました
+              </a>
+            )}
           </div>
+
+          {/* Issue一覧 */}
+          {ghIssues.length > 0 && (
+            <div className="mt-4">
+              <p className="text-xs font-semibold text-gray-500 mb-2">登録済みIssue</p>
+              <div className="space-y-1.5">
+                {ghIssues.map(issue => (
+                  <div key={issue.number} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
+                    <span className={`shrink-0 w-2 h-2 rounded-full ${issue.state === 'open' ? 'bg-red-500' : 'bg-green-500'}`} />
+                    <span className="text-gray-400 shrink-0">#{issue.number}</span>
+                    <span className="text-gray-700 flex-1 truncate">{issue.title}</span>
+                    <span className={`shrink-0 text-[10px] font-medium ${issue.state === 'open' ? 'text-red-500' : 'text-green-600'}`}>
+                      {issue.state === 'open' ? '未対応' : '修正済み'}
+                    </span>
+                    <a href={issue.html_url} target="_blank" rel="noopener noreferrer"
+                      className="shrink-0 text-gray-400 hover:text-blue-600">
+                      <ExternalLink size={12} />
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
 
         {/* ---- ドキュメント ---- */}
