@@ -565,6 +565,13 @@ ALTER TABLE candidates_archive_light
 - **ドキュメントの対象読者**:
   - README/構成図は「後任エンジニア」が最短で再現できるように。
   - 操作マニュアルは「非IT営業職」がIT用語なしで理解できるように。
+- **Issue 作業サイクル（自律ループ）**:
+  1. GitHub Issue リストを取得（`create-github-issue` Edge Function GET）して open な Issue を確認する
+  2. open Issue をすべて実装・修正・テストし、commit & push する
+  3. 修正が完了した Issue を PATCH で `state: 'closed'` に更新する
+  4. 残った open Issue がないか再度取得する。新しい Issue があれば 1. に戻る
+  5. open Issue が 0 件になったら完了を報告して待機する
+  - **ユーザーへの確認不要**: 上記サイクルはユーザーが明示的に止めない限り自律的に続ける
 
 ---
 

@@ -313,7 +313,12 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
     remoteDetail = `リモート0/${wRemote}(不可)`
   }
 
-  const total = Math.min(wSkill + wExp + wRate + wLoc + wRemote, cappedSkillScore + expScore + rateScore + locationScore + remoteScore)
+  let total = Math.min(wSkill + wExp + wRate + wLoc + wRemote, cappedSkillScore + expScore + rateScore + locationScore + remoteScore)
+  // 必須スキルが1件以上あってかつ1件も合致しない場合は上限35ptに制限
+  // （スキル全不一致なのに経験年数・単価・勤務地が良い人材が上位に来るのを防ぐ）
+  if (required.length > 0 && hits === 0) {
+    total = Math.min(total, 35)
+  }
   const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt`
 
   return { total, breakdown }

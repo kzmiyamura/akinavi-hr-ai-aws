@@ -1079,6 +1079,25 @@ function extractCandidateFieldsRegex(
   // 国籍除去後のnameStrippedで上書き（フォールバックで取得済みなら維持）
   name = name || nameStripped || null
 
+  // ── イニシャルのみパターン フォールバック ─────────────────────
+  // 「A.M」「K・S」「K.S（45歳/男性）」のようにラベルなしでイニシャルが記載されている場合
+  // 既に名前が取れている場合はスキップ
+  if (!name) {
+    const allTextForInitials = bodyText + '\n' + attachText
+    // パターン1: イニシャル + 年齢/性別 (例: K.S（45歳/男性）)
+    const initialsPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])[ 　]?[（(](\d{2})[才歳][^)）]*[）)]/m
+    // パターン2: イニシャルのみ（行頭・デコレータ直後）
+    const initialsOnlyPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→][ 　]?([A-Z][.．・][A-Z])(?:[ 　]|$)/m
+    const imatch = allTextForInitials.match(initialsPat)
+    const imatchOnly = !imatch ? allTextForInitials.match(initialsOnlyPat) : null
+    if (imatch) {
+      name = imatch[1].trim()
+      if (age === null) age = parseInt(imatch[2], 10)
+    } else if (imatchOnly) {
+      name = imatchOnly[1].trim()
+    }
+  }
+
   // ── ラベルあり別行フォールバック（年齢：30歳 / 性別：女性 / 国籍：中国）─
   // 名前から取れなかった場合に本文ラベルから補完する
   if (age === null) {
