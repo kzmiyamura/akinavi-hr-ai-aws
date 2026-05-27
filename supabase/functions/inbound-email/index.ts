@@ -2190,7 +2190,8 @@ async function unmarkEmailProcessed(
  * 戻り値: ブロックが2件以上あれば string[] を返す。1件以下なら null。
  */
 function splitMultiCandidateBody(body: string): string[] | null {
-  const DELIM_RE = /^[\*\-=＊]{8,}\s*$/
+  // ＝（全角イコール）を追加 — CyTech 等の「＝＝＝...」区切り線に対応
+  const DELIM_RE = /^[\*\-=＊＝]{8,}\s*$/
   const lines = body.split(/\r?\n/)
 
   const delimIndices: number[] = []
@@ -2238,7 +2239,8 @@ function splitMultiCandidateBody(body: string): string[] | null {
 
   // 氏名フィールドを含むブロックが2つ以上あるかで最終判定する
   // 「【直個人】フルスタックエンジニア...」のような装飾ラベルは除外するため
-  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】/
+  // 「氏名　　　：D.S」のようなラベルなし（ブラケットなし）形式にも対応
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|^氏名[　 ]*[：:]/m
   const blocksWithName = validBlocks.filter(b => NAME_FIELD_RE.test(b))
   return blocksWithName.length >= 2 ? validBlocks : null
 }
