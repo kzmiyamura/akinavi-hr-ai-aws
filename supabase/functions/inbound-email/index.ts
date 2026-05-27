@@ -2595,6 +2595,8 @@ Deno.serve(async (req: Request) => {
         type BlockResult = { id: string; name: string; skills: number }
         const results: BlockResult[] = []
         const allBlockBoxUrls: string[] = []
+        // 同一メール内のループ内重複防止: このバッチで既に登録/更新した name → id のマップ
+        const batchNameToId = new Map<string, string>()
 
         for (const block of multiBlocks) {
           try {
@@ -2666,7 +2668,13 @@ Deno.serve(async (req: Request) => {
 
             // INSERT前に重複チェック（同一人物なら UPDATE してスキップ）
             let blockExistingId: string | null = null
-            if (blockResolvedName && blockResolvedName !== '不明') {
+            // ① 同一メール内の既処理ブロックと名前が一致 → そのIDに UPDATE（DB未コミット分も補足）
+            if (blockResolvedName && blockResolvedName !== '不明' && batchNameToId.has(blockResolvedName)) {
+              blockExistingId = batchNameToId.get(blockResolvedName)!
+              console.log(`[multi-candidate dedup] 同一バッチ内重複 → UPDATE: ${blockResolvedName}`)
+            }
+            // ② DBに同名が存在するか確認
+            if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明') {
               const { data: similar } = await supabase
                 .from('candidates').select('id, name, skills, raw_profile, experience_years')
                 .eq('data_env', inboundDataEnv)
@@ -2727,6 +2735,11 @@ Deno.serve(async (req: Request) => {
                 continue
               }
               blockSavedId = blockData.id
+            }
+
+            // バッチ内重複防止: 処理済み名前を記録
+            if (blockResolvedName && blockResolvedName !== '不明') {
+              batchNameToId.set(blockResolvedName, blockSavedId)
             }
 
             // candidate_skills INSERT
