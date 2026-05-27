@@ -1092,6 +1092,33 @@ function extractCandidateFieldsRegex(
   // 国籍除去後のnameStrippedで上書き（フォールバックで取得済みなら維持）
   name = name || nameStripped || null
 
+  // ── 名前後処理: 残留汚染パターンを除去 ──────────────────────────
+  // スラッシュ区切りの性別・国籍残留 (例: "O.A / 男性 / 日本）" → "O.A")
+  if (name) name = name.replace(/[ 　]*[/／][ 　]*(男性|女性|男|女)[ 　]*(?:[/／][^）)]*)?[）)]?\s*$/, '').trim() || null
+  // 末尾に性別+閉じ括弧が残留 (例: "R・K　男性）" → "R・K")
+  if (name) name = name.replace(/[ 　]*(男性|女性|男|女)[）)]\s*$/, '').trim() || null
+  // 末尾にスペース+年齢が残留 (例: "MO 35歳", "AA　39歳")
+  if (name && !age) {
+    const trailingAgeM = name.match(/[ 　]+(\d{2})[才歳]$/)
+    if (trailingAgeM) {
+      age = parseInt(trailingAgeM[1], 10)
+      name = name.replace(/[ 　]+\d{2}[才歳]$/, '').trim() || null
+    }
+  }
+  // 末尾に括弧内2桁数字のみ = 年齢として取得 (例: "D.S（38）" → "D.S", age=38)
+  if (name && !age) {
+    const ageOnlyM = name.match(/[ 　]?[（(](\d{2})[）)]$/)
+    if (ageOnlyM) {
+      age = parseInt(ageOnlyM[1], 10)
+      name = name.replace(/[ 　]?[（(]\d{2}[）)]$/, '').trim() || null
+    }
+  }
+  // 名前中に【駅名】等の別フィールドが混入 (例: "【T・N】【豊岡】（男性..." → "T・N")
+  if (name && name.includes('】【')) {
+    name = name.replace(/】【.*$/, '').trim() || null
+    if (name) name = name.replace(/^【([^】]+)】$/, '$1').trim() || null
+  }
+
   // ── イニシャルのみパターン フォールバック ─────────────────────
   // 「A.M」「K・S」「K.S（45歳/男性）」のようにラベルなしでイニシャルが記載されている場合
   // 既に名前が取れている場合はスキップ
@@ -2430,6 +2457,8 @@ Deno.serve(async (req: Request) => {
         // 会社説明会・セミナー招待
         'セミナーのご案内', 'ウェビナーのご案内', '説明会のご案内',
         '無料セミナー', '無料ウェビナー',
+        // 社内業務メール・システム通知（人材メールboxへの誤配信）
+        '勤務明細書を提出', '客先向けの勤務表', 'SAP Fieldglass',
       ]
       const isTraining = TRAINING_KEYWORDS.some(kw => body.includes(kw))
       const isSolicitation = PROJECT_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))
