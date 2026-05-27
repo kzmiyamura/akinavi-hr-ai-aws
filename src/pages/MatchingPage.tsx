@@ -665,6 +665,7 @@ function ProjectModeRankCard({
         seenKeys.add(infoKey)
         return true
       })
+      if (deduped.length === 0) return null
       return (
         <div className="border-t border-amber-100 bg-amber-50 px-3 py-2.5">
           <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide mb-1.5">
