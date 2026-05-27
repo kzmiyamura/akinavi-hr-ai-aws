@@ -21,6 +21,7 @@ import {
   readStoredDataEnv,
   writeStoredDataEnv,
 } from './lib/dataEnv'
+import { projectsQueryKeys } from './lib/db/projects'
 
 class TabErrorBoundary extends Component<
   { children: ReactNode },
@@ -143,6 +144,13 @@ function AppInner() {
     setTabPage(page)
     setDetail(null)
   }
+
+  // マッチングタブへ切り替え時にプロジェクト一覧を強制更新（案件追加後の未反映対策）
+  useEffect(() => {
+    if (tabPage === 'matching') {
+      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.open(dataEnv) })
+    }
+  }, [tabPage, dataEnv])
 
   function openCandidateDetail(id: string) {
     setDetail({ kind: 'candidate', id })

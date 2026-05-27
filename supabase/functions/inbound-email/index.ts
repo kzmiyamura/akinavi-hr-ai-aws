@@ -2281,6 +2281,18 @@ Deno.serve(async (req: Request) => {
         '新人エンジニア育成',
         '助成金の活用も可能',
         '定員に達し次第受付を締め切',
+        // 自動返信・不在通知
+        '不在のため', '自動返信', 'Auto Reply', 'Out of Office', 'Automatic reply',
+        // 求人・採用サービス広告
+        '求人サービスのご案内', '採用支援サービス', '人材採用にお困りでは',
+        '採用コスト削減', '求人掲載のご案内', '転職サービスのご案内',
+        // 会計・法務・補助金系DM
+        '補助金・助成金', '税務申告のご案内', '法人向けサービスのご案内',
+        // IT商材DM
+        'DX推進のご支援', 'クラウド移行のご提案', 'セキュリティ診断のご案内',
+        // 会社説明会・セミナー招待
+        'セミナーのご案内', 'ウェビナーのご案内', '説明会のご案内',
+        '無料セミナー', '無料ウェビナー',
       ]
       const isTraining = TRAINING_KEYWORDS.some(kw => body.includes(kw))
       const isSolicitation = PROJECT_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))

@@ -161,6 +161,8 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
     },
     onSuccess: (issue) => {
       setIssueUrl(issue.html_url)
+      setMemo('')
+      saveAppMemo('')
       refetchIssues()
     },
   })
