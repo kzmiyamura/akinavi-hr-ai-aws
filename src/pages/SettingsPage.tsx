@@ -170,7 +170,8 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
       setIssuesPage(0)
       // 楽観的更新: GitHub API の反映遅延に関わらず即座にリストへ追加
       queryClient.setQueryData<GhIssue[]>(['ghIssues'], old => old ? [issue, ...old] : [issue])
-      refetchIssues()
+      // GitHub API の反映遅延（数秒）を待ってから再取得
+      setTimeout(() => refetchIssues(), 3000)
     },
   })
 

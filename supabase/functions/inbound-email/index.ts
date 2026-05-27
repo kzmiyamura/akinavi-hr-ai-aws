@@ -1210,19 +1210,36 @@ function extractCandidateFieldsRegex(
 
   // ── 希望単価 ──────────────────────────────────────────────────
   let desiredRate: string | null = extractFieldTwoPhase(
-    ['希望単価','目安単価','単価','単金','単　金','単 金','希望報酬','希望月額','希望料金'],
+    ['希望単価','目安単価','単価','単金','単　金','単 金','希望報酬','希望月額','月額','月単価','希望料金'],
     bodyText, attachText,
     v => /\d/.test(v),
     20,
   )
   if (!desiredRate) {
-    const rateM = allText.match(
-      /(?:希望[単]?価|単価)[：:\s]*(\d{2,3})\s*万\s*円?(?:以上|\/月|程度|台|〜|~)?/
-    ) ?? allText.match(/(\d{2,3})\s*万\s*円?(?:以上|\/月|程度)/)
-    if (rateM) {
-      const amount = parseInt(rateM[1], 10)
+    // ① ラベル付き（単価: 65万 / 単価65万〜70万 / 単価60〜65万円 等）
+    const rateM1 = allText.match(
+      /(?:希望[単]?価|単価|月額|月単価)[：:\s　]*(\d{2,3}[〜~－\-]?\d{0,3})\s*万\s*円?(?:[以上\/月程度台〜~]|$|\D)/
+    )
+    // ② 範囲（終端に万）: 60〜65万円
+    const rateM2 = !rateM1 ? allText.match(
+      /(\d{2,3})\s*[〜~]\s*(\d{2,3})\s*万\s*円?/
+    ) : null
+    // ③ 単独値: XX万円以上 / XX万/月 / XX万程度
+    const rateM3 = (!rateM1 && !rateM2) ? allText.match(
+      /(\d{2,3})\s*万\s*円?(?:以上|\/月|程度|台)/
+    ) : null
+
+    if (rateM1) {
+      const raw = rateM1[1]
+      const hasRange = /[〜~－\-]/.test(raw) && /\d{2,3}$/.test(raw)
+      desiredRate = hasRange ? `${raw}万円` : `${raw}万円`
+    } else if (rateM2) {
+      const lo = parseInt(rateM2[1], 10), hi = parseInt(rateM2[2], 10)
+      if (lo >= 20 && hi <= 300) desiredRate = `${lo}〜${hi}万円`
+    } else if (rateM3) {
+      const amount = parseInt(rateM3[1], 10)
       if (amount >= 20 && amount <= 300) {
-        const raw = rateM[0]
+        const raw = rateM3[0]
         const suffix = raw.includes('以上') ? '万円以上' : raw.includes('/月') ? '万円/月' : '万円'
         desiredRate = `${amount}${suffix}`
       }
