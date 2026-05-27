@@ -1016,19 +1016,19 @@ function extractCandidateFieldsRegex(
   let gender: string | null = null
   let nameStripped = cleanedName || ''
   // パターンA: (26歳/男性) (26歳/男性/日本) (26歳：男性) — 年齢が先・末尾に/国籍等があっても可
-  const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][ 　]*[/／：:][ 　]*(男性|女性|男|女)(?:[/／]([^)）]*))?[\)）]/)
-  // パターンB: (男性/40歳) (女性/34歳) — 性別が先
-  const genderAgeUnified = !agGenderUnified ? nameStripped.match(/[\(（](男性|女性|男|女)[ 　]*[/／][ 　]*(\d{2})[才歳][\)）]/) : null
+  const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][ 　]*[/／：:・．][ 　]*(男性|女性|男|女)(?:[/／]([^)）]*))?[\)）]/)
+  // パターンB: (男性/40歳) (女性/34歳) (男性：51歳) — 性別が先、/や：区切り
+  const genderAgeUnified = !agGenderUnified ? nameStripped.match(/[\(（](男性|女性|男|女)[ 　]*[/／：:・．][ 　]*(\d{2})[才歳][\)）]/) : null
   let nationality: string | null = null
   if (agGenderUnified) {
     age = parseInt(agGenderUnified[1], 10)
     gender = agGenderUnified[2]
     if (agGenderUnified[3]?.trim()) nationality = agGenderUnified[3].trim()
-    nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][ 　]*[/／：:][ 　]*(?:男性|女性|男|女)(?:[/／][^)）]*)?[\)）]/, '').trim()
+    nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][ 　]*[/／：:・．][ 　]*(?:男性|女性|男|女)(?:[/／][^)）]*)?[\)）]/, '').trim()
   } else if (genderAgeUnified) {
     gender = genderAgeUnified[1]
     age = parseInt(genderAgeUnified[2], 10)
-    nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[ 　]*[/／][ 　]*\d{2}[才歳][\)）]/, '').trim()
+    nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[ 　]*[/／：:・．][ 　]*\d{2}[才歳][\)）]/, '').trim()
   } else {
     // スペースなしで括弧が直後に来るケース: YS(26歳) → スペース不要で拾う
     const ageMatch = nameStripped.match(/[\s　]?[\(（](\d{2})[才歳][\)）]?/)
