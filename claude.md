@@ -528,7 +528,37 @@ ALTER TABLE candidates_archive_light
 
 ---
 
-## 4. Claude Codeへの重要な行動指針
+## 4. Claude Code 操作権限ポリシー
+
+### 確認なしで即実行してよい操作（常識的な開発作業）
+
+| カテゴリ | 具体例 |
+|---|---|
+| ファイル読み書き | Read / Edit / Write（ソースコード・設定・ドキュメント） |
+| TypeScript ビルド確認 | `npx tsc --noEmit` |
+| テスト実行 | `npm test` / `npx vitest run` |
+| 依存パッケージ追加 | `npm install <package>` |
+| Edge Function デプロイ | `bash scripts/check-and-deploy-edge.sh <function>` |
+| Git 操作（通常） | `git add` / `git commit` / `git push`（main ブランチへの通常 push） |
+| GitHub Issue 操作 | Issue 作成・クローズ（PATCH via Edge Function） |
+| Supabase SQL 実行 | migration ファイルの `supabase db query --linked -f <file>` |
+| ログ・状態確認 | `git status` / `git log` / `git diff` |
+
+### 必ず確認してから実行する操作（破壊的・不可逆・広範囲に影響）
+
+| カテゴリ | 具体例 |
+|---|---|
+| 強制 push | `git push --force` / `git push --force-with-lease` |
+| ブランチ削除 | `git branch -D` |
+| 大量削除 | `rm -rf` / DB テーブル DROP / `DELETE` 条件なし |
+| 本番データ変更 | Supabase prod テーブルへの直接 UPDATE / INSERT（migration 以外） |
+| 環境変数・Secrets 変更 | Supabase Secrets の追加・変更・削除 |
+| 外部サービス設定変更 | Azure / GitHub / Vercel の設定変更 |
+| 課金が発生する操作 | 有料 API の大量呼び出し・プラン変更 |
+
+---
+
+## 6. Claude Codeへの重要な行動指針
 - **正の所在**: 仕様・挙動の優先順位は **本リポジトリのソース** と **`README.md`**。本ファイル（`CLAUDE.md`）はそれに追従するメモであり、食い違いがあれば **ソースを正として本ファイルを更新**すること。
 - **こまめな Git 操作**: 機能実装単位、またはテスト通過ごとに、意味のあるメッセージと共に **commit & push** を行うこと。
 - **バグゼロの追求**: ロジックには必ずテストコードを付随させ、テスト項目書をエビデンスとして出力すること。
@@ -538,7 +568,7 @@ ALTER TABLE candidates_archive_light
 
 ---
 
-## 5. データベース構成
+## 7. データベース構成
 
 `candidate_skills` のカテゴリ CHECK 制約は **`supabase/migrations/add_candidate_skills.sql` を正**とする。
 
@@ -590,7 +620,7 @@ ALTER TABLE candidates_archive_light
 
 ---
 
-## 6. 実装済み機能の詳細
+## 8. 実装済み機能の詳細
 
 ### メール自動受信（現行・ポーリング方式）
 
