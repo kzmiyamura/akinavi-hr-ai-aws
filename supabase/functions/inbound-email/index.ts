@@ -263,6 +263,9 @@ function toExperienceYears(value: unknown): number | null {
  * セクション見出しリストからテキストを抽出するユーティリティ。
  * 最大500文字・複数セクション発見時は \n\n で結合。見つからない場合は null。
  */
+// 送信者署名の開始を示す行パターン（自己PR等の抽出をここで打ち切る）
+const SIGNATURE_START_RE = /(?:^|\n)[ 　]*(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人|[\S]{2,15}株式会社)|(?:^|\n)[ 　]*(?:TEL|FAX|Tel|Fax|電話|℡)[ 　]*[：:（(]?\s*[\d(（0]|(?:^|\n)[ 　]*〒\d{3}[-ー]\d{4}|(?:^|\n)[ 　]*E[-－]?[Mm]ail\s*[：:]/m
+
 function extractSectionsByLabels(text: string, labels: string[]): string | null {
   if (!text.trim()) return null
   const prefix = '[【◆■●▼★◎※◇]?'
@@ -278,6 +281,9 @@ function extractSectionsByLabels(text: string, labels: string[]): string | null 
     if (cutIdx > 0) content = content.slice(0, cutIdx)
     const blankIdx = content.search(/\n\s*\n/)
     if (blankIdx > 0 && blankIdx < 300) content = content.slice(0, blankIdx)
+    // 送信者署名の開始行で打ち切り（株式会社 / TEL / 〒 / Email 等）
+    const sigIdx = content.search(SIGNATURE_START_RE)
+    if (sigIdx > 0) content = content.slice(0, sigIdx)
     content = content.trim().slice(0, 500)
     if (content.length >= 5) found.push(content)
   }
