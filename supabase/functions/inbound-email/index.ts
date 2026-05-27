@@ -2236,7 +2236,11 @@ function splitMultiCandidateBody(body: string): string[] | null {
   const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]/
   const validBlocks = blocks.filter(b => CANDIDATE_FIELD_RE.test(b))
 
-  return validBlocks.length >= 2 ? validBlocks : null
+  // 氏名フィールドを含むブロックが2つ以上あるかで最終判定する
+  // 「【直個人】フルスタックエンジニア...」のような装飾ラベルは除外するため
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】/
+  const blocksWithName = validBlocks.filter(b => NAME_FIELD_RE.test(b))
+  return blocksWithName.length >= 2 ? validBlocks : null
 }
 
 Deno.serve(async (req: Request) => {
@@ -2459,6 +2463,8 @@ Deno.serve(async (req: Request) => {
         '無料セミナー', '無料ウェビナー',
         // 社内業務メール・システム通知（人材メールboxへの誤配信）
         '勤務明細書を提出', '客先向けの勤務表', 'SAP Fieldglass',
+        // 案件メールが人材boxに誤配信されるパターン
+        '支払いサイト', '【案件名】',
       ]
       const isTraining = TRAINING_KEYWORDS.some(kw => body.includes(kw))
       const isSolicitation = PROJECT_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))

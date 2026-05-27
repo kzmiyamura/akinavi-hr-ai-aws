@@ -29,9 +29,14 @@ export function toViewerUrl(url: string): string {
     }
     return url
   }
-  // Supabase Storage URL はGoogle Docs Viewerでラップしてブラウザ内表示（ダウンロードではなく別タブで開く）
+  // Supabase Storage URL: Office形式は Microsoft Office Online で開く
   if (url.includes('supabase.co/storage')) {
-    return `https://docs.google.com/viewer?url=${encodeURIComponent(url)}`
+    const lower = url.toLowerCase().split('?')[0]
+    if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.docx') || lower.endsWith('.doc')) {
+      return `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(url)}`
+    }
+    // PDF・画像はブラウザが直接開けるのでそのまま返す
+    return url
   }
   return `https://docs.google.com/viewer?url=${encodeURIComponent(url)}`
 }
