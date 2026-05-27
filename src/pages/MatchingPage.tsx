@@ -593,6 +593,12 @@ function ProjectModeRankCard({
       // 2. 同じ差出人メールアドレスから来た同名人材（別日・別件名でも同一エージェント再送）
       // 3. 名前+会社+単価が同じ
       const seenKeys = new Set<string>()
+      // メインカード自体の差出人・件名・送信者を先に登録して、同じものは除外する
+      const mainRp = s.candidate.raw_profile as Record<string, unknown>
+      const mainFrom = mainRp?.from as string | undefined
+      const mainSubject = mainRp?.subject as string | undefined
+      if (mainFrom && mainSubject) seenKeys.add(`mail:${mainFrom}|${mainSubject}`)
+      if (mainFrom) seenKeys.add(`sender:${mainFrom}`)
       const deduped = duplicates.filter(d => {
         const fromAddr = d.raw_profile?.from as string | undefined
         const subjectStr = d.raw_profile?.subject as string | undefined
