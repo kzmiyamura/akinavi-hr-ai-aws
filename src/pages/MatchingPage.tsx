@@ -588,18 +588,25 @@ function ProjectModeRankCard({
       </div>
     </div>
     {duplicates && duplicates.length > 0 && (() => {
-      // 同一内容の重複を除去（差出人+件名が同じ、または名前+会社+単価が同じ）
+      // 同一内容の重複を除去（以下のいずれかに該当すれば同一人物扱い）
+      // 1. 差出人+件名が同じ（確実に同一メール）
+      // 2. 同じ差出人メールアドレスから来た同名人材（別日・別件名でも同一エージェント再送）
+      // 3. 名前+会社+単価が同じ
       const seenKeys = new Set<string>()
       const deduped = duplicates.filter(d => {
         const fromAddr = d.raw_profile?.from as string | undefined
         const subjectStr = d.raw_profile?.subject as string | undefined
-        // 差出人+件名が同じなら確実に同一メール
+        // 1. 差出人+件名が同じ
         const mailKey = fromAddr && subjectStr ? `mail:${fromAddr}|${subjectStr}` : null
         if (mailKey && seenKeys.has(mailKey)) return false
-        // 名前+会社+単価も重複チェック
+        // 2. 同じ差出人からの同名（日付・件名問わず）
+        const senderKey = fromAddr ? `sender:${fromAddr}` : null
+        if (senderKey && seenKeys.has(senderKey)) return false
+        // 3. 名前+会社+単価
         const infoKey = `info:${d.name}|${d.from_company ?? ''}|${d.desired_rate ?? ''}`
         if (seenKeys.has(infoKey)) return false
         if (mailKey) seenKeys.add(mailKey)
+        if (senderKey) seenKeys.add(senderKey)
         seenKeys.add(infoKey)
         return true
       })
