@@ -365,13 +365,18 @@ const SKILL_HEAD = 12
 const accordionSummaryCls =
   'flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden'
 
-function SkillTagsWithAccordion({ skills }: { skills: string[] }) {
+function SkillTagsWithAccordion({ skills, highlightSkills = [] }: { skills: string[], highlightSkills?: string[] }) {
   if (skills.length === 0) return null
+  const hlSet = new Set(highlightSkills.map(s => s.toLowerCase()))
+  const tagCls = (sk: string) =>
+    hlSet.size > 0 && hlSet.has(sk.toLowerCase())
+      ? 'text-xs bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium'
+      : 'text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5'
   if (skills.length <= SKILL_HEAD) {
     return (
       <div className="flex flex-wrap gap-1 mt-1">
         {skills.map((sk) => (
-          <span key={sk} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
+          <span key={sk} className={tagCls(sk)}>
             {sk}
           </span>
         ))}
@@ -383,7 +388,7 @@ function SkillTagsWithAccordion({ skills }: { skills: string[] }) {
     <div className="mt-1 space-y-2">
       <div className="flex flex-wrap gap-1">
         {skills.slice(0, SKILL_HEAD).map((sk) => (
-          <span key={sk} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
+          <span key={sk} className={tagCls(sk)}>
             {sk}
           </span>
         ))}
@@ -397,7 +402,7 @@ function SkillTagsWithAccordion({ skills }: { skills: string[] }) {
         </summary>
         <div className="flex flex-wrap gap-1 px-2.5 pb-2 pt-1 border-t border-slate-100">
           {skills.slice(SKILL_HEAD).map((sk) => (
-            <span key={sk} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
+            <span key={sk} className={tagCls(sk)}>
               {sk}
             </span>
           ))}
@@ -441,6 +446,7 @@ function ProjectModeRankCard({
   scoreColor,
   onDecide,
   duplicates,
+  requiredSkills = [],
 }: {
   s: RankedSubmission
   rankIndex: number
@@ -448,6 +454,7 @@ function ProjectModeRankCard({
   scoreColor: (score: number) => string
   onDecide?: (submission: Submission) => void
   duplicates?: DuplicateCandidate[]
+  requiredSkills?: string[]
 }) {
   const [showEmail, setShowEmail] = useState(false)
   const rawText = (s.candidate.raw_profile as Record<string, unknown>)?.text as string | undefined
@@ -485,7 +492,13 @@ function ProjectModeRankCard({
           {s.candidate.email && (
             <p className="text-xs text-gray-400 mt-0.5 break-all">{s.candidate.email}</p>
           )}
-          <SkillTagsWithAccordion skills={s.candidate.skills as string[]} />
+          {(() => {
+            const allSkills = (s.candidate.skills as string[]) ?? []
+            const reqLower = requiredSkills.map(r => r.toLowerCase())
+            const matched = allSkills.filter(sk => reqLower.some(r => sk.toLowerCase().includes(r) || r.includes(sk.toLowerCase())))
+            const unmatched = allSkills.filter(sk => !reqLower.some(r => sk.toLowerCase().includes(r) || r.includes(sk.toLowerCase())))
+            return <SkillTagsWithAccordion skills={[...matched, ...unmatched]} highlightSkills={matched} />
+          })()}
           {(s.candidate.drive_url || s.candidate.resume_url) && (
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {s.candidate.drive_url && (
@@ -1652,6 +1665,7 @@ const { data: projects = [] } = useQuery({
                               scoreColor={scoreColor}
                               onDecide={(sub) => decideMutation.mutate(sub)}
                               duplicates={duplicatesMap[s.candidate.id]}
+                              requiredSkills={selectedProject.required_skills as string[]}
                             />
                           ))}
                           <RankingRestAccordion count={selectedProjectRanked.length - RANK_HEAD} unitLabel="名">
@@ -1663,6 +1677,7 @@ const { data: projects = [] } = useQuery({
                                 onOpenCandidateDetail={onOpenCandidateDetail}
                                 scoreColor={scoreColor}
                                 onDecide={(sub) => decideMutation.mutate(sub)}
+                                requiredSkills={selectedProject.required_skills as string[]}
                               />
                             ))}
                           </RankingRestAccordion>
