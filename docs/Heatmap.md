@@ -6,11 +6,13 @@
 
 ## 概要
 
-登録済みの人材データを **日本地図上の都道府県別ヒートマップ**として可視化する機能。ナビゲーションタブ「人材マップ」（5 タブ目）からアクセスする。
+登録済みの人材データを **日本地図上の都道府県別ヒートマップ**として可視化する機能。
+
+**配置（Phase 4.14 / Issue #3 で変更）**: 独立タブではなく **「人材」タブ内のサブ画面**として実装。`CandidatePage` の「人材マップ」ボタン（`MapIcon`）から `onOpenHeatmap` 経由で `HeatmapPage` へ遷移する。
 
 - **目的**: 「東京に集中しているのか、地方にも人材がいるのか」を一目で把握する
 - **データソース**: `candidates`（直近 7 日）+ `candidates_archive_light`（全期間モード時）
-- **集計**: PostgreSQL の RPC で実行（クライアント側集計なし）
+- **集計**: PostgreSQL の RPC で実行（クライアント側集計なし）。スキルフィルターも RPC 側で処理（`candidates.skills` JSONB 列もフィルタ対象・コミット `ae7544e`）
 - **AI 不使用**
 
 ---
@@ -45,7 +47,8 @@
 | **ツールチップ** | マウス位置に都道府県名・人数を表示。未選択なら「（クリックで詳細）」も表示 |
 | **凡例** | 地図下部にグラデーションバー（少←→多）。動的に `maxCount` ベースで再生成 |
 | **ランキング** | 右ペインに Top10 を棒グラフで表示。クリックで地図と同じ詳細パネルを開く |
-| **詳細パネル** | 都道府県クリック時に画面下部に展開。最大 10 件の受信メールを `created_at DESC` で表示。アーカイブ済みは「アーカイブ」バッジ付き |
+| **詳細パネル** | 都道府県クリック時に画面下部に展開。最大 10 件の受信メールを `created_at DESC` で表示。アーカイブ済みは「アーカイブ」バッジ付き（受信時間・件名・氏名も保持） |
+| **都道府県ズーム** | 都道府県をクリックすると地図がズームイン（CSS transform でアニメーション・コミット `ebb0dbc`）。再クリック・閉じるボタンで縮小 |
 
 ### キャッシュ戦略（TanStack Query）
 
@@ -78,14 +81,15 @@
 
 ## DB 層
 
-### 新規 migration 4 件
+### 新規 migration 5 件（順に実行）
 
 | ファイル | 内容 |
 |---|---|
 | `20260523_prefecture_counts_rpc.sql` | 初版 RPC `prefecture_counts(text, text)`（後段で差し替え） |
 | `20260523_archive_light_table.sql` | `candidates_archive_light` テーブル + 期間対応版 RPC `prefecture_counts(text, text, text)` |
 | `20260523_normalize_prefecture.sql` | `normalize_prefecture(text)` 関数 + 最終版 RPC `prefecture_counts` + `candidates_by_prefecture` |
-| `add_archive_candidates_cron.sql` | 毎日 JST 9:00 で `archive-candidates` Edge Function を起動する pg_cron スケジュール。旧 `delete-old-candidates` を unschedule |
+| `20260523_fix_heatmap_skill_filter.sql` | **スキルフィルタを `candidates.skills` JSONB 列にも適用**（`candidate_skills` だけでは upsertCandidate 経由の人材を取りこぼすため・コミット `ae7544e`） |
+| `add_archive_candidates_cron.sql` | 毎日 JST 0:00（UTC 15:00）で `archive-candidates` Edge Function を起動する pg_cron スケジュール。旧 `delete-old-candidates` を unschedule |
 
 ### テーブル `candidates_archive_light`
 
@@ -123,17 +127,27 @@
 | `'東京'` | `'東京都'` | 同上（東京・大阪・京都・北海の特殊 4 件） |
 | その他 | NULL | フォールバック |
 
-### 関数 `prefecture_counts(p_data_env, p_skill DEFAULT NULL, p_period DEFAULT '7d')`
+### 関数 `prefecture_counts(p_data_env, p_skill DEFAULT NULL, p_period DEFAULT '7d')`（`20260523_fix_heatmap_skill_filter.sql` が最新版）
 
 ```sql
 WITH live AS (
   -- 現行 candidates テーブル（常に対象）
-  SELECT DISTINCT c.id, normalize_prefecture(c.raw_profile->>'prefecture') AS prefecture
+  SELECT DISTINCT c.id,
+         normalize_prefecture(c.raw_profile->>'prefecture') AS prefecture
   FROM candidates c
-  LEFT JOIN candidate_skills cs ON cs.candidate_id = c.id
   WHERE c.data_env = p_data_env
     AND normalize_prefecture(c.raw_profile->>'prefecture') IS NOT NULL
-    AND (p_skill IS NULL OR cs.skill ILIKE '%' || p_skill || '%')
+    AND (
+      p_skill IS NULL
+      OR EXISTS (
+        SELECT 1 FROM candidate_skills cs
+        WHERE cs.candidate_id = c.id AND cs.skill ILIKE '%' || p_skill || '%'
+      )
+      OR EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(c.skills) s
+        WHERE s ILIKE '%' || p_skill || '%'
+      )
+    )
 ),
 archived AS (
   -- candidates_archive_light（p_period = 'all' のときのみ追加）
@@ -158,22 +172,31 @@ ORDER BY cnt DESC;
 ```
 
 ポイント:
-- スキルフィルターは `candidate_skills.skill ILIKE '%skill%'`（部分一致）
+- スキルフィルターは **`candidate_skills.skill` と `candidates.skills` JSONB 両方を対象**にした OR 条件（`upsertCandidate` 経由で登録された人材も拾えるよう修正）
 - アーカイブ側は `skills (jsonb)` を `jsonb_array_elements_text` で展開してから部分一致
 - `UNION`（`UNION ALL` ではない）で同 ID を排除
 
-### 関数 `candidates_by_prefecture(p_data_env, p_prefecture, p_skill DEFAULT NULL, p_limit DEFAULT 10, p_period DEFAULT '7d')`
+### 関数 `candidates_by_prefecture(p_data_env, p_prefecture, p_skill DEFAULT NULL, p_limit DEFAULT 10, p_period DEFAULT '7d')`（最新版）
 
 ```sql
 SELECT DISTINCT
   c.id, c.name, c.raw_profile->>'subject' AS subject, c.created_at, false AS is_archived
 FROM candidates c
-LEFT JOIN candidate_skills cs ON cs.candidate_id = c.id
 WHERE c.data_env = p_data_env
   AND normalize_prefecture(c.raw_profile->>'prefecture') = p_prefecture
   AND c.merged_into IS NULL
   AND c.duplicate_flag = false
-  AND (p_skill IS NULL OR cs.skill ILIKE '%' || p_skill || '%')
+  AND (
+    p_skill IS NULL
+    OR EXISTS (
+      SELECT 1 FROM candidate_skills cs
+      WHERE cs.candidate_id = c.id AND cs.skill ILIKE '%' || p_skill || '%'
+    )
+    OR EXISTS (
+      SELECT 1 FROM jsonb_array_elements_text(c.skills) s
+      WHERE s ILIKE '%' || p_skill || '%'
+    )
+  )
 
 UNION
 
@@ -191,8 +214,8 @@ LIMIT p_limit;
 ```
 
 ポイント:
-- `live` 側は `merged_into IS NULL` かつ `duplicate_flag = false` で重複を除外
-- アーカイブ側は `is_archived=true` を返す（UI でバッジ表示）
+- `live` 側は `merged_into IS NULL` かつ `duplicate_flag = false` で重複を除外。スキルフィルタは `candidate_skills` / `candidates.skills` の OR 条件
+- アーカイブ側は `is_archived=true` を返す（UI でバッジ表示）。`a.name` / `a.subject` で受信時刻・件名・氏名も同時表示
 - 最大 `p_limit` 件（既定 10）を `created_at DESC` で返す
 
 ---
@@ -201,8 +224,7 @@ LIMIT p_limit;
 
 ### スケジュール
 
-- 毎日 **JST 9:00（0:00 UTC）** に pg_cron で起動
-- `add_archive_candidates_cron.sql` の `0 15 * * *` ... ※ 実装は **UTC 15:00 = JST 0:00** 起動
+- 毎日 **JST 0:00（UTC 15:00 = 0 15 * * *）** に pg_cron で起動
 
 ### 処理フロー
 
@@ -224,6 +246,12 @@ LIMIT p_limit;
 ④ candidates から削除
    DELETE FROM candidates WHERE id IN (...)
 ```
+
+### Storage 書き込みは廃止（コミット `71d6aea`）
+
+- 過去版では `candidates_archive_light` と並行して **Supabase Storage に JSONL バックアップ**も書いていたが、運用簡素化・容量削減のため **廃止**
+- 現在は `candidates_archive_light` のみが永続化先
+- 長期保存が必要な場合は別途 JSONL バックアップを検討すること（後述の Q&A も参照）
 
 ### 旧 `delete-old-candidates` からの移行
 
@@ -262,11 +290,12 @@ LIMIT p_limit;
 
 新規環境に展開する場合は以下の順で実施:
 
-1. **SQL Editor で migrations を実行**
+1. **SQL Editor で migrations を実行**（順序が重要）
+   - `20260523_prefecture_counts_rpc.sql`（後段で上書きされるが先に流して OK）
    - `20260523_archive_light_table.sql`
    - `20260523_normalize_prefecture.sql`
-   - `20260523_prefecture_counts_rpc.sql`（後段で上書きされるが先に流して OK）
-   - `ALTER TABLE candidates_archive_light ADD COLUMN IF NOT EXISTS name text, ADD COLUMN IF NOT EXISTS subject text;`（要追加・現状の migration 漏れ対応）
+   - `20260523_fix_heatmap_skill_filter.sql`（スキルフィルタを JSONB 列にも対応）
+   - `ALTER TABLE candidates_archive_light ADD COLUMN IF NOT EXISTS name text, ADD COLUMN IF NOT EXISTS subject text;`（**要追加・現状の migration 漏れ対応**）
    - `add_archive_candidates_cron.sql`（`YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を置換）
 
 2. **Edge Function `archive-candidates` をデプロイ**
@@ -299,7 +328,7 @@ A. `normalize_prefecture` が `'東京都'` に正規化して集計します。
 
 ### Q. 同名駅の同名都道府県問題（町田・野田 等）には対応している？
 
-A. ヒートマップは `raw_profile->>'prefecture'` を直接参照するため、`STATION_TO_PREFECTURE` の駅マッピングが正しく `prefecture` を埋めていれば問題ありません。`inbound-email` 側の駅マップの精度に依存します。
+A. ヒートマップは `raw_profile->>'prefecture'` を直接参照するため、`station_master` テーブル（全国 1,797 駅・Phase 4.14）の駅マッピングが正しく `prefecture` を埋めていれば問題ありません。`inbound-email` 側の駅マップ精度（DB + ハードコード合計約 1,800 駅）に依存します。
 
 ### Q. 「全期間」モードが遅い
 
@@ -311,8 +340,12 @@ A. `dataEnv=demo` で同じ RPC が動きます。デモシードや本番→デ
 
 ### Q. アーカイブされたデータは戻せる？
 
-A. `candidates_archive_light` には集計に必要な最小限（prefecture / skills / name / subject など）しか残らないため、元のフルプロファイルは復元できません。長期保存が必要な場合は Supabase Storage に JSONL でバックアップする運用を別途検討する必要があります。
+A. `candidates_archive_light` には集計に必要な最小限（prefecture / skills / name / subject など）しか残らないため、元のフルプロファイルは復元できません。Phase 4.12 で一時的に検討した Storage JSONL バックアップはコミット `71d6aea` で廃止しました。長期保存が必要な場合は別途バックアップ運用を検討してください。
+
+### Q. 都道府県をクリックするとどうなる？
+
+A. 地図がその都道府県にズームイン（CSS transform でアニメーション）し、画面下部に最大 10 件の受信メール一覧（日付・氏名・件名）が展開されます。アーカイブされたデータも「アーカイブ」バッジ付きで表示され、受信時間・件名・氏名が確認できます。再クリックまたは閉じるボタンで縮小します。
 
 ---
 
-*最終更新: 2026-05-23*
+*最終更新: 2026-05-28（Phase 4.13/4.14 反映）*

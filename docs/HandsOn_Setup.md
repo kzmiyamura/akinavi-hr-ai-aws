@@ -278,6 +278,14 @@ cd akinavi-hr-ai
 | 29 | `20260523_prefecture_counts_rpc.sql` | **Phase 4.12 / 人材マップ**：初版 `prefecture_counts` RPC（後段で上書き） |
 | 30 | `20260523_archive_light_table.sql` | **Phase 4.12 / 人材マップ**：`candidates_archive_light` テーブル + 期間対応 `prefecture_counts(text, text, text)` RPC |
 | 31 | `20260523_normalize_prefecture.sql` | **Phase 4.12 / 人材マップ**：`normalize_prefecture()` 関数 + 最終版 `prefecture_counts` / `candidates_by_prefecture` RPC |
+| 32 | `20260523_fix_heatmap_skill_filter.sql` | **Phase 4.12 / 人材マップ**：スキルフィルタを `candidates.skills` JSONB 列にも適用するよう修正 |
+| 33 | `20260525_fix_matching_rpc_duplicate_filter.sql` | **Phase 4.13 / マッチング**：duplicate_flag=true を SQL 側で除外 + `fetch_candidates_for_matching` の上限 2000 へ |
+| 34 | `20260525_fetch_candidates_with_rule_score.sql` | **Phase 4.13 / マッチング**：`fetch_candidates_for_project` をルールスコア順に再定義 |
+| 35 | `20260526_fetch_candidates_with_weights.sql` | **Phase 4.13 / マッチング**：スコアウェイト 5 引数（スキル/経験/単価/勤務地/リモート）を追加 |
+| 36 | `20260526_fix_timeout.sql` | **Phase 4.13 / マッチング**：CROSS JOIN LATERAL で計算を 1 回だけにしてタイムアウト解消 |
+| 37 | `20260526_region_location_scoring.sql` | **Phase 4.13 / マッチング**：`get_region(prefecture_core)` 関数 + 同一地方加点（10pt）対応 |
+| 38 | `20260527_add_station_master.sql` | **Phase 4.14 / 駅マスタ**：`station_master` テーブル（全国 1,797 駅）+ INSERT データ |
+| 39 | `20260527_fix_kyoto_bug.sql` | **Phase 4.13 / マッチング**：「東京都 大森」に「京都」が誤マッチするバグを完全一致判定で修正 |
 
 **人材マップ用の追加 SQL（migration 漏れ対応）**
 
@@ -293,8 +301,9 @@ ALTER TABLE candidates_archive_light
 > `*_cron.sql` 系は `YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を実際の値に書き換えてから実行してください。
 
 > ⚠️ **重要**: `schema.sql` の `candidate_skills.check_category` は 14 カテゴリへ更新済みですが、`add_candidate_skills.sql` 等のマイグレーションも必ず流してください。
-> ⚠️ **重要**: `fetch_candidates_for_matching` / `fetch_candidates_for_project` RPC は MatchingPage の動作に必須です。これらを流さないとマッチング画面が空になります。
+> ⚠️ **重要**: `fetch_candidates_for_matching` / `fetch_candidates_for_project` RPC は MatchingPage の動作に必須です。これらを流さないとマッチング画面が空になります。**特に Phase 4.13 の 6 ファイル（順番 33〜37, 39）は必ずこの順序で実行**してください（同じ関数名を何度も DROP/CREATE するため）。
 > ⚠️ **重要**: 人材マップ機能を使う場合は `prefecture_counts` / `candidates_by_prefecture` / `normalize_prefecture` の 3 つを流したうえで、上記の `ALTER TABLE` も必須です。
+> ⚠️ **重要**: 駅 → 都道府県の推定精度を担保するため、Phase 4.14 で `station_master` テーブル（順番 38）が必須になりました。これを流さないと駅マッピングがハードコードのみになり精度が大幅低下します。
 
 ### 完了チェック
 
@@ -382,11 +391,13 @@ Cerebras は `match-score` の 1 段目（軽量モデル `llama3.1-8b`）とし
 
 | Edge Function | 役割 |
 |---|---|
-| `inbound-email` | メール解析（AI 不使用・regex + DB 照合のみ） |
+| `inbound-email` | メール解析（AI 不使用・regex + DB 照合のみ・`station_master`/`skill_master` を起動時にロード） |
 | `poll-email` | Outlook のメール取得（5 分ごと cron） |
 | `auto-match` | 毎朝 JST 9:00 の自動マッチング（`match-batch` を内部呼び出し） |
-| `match-batch` | **バッチ AI 採点**（ルール事前フィルタ + topN を 1 コール採点・Phase 4.10 新規） |
+| `match-batch` | **バッチ AI 採点**（`fetch_candidates_for_project` RPC で SQL 側ルールスコア + topN=10 を 1 コール採点・ウェイト可変・Phase 4.10/4.13） |
 | `match-score` | UI から呼ばれる単発スコア計算（duplicate 検出付き） |
+| `archive-candidates` | **7 日アーカイブ Edge Function**（毎日 JST 0:00 cron・人材マップ全期間集計用・Phase 4.12） |
+| `create-github-issue` | **GitHub Issue 連携**（POST 作成 / GET 一覧 / PATCH クローズ・Phase 4.14 / Issue 機能） |
 | `microsoft-oauth` | Microsoft アカウント連携（OAuth コールバック） |
 | `enrich-candidate` | Box 連携・再解析（Box 運用時のみ） |
 | `skill-master-cleanup` | skill_master の毎日クリーンアップ |
@@ -417,6 +428,7 @@ npx supabase functions deploy auto-match
 npx supabase functions deploy match-batch          # Phase 4.10 新規
 npx supabase functions deploy match-score
 npx supabase functions deploy archive-candidates   # Phase 4.12 新規（人材マップの 7 日アーカイブ用）
+npx supabase functions deploy create-github-issue  # Phase 4.14 新規（改善案・バグメモ → GitHub Issue）
 npx supabase functions deploy microsoft-oauth
 npx supabase functions deploy enrich-candidate
 npx supabase functions deploy skill-master-cleanup
@@ -439,6 +451,7 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add
 | `GROQ_API_KEY` | 第3章でメモしたGroq APIキー（`match-score` で使用） | ◎ |
 | `CEREBRAS_API_KEY` | 第3章でメモしたCerebras APIキー（`match-score` 1 段目） | 推奨 |
 | `INBOUND_CALL_KEY` | 第2章でメモした service_role キー | ◎ |
+| `GITHUB_TOKEN` | GitHub Personal Access Token（`repo` スコープ）。`create-github-issue` Edge Function 用 | Issue 連携を使う場合 |
 
 > `SUPABASE_URL` と `SUPABASE_SERVICE_ROLE_KEY` は Supabase が自動で設定するため、手動登録は不要です。もしエラーが出る場合は手動で追加してください。  
 > `inbound-email` は AI を使わなくなったため、上記の API キーがなくてもメール解析自体は動きます。ただしマッチング処理が動かないと意味がないので必ず設定してください。
@@ -461,12 +474,21 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Box → Drive 移送用キュー（スプレッドシート）アクセス |
 | `BOX_SPREADSHEET_ID` | キュー用スプレッドシート ID |
 
+**GitHub Token の取得手順**（Issue 連携を使う場合のみ）
+
+1. `https://github.com/settings/tokens` を開き「Generate new token (classic)」を選択
+2. 「Note」に任意の説明（例: `akinavi-issue-edge-function`）、「Expiration」を設定
+3. 「Select scopes」で `repo`（フルアクセス）にチェック
+4. 「Generate token」をクリックして表示された文字列（`ghp_...`）を Supabase Secrets `GITHUB_TOKEN` に登録
+5. **`supabase/functions/create-github-issue/index.ts` の `REPO` 定数**（既定: `kzmiyamura/akinavi-hr-ai-aws`）を、自分のリポジトリに合わせて変更する場合はコード修正 + 再デプロイ
+
 ### 完了チェック
 
 - [ ] `supabase login` が完了した
 - [ ] `supabase link` でプロジェクトに接続した
-- [ ] 全Edge Functions（8つ）をデプロイした
+- [ ] 全Edge Functions（9つ）をデプロイした
 - [ ] `GEMINI_API_KEY`・`GROQ_API_KEY`・`CEREBRAS_API_KEY`・`INBOUND_CALL_KEY` を Secrets に登録した
+- [ ] （任意）Issue 連携を使う場合は `GITHUB_TOKEN` も登録した
 
 ---
 
@@ -704,15 +726,18 @@ Vercel ダッシュボード → プロジェクトを選択 → 「Settings」�
 全章が完了したら、以下を本番URLで確認してください。
 
 - [ ] 本番URLでブラウザにエラーなく画面が表示される
-- [ ] 人材登録タブでテキストを貼り付けて「登録」が動く（Phase 4.11 で「AI で登録」は廃止・登録ボタンに統一）
-- [ ] マッチング結果タブでスコアが表示される
-- [ ] マッチング詳細パネルに案件サマリーが表示される
+- [ ] 「人材」タブでテキストを貼り付けて「登録」が動く（Phase 4.11 で「AI で登録」は廃止・登録ボタンに統一）
+- [ ] 「マッチング」タブでスコアが表示される（スコア降順）
+- [ ] マッチング詳細パネルに案件サマリー・ルールスコア内訳が表示される
 - [ ] 専用のOutlookアドレスにメールを送って5分以内に人材/案件が登録される
-- [ ] **人材マップタブ**で日本地図が表示され、登録済み人材の都道府県が色付けされる
-- [ ] **人材マップ**で都道府県をクリックすると下部にメール一覧が出る
+- [ ] 「人材」タブの「人材マップ」ボタンから日本地図が表示され、都道府県が色付けされる
+- [ ] **人材マップ**で都道府県をクリックすると地図がズームインし、下部にメール一覧が出る
 - [ ] **人材マップ**でスキル名（例: `Java`）を入力するとオートコンプリート候補が出る
 - [ ] **人材マップ**の「全期間」モードに切り替えてもエラーが出ない（`candidates_archive_light` の `name` / `subject` カラムが必要）
+- [ ] 「設定」タブの「マッチング動作」で高速 / 全件モードを切り替えられる
+- [ ] 「設定」タブの「改善案・バグメモ」でテストメモを入力し Issue 登録ができる（`GITHUB_TOKEN` 設定済みの場合）
 - [ ] `[station_unmapped]` ログが Supabase Functions Logs に流れていないか確認（月次レビュー）
+- [ ] inbound-email のログに `[station] DBから XXXX 駅を読み込み` が表示される（`station_master` ロード成功確認）
 
 ---
 

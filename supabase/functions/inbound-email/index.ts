@@ -2962,6 +2962,8 @@ Deno.serve(async (req: Request) => {
         || proseFields.workStyle === 'フルリモート'
         || proseFields.workStyle === 'リモート可'
         || proseFields.workStyle === 'リモート希望'
+      // フルリモート希望: 常駐案件を避けマッチングスコアを下げるために使用
+      const resolvedWantsFullRemote = proseFields.workStyle === 'フルリモート'
 
       // ── AI必要性チェック用: フィールドごとの情報源を記録 ──────────────────
       // 'ai'=AI提供, 'regex'=正規表現補完, 'prose'=文章スキャン補完, 'none'=取得不可
@@ -3014,6 +3016,7 @@ Deno.serve(async (req: Request) => {
           availableRegions: analyzed.availableRegions ?? null,
           currentWorkLocation: analyzed.currentWorkLocation ?? null,
           remoteAvailable: resolvedRemoteAvailable,
+          wantsFullRemote: resolvedWantsFullRemote || null,
           from, subject,
           emailReceivedAt,
           attachmentCount: allAttachments.length,

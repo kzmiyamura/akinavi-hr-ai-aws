@@ -54,6 +54,7 @@ interface CandidateInput {
   desiredRate: string | null
   summary: string
   remoteAvailable?: boolean | null
+  wantsFullRemote?: boolean | null
   prefecture?: string | null
   availableRegions?: string[] | null
   preferredJobTypes?: string[] | null
@@ -319,7 +320,14 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
   if (required.length > 0 && hits === 0) {
     total = Math.min(total, 35)
   }
-  const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt`
+  // フルリモート希望の人材が常駐・リモートなし案件にマッチングされるのを防ぐ
+  // 案件がフルリモートでも部分リモートでもない場合、上限30ptでキャップ
+  const projectHasRemote = isFullRemote || /リモート|remote|在宅/i.test(project.remotePolicy ?? '')
+  if (candidate.wantsFullRemote && !projectHasRemote) {
+    total = Math.min(total, 30)
+  }
+  const fullRemoteNote = (candidate.wantsFullRemote && !projectHasRemote) ? ' [フルリモート希望・常駐案件のため30pt上限]' : ''
+  const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt${fullRemoteNote}`
 
   return { total, breakdown }
 }

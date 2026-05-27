@@ -9,12 +9,15 @@
 
 | 機能 | 説明 |
 |---|---|
-| AI マッチング | 案件と人材の相性スコアと理由を AI が自動生成。手動 (`match-score`) / バッチ採点 (`match-batch`) / 自動 cron (`auto-match`) の 3 経路 |
-| 人材登録 | テキスト貼り付け・Excel・Word をアップロードするだけで自動解析・登録（PDF / 画像は現状未対応） |
-| 案件登録 | 同上。メール本文や要件定義書をそのまま貼り付け OK。【場所】【単価】【時期】【備考】等のブラケット形式にも対応 |
-| メール自動取り込み | 専用 Outlook アドレスを 5 分ごとにポーリング → 取得 → DB 保存（AI 不使用・ルールベース） |
-| **人材マップ** | 登録済み人材を日本地図上の都道府県別ヒートマップで可視化。スキルフィルター・直近 7 日 / 全期間切替・都道府県クリックで受信メール一覧表示 |
-| デモ環境 | 本番データとは独立したデモ用データ環境（`?demo=KEY` でトグル）。本番→デモコピー・スコア別 5 人生成 |
+| AI マッチング | 案件と人材の相性スコアと理由を AI が自動生成。手動 (`match-score`) / バッチ採点 (`match-batch`) / 自動 cron (`auto-match`) の 3 経路。**ルールスコアは SQL 側で完結**（`fetch_candidates_for_project` RPC）し、トップ N (=10) のみ AI 採点 |
+| 人材登録 | テキスト貼り付け・Excel・Word をアップロードするだけで自動解析・登録（PDF / 画像は現状未対応）。HTML テーブル形式メール / `[氏名]` ラベル / `[氏名]男性：51 歳` 等の混入パターンに対応 |
+| 案件登録 | 同上。メール本文や要件定義書をそのまま貼り付け OK。【場所】【単価】【時期】【備考】等のブラケット形式・`単金(税抜)` 括弧付きラベル・■PR セクション・希望ラベルに対応 |
+| メール自動取り込み | 専用 Outlook アドレスを 5 分ごとにポーリング → 取得 → DB 保存（AI 不使用・ルールベース）。営業/広告メール（メール配信解除・研修販売等）は自動スキップ |
+| 人材マップ | 「人材」タブ内のサブ画面で日本地図上の都道府県別ヒートマップ表示。スキルフィルター（RPC 経由）・直近 7 日 / 全期間切替・都道府県クリックで受信メール一覧・都道府県クリックで地図ズームアニメーション |
+| **改善案・バグメモ → GitHub Issue** | 設定タブで自然文を貼り付けると、`create-github-issue` Edge Function 経由で GitHub Issue として自動登録。一覧表示・クローズ（PATCH）も同 UI から可能 |
+| **スコアウェイトのカスタムチューニング** | `match-batch` / `fetch_candidates_for_project` の 5 観点（スキル / 経験 / 単価 / 勤務地 / リモート）のウェイトを実行時に変更可能（既定: 40/15/15/20/10 = 100pt）|
+| **スキル別経験年数の活用** | Excel スキルシートから `skillYears` を抽出し、必須スキルの実年数をスコアリングに反映（総経験年数より優先） |
+| デモ環境 | 本番データとは独立したデモ用データ環境（`?demo=KEY` でトグル + 設定タブの「デモモード」スイッチ）。本番→デモコピー・スコア別 5 人生成。デモ案件のリモートポリシーを考慮したスコア設計 |
 
 ---
 
@@ -27,13 +30,15 @@ flowchart TD
     H -->|upsert| D[(Supabase<br/>PostgreSQL)]
     B -->|upsert / fetch| D
     B -->|手動マッチ要求| MS[Edge Function<br/>match-score<br/>単発スコア + duplicate判定]
-    B -->|高速/全件マッチ| MB[Edge Function<br/>match-batch<br/>ルール事前フィルタ + バッチ AI 採点]
+    B -->|高速/全件マッチ| MB[Edge Function<br/>match-batch<br/>ウェイト調整 + バッチ AI 採点]
+    B -->|SQL側で<br/>ルールスコア算出 + 上位500件取得| RPC[(RPC<br/>fetch_candidates_for_project<br/>p_weight_skill/exp/rate/location/remote)]
+    RPC --> D
     MS -->|Cerebras → Groq 70B → Gemini<br/>3段失敗時はエラー| AI[AI プロバイダー]
     MB -->|Cerebras → Groq 70B → Gemini<br/>3段失敗時は ruleScore で全代替| AI
-    AI -->|スコア・理由| MS
-    AI -->|スコア・理由| MB
+    AI -->|スコア・理由<br/>±15pt 制限| MS
+    AI -->|スコア・理由<br/>topN=10| MB
     MS -->|upsert submissions| D
-    MB -->|upsert submissions| D
+    MB -->|upsert submissions<br/>ai_raw.ruleScore も保存| D
 
     E[Outlook<br/>専用アカウント×4] -->|未読メール監視| F[pg_cron<br/>5分ごと起動]
     F -->|HTTP POST| G[Edge Function<br/>poll-email]
@@ -42,7 +47,8 @@ flowchart TD
     G -.->|メール種別分類<br/>Gemini バッチ| CLS[Gemini Flash Lite]
     G -->|内部 POST| H
     H -->|Drive/Sheets URL検出→fetch| I[Google Drive<br/>共有リンク]
-    H -->|regex + 文章スキャン<br/>+ skill_master DB照合<br/>+ STATION_TO_PREFECTURE| H
+    H -->|station_master DB から<br/>全国 1,797 駅を読込・キャッシュ| SM[(station_master<br/>name → prefecture)]
+    H -->|skill_master DB照合<br/>+ regex + 文章スキャン<br/>+ HTML エンティティデコード| H
 
     CR[pg_cron<br/>毎朝 JST 9:00] -->|HTTP POST| AM[Edge Function<br/>auto-match]
     AM -->|match-batch を内部呼び出し| MB
@@ -52,9 +58,12 @@ flowchart TD
     AR -->|7日以上経過した prod 人材を<br/>サマリー化してから削除| D
     AR -->|prefecture/skills/name/subject 保存| AL[(candidates_archive_light<br/>軽量サマリーテーブル)]
 
-    B -->|人材マップ表示| HP[HeatmapPage<br/>d3-geo + japan.topojson]
+    B -->|人材マップ表示<br/>※「人材」タブ内サブ画面| HP[HeatmapPage<br/>d3-geo + japan.topojson<br/>都道府県ズームアニメ]
     HP -->|prefecture_counts RPC<br/>candidates_by_prefecture RPC| D
     HP -->|全期間モード時に合算| AL
+
+    B -->|改善案・バグメモ| GHI[Edge Function<br/>create-github-issue]
+    GHI -->|POST/GET/PATCH| GH[GitHub Issues API]
 ```
 
 ---
@@ -70,13 +79,14 @@ flowchart TD
 | AI（サーバー・マッチング単発） | `match-score`: 上記と同じフォールバック順。`duplicateSuspected` フラグ込みの単発スコア。理由は **150 字以内** |
 | AI（サーバー・自動マッチング） | `auto-match`（毎朝 JST 9:00 cron）: `match-batch` を内部呼び出し → 同じフォールバック順を継承 |
 | AI（サーバー・メール種別分類） | `poll-email` の同一受信箱判別: Gemini `gemini-2.5-flash-lite` バッチ（任意・既定は無効） |
-| メール解析 | **AI 不使用**。regex（`extractCandidateFieldsRegex` + `flexLabel`） + 文章スキャン（`extractFromProse`） + `skill_master` DB 照合（約 1,660 件） + 駅→都道府県マッピング（約 254 駅） |
-| ファイル解析 | `xlsx`（Excel）・`mammoth`（Word）。**PDF と画像はテキスト解析対象外** |
-| 人材マップ | `d3-geo`（Mercator 投影） + `topojson-client` + `public/japan.topojson`（416KB・47 都道府県）。`prefecture_counts` / `candidates_by_prefecture` RPC で SQL 集計 |
+| メール解析 | **AI 不使用**。regex（`extractCandidateFieldsRegex` + `flexLabel`） + 文章スキャン（`extractFromProse`） + `skill_master` DB 照合（約 1,660 件 + HTML エンティティデコード） + `station_master` DB 照合（**全国 1,797 駅**・関数インスタンス内キャッシュ）。HTML テーブル形式メール・複数人材分割・送信者署名除去・営業/広告メールフィルタにも対応 |
+| ファイル解析 | `xlsx`（Excel）・`mammoth`（Word）。**PDF と画像はテキスト解析対象外**。Excel から `skillYears`（スキル別経験月数）を抽出してマッチングに活用 |
+| 人材マップ | `d3-geo`（Mercator 投影） + `topojson-client` + `public/japan.topojson`（416KB・47 都道府県）。`prefecture_counts` / `candidates_by_prefecture` RPC で SQL 集計（スキルフィルタも RPC 側）。都道府県クリックでズームアニメーション |
 | メール自動受信 | Microsoft Graph API + Supabase pg_cron（**完全無料・Make.com 不要**） |
-| データアーカイブ | `archive-candidates` Edge Function（毎日 JST 0:00 cron）。7 日経過した prod 人材を `candidates_archive_light` にサマリー化してから DB 削除（人材マップ全期間集計用） |
+| データアーカイブ | `archive-candidates` Edge Function（毎日 JST 0:00 cron）。7 日経過した prod 人材を `candidates_archive_light` にサマリー化してから DB 削除（人材マップ全期間集計用・Storage 書き込みは廃止） |
+| Issue 連携 | `create-github-issue` Edge Function（POST 作成 / GET 一覧 / PATCH クローズ）。設定タブの「改善案・バグメモ」から自然文を貼り付けて GitHub Issues に登録 |
 | Edge Function デプロイ事前検査 | `scripts/check-and-deploy-edge.sh`（`deno check` で TS2304 を検知 → デプロイ中止） |
-| デプロイ | Vercel（フロント）/ Supabase（バックエンド） |
+| デプロイ | Vercel（フロント・**tsc 型チェックは Vercel ビルドから除外して高速化**）/ Supabase（バックエンド） |
 | テスト | Vitest, React Testing Library, MSW + `scripts/verify_email_extraction.mjs`（メール抽出リグレッション） |
 
 ---
@@ -149,7 +159,7 @@ Supabase Dashboard → SQL Editor で以下を**順番に**実行:
    - 基本系: `add_skill_master.sql` / `seed_skill_master.sql` / `add_relevance_keywords.sql` / `add_box_columns.sql` / `add_resume_url.sql` / `add_attachments_bucket.sql`
    - RPC 系: `find_duplicate_candidates_rpc.sql` / `add_search_rpc.sql`
    - cron 系: `add_email_polling_cron.sql` / `add_auto_match_cron.sql` / `add_skill_cleanup_cron.sql` / `add_enrich_cron.sql`（`YOUR_PROJECT_REF` と `YOUR_SERVICE_ROLE_KEY` を実値に書き換え）
-   - **Phase 4.10 / 4.11 / 4.12 で追加された新規マイグレーション**:
+   - **Phase 4.10 / 4.11 / 4.12 / 4.13 / 4.14 で追加された新規マイグレーション**:
      1. `20260520130000_add_work_phases.sql`（IBM 系・ストレージ系・工程系 18 件）
      2. `20260521000000_add_search_scope.sql`（`search_candidates(p_scope)` 3 モード対応）
      3. `20260521210000_add_bigquery_and_cloud_dwh.sql`（DWH 系 10 件）
@@ -160,8 +170,16 @@ Supabase Dashboard → SQL Editor で以下を**順番に**実行:
      8. `20260523_archive_light_table.sql`（**人材マップ用** `candidates_archive_light` テーブル + 期間対応 `prefecture_counts` RPC）
      9. `20260523_prefecture_counts_rpc.sql`（**人材マップ用** 初版 RPC・後段で上書き）
      10. `20260523_normalize_prefecture.sql`（**人材マップ用** `normalize_prefecture` 関数 + 最終版 `prefecture_counts` + `candidates_by_prefecture`）
-     11. `add_archive_candidates_cron.sql`（**人材マップ用** 7 日アーカイブ pg_cron。`YOUR_PROJECT_REF` / `YOUR_SERVICE_ROLE_KEY` 置換が必要。旧 `delete-old-candidates` を unschedule）
-     12. **要追加 SQL（migration 漏れ対応）**: `ALTER TABLE candidates_archive_light ADD COLUMN IF NOT EXISTS name text, ADD COLUMN IF NOT EXISTS subject text;`（`archive-candidates` Edge Function と `candidates_by_prefecture` RPC が両カラムを参照するため）
+     11. `20260523_fix_heatmap_skill_filter.sql`（**人材マップ用** スキルフィルタを `candidates.skills` JSONB も参照するよう修正）
+     12. `20260525_fetch_candidates_with_rule_score.sql`（**マッチング SQL 化** `fetch_candidates_for_project` をルールスコア順に再定義）
+     13. `20260525_fix_matching_rpc_duplicate_filter.sql`（duplicate_flag=true を SQL 側で除外 / `fetch_candidates_for_matching` 上限 2000 へ）
+     14. `20260526_fetch_candidates_with_weights.sql`（**ウェイト調整可能化** スキル/経験/単価/勤務地/リモート の 5 引数）
+     15. `20260526_fix_timeout.sql`（CROSS JOIN LATERAL でルールスコアを 1 回だけ計算しタイムアウト解消）
+     16. `20260526_region_location_scoring.sql`（**勤務地に同一地方加点** `get_region(prefecture_core)` 関数。同一都道府県 20pt / 同一地方 10pt / 不明 5pt / 不一致 0pt）
+     17. `20260527_add_station_master.sql`（**全国 1,797 駅の `station_master` テーブル** + INSERT データ。`inbound-email` が起動時にロード）
+     18. `20260527_fix_kyoto_bug.sql`（「東京都 大森」に「京都」が部分一致するバグを修正 → 完全一致判定へ）
+     19. `add_archive_candidates_cron.sql`（**人材マップ用** 7 日アーカイブ pg_cron。`YOUR_PROJECT_REF` / `YOUR_SERVICE_ROLE_KEY` 置換が必要。旧 `delete-old-candidates` を unschedule）
+     20. **要追加 SQL（migration 漏れ対応）**: `ALTER TABLE candidates_archive_light ADD COLUMN IF NOT EXISTS name text, ADD COLUMN IF NOT EXISTS subject text;`（`archive-candidates` Edge Function と `candidates_by_prefecture` RPC が両カラムを参照するため）
 
 > `schema.sql` の `candidate_skills.check_category` は 14 カテゴリへ更新済み。すべての `migrations/` を昇順で流すこと（新規環境構築時の必須手順）。
 > 人材マップ機能の詳細仕様は [`docs/Heatmap.md`](docs/Heatmap.md) を参照。
@@ -199,6 +217,7 @@ supabase functions deploy auto-match
 supabase functions deploy match-score
 supabase functions deploy match-batch          # Phase 4.10 新規（バッチ AI 採点）
 supabase functions deploy archive-candidates   # Phase 4.12 新規（7日アーカイブ・人材マップ用）
+supabase functions deploy create-github-issue  # Phase 4.14 新規（改善案・バグメモ → GitHub Issue）
 supabase functions deploy microsoft-oauth
 supabase functions deploy enrich-candidate
 supabase functions deploy skill-master-cleanup
@@ -220,10 +239,11 @@ supabase functions deploy skill-master-cleanup
 | `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 人材用メール（demo）のリフレッシュトークン | 任意 |
 | `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 案件用メール（demo）のリフレッシュトークン | 任意 |
 | `INBOUND_CALL_KEY` | poll-email → inbound-email 呼び出し用 JWT（service_role キー） | ◎ |
+| `GITHUB_TOKEN` | `create-github-issue` 用の GitHub Personal Access Token（`repo` スコープ） | Issue 機能利用時 |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Google Sheets/Drive（Box 連携キュー）アクセス用 | Box 連携時 |
 | `BOX_SPREADSHEET_ID` | Box 連携キュー用スプレッドシート ID | Box 連携時 |
 
-> `inbound-email` 自体は AI を使わないので、メール取り込みだけ動かしたいなら `GROQ_API_KEY` 等は不要。マッチング系を使うときに必須になる。
+> `inbound-email` 自体は AI を使わないので、メール取り込みだけ動かしたいなら `GROQ_API_KEY` 等は不要。マッチング系を使うときに必須になる。GitHub Issue 連携を使う場合は `GITHUB_TOKEN` を別途登録（`supabase/functions/create-github-issue/index.ts` の `REPO` 定数で対象リポジトリを指定）。
 
 **pg_cron スケジュール登録**
 
@@ -247,9 +267,10 @@ Edge Function 群の挙動はソースを書き換えずに app_config キーで
 | `email_poll_mode` | `incremental` | `incremental`（未読のみ）か `full`（指定日以降全件） |
 | `email_full_import_since` | （未設定） | `email_poll_mode=full` 時に取得を開始する ISO 日時 |
 | `email_classify_enabled` | `false` | 同一受信箱に人材/案件が混在するとき、Gemini で `candidate`/`project`/`other` をバッチ分類 |
-| `matching_fast_max_candidates` | `20` | 高速モード時の案件あたり候補者上限 |
-| `matching_fast_max_projects` | `10` | 高速モード時の人材あたり案件上限 |
-| `candidate_retention_days` | `7` | 人材データ保持日数（旧データ自動削除用・運用判断で活用） |
+| `matching_run_mode` | `fast` | **マッチング既定実行モード** (`fast` / `full`)。設定タブ「マッチング実行モード」で変更可能 |
+| `matching_fast_max_candidates` | `20` | 高速モード時の案件あたり候補者上限（1〜200 で UI から変更可） |
+| `matching_fast_max_projects` | `10` | 高速モード時の人材あたり案件上限（1〜200 で UI から変更可） |
+| `candidate_retention_days` | `7` | 人材データ保持日数（`archive-candidates` cron が参照） |
 | `app_memo` | （未設定） | 営業引き継ぎ用フリーテキストメモ |
 | `graph_rt_human_prod` ほか | — | Microsoft OAuth 連携で保存されるリフレッシュトークン（4 アカウント分） |
 
@@ -287,10 +308,11 @@ npm run deploy:edge inbound-email  # 型検査 + supabase functions deploy
 
 `.claude/skills/quality-check/SKILL.md` / `/quality-check` コマンドの手順に従う:
 1. Supabase Dashboard → Functions → inbound-email → Logs で `[station_unmapped]` を検索 → 集計
-2. `STATION_TO_PREFECTURE` に追記 → `npm run deploy:edge`
+2. `station_master` テーブルへ `INSERT ... ON CONFLICT DO NOTHING` で駅を追加（旧 `STATION_TO_PREFECTURE` ハードコードは保持しつつ DB 側で拡張）
 3. `python3 scripts/skill_master_review.py` → 怪しい `source='ai'` スキルの削除候補 SQL を出力
 4. `[SKIP_IRRELEVANT]` ログを確認（TRAINING_REPORT / PROJECT_SOLICITATION 等の誤投函パターン）
 5. **AI コスト監視**（`ai_logs` テーブル）: モデル別・日次呼び出し数を集計し、Gemini 無料枠超過 / プリペイドクレジット枯渇 / フォールバック多発を検知
+6. **GitHub Issue の整理**: 設定タブの「改善案・バグメモ」から登録された Issue を確認し、重複や対応済みのものをクローズ
 
 ---
 
@@ -326,38 +348,48 @@ poll-email Edge Function
   ↓ 内部POST
 inbound-email Edge Function（※ AI は呼ばない）
   ├─ TRAINING_REPORT / PROJECT_SOLICITATION フィルタ（人材メールボックスへの誤投函を 200 OK でスキップ）
-  ├─ HTML → プレーンテキスト化 + HTML エンティティデコード
-  ├─ URL 除去・送信者署名除去（誤マッチ対策）
+  ├─ HTML → プレーンテキスト化 + HTML エンティティデコード（skill_master 照合前にも実施）
+  ├─ URL 除去・送信者署名除去（誤マッチ対策。selfPR / agentComment に株式会社名が混入する問題も対策）
   ├─ Google Drive / Sheets / Docs URL 検出・自動取得
   ├─ Word / Excel 添付 → テキスト変換（PDF は Storage に保存するだけ）
-  ├─ 複数人材検出: 区切り線（*****／─── 等）で 1 メール = 複数候補者対応
+  ├─ Excel から skillYears（スキル別経験月数）を抽出 → マッチングへ
+  ├─ 複数人材検出: 区切り線（*****／─── 等）/◇形式で 1 メール = 複数候補者対応
+  ├─ 案件メール / 営業/広告メール（配信解除リンク・研修販売等）を 200 OK でスキップ
   ├─ skill_master DB 照合（本文と添付で別ロジック、添付は上位 20 件・D/E評価除外）
-  ├─ extractCandidateFieldsRegex: 氏名・最寄駅・都道府県・経験年数・希望単価・参画時期・希望案件
+  ├─ station_master DB を起動時にロード（全国 1,797 駅・関数インスタンス内キャッシュ）
+  ├─ extractCandidateFieldsRegex: 氏名・最寄駅・都道府県・経験年数・希望単価（範囲・ラベルなし・月額対応）・参画時期・希望案件・国籍・自己PR
   ├─ extractFromProse: 役割・業界・リモート可否（フェーズ表ヘッダーは除外）
+  ├─ 年齢・性別の抽出パターン 4 種（「男性：51 歳」混入パターンも対応）
   ├─ 駅 → 都道府県マッピングで送信者署名由来の誤判定を上書き
-  ├─ 重複疑い: 名前一致 + スキル Jaccard ≥ 0.4 → duplicate_flag=true
-  └─ DB保存（candidates / projects / candidate_skills / ai_logs ※ ai_logs.model='no-ai'）
+  ├─ 重複疑い: 名前一致 + スキル Jaccard ≥ 0.4 + 都道府県不一致・経験年数差 ≥ 5 年は別人扱い → duplicate_flag
+  └─ DB 保存（candidates / projects / candidate_skills / ai_logs ※ ai_logs.model='no-ai'）
 ```
 
 ### マッチング（AI 使用）
 
 | 方式 | トリガー | 対象人材数上限 | AI フォールバック順 |
 |---|---|---|---|
-| `match-batch` | UI ボタン（高速/全件）または `auto-match` から内部呼び出し | 高速モード: `matching_fast_max_candidates`（既定 20）<br>auto-match: 案件 1 件あたり最大 40 名（`BATCH_AI_SIZE=20` × 2 リクエスト） | Cerebras → Groq 70B → Gemini → 3 段失敗時はルールスコアで全代替 |
+| `match-batch` | UI ボタン（高速/全件）または `auto-match` から内部呼び出し | 高速モード: `matching_fast_max_candidates`（既定 20）<br>全件モード: `fetch_candidates_for_project` 上限 500<br>auto-match: 案件 1 件あたり最大 40 名 | Cerebras → Groq 70B → Gemini → 3 段失敗時はルールスコアで全代替 |
 | `match-score` | 手動（個別スコア確認・duplicate 検出） | 1 ペア | Cerebras → Groq 70B → Gemini |
 | `auto-match` | 毎朝 JST 9:00 cron。`auto_match_enabled='false'` でスキップ | 直近 25 時間以内に登録された `prod` 案件 ×最大 40 名 | `match-batch` 経由（Cerebras → Groq 70B → Gemini） |
 
-### ルールベーススコア（`match-batch` の `calcRuleScore`・0〜100pt）
+### ルールベーススコア（既定ウェイト・0〜100pt）
 
-| 観点 | 配点 | 備考 |
+**SQL 側で計算**（`fetch_candidates_for_project` RPC）→ ルールスコア降順で取得 → 上位 10 件のみ AI 採点。
+
+| 観点 | 既定ウェイト | 加点ルール |
 |---|---|---|
-| スキル一致 | 最大 40pt | required 空のときは固定 +20pt |
-| 経験年数 | 最大 15pt | 10年=15 / 7年=12 / 5年=8 / 3年=4 / 1年=2 |
-| 単価 | 最大 15pt | 予算未設定なら +15、範囲内 +15、上限+10% +8、上限+20% +3 |
-| 勤務地 | 最大 20pt | 同じ都道府県 / フルリモートで +20、居住地不明 +5 |
-| リモート | 最大 10pt | リモート可・希望時 +10 |
+| スキル一致 | 40pt | 必須スキル合致比率 × 40。`required` 空時は `0.5 × 40 = 20pt`。歓迎スキルは + 0.1 ボーナス（最大 40pt キャップ） |
+| 経験年数 | 15pt | 10年=15 / 7年=12 / 5年=8 / 3年=4 / 1年=2 / **不明=5**（中間点）。Excel `skillYears` あれば優先 / 必須スキル「希望」表明で 8/15 を付与 |
+| 単価 | 15pt | 予算未設定 +15 / 範囲内 +15 / 上限+10% 内 +8 / 上限+20% 内 +3 |
+| 勤務地 | 20pt | フルリモート +20 / **同一都道府県 +20 / 同一地方 +10 / 居住地不明 +5 / 不一致 0** |
+| リモート | 10pt | リモート可 + 「リモート/remote/在宅」を含む案件で +10 |
 
-AI 採点は **topN（既定 10）件のみ**バッチプロンプト 1 コールで実施し、残りはルールスコアのみで返す。マッチング理由は **150 字以内**で「必須スキル合致 → 経験年数 → 単価 → 勤務地リモート → 懸念点」の優先順。
+- **スキル全不一致の上限制限**: `required.length > 0` かつ `hits === 0` の場合は合計を **35pt にキャップ**（経験/単価/勤務地が良くてもスキル全不一致は上位に来させない）
+- **ウェイトはユーザーが調整可能**: UI または RPC 引数 (`p_weight_skill`, `p_weight_exp`, `p_weight_rate`, `p_weight_location`, `p_weight_remote`) で実行時に変更可能
+- **AI スコアは ruleScore ±15pt 内**: AI のハルシネーションを抑制（match-batch では AI スコアが範囲外なら ruleScore に丸める）
+- **AI 採点は topN（既定 10）件のみ**バッチプロンプト 1 コールで実施し、残りはルールスコアのみで返す
+- **AI コメント**は **120 字以内**で「ルールスコア breakdown → 必須スキル合致 → 経験 → 単価 → 勤務地 → リモート → 人物像 / 本人希望 / 国籍懸念」の優先順。スコア数値・分数表記・余計な推測（「リモート不可」等）は禁止
 
 ### ブラウザからのファイル解析フロー
 
@@ -382,7 +414,7 @@ regex + skill_master DB 照合 → candidates / projects に upsert
 | 環境 | 用途 | 切替方法 |
 |---|---|---|
 | `prod` | 本番データ（実際の人材・案件） | デフォルト |
-| `demo` | 営業デモ用サンプルデータ | URLに `?demo=<VITE_DEMO_KEY>` を付加 |
+| `demo` | 営業デモ用サンプルデータ | URL に `?demo=<VITE_DEMO_KEY>` を 1 回付加 → **以降は設定タブ「デモモード」スイッチでオン／オフ切替**。トグル ON でヘッダの「データ」セレクタが出現 |
 
 ### DB テーブル一覧
 
@@ -396,6 +428,7 @@ regex + skill_master DB 照合 → candidates / projects に upsert
 | `ai_logs` | AI 解析実行ログ（モデル名・所要時間・結果・エラー。`model='no-ai'` でメール解析記録） |
 | `error_logs` | フロントエンド側クライアントエラー（page/message/stack/context/data_env/nickname） |
 | `skill_master` | スキル辞書（約 1,660 件 + AI 自動登録分。DWH/IBM/工程系を Phase 4.10 で強化）。`aliases` で表記ゆれ吸収、`match_count` で実績管理 |
+| `station_master` | **全国 1,797 駅と都道府県のマッピングテーブル**（Phase 4.14 新規）。`inbound-email` が起動時にロードして勤務地推定に使用。RLS 読み取り全許可 |
 | `relevance_keywords` | 関連度判定用キーワード（`exclude` / `candidate` / `project` の 3 種別。現状は未使用・Phase 4.9 で `classifyInboundRelevance` 削除済み） |
 | `app_config` | アプリ設定 / Graph API リフレッシュトークンのローテーション保存 |
 
@@ -456,19 +489,22 @@ akinavi-hr-ai/
 │   │   ├── fileParser.ts     # Excel / Word テキスト抽出（PDF / 画像 非対応）
 │   │   ├── dataEnv.ts        # prod/demo 環境切替
 │   │   └── supabase.ts
-│   ├── pages/                # 各画面（Matching / Candidate / Project / Settings ほか）
+│   ├── pages/                # 各画面（Matching / Candidate / Project / Settings / Heatmap ほか）
+│   │                         # ※ 現在のナビは4タブ: マッチング・人材・案件・設定
+│   │                         # ※ 「人材マップ」は「人材」タブ内のサブ画面（ボタンから遷移）
 │   │                         # ※ History / Duplicate / Monitor は実装済みだがナビから非表示
 │   └── components/           # 共通 UI（DemoSeedPanel / DemoProjectCandidateGen 等）
 ├── supabase/
 │   ├── schema.sql            # DB テーブル定義・RLS ポリシー
 │   ├── migrations/           # 追加マイグレーション SQL（昇順で全て実行）
 │   └── functions/
-│       ├── inbound-email/        # メール解析 Edge Function（AI 不使用・regex + DB 照合）
+│       ├── inbound-email/        # メール解析 Edge Function（AI 不使用・regex + DB 照合・station_master/skill_master）
 │       ├── poll-email/           # Outlook ポーリング Edge Function（5 分ごと cron）
 │       ├── auto-match/           # 自動マッチング Edge Function（毎朝 JST 9:00 cron・match-batch を内部呼び出し）
-│       ├── match-batch/          # バッチ AI 採点 Edge Function（ルール事前フィルタ + topN を 1 コール採点）
+│       ├── match-batch/          # バッチ AI 採点 Edge Function（fetch_candidates_for_project RPC + topN=10 を 1 コール採点・ウェイト可変）
 │       ├── match-score/          # 単発スコア Edge Function（duplicate 検出付き・Cerebras→Groq→Gemini）
 │       ├── archive-candidates/   # 7 日アーカイブ Edge Function（毎日 JST 0:00 cron・人材マップ全期間集計用）
+│       ├── create-github-issue/  # GitHub Issue 登録 Edge Function（POST 作成 / GET 一覧 / PATCH クローズ）
 │       ├── microsoft-oauth/      # Microsoft OAuth 認証 Edge Function
 │       ├── enrich-candidate/     # Box 連携・再解析 Edge Function（毎日 JST 3:00 cron）
 │       └── skill-master-cleanup/ # skill_master クリーンアップ Edge Function（毎日 cron）
@@ -482,9 +518,9 @@ akinavi-hr-ai/
     ├── Sales_Manual.md       # 営業担当者向け操作マニュアル
     ├── HandsOn_Setup.md      # 環境構築ガイド（後任エンジニア向け）
     ├── ai_fallback_flow.md   # AI フォールバックフロー詳細
-    ├── matching_candidate_selection.md  # マッチング選定ロジック
+    ├── matching_candidate_selection.md  # マッチング選定ロジック（SQL 側スコア計算・地方加点）
     ├── Heatmap.md            # 人材マップ（ヒートマップ）機能仕様
-    ├── DataEnv_Demo_Prod.md  # データ環境（prod/demo）の使い分け
+    ├── DataEnv_Demo_Prod.md  # データ環境（prod/demo）の使い分け（設定タブからの切替）
     ├── Outlook_AutoForward_Setup.md     # Outlook 自動転送ルール設定
     ├── AWS_Account_Setup_Guide.md       # AWS アカウント作成（参考資料）
     ├── AI_Freetier_Challenges.md        # 無料枠と現状の限界（歴史的記述含む）

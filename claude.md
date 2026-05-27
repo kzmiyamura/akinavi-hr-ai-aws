@@ -10,8 +10,8 @@
 - **AI（ブラウザ）**: Google Gemini デフォルト `gemini-2.5-flash-lite`（`VITE_GEMINI_MODEL` で上書き可）。**人材・案件登録の UI からは Gemini を使わなくなった**（コミット `f28ec86` で「AI で登録」ボタン廃止）。`src/lib/ai/geminiProvider.ts` は残るが UI 接続なし
 - **ファイルパース（ブラウザ）**: `xlsx`（Excel）・`mammoth`（Word）— `src/lib/fileParser.ts`。**PDF と画像は現状未対応**（旧 `pdfjs-dist` は依存に残るが import なし。CandidatePage / ProjectPage で「PDF は手動貼り付けか画像化して添付」を案内）
 - **AI（サーバー・メール解析）**: **AI 不使用**。`inbound-email` Edge Function は regex（`extractCandidateFieldsRegex`） + 文章スキャン（`extractFromProse`） + `skill_master` DB 照合 + 駅→都道府県マッピング のみで構造化抽出する（コミット `139a4f2` で AI 廃止、`a4dc3b4` で `classifyInboundRelevance` / `generateJSONSmart` 等のデッドコードも完全削除済み）。残存 AI 呼び出しは自動マッチング用 `matchCandidateToProject`（`AUTO_MATCH_ENABLED='true'` 時の即時マッチ）のみ
-- **AI（サーバー・マッチング・新方式 `match-batch`）**: コミット `b35df40` で導入。**ルールベース事前フィルタ（スキル一致40pt / 経験15pt / 単価15pt / 勤務地20pt / リモート10pt = 100pt）→ topN だけバッチ AI 採点**。AI フォールバック順は Cerebras `llama3.1-8b` → Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.5-flash`。AI が 3 段とも失敗したらルールスコアで全代替（`usedModel='rule'`）。1 案件 = 1 AI コール（topN 候補者を一括採点）でトークン消費を圧縮
-- **AI（サーバー・マッチング・既存 `match-score`）**: UI 手動の単発スコア計算（`duplicateSuspected` フラグ込み）。フォールバック順は同上。マッチング理由は **150 字以内**で「必須スキル合致 → 経験年数 → 単価 → 勤務地リモート → 懸念点」の優先順
+- **AI（サーバー・マッチング・新方式 `match-batch`）**: コミット `b35df40` で導入、Phase 4.13 で SQL 化・ウェイト可変・地方加点を追加。**ルールベース事前フィルタを SQL 側に全移動（`fetch_candidates_for_project` RPC）→ topN（既定 10 件）だけバッチ AI 採点**。ウェイトは引数で可変（既定: スキル40 / 経験15 / 単価15 / 勤務地20 / リモート10 = 100pt）。AI フォールバック順は Cerebras `llama3.1-8b` → Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.5-flash`。Cerebras はプロンプト 22500 文字超でスキップ。AI が 3 段とも失敗したらルールスコアで全代替。AI スコアは **ruleScore ±15pt** 以内に丸める（ハルシネーション抑制）。スキル全不一致時の合計は 35pt 上限。歓迎スキル一致は +0.1 ボーナス（最大 40pt キャップ）
+- **AI（サーバー・マッチング・既存 `match-score`）**: UI 手動の単発スコア計算（`duplicateSuspected` フラグ込み）。フォールバック順は同上。マッチング理由は **120〜150 字以内**で「ルールスコア breakdown → 必須スキル → 経験 → 単価 → 勤務地 → リモート → 人物像 / 本人希望 / 国籍懸念」の優先順。スコア数値・分数表記・余計な推測は禁止
 - **AI（サーバー・マッチング・自動 cron `auto-match`）**: 毎朝 JST 9:00 起動。**`match-batch` を経由**して Cerebras/Groq/Gemini フォールバック付き。`MAX_CANDIDATES_PER_PROJECT=40` / `BATCH_AI_SIZE=20`、`app_config.auto_match_enabled='false'` でスキップ
 - **AI（サーバー・メール種別分類）**: `poll-email` 内で Gemini バッチ分類（任意・既定 `app_config.email_classify_enabled='false'`）
 - **AI（切替・フロントのみ）**: `VITE_AI_PROVIDER=gemini` / `openai` — OpenAI は未実装スタブ
@@ -521,6 +521,92 @@ ALTER TABLE candidates_archive_light
 
 詳細は `docs/Heatmap.md` を参照。
 
+#### Storage 書き込みの廃止
+コミット `71d6aea`（2026-05-23）で `archive-candidates` の Storage 書き込みは廃止。現在は `candidates_archive_light` のみ書く設計（容量削減・運用簡素化）。長期保存が必要な場合は別途 JSONL バックアップを検討すること。
+
+### 【Phase 4.13】マッチングロジックの SQL 化・ウェイト可変化・地方加点（コミット群: 2026-05-25 〜 2026-05-27）
+
+#### 背景
+- マッチング処理のタイムアウト・ハルシネーション・配点固定の限界を解消
+- 「東京都 大森」に「京都」が部分一致するなどの実バグ修正
+- 営業から「スキルウェイトを案件ごとに調整したい」要望
+
+#### マイグレーション群（順に実行）
+| ファイル | 内容 |
+|---|---|
+| `20260525_fix_matching_rpc_duplicate_filter.sql` | `duplicate_flag=true` を SQL 側で除外。`fetch_candidates_for_matching` 上限 800→2000 へ |
+| `20260525_fetch_candidates_with_rule_score.sql` | `fetch_candidates_for_project` をルールスコア順に再定義（旧版を DROP） |
+| `20260526_fetch_candidates_with_weights.sql` | スキル/経験/単価/勤務地/リモート の 5 ウェイトを引数化（`p_weight_skill` ほか） |
+| `20260526_fix_timeout.sql` | CROSS JOIN LATERAL でルールスコアを 1 回だけ計算（`statement_timeout=30000ms`） |
+| `20260526_region_location_scoring.sql` | `get_region(prefecture_core)` 関数を追加。**同一都道府県 20pt / 同一地方 10pt / 居住地不明 5pt / 不一致 0pt** |
+| `20260527_fix_kyoto_bug.sql` | LIKE 部分一致から完全一致判定へ変更（東京都 ⊂ 京都府 の誤マッチを修正） |
+
+#### `match-batch` 側の主要変更
+- `topN` は **既定 10 件**（コミット `0626e82`）。残りはルールスコアのみで `ruleOnly` 配列として返却
+- **スキル全不一致時の上限 35pt**（コミット `eb03686 #12`）: `required.length > 0 && hits === 0` なら合計 35pt キャップ
+- **歓迎スキル一致 +0.1 ボーナス**（コミット `c6b4342`・最大 40pt キャップ）
+- **経験年数不明 → 5/15pt（中間点）**（コミット `0507697`）。以前は 0pt
+- **AI スコアは ruleScore ±15pt 以内**（コミット `d382aac`・ハルシネーション抑制）
+- **AI コメント** に breakdown / リモート可否 / 人物像 / 本人希望 / 国籍懸念を必須化（コミット `b1569ef` / `c5b97a6` / `c78ee9c`）
+- **Excel `skillYears` 活用**（コミット `5f61959`・必須スキルの実年数を反映）
+- **必須スキルへの「希望」表明で経験 5年相当(8/15)**（コミット `24ebe7d`）
+- max_tokens: Cerebras 4096 / Groq 8000 / Gemini 8000（コミット `522825f`・20 人分 JSON 切断対策）
+- Cerebras はプロンプト 22500 文字超でスキップ（`f501268`）
+- スコアウェイトのカスタム UI（コミット `4b04086`・`MATCHING_DEFAULTS`）
+
+#### `match-batch` の AI プロンプト最適化
+- `filterRelevantSkills` で必須/歓迎スキルにマッチするものを優先し最大 10 件に絞る
+- ruleBreakdown を**そのままプロンプトに渡し**、AI には事実記述のみさせる
+- 「スコア数値・分数禁止」「リモート不可等の推測禁止」を明示
+- nationality / wantedJobs / selfPR / agentNote を非日本語・指定値時のみ含める
+
+### 【Phase 4.14】Issue 連携・station_master DB 化・抽出精度改善（コミット群: 2026-05-27 〜 2026-05-28）
+
+#### 概要
+- 営業からの改善案・バグ報告を GitHub Issue に直結する仕組みを導入
+- 全国 1,797 駅のマッピングをハードコードから DB テーブルに移行（運用時の追加を簡素化）
+- 経歴書フォーマットの揺れに対応する抽出ロジック改善（Issue #19〜#25）
+
+#### 新規ファイル
+| ファイル | 内容 |
+|---|---|
+| `supabase/functions/create-github-issue/index.ts` | GitHub Issues API ラッパ Edge Function（POST 作成 / GET 一覧 / PATCH クローズ）。`GITHUB_TOKEN` 必須。`REPO` は `kzmiyamura/akinavi-hr-ai-aws` 固定 |
+| `supabase/migrations/20260527_add_station_master.sql` | `station_master` テーブル（id / name / prefecture）+ 全国 1,797 駅の INSERT。RLS 読み取り全許可 |
+
+#### 改修ファイル
+- `supabase/functions/inbound-email/index.ts`: 起動時に `station_master` をロードして `STATION_TO_PREFECTURE` とマージしてキャッシュ（`_stationDbMap`）。`preloadStationMap()` をリクエスト処理の冒頭で呼ぶ
+- `src/pages/SettingsPage.tsx`: 「改善案・バグメモ」セクション + 一覧（ページネーション付き）+ Issue クローズボタン
+- `src/components/Layout.tsx`: **タブを 4 つに集約**（`マッチング` / `人材` / `案件` / `設定`）。「人材マップ」は**「人材」タブ内のサブ画面**として `CandidatePage` から `onOpenHeatmap` で遷移
+- `src/pages/CandidatePage.tsx`: 「人材マップ」ボタン追加（`MapIcon`）
+- `src/pages/MatchingPage.tsx`: マッチング実行モード（高速/全件）の設定を SettingsPage に移動（Issue #1）
+
+#### Issue ベースの改善（#1〜#25・27 コミット）
+- **#1**: マッチング実行モードを SettingsPage に移動
+- **#2/3/4**: タブ名短縮（「マッチング結果」→「マッチング」など）・「人材マップ」を「人材」タブ内へ移動・デモトグルを設定画面に集約
+- **#5/6/8**: 案件未反映バグ修正・誤認識フィルター・Issue 登録後にメモ欄を空に
+- **#7**: 全国 1,797 駅の `station_master` テーブルを追加・DB 参照に対応
+- **#9/10/11**: Issue 一覧のページネーション・経験年数抽出改善・人材マップのクラッシュ修正
+- **#12**: スキル全不一致時の上限 35pt 制限
+- **#13**: CLAUDE.md に Issue 自律ループを追加
+- **#14**: 楽観的更新で Issue リスト即時反映
+- **#15**: イニシャルのみパターンの名前抽出
+- **#16**: 複数人材メールで同じ名前が連続登録される問題を修正
+- **#17**: 案件メールが人材として登録される問題を修正（営業/広告メールフィルター強化）
+- **#18**: 自己 PR に送信者署名（株式会社名等）が混入する問題を修正
+- **#19**: 単価の取り込み精度向上（範囲・ラベルなし・月額ラベル対応）
+- **#20**: Issue 登録後に一瞬表示されて消える問題（refetch を 3 秒遅延）
+- **#21**: 名前に年齢・性別が混入（男性：51 歳）パターンに対応
+- **#22**: 年齢・性別が表示されない問題（#21 修正で raw_profile に正しく保存）
+- **#23**: バングラデシュ籍の国籍抽出
+- **#24**: `[氏名]OY` の名前から `[ラベル]` プレフィクス除去
+- **#25**: HTML テーブル形式メールで情報が取れない問題を改善
+
+#### `create-github-issue` Edge Function の使い方
+- **POST**: `{ memo, url, userAgent, nickname, timestamp }` → `[Bug] <先頭50字>` のタイトルで Issue 作成（`labels: ['bug']`）
+- **GET**: open + closed の bug ラベル付き Issue を `created` 降順で 20 件返す
+- **PATCH**: `{ number, state }` で Issue クローズ／再オープン
+- CORS は全許可。`GITHUB_TOKEN` 未設定時は 500 エラー
+
 ### 【Phase 5】最終納品ドキュメント作成（一部進行中）
 1. **[Claude] 作業**: システム構成図のメンテナンス（README.md に Mermaid 図あり・コミット `2026-05-20` で更新）
 2. **[Claude] 作業**: 操作マニュアルのメンテナンス（`docs/Sales_Manual.md` / `docs/Sales_Manual.pdf`・営業担当者向け）
@@ -590,6 +676,7 @@ ALTER TABLE candidates_archive_light
 | `ai_logs` | AI解析の実行ログ（モデル・所要時間・結果・エラー）。メール解析の AI 廃止後、`inbound-email` 由来のレコードは `model='no-ai'` で保存される |
 | `error_logs` | フロントエンド側のクライアントエラーを記録（コミット `a2c0e96`）。`page`/`message`/`stack`/`context`/`data_env`/`nickname` を保持。`saveErrorLog`/`logError` ユーティリティから呼び出し。30 日自動削除 cron は未実装（要追加） |
 | `skill_master` | ITスキルマスタ。約 1,660 件規模（acf9d31 で +32 件、Phase 4.10 で DWH/工程/IBM 系を +32 件追加）。aliases で表記ゆれ吸収・match_count / last_matched_at でマッチ実績管理 |
+| `station_master` | **駅名 → 都道府県マッピング**（Phase 4.14 / コミット `0f28327`）。全国 1,797 駅。`id`/`name`/`prefecture`。`inbound-email` が起動時にロードして関数インスタンス内にキャッシュ（`_stationDbMap`）。RLS は読み取り全許可 |
 | `relevance_keywords` | 関連性キーワード辞書（`exclude` / `candidate` / `project` の 3 種別）。`classifyInboundRelevance` で使用予定だったがコミット `a4dc3b4` で関数自体が削除されたため、現状の `inbound-email` 経路では未使用 |
 | `app_config` | アプリ全体設定。Microsoft OAuth リフレッシュトークンのローテーション保存・各種機能フラグも保持（後述） |
 
@@ -601,9 +688,10 @@ ALTER TABLE candidates_archive_light
 | `email_poll_mode` | `incremental` | `incremental`（未読のみ）か `full`（指定日以降全件） |
 | `email_full_import_since` | （未設定） | `full` モード時の開始 ISO 日時 |
 | `email_classify_enabled` | `false` | `poll-email` 内の Gemini メール種別分類 |
-| `matching_fast_max_candidates` | `20` | 高速モード時の案件あたり候補者上限 |
-| `matching_fast_max_projects` | `10` | 高速モード時の人材あたり案件上限 |
-| `candidate_retention_days` | `7` | 人材データ保持日数（旧データ自動削除用・運用判断で活用） |
+| `matching_run_mode` | `fast` | **既定マッチング実行モード**（`fast` / `full`）。SettingsPage の「マッチング実行モード」セクションから変更 |
+| `matching_fast_max_candidates` | `20` | 高速モード時の案件あたり候補者上限（1〜200 で UI から変更可） |
+| `matching_fast_max_projects` | `10` | 高速モード時の人材あたり案件上限（1〜200 で UI から変更可） |
+| `candidate_retention_days` | `7` | 人材データ保持日数（`archive-candidates` cron が参照） |
 | `app_memo` | （未設定） | 営業引き継ぎ用フリーテキストメモ |
 | `graph_rt_human_prod` ほか | — | Microsoft OAuth 連携で保存されるリフレッシュトークン（4 アカウント分） |
 
@@ -703,8 +791,9 @@ pg_cron（5分ごと）
 
 ### 論理データ環境 `data_env`
 - `prod` / `demo` を同一Supabase内で分離（`data_env` カラムでフィルター）
-- **デモ解除**: `VITE_DEMO_KEY` と URL クエリ `?demo=<鍵>` でトグル
-- 解除時にヘッダの「データ」セレクトが表示される
+- **デモ解除（初回）**: `VITE_DEMO_KEY` と URL クエリ `?demo=<鍵>` でトグル
+- **以降の切替**: SettingsPage の「デモモード」スイッチで ON/OFF 切替（Issue #4 / コミット `ccf15e7`）
+- 解除（ON）時にヘッダの「データ」セレクトが表示される
 - デモ UI 未解除時は常に `prod` 固定
 
 ### マッチング画面（Phase 4.10 で全面再設計）
@@ -731,16 +820,22 @@ pg_cron（5分ごと）
 - `fetch_candidates_for_project(p_data_env, p_skills text[], p_limit DEFAULT 500)`: 案件の必須スキルを SQL に渡して **PostgreSQL 側で `jsonb_array_elements_text` 展開**してマッチ。`skills (jsonb)` 列に `&&` が使えない問題を回避
 - `MatchingPage` は `duplicate_flag=true` と `merged_into != null` の人材を完全除外（コミット `1bf49ff`）
 
-#### `match-batch` のスコア配点（ルールベース 100pt）
-| 観点 | 配点 | 備考 |
-|---|---|---|
-| スキル一致 | 最大 40pt | required 空のときは固定 +20pt |
-| 経験年数 | 最大 15pt | 10年=15 / 7年=12 / 5年=8 / 3年=4 / 1年=2 |
-| 単価 | 最大 15pt | 予算未設定なら +15、範囲内 +15、上限+10% +8、上限+20% +3 |
-| 勤務地 | 最大 20pt | 同じ都道府県 / フルリモートで +20、居住地不明 +5 |
-| リモート | 最大 10pt | リモート可・希望時 +10 |
+#### `match-batch` のスコア配点（既定ウェイト 100pt・Phase 4.13 で SQL 化・可変化）
+**ルールスコア計算は SQL 側で完結**（`fetch_candidates_for_project` RPC）。`match-batch` は SQL 結果に対して AI 採点だけ実施。
 
-AI 採点は **topN 件（既定 10 件）のみ**バッチプロンプト 1 コールで実施し、残りはルールスコアのみで返す（`ruleOnly` 配列）。
+| 観点 | 既定ウェイト | 備考 |
+|---|---|---|
+| スキル一致 | 40pt | 必須スキル合致比率 × 40。required 空時は固定 20pt。歓迎スキル一致は +0.1 ボーナス（最大 40pt キャップ） |
+| 経験年数 | 15pt | 10年=15 / 7年=12 / 5年=8 / 3年=4 / 1年=2 / **不明=5**（中間点）。Excel `skillYears` あれば優先 / 必須スキル「希望」表明で 8/15 |
+| 単価 | 15pt | 予算未設定なら +15、範囲内 +15、上限+10% +8、上限+20% +3 |
+| 勤務地 | 20pt | フルリモート +20 / **同一都道府県 +20 / 同一地方 +10 / 居住地不明 +5 / 不一致 0**（Phase 4.13・`get_region` 関数） |
+| リモート | 10pt | リモート可・希望時 +10 |
+
+- **スキル全不一致時の上限 35pt**: `required > 0 && hits === 0` のとき合計を 35pt キャップ
+- **ウェイト可変**: `p_weight_skill` / `p_weight_exp` / `p_weight_rate` / `p_weight_location` / `p_weight_remote` で実行時に変更可
+- **AI スコアは ruleScore ±15pt** 以内に丸める（match-batch 側でハルシネーション抑制）
+
+AI 採点は **topN 件（既定 10 件）のみ**バッチプロンプト 1 コールで実施し、残りはルールスコアのみで返す（`ruleOnly` 配列）。AI 出力は **120 字以内**のコメントで、breakdown / リモート可否 / 人物像 / 本人希望 / 国籍懸念を必須。スコア数値・分数表記・余計な推測は禁止。
 
 #### 自動バッチ（`supabase/functions/auto-match/index.ts`・コミット `aa480b8`）
 - **スケジュール**: 毎日 0:00 UTC（日本時間 9:00）。`app_config.auto_match_enabled='false'` でスキップ
@@ -767,10 +862,20 @@ AI 採点は **topN 件（既定 10 件）のみ**バッチプロンプト 1 コ
 - 別ドメインスキルを `getUnrelatedSkills` で混入
 - 挿入先は常に `dataEnv='demo'`
 
-### 画面構成
-- タブは **5 つ**（`マッチング結果` / `人材登録` / `案件登録` / `設定` / `人材マップ`）。`src/components/Layout.tsx` の `NAV_ITEMS` を正とする
-- `設定` タブは Microsoft アカウント連携・案件メール解析の有効化トグル・自動マッチング ON/OFF・人材データ保持日数・マッチング高速モード上限・アプリメモなどをまとめる
-- `人材マップ` タブは Phase 4.12 で追加。`src/pages/HeatmapPage.tsx` で `d3-geo` + `public/japan.topojson` を使った日本地図ヒートマップを表示。詳細は [`docs/Heatmap.md`](docs/Heatmap.md) 参照
+### 画面構成（Phase 4.14 で再編）
+- ナビゲーションタブは **4 つ**: `マッチング` / `人材` / `案件` / `設定`（`src/components/Layout.tsx` の `NAV_ITEMS` を正とする・Issue #2）
+- **「人材マップ」は独立タブから外して「人材」タブ内のサブ画面に格納**（Issue #3）。`CandidatePage` の「人材マップ」ボタン（`MapIcon`）で `onOpenHeatmap` 経由で遷移
+- `設定` タブの内訳:
+  - メールアドレス設定（人材用 / 案件用）
+  - Microsoft アカウント連携
+  - 案件メール解析の有効化トグル
+  - AI 種別判断（デモのみ）
+  - 自動マッチング ON/OFF
+  - **マッチング実行モード**（高速 / 全件・既定値）+ **案件あたり / 人材あたり上限件数**（Issue #1）
+  - **改善案・バグメモ → GitHub Issue 登録**（一覧表示・クローズ操作付き）
+  - **デモモード**（トグル ON で `?demo=KEY` 相当・Issue #4）
+  - データ全件削除
+- `人材マップ` 画面は `src/pages/HeatmapPage.tsx`。`d3-geo` + `public/japan.topojson` で日本地図ヒートマップ + 都道府県ズームアニメーション + メール一覧表示。詳細は [`docs/Heatmap.md`](docs/Heatmap.md) 参照
 - `提案履歴` / `重複管理` / `解析監視` は実装済みだがナビから非表示（`src/pages/HistoryPage.tsx`, `DuplicatePage.tsx`, `MonitorPage.tsx` は存在するが `App.tsx` 経由で参照されていない）
 
 ### 人材・案件ページの追加機能（Phase 4.11）
@@ -820,11 +925,12 @@ AI 採点は **topN 件（既定 10 件）のみ**バッチプロンプト 1 コ
 - `package.json` に `npm run check:edge <function>` / `npm run deploy:edge <function>` を登録（既定 `inbound-email`）
 
 ### 品質チェック（`.claude/skills/quality-check/SKILL.md` / `/quality-check` コマンド）
-- ① 駅マッピング: `[station_unmapped]` ログを Supabase Dashboard → Functions → inbound-email → Logs から月次レビュー → `STATION_TO_PREFECTURE` に追記 → `npm run deploy:edge`
+- ① 駅マッピング: `[station_unmapped]` ログを Supabase Dashboard → Functions → inbound-email → Logs から月次レビュー → **`station_master` テーブルに INSERT**（Phase 4.14 で DB 化・SQL Editor で `INSERT ... ON CONFLICT DO NOTHING`。コード変更不要）
 - ② スキルマスタ: `scripts/skill_master_review.py` で `source='ai'` 怪しいスキルの削除候補 SQL を出力
 - ③ 誤登録パターン検出: `TRAINING_REPORT` / `PROJECT_SOLICITATION` の `[SKIP_IRRELEVANT]` ログを確認
 - ④ 重複候補者の手動マージ判定
 - ⑤ **AI コスト監視**（コミット `bd13e85`）: `ai_logs` でモデル別・日次呼び出し数を集計 → Gemini 無料枠超過 / プリペイドクレジット枯渇 / フォールバック多発の検知
+- ⑥ **GitHub Issue 整理**: 設定タブの「改善案・バグメモ」一覧から重複・対応済みの Issue をクローズ（PATCH）
 
 ### 認証・ニックネーム制
 - ログイン機能なし

@@ -42,7 +42,7 @@ async function matchBatchProjectToCandidates(
   projectRequirements: Record<string, unknown>,
   candidates: Array<{
     id: string; name: string; skills: string[]; experienceYears: number | null
-    desiredRate: string | null; summary: string; remoteAvailable?: boolean | null; prefecture?: string | null
+    desiredRate: string | null; summary: string; remoteAvailable?: boolean | null; wantsFullRemote?: boolean | null; prefecture?: string | null
   }>,
 ): Promise<Map<string, { score: number; summary: string }>> {
   const resultMap = new Map<string, { score: number; summary: string }>()
@@ -208,6 +208,7 @@ Deno.serve(async (req: Request) => {
             desiredRate: rp.desiredRate as string | null ?? null,
             summary: typeof rp.summary === 'string' ? rp.summary as string : '',
             remoteAvailable: rp.remoteAvailable as boolean | null ?? null,
+            wantsFullRemote: rp.wantsFullRemote as boolean | null ?? null,
             prefecture: rp.prefecture as string | null ?? null,
             availableRegions: Array.isArray(rp.availableRegions) ? rp.availableRegions as string[] : null,
             preferredJobTypes: Array.isArray(rp.roles) ? rp.roles as string[] : null,

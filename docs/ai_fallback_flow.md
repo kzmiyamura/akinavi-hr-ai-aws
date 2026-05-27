@@ -9,6 +9,9 @@
 >
 > **マッチング再設計（2026-05-22 / コミット `b35df40`）**
 > 新 Edge Function `match-batch` を導入。ルールベース事前フィルタ + バッチ AI 採点で 1 案件 = 1 AI コールに圧縮。`auto-match` も `match-batch` を内部呼び出しするように書き直され、Gemini 単発から Cerebras → Groq → Gemini フォールバック付きに昇格した。
+>
+> **スコアリングの SQL 化・ウェイト可変化（2026-05-26 / Phase 4.13）**
+> `match-batch` のルールスコアは引き続き Edge Function 側で再計算するが、`fetch_candidates_for_project` RPC（PostgreSQL 側）も `p_weight_skill` / `p_weight_exp` / `p_weight_rate` / `p_weight_location` / `p_weight_remote` パラメータを受け取って同じ配点で並べ替える。これにより SQL 側で topN=10 を選んだあと Edge Function 側の `calcRuleScore` と整合する。AI には `score` を「変更禁止」と指示し、AI は `summary`（80〜120字の事実記述）だけを生成する。
 
 ---
 
