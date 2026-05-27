@@ -1915,13 +1915,21 @@ function stripHtml(html: string): string {
     .replace(/<\/p>/gi, '\n')
     .replace(/<\/div>/gi, '\n')
     .replace(/<\/li>/gi, '\n')
+    // テーブルセル: </td> / </th> はタブ区切り、</tr> は改行
+    // → 「氏名：田中」形式のHTMLテーブルでラベルと値が正しく分離される
+    .replace(/<\/t[dh]>/gi, '\t')
+    .replace(/<\/tr>/gi, '\n')
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ')
+    .replace(/&thinsp;/g, ' ')
+    .replace(/&#8203;/g, '')   // zero-width space
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
     .replace(/\r\n/g, '\n')
+    .replace(/\t{2,}/g, '\t')  // 連続タブを1つに
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
