@@ -99,11 +99,13 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
   })
   const [fastMaxCandidates, setFastMaxCandidates] = useState(MATCHING_DEFAULTS.fast_max_candidates_per_project)
   const [fastMaxProjects, setFastMaxProjects] = useState(MATCHING_DEFAULTS.fast_max_projects_per_candidate)
+  const [runMode, setRunMode] = useState<'fast' | 'full'>(MATCHING_DEFAULTS.run_mode)
 
   useEffect(() => {
     if (!matchingSettings) return
     setFastMaxCandidates(matchingSettings.fast_max_candidates_per_project)
     setFastMaxProjects(matchingSettings.fast_max_projects_per_candidate)
+    setRunMode(matchingSettings.run_mode)
   }, [matchingSettings])
 
   useEffect(() => {
@@ -165,6 +167,7 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
     mutationFn: () => saveMatchingSettings({
       fast_max_candidates_per_project: fastMaxCandidates,
       fast_max_projects_per_candidate: fastMaxProjects,
+      run_mode: runMode,
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['matchingSettings'] })
@@ -659,9 +662,34 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
         {/* ---- マッチング設定 ---- */}
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
           <h2 className="text-base font-semibold text-gray-800 mb-1">マッチング設定</h2>
-          <p className="text-xs text-gray-400 mb-4">高速モード時の上限件数を設定します。</p>
+          <p className="text-xs text-gray-400 mb-4">手動マッチング時の実行モードと高速モード上限件数を設定します。</p>
 
           <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                実行モード
+              </label>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setRunMode('fast')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${runMode === 'fast' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                >
+                  高速モード
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRunMode('full')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${runMode === 'full' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                >
+                  全件モード
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-gray-400">
+                高速: 上限件数のみ採点（速い）　全件: 全候補と照合（遅いが網羅的）
+              </p>
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 案件ごとの候補者上限（高速モード）

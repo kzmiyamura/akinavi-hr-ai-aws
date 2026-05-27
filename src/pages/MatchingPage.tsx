@@ -205,7 +205,6 @@ interface RankedSubmission extends Submission {
 type MatchMode = 'project' | 'candidate'
 
 type MatchingRunMode = 'fast' | 'full'
-const MATCHING_RUN_MODE_KEY = 'akinavi.matchingRunMode.v1'
 
 /** マッチング実行中の進捗（一括・単体の「再実行」共通） */
 type MatchRunProgress = {
@@ -776,18 +775,12 @@ export function MatchingPage({
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
   const [candidateDisplayLimit, setCandidateDisplayLimit] = useState(50)
-  const [matchingRunMode, setMatchingRunMode] = useState<MatchingRunMode>(() => {
-    try {
-      const raw = localStorage.getItem(MATCHING_RUN_MODE_KEY)
-      if (raw === 'full' || raw === 'fast') return raw
-    } catch { /* ignore */ }
-    return 'fast'
-  })
   const { data: matchingSettings } = useQuery({
     queryKey: ['matchingSettings'],
     queryFn: getMatchingSettings,
     staleTime: 60_000,
   })
+  const matchingRunMode: MatchingRunMode = matchingSettings?.run_mode ?? 'fast'
   const fastMaxCandidates = matchingSettings?.fast_max_candidates_per_project ?? MATCHING_DEFAULTS.fast_max_candidates_per_project
   const fastMaxProjects = matchingSettings?.fast_max_projects_per_candidate ?? MATCHING_DEFAULTS.fast_max_projects_per_candidate
 
@@ -803,13 +796,7 @@ export function MatchingPage({
   const bulkCancelRequestedRef = useRef(false)
   const queryClient = useQueryClient()
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(MATCHING_RUN_MODE_KEY, matchingRunMode)
-    } catch { /* ignore */ }
-  }, [matchingRunMode])
-
-  const { data: projects = [] } = useQuery({
+const { data: projects = [] } = useQuery({
     queryKey: projectsQueryKeys.open(dataEnv),
     queryFn: () => fetchOpenProjects(dataEnv),
   })
@@ -1330,7 +1317,7 @@ export function MatchingPage({
         <h1 className="text-lg font-semibold text-gray-900">マッチング結果一覧</h1>
         <p className="text-sm text-gray-500 mt-1 break-words">
           案件ごと・人材ごとに、保存済みのスコア順ランキングと AI によるマッチング理由をその場で表示します。未実施の行は「マッチング未実施」です。
-          「再実行」は、下の <span className="font-medium text-gray-700">マッチング実行モード</span>（高速/全件）に従って更新します（高速は必須スキル重複が多い候補を優先して短時間）。
+          「再実行」は、設定画面の実行モード（高速/全件）に従って更新します（高速は必須スキル重複が多い候補を優先して短時間）。
         </p>
       </div>
 
@@ -1359,31 +1346,6 @@ export function MatchingPage({
           <User size={16} className="text-blue-600 shrink-0" />
           人材から見る
         </button>
-      </div>
-
-      <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-2 min-w-0">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-gray-800">マッチング実行モード</p>
-            <p className="text-xs text-gray-500 mt-1 break-words">
-              「高速」は必須スキルとの重複が多い順に優先して、AI評価する人数（または案件数）を上限します。「全件」は登録済みの全組み合わせを評価します（時間がかかります）。
-            </p>
-          </div>
-          <select
-            value={matchingRunMode}
-            onChange={(e) => {
-              setMatchingRunMode(e.target.value as MatchingRunMode)
-              setMessage(null)
-            }}
-            className="w-full sm:w-auto border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
-          >
-            <option value="fast">高速（おすすめ・既定）</option>
-            <option value="full">全件（時間がかかる）</option>
-          </select>
-        </div>
-        <p className="text-xs text-gray-400">
-          高速モード上限：案件ごと最大 {fastMaxCandidates} 名／人材ごと最大 {fastMaxProjects} 案件（必須スキル重複が多い順）
-        </p>
       </div>
 
       {/* スコアウェイト調整パネル */}
