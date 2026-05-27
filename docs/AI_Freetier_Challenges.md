@@ -13,14 +13,16 @@ AkiNavi HR-AI における AI 利用コスト・無料枠の制約を整理し�
 
 ---
 
-## 1. 現在の AI 構成（2026-05-23 時点）
+## 1. 現在の AI 構成（2026-05-28 時点 / Phase 4.13 + 4.14 反映）
 
 | 場所 | AI 使用 | モデル | フォールバック |
 |---|---|---|---|
-| **`inbound-email` メール解析** | **不使用**（regex + 文章スキャン + `skill_master` DB 照合のみ） | — | — |
-| `match-batch`（バッチ採点・MatchingPage 高速/全件 + `auto-match` 内部呼び出し） | 使用 | Cerebras `llama3.1-8b` → Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.5-flash` | **あり**。3 段失敗時はルールスコアで全代替 |
+| **`inbound-email` メール解析** | **不使用**（regex + 文章スキャン + `skill_master` + `station_master` DB 照合のみ） | — | — |
+| `match-batch`（バッチ採点・MatchingPage 高速/全件 + `auto-match` 内部呼び出し） | 使用（summary 生成のみ・score はルール固定） | Cerebras `llama3.1-8b` → Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.5-flash` | **あり**。3 段失敗時はルールスコアで全代替（summary 空） |
 | `match-score`（UI 単発・duplicate 検出付き） | 使用 | 同上 | あり |
 | `auto-match`（毎朝 JST 9:00 cron） | 使用 | `match-batch` を内部呼び出し → 同じ 3 段フォールバック | あり（同上） |
+| `archive-candidates`（毎日 JST 0:00 cron・Phase 4.12） | **不使用**（候補者を `candidates_archive_light` にサマリー保存するだけ） | — | — |
+| `create-github-issue`（Phase 4.14） | **不使用**（GitHub Issues API を叩くだけ） | — | — |
 | `poll-email` メール種別バッチ分類 | 使用（既定 OFF） | Gemini `gemini-2.5-flash-lite` | なし（失敗時は `candidate` フォールバック） |
 | **ブラウザ（人材・案件登録）** | **不使用**（Phase 4.11 で「AI で登録」ボタン廃止、登録ボタンは `inbound-email` regex 経路に一本化） | — | — |
 
@@ -37,17 +39,19 @@ AkiNavi HR-AI における AI 利用コスト・無料枠の制約を整理し�
 
 ## 2. 1 回のマッチング処理あたりのトークン消費量
 
-### `match-batch`（バッチ採点・1 案件 1 コール）
+### `match-batch`（バッチ採点・1 案件 1 コール / Phase 4.13 でスコアは SQL/Edge ルール固定）
 
-ルールベース事前フィルタで上位 topN（既定 10 名）を選び、まとめて 1 リクエストで AI に再採点させるため、案件あたりの AI 呼び出し回数が劇的に減る。
+ルールベース事前フィルタ（`fetch_candidates_for_project` RPC・PostgreSQL）で上位 topN（既定 10 名）を選び、まとめて 1 リクエストで AI に summary を生成させる。**score は変更禁止**（AI には `breakdown` を渡して事実だけを 120 字で日本語化させる）。
 
 | 内容 | トークン概算 |
 |---|---|
-| プロンプトヘッダー（指示文 + 150 字 summary 仕様） | 約 400 tokens |
+| プロンプトヘッダー（指示文 + 120 字 summary 仕様 + 推測禁止ルール） | 約 400 tokens |
 | 案件要件（要約済み） | 約 500 tokens |
-| 人材リスト（topN = 10 名分）| 約 2,500 tokens |
-| レスポンス（JSON 配列・各 150 字 summary） | 約 1,500 tokens |
+| 人材リスト（topN = 10 名分・matchedSkills を案件関連で 10 件にフィルタ） | 約 2,500 tokens |
+| レスポンス（JSON 配列・各 120 字 summary） | 約 1,500 tokens |
 | **合計（1 案件 = 10 名分一括）** | **約 5,000 tokens** |
+
+> Cerebras はプロンプトが 22500 文字（≒7500 tokens）を超える場合は自動スキップして Groq を呼び出す。
 
 ### `match-score`（単発・1 ペア）
 
@@ -184,5 +188,6 @@ Phase 4.11（コミット `f28ec86`）で「AI で登録」ボタンが廃止さ
 
 ---
 
-*更新日: 2026-05-23 / データ出典: ai_logs テーブル（Supabase）*
+*更新日: 2026-05-28 / データ出典: ai_logs テーブル（Supabase）*
+*Phase 4.13 でスコアリングが SQL + Edge Function のルールに固定され、AI は summary 生成だけに使われるようになった。最悪 AI が全滅してもスコア・並び順は変化しない。*
 *旧構成・実績データの保持理由: 5/15 の障害から得た教訓を残すため*

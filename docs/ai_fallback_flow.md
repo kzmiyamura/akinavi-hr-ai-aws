@@ -54,13 +54,18 @@ Outlook 受信メール
               │     ├─ filterBySkillRating（スキルシート A〜E 評価のうち D/E を除外）
               │     ├─ extractCandidateFieldsRegex + flexLabel
               │     │     - 氏名・最寄駅・都道府県・経験年数・希望単価・参画時期・希望案件
+              │     │     - 年齢（"42歳"・"35才"）/ 性別（"男性"・"女"・"M"/"F"）/ 国籍（日本国籍以外を抽出）
+              │     │     - 自己PR・希望案件・希望分野（desiredProject）
               │     │     - 【単　価】等の全角スペース入りラベル・◆氏名◆等のデコレータに対応
               │     │     - SEP に 】 を含めて 【単価】65万 のような囲み記号にも対応
+              │     │     - HTML テーブルの `<th>項目</th><td>値</td>` パターンに対応
               │     ├─ inferPrefectureFromStation（駅 → 都道府県マップで署名由来の誤判定を上書き）
-              │     │     - 約 254 駅・32 都道府県をカバー
-              │     │     - 未収載駅は console.log('[station_unmapped]', station) で記録
+              │     │     - **`station_master` DB（1,797 駅・全 47 都道府県）** + 旧 hardcoded MAP のマージ
+              │     │     - 起動時に `preloadStationMap()` で DB から非同期ロード・メモリキャッシュ
+              │     │     - 未収載駅は `console.log('[station_unmapped]', station)` で記録 → 月次レビューでマスタ追加
               │     ├─ extractFromProse（PROSE_ROLES / PROSE_INDUSTRIES）
               │     │     - isPhaseTableHeader でフェーズ表ヘッダー行を除外
+              │     ├─ extractSkillYears（Excel スキルシートから per-skill 経験月数を抽出）
               │     ├─ splitMultiCandidateBody（1 メール = 複数候補者を分割・区切り線 2 本以上で発動）
               │     └─ extractAgentComment（エージェント所感を最大 500 字で抽出）
               ├─ [STEP6] 重複判定（名前完全一致 + スキル Jaccard ≥ 0.4 → duplicate_flag=true・駅違いは別人扱い）
@@ -81,22 +86,28 @@ Outlook 受信メール
 
 > マッチング AI 使用量削減のため、コミット `b35df40` で導入。ルールベース事前フィルタ（100pt）で全候補者を採点し、上位 topN（既定 10 名）だけ AI に再採点させる。
 
-### ルールベーススコア `calcRuleScore`（0〜100pt）
+### ルールベーススコア `calcRuleScore`（0〜100pt・ウェイト可変・Phase 4.13）
 
-| 観点 | 配点 | ロジック |
+ウェイトは `app_config.matching_scoring_weights` から `MatchingPage` 経由で渡される。既定値は **スキル40 / 経験15 / 単価15 / 勤務地20 / リモート10**（合計100）。
+
+| 観点 | 既定配点 | ロジック |
 |---|---|---|
-| スキル一致 | 最大 40pt | `required_skills` がある場合のみ算出。完全一致 1pt / includes 部分一致 0.5pt → `(hits/required.length) * 40`。required 空のときは固定 +20 |
-| 経験年数 | 最大 15pt | 10年=15 / 7年=12 / 5年=8 / 3年=4 / 1年=2 |
+| スキル一致 | 最大 40pt | `required_skills` がある場合のみ算出。完全一致 1.0 / includes 部分一致 0.5 → `(hits/required.length) * 40`。`niceToHaveSkills` 一致は最大 `+0.1` の比率ボーナス。required 空のときは固定 0.5 比率 |
+| 経験年数 | 最大 15pt | 優先順: ① `skillYears`（Excel 経歴書から抽出した per-skill 月数）→ ② 必須スキルを `desiredProject`/`selfPR`/`agentComment` で希望と明示 → 5 年相当(8/15)の部分クレジット → ③ 総 `experienceYears`。値域は 10年=15 / 7年=12 / 5年=8 / 3年=4 / 1年=2 / 不明=5 |
 | 単価 | 最大 15pt | `budgetMax==null` なら +15 固定、範囲内 +15、上限+10% +8、上限+20% +3 |
-| 勤務地 | 最大 20pt | 同じ都道府県（接尾辞除去 includes 一致） +20、フルリモート（`/フルリモート\|完全リモート\|100[%％]リモート/`） +20、居住地不明 +5 |
+| 勤務地 | 最大 20pt | 同じ都道府県（接尾辞除去 + 完全一致）+20、フルリモート（`/フルリモート\|完全リモート\|100[%％]リモート/`）+20、**同一地方**（関東/近畿/東海 等の 9 地方マップ）+10、居住地不明 +5 |
 | リモート | 最大 10pt | `!isFullRemote && remoteAvailable && /リモート\|remote\|在宅/i.test(remotePolicy)` で +10 |
 
-### AI 再採点
+**ペナルティ:** 必須スキルが 1 件以上ありかつ 1 件も合致しない場合は合計を **35pt に強制クランプ**（スキル不一致なのに経験・単価・勤務地が良い人材が上位に来るのを防ぐ）。
+
+### AI 再採点（実態は「事実記述生成」）
 
 - 1 コールで topN 名（既定 10）を一括採点
-- 各候補者に `ruleScore` を埋め込み、**「ruleScore を参考にしつつ役割・経歴・希望職種で再採点」**を AI に指示
-- `summary` は **150 字以内**で「必須スキル合致 → 経験年数 → 単価 → 勤務地リモート → 懸念点」の優先順
-- 出力形式: `[{"id":"...","score":整数,"summary":"150字以内"},...]`
+- 各候補者に `ruleScore` と `ruleBreakdown` を埋め込み、**「score は変更禁止・summary だけ生成」**を指示
+- AI 入力には `matchedSkills`（案件関連スキル最大 10 件にフィルタ）、`wantedJobs`、`summary`、`selfPR`（80字）、`agentNote`（80字）、`nationality`（非日本人時）を含める
+- `summary` は **80〜120 字**で `breakdown` の事実を日本語化（数値・分数は出力禁止・推測禁止）
+- 出力形式: `[{"id":"...","score":整数,"summary":"120字以内"},...]`
+- **Cerebras スキップ条件:** プロンプトが 22500 文字（≒7500 トークン）を超える場合は Cerebras を飛ばして Groq へ
 
 ### フォールバック
 
@@ -224,4 +235,16 @@ Cerebras 8B（llama3.1-8b）
 
 ---
 
-*最終更新: 2026-05-23*
+## `create-github-issue`（Phase 4.14・任意）
+
+> AI は使わない。設定画面の「改善案・バグメモ」セクションから入力された自由記述を、そのまま GitHub Issues API へ転送する Edge Function。
+
+- **POST**: 新規 Issue 作成（`title`、`body` を受け取り `https://api.github.com/repos/{REPO}/issues` へ）
+- **GET**: 既存 Issue 一覧取得（state=open のみ）
+- **PATCH**: Issue クローズ / リオープン
+- **Secret**: `GITHUB_TOKEN`（Personal Access Token・`repo` スコープ必須）
+- **対象リポジトリ**: `supabase/functions/create-github-issue/index.ts` 内 `REPO` 定数（既定: `kzmiyamura/akinavi-hr-ai-aws`）
+
+---
+
+*最終更新: 2026-05-28（Phase 4.13/4.14: ウェイト可変ルールスコア・station_master DB・改善案 → GitHub Issue 連携 を反映）*

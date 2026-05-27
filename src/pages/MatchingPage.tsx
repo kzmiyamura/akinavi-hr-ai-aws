@@ -491,9 +491,44 @@ function ProjectModeRankCard({
               </span>
             )}
           </div>
-          {s.candidate.email && (
-            <p className="text-xs text-gray-400 mt-0.5 break-all">{s.candidate.email}</p>
-          )}
+          {(() => {
+            const rp2 = s.candidate.raw_profile as Record<string, unknown>
+            const age = rp2?.age as number | null
+            const gender = rp2?.gender as string | null
+            const prefecture = rp2?.prefecture as string | null
+            const nearestStation = rp2?.nearestStation as string | null
+            const remoteAvailable = rp2?.remoteAvailable as boolean | null
+            const wantsFullRemote = rp2?.wantsFullRemote as boolean | null
+            const agentComment = rp2?.agentComment as string | null
+            const location = [prefecture, nearestStation].filter(Boolean).join(' / ')
+            return (
+              <>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {[s.candidate.from_company, s.candidate.desired_rate].filter(Boolean).join(' ／ ')}
+                  {(s.candidate.from_company || s.candidate.desired_rate) && (age != null || gender) ? ' ／ ' : ''}
+                  {age != null ? `${age}歳` : ''}
+                  {gender ? `（${gender}）` : ''}
+                </p>
+                {location && (
+                  <p className="text-xs text-gray-400 mt-0.5">{location}</p>
+                )}
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {wantsFullRemote && (
+                    <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">リモートのみ</span>
+                  )}
+                  {!wantsFullRemote && remoteAvailable && (
+                    <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5">リモート可</span>
+                  )}
+                </div>
+                {agentComment && (
+                  <div className="mt-1.5 bg-amber-50 border border-amber-100 rounded px-2 py-1.5">
+                    <p className="text-[10px] font-semibold text-amber-600 mb-0.5">エージェントコメント</p>
+                    <p className="text-xs text-amber-900 whitespace-pre-wrap leading-relaxed">{agentComment}</p>
+                  </div>
+                )}
+              </>
+            )
+          })()}
           {(() => {
             const allSkills = (s.candidate.skills as string[]) ?? []
             const reqLower = requiredSkills.map(r => r.toLowerCase())

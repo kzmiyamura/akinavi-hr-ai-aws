@@ -1209,7 +1209,18 @@ function extractCandidateFieldsRegex(
     // 全文走査時に送信者署名（〒XXX-XXXX 東京都...）を除外して誤判定を防ぐ。
     // 同様に署名内の "■MAIL/TEL/FAX/URL" 行も除外する。
     const allText = stripSenderSignature(bodyText) + '\n' + attachText
-    prefecture = PREFECTURES.find(p => allText.includes(p)) ?? null
+    // PREFECTURES配列順ではなくテキスト内出現順で最初に登場する都道府県を採用する。
+    // （配列順だと '東京都' が '大阪府' より前にあるため、大阪在住の候補者が東京と誤判定される問題を防ぐ）
+    let firstIdx = Infinity
+    let firstPref: string | null = null
+    for (const p of PREFECTURES) {
+      const idx = allText.indexOf(p)
+      if (idx !== -1 && idx < firstIdx) {
+        firstIdx = idx
+        firstPref = p
+      }
+    }
+    prefecture = firstPref
   }
   // 最寄駅から推定できる都道府県があれば最優先で採用する。
   // 送信者署名（東京都町田市等）由来の誤判定を上書きするため、
