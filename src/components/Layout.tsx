@@ -1,4 +1,4 @@
-import { Users, Briefcase, Star, LogOut, Settings, Map } from 'lucide-react'
+import { Users, Briefcase, Star, LogOut, Settings } from 'lucide-react'
 import type { DataEnv } from '../lib/dataEnv'
 
 export type Page = 'matching' | 'candidates' | 'projects' | 'settings' | 'heatmap'
@@ -17,11 +17,10 @@ interface Props {
 }
 
 const NAV_ITEMS: { page: Page; label: string; icon: React.ReactNode }[] = [
-  { page: 'matching', label: 'マッチング結果', icon: <Star size={16} className="shrink-0" /> },
-  { page: 'candidates', label: '人材登録', icon: <Users size={16} className="shrink-0" /> },
-  { page: 'projects', label: '案件登録', icon: <Briefcase size={16} className="shrink-0" /> },
+  { page: 'matching', label: 'マッチング', icon: <Star size={16} className="shrink-0" /> },
+  { page: 'candidates', label: '人材', icon: <Users size={16} className="shrink-0" /> },
+  { page: 'projects', label: '案件', icon: <Briefcase size={16} className="shrink-0" /> },
   { page: 'settings', label: '設定', icon: <Settings size={16} className="shrink-0" /> },
-  { page: 'heatmap', label: '人材マップ', icon: <Map size={16} className="shrink-0" /> },
 ]
 
 export function Layout({

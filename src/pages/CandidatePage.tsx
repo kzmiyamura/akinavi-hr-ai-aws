@@ -1,6 +1,6 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate } from '../lib/db/candidates'
 import type { SearchScope } from '../lib/db/candidates'
@@ -596,9 +596,11 @@ interface Props {
   demoUiEnabled?: boolean
   /** カードクリックで人材詳細へ（未指定時は遷移なし） */
   onOpenCandidateDetail?: (candidateId: string) => void
+  /** 人材マップへ遷移 */
+  onOpenHeatmap?: () => void
 }
 
-export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpenCandidateDetail: _onOpenCandidateDetail }: Props) {
+export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpenCandidateDetail: _onOpenCandidateDetail, onOpenHeatmap }: Props) {
   const [showRegisterModal, setShowRegisterModal] = useState(false)
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -986,6 +988,17 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           >
             <RefreshCw size={14} />
           </button>
+          {onOpenHeatmap && (
+            <button
+              type="button"
+              onClick={onOpenHeatmap}
+              className="flex items-center gap-1.5 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
+              title="都道府県別の人材分布マップを表示"
+            >
+              <Map size={14} />
+              人材マップ
+            </button>
+          )}
           <div className="relative flex-1 min-w-48">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input

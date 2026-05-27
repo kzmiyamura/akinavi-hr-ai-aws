@@ -173,13 +173,14 @@ function AppInner() {
                 dataEnv={dataEnv}
                 demoUiEnabled={demoUiEnabled}
                 onOpenCandidateDetail={openCandidateDetail}
+                onOpenHeatmap={() => handleNavigate('heatmap')}
               />
             )}
             {tabPage === 'projects' && (
               <ProjectPage nickname={nickname} dataEnv={dataEnv} demoUiEnabled={demoUiEnabled} onOpenProjectDetail={openProjectDetail} />
             )}
             {tabPage === 'settings' && (
-              <SettingsPage demoUiEnabled={demoUiEnabled} />
+              <SettingsPage demoUiEnabled={demoUiEnabled} onToggleDemoUi={setDemoUiEnabled} />
             )}
             {tabPage === 'heatmap' && (
               <HeatmapPage dataEnv={dataEnv} />

@@ -22,9 +22,11 @@ import {
   saveMatchingSettings,
   MATCHING_DEFAULTS,
 } from '../lib/db/matchingSettings'
+import { writeStoredDemoUnlock } from '../lib/dataEnv'
 
 interface SettingsPageProps {
   demoUiEnabled: boolean
+  onToggleDemoUi: (enabled: boolean) => void
 }
 
 interface PendingConnect {
@@ -40,7 +42,7 @@ interface PendingDelete {
   label: string
 }
 
-export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
+export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProps) {
   const queryClient = useQueryClient()
 
   const { data: settings, isLoading, error } = useQuery({
@@ -809,6 +811,27 @@ export function SettingsPage({ demoUiEnabled }: SettingsPageProps) {
               </div>
             </div>
           )}
+        </section>
+
+        {/* ---- デモモード ---- */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">デモモード</h2>
+          <p className="text-xs text-gray-400 mb-4">
+            有効にするとヘッダーに「データ」セレクタが表示され、本番データとデモデータを切り替えられます。
+          </p>
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => {
+                writeStoredDemoUnlock(!demoUiEnabled)
+                onToggleDemoUi(!demoUiEnabled)
+              }}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${demoUiEnabled ? 'bg-blue-600' : 'bg-gray-300'}`}
+            >
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${demoUiEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
+            <span className="text-sm text-gray-700">{demoUiEnabled ? 'デモモード有効' : 'デモモード無効（本番のみ）'}</span>
+          </div>
         </section>
 
         {/* ---- ドキュメント ---- */}
