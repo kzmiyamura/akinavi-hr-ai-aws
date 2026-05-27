@@ -865,8 +865,8 @@ function extractFieldTwoPhase(
   // 区切り文字。
   //   - 】 を含めることで「【単　価】65万」のような囲み記号ラベル直後に値が続くフォーマットも拾える。
   //   - ラベル直後（または半角スペース許容）にのみ ] として作用するため、本文中の単独「】」は誤検出しない。
-  const SEP     = `(?:[：:\\t】◆◇●■▼★]|　+| {2,})`
-  const SEP_ATT = `(?:[：:\\t,，】◆◇●■▼★]|　+| {2,})`
+  const SEP     = `(?:[：:\\t\\]】◆◇●■▼★]|　+| {2,})`
+  const SEP_ATT = `(?:[：:\\t\\],，】◆◇●■▼★]|　+| {2,})`
 
   // ◆氏名◆ / ●名前● 等のデコレータ文字でラベルが囲まれているケースを正規化
   // 「◆氏名◆\nSS」→「氏名\nSS」、「◆氏名◆：SS」→「氏名：SS」
@@ -1064,11 +1064,12 @@ function extractCandidateFieldsRegex(
     const nlM = allTextForName.match(noLabelPat)
     const nlMGF = !nlM ? allTextForName.match(noLabelPatGF) : null
     if (nlM) {
-      if (!name)           name   = nlM[1].trim() || null
+      // [氏名]OY のような半角ブラケットラベル前置きを除去
+      if (!name)           name   = (nlM[1].trim().replace(/^\[[^\]]{1,10}\]/, '') || null)
       if (age === null)    age    = parseInt(nlM[2], 10)
       if (gender === null) gender = nlM[3]
     } else if (nlMGF) {
-      if (!name)           name   = nlMGF[1].trim() || null
+      if (!name)           name   = (nlMGF[1].trim().replace(/^\[[^\]]{1,10}\]/, '') || null)
       if (gender === null) gender = nlMGF[2]
       if (age === null)    age    = parseInt(nlMGF[3], 10)
     }
@@ -1081,6 +1082,12 @@ function extractCandidateFieldsRegex(
       nationality = natInName[1].trim()
       nameStripped = nameStripped.replace(/[\s　]?[\(（][^)）\d]{1,15}[籍人国][\)）]/, '').trim()
     }
+  }
+  // 国籍 — 名前外 ※XX籍 / ※外国籍 パターン（括弧なし）
+  if (!nationality) {
+    const allTextForNat = bodyText + '\n' + attachText
+    const natMark = allTextForNat.match(/[※＊\*][ 　]?([^\s,、。（）「」【】\t]{1,15}[籍国人])/)
+    if (natMark) nationality = natMark[1].trim()
   }
   // 国籍除去後のnameStrippedで上書き（フォールバックで取得済みなら維持）
   name = name || nameStripped || null
