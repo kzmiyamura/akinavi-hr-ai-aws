@@ -569,15 +569,53 @@ const STATION_TO_PREFECTURE: Record<string, string> = {
   '山形': '山形県', '福島': '福島県', '郡山': '福島県',
 }
 
+/** station_master DB から取得したマップ（関数インスタンス内でキャッシュ） */
+let _stationDbMap: Record<string, string> | null = null
+
+/** DB の station_master を取得してハードコードマップとマージ */
+async function loadStationMap(): Promise<Record<string, string>> {
+  if (_stationDbMap) return _stationDbMap
+  try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    if (supabaseUrl && serviceKey) {
+      const res = await fetch(`${supabaseUrl}/rest/v1/station_master?select=name,prefecture&limit=5000`, {
+        headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
+      })
+      if (res.ok) {
+        const rows = await res.json() as { name: string; prefecture: string }[]
+        const dbMap: Record<string, string> = {}
+        for (const r of rows) dbMap[r.name] = r.prefecture
+        _stationDbMap = { ...STATION_TO_PREFECTURE, ...dbMap }
+        console.log(`[station] DBから${rows.length}駅を読み込み（合計${Object.keys(_stationDbMap).length}駅）`)
+        return _stationDbMap
+      }
+    }
+  } catch (e) {
+    console.warn('[station] DB読み込み失敗、ハードコードマップで継続:', e)
+  }
+  _stationDbMap = { ...STATION_TO_PREFECTURE }
+  return _stationDbMap
+}
+
 /**
  * 駅名（"八街駅" "八街" 等）から都道府県を推定する。
- * 不一致時は null を返す。
+ * 不一致時は null を返す。同期版（ハードコードマップのみ）。
+ * 非同期版は inferPrefectureFromStationAsync を使うこと。
  */
 export function inferPrefectureFromStation(station: string | null | undefined): string | null {
   if (!station) return null
   const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim()
   if (!cleaned) return null
-  return STATION_TO_PREFECTURE[cleaned] ?? null
+  const map = _stationDbMap ?? STATION_TO_PREFECTURE
+  return map[cleaned] ?? null
+}
+
+/**
+ * DB キャッシュを使った非同期版。リクエスト処理の開始時に一度呼ぶこと。
+ */
+export async function preloadStationMap(): Promise<void> {
+  await loadStationMap()
 }
 
 /**
@@ -2370,6 +2408,9 @@ Deno.serve(async (req: Request) => {
     tracePhase = 'supabase_connect'
     pipe(traceRid, tracePhase)
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
+
+    // 駅マスターをDBから先行ロード（以降の inferPrefectureFromStation がDB値を使う）
+    await preloadStationMap()
 
     tracePhase = 'pre_supabase'
 
