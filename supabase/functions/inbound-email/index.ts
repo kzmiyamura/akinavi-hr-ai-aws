@@ -1551,6 +1551,25 @@ function calcMonthsFromDates(start: string, end: string): number | null {
  * Method2: スキル一覧型（スキル名 | X年 が近接している形式）
  */
 function extractSkillYearsFromSheetData(data: string[][]): Record<string, number> {
+  // ── 事前スキャン: Excel上部の「IT経験」「経験年数」宣言セルを探す ──
+  // 例: 「IT経験」「7年」が同行または隣接セルにある場合
+  const EXP_LABEL = /IT経験|開発経験|エンジニア歴|経験年数|総経験|業務経験/
+  for (let i = 0; i < Math.min(30, data.length); i++) {
+    const row = data[i]
+    for (let j = 0; j < row.length; j++) {
+      const v = String(row[j] ?? '').trim()
+      if (!EXP_LABEL.test(v)) continue
+      // 同セル内に年数が含まれる場合: "IT経験: 7年" など
+      const inCell = parseDurationToMonths(v)
+      if (inCell) { return { _totalProjectMonths: inCell } }
+      // 隣接セル（右±3）に年数がある場合
+      for (let k = j + 1; k <= Math.min(row.length - 1, j + 3); k++) {
+        const adj = parseDurationToMonths(String(row[k] ?? ''))
+        if (adj) { return { _totalProjectMonths: adj } }
+      }
+    }
+  }
+
   // ── Method 1: プロジェクト経歴型 ──
   let langColIdx = -1
   let fwColIdx = -1
@@ -1566,6 +1585,8 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   }
   if (langColIdx >= 0) {
     const skillMonths: Record<string, number> = {}
+    // プロジェクト期間の重複なし合計（経験年数推定用）
+    const projectPeriods: Array<{ start: string; end: string; months: number }> = []
     for (let i = headerRowIdx + 1; i < data.length; i++) {
       const row = data[i]
       const noCell = String(row[0] ?? '').trim().replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
@@ -1577,13 +1598,21 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       if (i + 1 < data.length) months = parseDurationToMonths(String(data[i + 1][1] ?? ''))
       if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), String(row[5] ?? ''))
       if (!months || months <= 0) continue
+      projectPeriods.push({ start: String(row[1] ?? ''), end: String(row[5] ?? ''), months })
       const skillTexts = (langCell + '\n' + fwCell).split(/[\n\r、，,]+/).map(s => s.trim())
         .filter(s => s && s !== '-' && s !== '－' && !/^[\s\-－]+$/.test(s))
       for (const skill of skillTexts) {
         skillMonths[skill] = (skillMonths[skill] ?? 0) + months
       }
     }
-    if (Object.keys(skillMonths).length > 0) return skillMonths
+    if (Object.keys(skillMonths).length > 0) {
+      // プロジェクト合計月数を特殊キーとして付与（経験年数フォールバック用）
+      if (projectPeriods.length > 0) {
+        const totalProjectMonths = projectPeriods.reduce((s, p) => s + p.months, 0)
+        skillMonths['_totalProjectMonths'] = totalProjectMonths
+      }
+      return skillMonths
+    }
   }
   // ── Method 2: スキル一覧型 ──
   const skillMonths2: Record<string, number> = {}
@@ -2741,12 +2770,20 @@ Deno.serve(async (req: Request) => {
       const resolvedStation = analyzed.nearestStation || regexFields.nearestStation
       const resolvedPrefecture = analyzed.prefecture || regexFields.prefecture
       let resolvedExperienceYears = analyzed.experienceYears ?? regexFields.experienceYears
-      // skillYearsフォールバック: メール本文に経験年数が書かれていない場合、Excelのスキル別経験月数の最大値で補完
+      // skillYearsフォールバック: メール本文に経験年数が書かれていない場合、Excelから推定
       if (resolvedExperienceYears == null && Object.keys(excelSkillYears).length > 0) {
-        const maxMonths = Math.max(...Object.values(excelSkillYears))
-        if (maxMonths > 0) {
-          resolvedExperienceYears = maxMonths / 12
-          console.log(`[inbound] skillYearsから経験年数推定: ${resolvedExperienceYears.toFixed(1)}年 (最大${maxMonths}ヶ月)`)
+        // 優先1: プロジェクト合計月数（_totalProjectMonths 特殊キー）
+        const totalProjectMonths = excelSkillYears['_totalProjectMonths']
+        // 優先2: スキル別月数の最大値（最も経験の長いスキルをITキャリアの代理指標に）
+        const skillValues = Object.entries(excelSkillYears)
+          .filter(([k]) => k !== '_totalProjectMonths')
+          .map(([, v]) => v)
+        const maxSkillMonths = skillValues.length > 0 ? Math.max(...skillValues) : 0
+        const estimatedMonths = totalProjectMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
+        if (estimatedMonths && estimatedMonths > 0) {
+          resolvedExperienceYears = estimatedMonths / 12
+          const src = totalProjectMonths ? 'プロジェクト合計' : 'スキル最大値'
+          console.log(`[inbound] skillYearsから経験年数推定(${src}): ${resolvedExperienceYears.toFixed(1)}年 (${estimatedMonths}ヶ月)`)
         }
       }
       const resolvedDesiredRate = analyzed.desiredRate || regexFields.desiredRate

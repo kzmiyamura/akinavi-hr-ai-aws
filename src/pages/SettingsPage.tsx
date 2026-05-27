@@ -141,6 +141,10 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
     },
     staleTime: 60_000,
   })
+  const ISSUES_PER_PAGE = 10
+  const [issuesPage, setIssuesPage] = useState(0)
+  const pagedIssues = ghIssues.slice(issuesPage * ISSUES_PER_PAGE, (issuesPage + 1) * ISSUES_PER_PAGE)
+  const issuesTotalPages = Math.ceil(ghIssues.length / ISSUES_PER_PAGE)
   const [issueUrl, setIssueUrl] = useState<string | null>(null)
   const issueMutation = useMutation({
     mutationFn: async (text: string) => {
@@ -163,6 +167,7 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
       setIssueUrl(issue.html_url)
       setMemo('')
       saveAppMemo('')
+      setIssuesPage(0)
       refetchIssues()
     },
   })
@@ -794,9 +799,34 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
           {/* Issue一覧 */}
           {ghIssues.length > 0 && (
             <div className="mt-4">
-              <p className="text-xs font-semibold text-gray-500 mb-2">登録済みIssue</p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-gray-500">
+                  登録済みIssue（全{ghIssues.length}件）
+                </p>
+                {issuesTotalPages > 1 && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setIssuesPage(p => Math.max(0, p - 1))}
+                      disabled={issuesPage === 0}
+                      className="px-2 py-0.5 text-xs border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-50"
+                    >
+                      ‹ 前
+                    </button>
+                    <span className="text-xs text-gray-400">{issuesPage + 1}/{issuesTotalPages}</span>
+                    <button
+                      type="button"
+                      onClick={() => setIssuesPage(p => Math.min(issuesTotalPages - 1, p + 1))}
+                      disabled={issuesPage >= issuesTotalPages - 1}
+                      className="px-2 py-0.5 text-xs border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-50"
+                    >
+                      次 ›
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="space-y-1.5">
-                {ghIssues.map(issue => (
+                {pagedIssues.map(issue => (
                   <div key={issue.number} className="flex items-center gap-2 text-xs bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
                     <span className={`shrink-0 w-2 h-2 rounded-full ${issue.state === 'open' ? 'bg-red-500' : 'bg-green-500'}`} />
                     <span className="text-gray-400 shrink-0">#{issue.number}</span>

@@ -1,6 +1,6 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate } from '../lib/db/candidates'
 import type { SearchScope } from '../lib/db/candidates'
@@ -995,7 +995,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
               className="flex items-center gap-1.5 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
               title="都道府県別の人材分布マップを表示"
             >
-              <Map size={14} />
+              <MapIcon size={14} />
               人材マップ
             </button>
           )}
