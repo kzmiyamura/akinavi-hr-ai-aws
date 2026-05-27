@@ -21,7 +21,7 @@ Deno.serve(async (req) => {
     return new Response(null, {
       headers: {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
         'Access-Control-Allow-Headers': 'authorization, content-type',
       },
     })
@@ -102,6 +102,24 @@ ${memo.trim()}
       html_url: issue.html_url,
       state: issue.state,
     }, 201)
+  }
+
+  // PATCH: Issue クローズ
+  if (req.method === 'PATCH') {
+    const body = await req.json().catch(() => ({}))
+    const { number, state } = body as { number?: number; state?: string }
+    if (!number) return json({ error: 'number is required' }, 400)
+    const res = await fetch(`${GITHUB_API}/repos/${REPO}/issues/${number}`, {
+      method: 'PATCH',
+      headers: githubHeaders(token),
+      body: JSON.stringify({ state: state ?? 'closed' }),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      return json({ error: err }, res.status)
+    }
+    const issue = await res.json() as Record<string, unknown>
+    return json({ number: issue.number, state: issue.state }, 200)
   }
 
   return json({ error: 'Method not allowed' }, 405)
