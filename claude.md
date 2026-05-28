@@ -658,12 +658,22 @@ ALTER TABLE candidates_archive_light
   - README/構成図は「後任エンジニア」が最短で再現できるように。
   - 操作マニュアルは「非IT営業職」がIT用語なしで理解できるように。
 - **Issue 作業サイクル（自律ループ）**:
-  1. GitHub Issue リストを取得（`create-github-issue` Edge Function GET）して open な Issue を確認する
+  1. GitHub Issue リストを取得（`node scripts/list_issues.mjs`）して open な Issue を確認する
   2. open Issue をすべて実装・修正・テストし、commit & push する
-  3. 修正が完了した Issue を PATCH で `state: 'closed'` に更新する
+  3. 修正が完了した Issue を `node scripts/list_issues.mjs --close <番号>` でクローズする
   4. 残った open Issue がないか再度取得する。新しい Issue があれば 1. に戻る
   5. open Issue が 0 件になったら完了を報告して待機する
   - **ユーザーへの確認不要**: 上記サイクルはユーザーが明示的に止めない限り自律的に続ける
+- **ローカル検証スクリプト（使えるときは積極的に使うこと）**:
+  - `node scripts/list_issues.mjs` — GitHub Issue 一覧取得・クローズ。Edge Function を直接叩くより高速
+  - `node scripts/list_issues.mjs --close <番号>` — Issue クローズ（PATCH）
+  - `node scripts/test_extraction.mjs "本文"` — regex 変更を **デプロイなし** でローカル検証。regex・フィールド抽出・複数人分割を即確認できる。変更前後の動作確認に必ず使うこと
+  - `node scripts/check_extraction.mjs` — 直近14日の取りこぼし（name不明/NULLフィールド/誤登録）を Supabase から取得してローカル表示。品質チェックや `PROJECT_SOLICITATION_KEYWORDS` 追加前の調査に使う
+  - `bash scripts/check-and-deploy-edge.sh <function>` — deno check + deploy を一括実行。Edge Function デプロイは必ずこれを使う
+- **スキルの活用（使えるときは積極的に使うこと）**:
+  - `/issue-loop` — Issue 自律修正ループ（fetch→実装→close→refetch）
+  - `/deploy-edge` — Edge Function のデプロイ一括実行
+  - `/quality-check` — skill_master メンテ・駅名マッピング・取りこぼし調査・異常監視・AIコスト監視
 
 ---
 
