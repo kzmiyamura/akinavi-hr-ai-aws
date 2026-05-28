@@ -99,12 +99,13 @@ export function ProjectProfileFields({
   onToggleExpand?: () => void
   detailMode?: boolean
 }) {
-  const rawNice = (p.raw_data as { niceToHaveSkills?: unknown })?.niceToHaveSkills
+  const rawData = (p.raw_data ?? {}) as { from?: unknown; subject?: unknown; niceToHaveSkills?: unknown; requiredSkillYears?: Record<string, number[]> }
+  const rawNice = rawData.niceToHaveSkills
   const nice = Array.isArray(rawNice) ? rawNice.map(String).filter(Boolean) : []
   const required = (p.required_skills as string[]) ?? []
-  const raw = (p.raw_data ?? {}) as { from?: unknown; subject?: unknown }
-  const mailFrom = typeof raw.from === 'string' ? raw.from : null
-  const mailSubject = typeof raw.subject === 'string' ? raw.subject : null
+  const requiredSkillYears = rawData.requiredSkillYears ?? {}
+  const mailFrom = typeof rawData.from === 'string' ? rawData.from : null
+  const mailSubject = typeof rawData.subject === 'string' ? rawData.subject : null
   const needsToggle = !detailMode && ((required.length + nice.length) > 12 || (p.description?.length ?? 0) > 240)
   const hasLocation = Boolean(p.work_location) || Boolean(p.remote_policy)
   const showAll = detailMode || isExpanded
@@ -218,9 +219,15 @@ export function ProjectProfileFields({
           {required.length > 0 && (
             <div className="flex flex-wrap gap-1 items-center">
               <span className="text-xs text-gray-400 w-12 shrink-0">必須</span>
-              {(showAll ? required : required.slice(0, 10)).map((s) => (
-                <span key={s} className="text-xs bg-purple-50 text-purple-700 rounded px-1.5 py-0.5">{s}</span>
-              ))}
+              {(showAll ? required : required.slice(0, 10)).map((s) => {
+                const years = requiredSkillYears[s]
+                const minYear = years?.length ? Math.min(...years) : null
+                return (
+                  <span key={s} className="text-xs bg-purple-50 text-purple-700 rounded px-1.5 py-0.5">
+                    {s}{minYear != null && <span className="opacity-60 ml-0.5">{minYear}年↑</span>}
+                  </span>
+                )
+              })}
               {!showAll && required.length > 10 && (
                 <span className="text-xs text-gray-400">+{required.length - 10}</span>
               )}

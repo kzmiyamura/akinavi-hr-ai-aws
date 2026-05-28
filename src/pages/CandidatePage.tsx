@@ -47,6 +47,7 @@ interface RawProfile {
   gender?: string | null
   agentComment?: string | null
   selfPR?: string | null
+  skillYears?: Record<string, number> | null
 }
 
 function getRaw(c: Candidate): RawProfile {
@@ -190,7 +191,23 @@ export function CandidateProfileFields({
     prefecture, nearestStation, availableRegions,
     currentWorkLocation, remoteAvailable,
     from: mailFrom, subject: mailSubject, emailReceivedAt,
-    age, gender, agentComment, selfPR } = raw
+    age, gender, agentComment, selfPR, skillYears } = raw
+
+  function getSkillMonths(skill: string): number | null {
+    if (!skillYears) return null
+    const lower = skill.toLowerCase().replace(/\s/g, '')
+    for (const [k, v] of Object.entries(skillYears)) {
+      if (k === '_totalProjectMonths') continue
+      const kl = k.toLowerCase().replace(/\s/g, '')
+      if (kl === lower || kl.includes(lower) || lower.includes(kl)) return v
+    }
+    return null
+  }
+
+  function monthsToLabel(months: number): string {
+    if (months < 12) return '〜1年'
+    return `${Math.floor(months / 12)}年`
+  }
 
   const rawText = raw.text ?? ''
 
@@ -317,9 +334,14 @@ export function CandidateProfileFields({
             return (
               <div key={key} className="flex flex-wrap gap-1 items-center">
                 <span className="text-xs text-gray-400 w-12 shrink-0">{label}</span>
-                {shown.map((s) => (
-                  <span key={s} className={`text-xs rounded px-1.5 py-0.5 ${badge}`}>{s}</span>
-                ))}
+                {shown.map((s) => {
+                  const months = getSkillMonths(s)
+                  return (
+                    <span key={s} className={`text-xs rounded px-1.5 py-0.5 ${badge}`}>
+                      {s}{months != null && months > 0 && <span className="opacity-60 ml-0.5">{monthsToLabel(months)}</span>}
+                    </span>
+                  )
+                })}
                 {!showAll && hidden > 0 && (
                   <span className="text-xs text-gray-400">+{hidden}</span>
                 )}
@@ -332,9 +354,14 @@ export function CandidateProfileFields({
               const sorted = [...(c.skills as string[])].sort(
                 (a, b) => (skillScores.get(b) ?? 0) - (skillScores.get(a) ?? 0)
               )
-              return (showAll ? sorted : sorted.slice(0, COLLAPSED_PER_CATEGORY)).map((s) => (
-                <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
-              ))
+              return (showAll ? sorted : sorted.slice(0, COLLAPSED_PER_CATEGORY)).map((s) => {
+                const months = getSkillMonths(s)
+                return (
+                  <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
+                    {s}{months != null && months > 0 && <span className="opacity-60 ml-0.5">{monthsToLabel(months)}</span>}
+                  </span>
+                )
+              })
             })()}
             {!showAll && (c.skills as string[]).length > COLLAPSED_PER_CATEGORY && (
               <span className="text-xs text-gray-400">+{(c.skills as string[]).length - COLLAPSED_PER_CATEGORY}</span>
