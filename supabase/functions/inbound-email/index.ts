@@ -2553,7 +2553,10 @@ Deno.serve(async (req: Request) => {
     }
 
     // ② 研修報告・案件紹介メールをスキップ（人材メールボックスの誤登録対策）
-    if (type === 'candidate' && !forceProcess) {
+    // 複数人材メール（区切り線2本以上）は前置きテキストに案件紹介フレーズを含む場合があるため
+    // splitMultiCandidateBody で先に構造を確認し、2人以上いればスキップをバイパスする
+    const earlyMultiCheck = type === 'candidate' ? splitMultiCandidateBody(body) : null
+    if (type === 'candidate' && !forceProcess && !earlyMultiCheck) {
       const TRAINING_KEYWORDS = [
         '研修内容について報告します',
         '【本日の作業進捗】',
@@ -2834,7 +2837,8 @@ Deno.serve(async (req: Request) => {
       const effectiveBody = body.trim() ? body : subject
 
       // ── 複数人材検出（*****や-----の区切り線） ─────────────────────────────
-      const multiBlocks = splitMultiCandidateBody(effectiveBody)
+      // earlyMultiCheck は body で事前計算済み（effectiveBody と同一の場合は再利用）
+      const multiBlocks = earlyMultiCheck ?? splitMultiCandidateBody(effectiveBody)
       if (multiBlocks && multiBlocks.length >= 2) {
         console.log(`[multi-candidate] ${multiBlocks.length}人検出 from=${from} subject=${subject.slice(0, 80)}`)
         console.log(`[multi-candidate] resumeUrl=${resumeUrl ?? 'null'} allTextContents=[${allTextContents.map(t => t.label).join(', ')}]`)
