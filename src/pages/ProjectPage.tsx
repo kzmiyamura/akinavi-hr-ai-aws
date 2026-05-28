@@ -224,7 +224,7 @@ export function ProjectProfileFields({
                 const minYear = years?.length ? Math.min(...years) : null
                 return (
                   <span key={s} className="text-xs bg-purple-50 text-purple-700 rounded px-1.5 py-0.5">
-                    {s}{minYear != null && <span className="opacity-60 ml-0.5">{minYear}年↑</span>}
+                    {s}{minYear != null && <span className="opacity-60 ml-0.5">({minYear}年↑)</span>}
                   </span>
                 )
               })}

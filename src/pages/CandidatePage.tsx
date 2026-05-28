@@ -338,7 +338,7 @@ export function CandidateProfileFields({
                   const months = getSkillMonths(s)
                   return (
                     <span key={s} className={`text-xs rounded px-1.5 py-0.5 ${badge}`}>
-                      {s}{months != null && months > 0 && <span className="opacity-60 ml-0.5">{monthsToLabel(months)}</span>}
+                      {s}{months != null && months > 0 && <span className="opacity-60 ml-0.5">({monthsToLabel(months)})</span>}
                     </span>
                   )
                 })}
@@ -358,7 +358,7 @@ export function CandidateProfileFields({
                 const months = getSkillMonths(s)
                 return (
                   <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">
-                    {s}{months != null && months > 0 && <span className="opacity-60 ml-0.5">{monthsToLabel(months)}</span>}
+                    {s}{months != null && months > 0 && <span className="opacity-60 ml-0.5">({monthsToLabel(months)})</span>}
                   </span>
                 )
               })
