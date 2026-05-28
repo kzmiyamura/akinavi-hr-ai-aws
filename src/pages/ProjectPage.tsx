@@ -1,5 +1,6 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
+import type { InfiniteData } from '@tanstack/react-query'
 import { Loader2, Briefcase, RefreshCw, Search, ChevronDown, ChevronUp, Pencil, Trash2, X, MapPin, Wifi, Mail, Paperclip, ChevronRight } from 'lucide-react'
 import {
   fetchProjectsPage,
@@ -567,6 +568,14 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
   }
 
   const onProjectRegisterSuccess = (project: Project) => {
+    // 楽観的更新: 新規案件をキャッシュ先頭に即時追加（selectedId 設定前に反映させる）
+    const prev = queryClient.getQueryData<InfiniteData<Project[]>>(projectsQueryKeys.all(dataEnv))
+    if (prev?.pages?.length) {
+      queryClient.setQueryData<InfiniteData<Project[]>>(projectsQueryKeys.all(dataEnv), {
+        ...prev,
+        pages: [[project, ...prev.pages[0]], ...prev.pages.slice(1)],
+      })
+    }
     invalidateProjectLists(queryClient, dataEnv)
     queryClient.invalidateQueries({ queryKey: ['projects-count', dataEnv] })
     setText('')

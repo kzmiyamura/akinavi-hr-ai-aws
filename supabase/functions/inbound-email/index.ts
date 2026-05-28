@@ -1126,8 +1126,8 @@ function extractCandidateFieldsRegex(
     const allTextForInitials = bodyText + '\n' + attachText
     // パターン1: イニシャル + 年齢/性別 (例: K.S（45歳/男性）)
     const initialsPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])[ 　]?[（(](\d{2})[才歳][^)）]*[）)]/m
-    // パターン2: イニシャルのみ（行頭・デコレータ直後）
-    const initialsOnlyPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→][ 　]?([A-Z][.．・][A-Z])(?:[ 　]|$)/m
+    // パターン2: イニシャルのみ（行頭 + 任意デコレータ。例: G.S / ■G.S）
+    const initialsOnlyPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])(?:[ 　]|$)/m
     const imatch = allTextForInitials.match(initialsPat)
     const imatchOnly = !imatch ? allTextForInitials.match(initialsOnlyPat) : null
     if (imatch) {
@@ -3430,11 +3430,15 @@ Deno.serve(async (req: Request) => {
         const requiredText = niceIdx >= 0 ? skillText.slice(0, niceIdx) : skillText
         const niceText = niceIdx >= 0 ? skillText.slice(niceIdx) : ''
         const skillFiltered = dbSkillNames.filter(s => !PROJECT_PROCESS_NOISE.has(s))
-        // スペースなし比較も追加（"Spring Boot" vs "Springboot" 等の表記ゆれ対応）
+        // スキル名 → エイリアスのマップ（aliases チェック用。"Visual Basic .NET" → VB.NET 対応）
+        const skillAliasMap = new Map(masterSkills.map(s => [s.name, s.aliases]))
+        // スペースなし比較 + エイリアス比較も追加（"Spring Boot" vs "Springboot" / "VB.NET" vs "Visual Basic .NET" 等の表記ゆれ対応）
         const matchesText = (s: string, text: string) => {
           const sl = s.toLowerCase()
           const tl = text.toLowerCase()
-          return tl.includes(sl) || tl.includes(sl.replace(/\s+/g, ''))
+          if (tl.includes(sl) || tl.includes(sl.replace(/\s+/g, ''))) return true
+          const aliases = skillAliasMap.get(s) ?? []
+          return aliases.some(a => a && (tl.includes(a.toLowerCase()) || tl.includes(a.toLowerCase().replace(/\s+/g, ''))))
         }
         const inRequired = skillFiltered.filter(s => matchesText(s, requiredText))
         projectRequiredSkills = inRequired.length > 0 ? inRequired : skillFiltered
