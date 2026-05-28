@@ -440,6 +440,8 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
   const [text, setText] = useState('')
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [replayingProjectId, setReplayingProjectId] = useState<string | null>(null)
+  const [replayProjectMsg, setReplayProjectMsg] = useState<{ id: string; text: string; ok: boolean } | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
@@ -565,6 +567,38 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
     if (!window.confirm(`「${p.title}」を削除しますか？この操作は元に戻せません。`)) return
     setDeletingId(p.id)
     deleteMutation.mutate(p.id)
+  }
+
+  async function handleProjectReplay(p: Project) {
+    const raw = (p.raw_data ?? {}) as Record<string, unknown>
+    const rawText = raw.text as string | undefined
+    if (!rawText?.trim()) {
+      setReplayProjectMsg({ id: p.id, text: 'メール本文（raw_data.text）がないため再解析できません', ok: false })
+      return
+    }
+    setReplayingProjectId(p.id)
+    setReplayProjectMsg(null)
+    try {
+      const { error } = await supabase.functions.invoke('inbound-email', {
+        body: {
+          subject: raw.subject ?? `【再解析】${p.title}`,
+          body: rawText,
+          from: raw.from ?? `replay+${p.id}@demo.invalid`,
+          attachments: [],
+          type: 'project',
+          force: true,
+          mode: dataEnv,
+        },
+      })
+      if (error) throw error
+      setReplayProjectMsg({ id: p.id, text: '再解析完了。新規案件として登録されました。', ok: true })
+      queryClient.invalidateQueries({ queryKey: ['projects', dataEnv] })
+      queryClient.invalidateQueries({ queryKey: ['projects-count', dataEnv] })
+    } catch (e) {
+      setReplayProjectMsg({ id: p.id, text: `再解析失敗: ${String(e)}`, ok: false })
+    } finally {
+      setReplayingProjectId(null)
+    }
   }
 
   const onProjectRegisterSuccess = (project: Project) => {
@@ -881,6 +915,20 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                   <div className="flex items-start justify-between gap-3">
                     <h3 className="text-base font-semibold text-gray-800">{selectedProject.title}</h3>
                     <div className="flex items-center gap-2 shrink-0">
+                      {(selectedProject.raw_data as Record<string, unknown>)?.text && (
+                        <button
+                          type="button"
+                          onClick={() => handleProjectReplay(selectedProject)}
+                          disabled={replayingProjectId === selectedProject.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-violet-200 rounded-lg text-violet-600 hover:text-violet-800 hover:border-violet-400 transition-colors disabled:opacity-50"
+                          title="保存済みメール本文を再解析して新規登録"
+                        >
+                          {replayingProjectId === selectedProject.id
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <RefreshCw size={14} />}
+                          再解析
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setEditingProject(selectedProject)}
@@ -916,6 +964,11 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                         queryClient.invalidateQueries({ queryKey: ['candidates-count', 'demo'] })
                       }}
                     />
+                  )}
+                  {replayProjectMsg?.id === selectedProject.id && (
+                    <p className={`text-xs px-1 ${replayProjectMsg.ok ? 'text-green-600' : 'text-red-500'}`}>
+                      {replayProjectMsg.text}
+                    </p>
                   )}
                   {/* 元メール本文 */}
                   {(() => {
