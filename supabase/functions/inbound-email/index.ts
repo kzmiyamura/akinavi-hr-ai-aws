@@ -2750,42 +2750,31 @@ Deno.serve(async (req: Request) => {
         // 同一メール内のループ内重複防止: このバッチで既に登録/更新した name → id のマップ
         const batchNameToId = new Map<string, string>()
 
-        // ── 複数人材×添付ファイルのプリマッチング ────────────────────────────
-        // 各ブロックの仮名前・駅名を先行抽出し、添付ファイル名とのマッチングを事前に確認する。
-        // 1件以上マッチが見つかれば「個人別添付割り当てモード」に切り替え、
-        // マッチなし（汎用添付等）の場合は従来通り全ブロック共有でフォールバックする。
-        const blockPrelimData = multiBlocks.map(block => {
-          const preText = decodeHtmlEntities([subject, block].join('\n'))
-          const preFields = extractCandidateFieldsRegex(preText, '')
-          const preName = preFields.name ?? extractNameFallback(preText) ?? extractCandidateCode(subject) ?? '不明'
-          const preStation = preFields.nearestStation ?? null
-          return { preName, preStation }
-        })
-        const useBlockAttachMatching = allTextContents.length > 0
-          && blockPrelimData.some(({ preName, preStation }) =>
-            findMatchingTextContent(preName, preStation, allTextContents) !== null)
-        if (useBlockAttachMatching) {
-          console.log(`[multi-candidate] 個人別添付割り当てモード: ${allTextContents.map(t => t.label).join(', ')}`)
-        }
-
-        for (const [blockIdx, block] of multiBlocks.entries()) {
+        for (const block of multiBlocks) {
           try {
-            // ブロック固有のスキル照合（本文のみ）
+            // ── Step1: 本文のみから名前・駅名を先行抽出（添付マッチングに使用） ──
+            const blockPreText = decodeHtmlEntities([subject, block].join('\n'))
+            const blockPreFields = extractCandidateFieldsRegex(blockPreText, '')
+            const blockNameForMatch = blockPreFields.name ?? extractNameFallback(blockPreText) ?? null
+            const blockStationForMatch = blockPreFields.nearestStation ?? null
+
+            // ── Step2: 名前でファイル名マッチング（複数人材限定） ────────────────
+            // 「名前が取れたら → ファイル名に名前が含まれるか確認 → 一致したらその人の添付」
+            // 名前が取れない / マッチなし → 添付なし（他人のデータを混入させない）
+            let matchedTextContent: { label: string; content?: string } | null = null
+            if (blockNameForMatch && allTextContents.length > 0) {
+              matchedTextContent = findMatchingTextContent(blockNameForMatch, blockStationForMatch, allTextContents)
+              if (matchedTextContent) {
+                console.log(`[multi-candidate] 添付マッチ: ${blockNameForMatch} → ${matchedTextContent.label}`)
+              }
+            }
+            const blockAttachText = matchedTextContent?.content ?? ''
+            const blockAttachLabel = matchedTextContent?.label ?? ''
+
+            // ── Step3: ブロック固有のスキル照合 ──────────────────────────────────
             const blockBodyText = [subject, block].join('\n')
             const { matched: blockBodyMatched } = extractAndRemoveSkills(blockBodyText, masterSkills, { looseCert: false })
             const blockBodyMatchedNames = new Set(blockBodyMatched.map(s => s.name))
-
-            // 添付テキスト・添付ラベルの決定
-            // 個人別割り当てモード: ブロックの仮名前・駅名にマッチする添付だけ使用（マッチなし→添付なし）
-            // 共有モード（汎用添付・マッチなし全体）: 従来通り全添付テキストを共有
-            const { preName: blockPrelimName, preStation: blockPrelimStation } = blockPrelimData[blockIdx]
-            const matchedTextContent = useBlockAttachMatching
-              ? findMatchingTextContent(blockPrelimName, blockPrelimStation, allTextContents)
-              : null
-            const blockAttachText = useBlockAttachMatching
-              ? (matchedTextContent?.content ?? '')
-              : attachText
-            const blockAttachLabel = matchedTextContent?.label ?? ''
             const blockAttachRaw = blockAttachText.trim()
               ? extractAndRemoveSkills(blockAttachText, masterSkills, { looseCert: true }).matched
               : []
@@ -2794,9 +2783,8 @@ Deno.serve(async (req: Request) => {
             const blockDbMatchedSkills = [...blockBodyMatched, ...blockAttachDeduped]
             const blockSkillNames = blockDbMatchedSkills.map(s => s.name)
 
-            // フィールド抽出（件名＋ブロック本文＋マッチ添付ラベルのみ）
-            const blockAttachNameForExtract = useBlockAttachMatching ? blockAttachLabel : attachmentNames
-            const blockRegexBodyText = decodeHtmlEntities([subject, block, blockAttachNameForExtract].join('\n'))
+            // ── Step4: フィールド抽出（件名＋ブロック本文＋マッチ添付テキスト） ──
+            const blockRegexBodyText = decodeHtmlEntities([subject, block, blockAttachLabel].join('\n'))
             const blockRegexFields = extractCandidateFieldsRegex(blockRegexBodyText, blockAttachText)
             const blockProseFields = extractFromProse(blockRegexBodyText, blockAttachText)
 
@@ -2835,14 +2823,8 @@ Deno.serve(async (req: Request) => {
                 from, subject,
                 emailReceivedAt,
                 attachmentCount: allAttachments.length,
-                // 個人別割り当てモードの場合はマッチした添付のラベルのみ記録
-                // 共有モード（汎用添付）の場合は全添付を記録（従来動作）
-                attachmentNames: useBlockAttachMatching
-                  ? (matchedTextContent ? [matchedTextContent.label] : [])
-                  : [
-                      ...allAttachments.map(a => a.name ?? a.mimeType),
-                      ...officeTextContents.map(t => t.label),
-                    ],
+                // マッチした添付のラベルのみ記録（マッチなし = この人の添付なし）
+                attachmentNames: matchedTextContent ? [matchedTextContent.label] : [],
                 driveLinks: driveTexts.map(t => t.label),
                 aiAnalysis: { availableFrom: blockRegexFields.availableFrom },
                 desiredProject: blockRegexFields.desiredProject,
