@@ -2195,6 +2195,40 @@ async function unmarkEmailProcessed(
 }
 
 /**
+ * 複数人材メールで、ブロック（人材）と添付ファイルを名前・駅名でマッチングする。
+ *
+ * 送信側が「1メール複数人材 + 各人のExcelを1ファイルずつ添付」する形式に対応:
+ *   - ファイル名 "Y.N_神立.xlsx" → ブロック名 "Y.N" または駅名 "神立" にマッチ
+ *   - マッチした場合、そのブロックのみが添付テキストを使用（他ブロックは使用しない）
+ *   - allTextContents が1件でも名前マッチを試みる（1件だからといってスキップしない）
+ *   - マッチなし → null（そのブロックは添付を使わない）
+ */
+function findMatchingTextContent(
+  blockName: string,
+  blockStation: string | null,
+  allTextContents: Array<{ label: string; content?: string }>,
+): { label: string; content?: string } | null {
+  if (allTextContents.length === 0) return null
+
+  // ブロック名を正規化（イニシャル "Y.N" → "yn" / "yn"）
+  const normName = blockName.replace(/[.\s　]/g, '').toLowerCase()
+
+  for (const tc of allTextContents) {
+    // ラベル例: "Excelファイル(Y.N_神立.xlsx)" → ファイル名部分を取り出す
+    const filenameMatch = tc.label.match(/\(([^)]+)\)/)
+    const filename = (filenameMatch ? filenameMatch[1] : tc.label).toLowerCase().replace(/[.\s　]/g, '')
+
+    // ブロック名（イニシャル）がファイル名に含まれるか
+    if (normName.length >= 2 && filename.includes(normName)) return tc
+
+    // 駅名がファイル名に含まれるか
+    if (blockStation && blockStation.length >= 2 && filename.includes(blockStation.toLowerCase())) return tc
+  }
+
+  return null
+}
+
+/**
  * 1メールに複数人材が区切り線（`*****`/`-----` 8文字以上）で並んでいる場合に分割する。
  *
  * メール構造（Phoenixテクノロジーズ等）:
@@ -2716,23 +2750,58 @@ Deno.serve(async (req: Request) => {
         // 同一メール内のループ内重複防止: このバッチで既に登録/更新した name → id のマップ
         const batchNameToId = new Map<string, string>()
 
-        for (const block of multiBlocks) {
+        // ── 複数人材×添付ファイルのプリマッチング ────────────────────────────
+        // 各ブロックの仮名前・駅名を先行抽出し、添付ファイル名とのマッチングを事前に確認する。
+        // 1件以上マッチが見つかれば「個人別添付割り当てモード」に切り替え、
+        // マッチなし（汎用添付等）の場合は従来通り全ブロック共有でフォールバックする。
+        const blockPrelimData = multiBlocks.map(block => {
+          const preText = decodeHtmlEntities([subject, block].join('\n'))
+          const preFields = extractCandidateFieldsRegex(preText, '')
+          const preName = preFields.name ?? extractNameFallback(preText) ?? extractCandidateCode(subject) ?? '不明'
+          const preStation = preFields.nearestStation ?? null
+          return { preName, preStation }
+        })
+        const useBlockAttachMatching = allTextContents.length > 0
+          && blockPrelimData.some(({ preName, preStation }) =>
+            findMatchingTextContent(preName, preStation, allTextContents) !== null)
+        if (useBlockAttachMatching) {
+          console.log(`[multi-candidate] 個人別添付割り当てモード: ${allTextContents.map(t => t.label).join(', ')}`)
+        }
+
+        for (const [blockIdx, block] of multiBlocks.entries()) {
           try {
-            // ブロック固有のスキル照合
+            // ブロック固有のスキル照合（本文のみ）
             const blockBodyText = [subject, block].join('\n')
             const { matched: blockBodyMatched } = extractAndRemoveSkills(blockBodyText, masterSkills, { looseCert: false })
             const blockBodyMatchedNames = new Set(blockBodyMatched.map(s => s.name))
-            const blockAttachDeduped = attachRated.filter(s => !blockBodyMatchedNames.has(s.name)).slice(0, 10)
+
+            // 添付テキスト・添付ラベルの決定
+            // 個人別割り当てモード: ブロックの仮名前・駅名にマッチする添付だけ使用（マッチなし→添付なし）
+            // 共有モード（汎用添付・マッチなし全体）: 従来通り全添付テキストを共有
+            const { preName: blockPrelimName, preStation: blockPrelimStation } = blockPrelimData[blockIdx]
+            const matchedTextContent = useBlockAttachMatching
+              ? findMatchingTextContent(blockPrelimName, blockPrelimStation, allTextContents)
+              : null
+            const blockAttachText = useBlockAttachMatching
+              ? (matchedTextContent?.content ?? '')
+              : attachText
+            const blockAttachLabel = matchedTextContent?.label ?? ''
+            const blockAttachRaw = blockAttachText.trim()
+              ? extractAndRemoveSkills(blockAttachText, masterSkills, { looseCert: true }).matched
+              : []
+            const blockAttachRatedLocal = filterBySkillRating(blockAttachText, blockAttachRaw)
+            const blockAttachDeduped = blockAttachRatedLocal.filter(s => !blockBodyMatchedNames.has(s.name)).slice(0, 10)
             const blockDbMatchedSkills = [...blockBodyMatched, ...blockAttachDeduped]
             const blockSkillNames = blockDbMatchedSkills.map(s => s.name)
 
-            // フィールド抽出（件名＋ブロック本文＋添付名）
-            const blockRegexBodyText = decodeHtmlEntities([subject, block, attachmentNames].join('\n'))
-            const blockRegexFields = extractCandidateFieldsRegex(blockRegexBodyText, attachText)
-            const blockProseFields = extractFromProse(blockRegexBodyText, attachText)
+            // フィールド抽出（件名＋ブロック本文＋マッチ添付ラベルのみ）
+            const blockAttachNameForExtract = useBlockAttachMatching ? blockAttachLabel : attachmentNames
+            const blockRegexBodyText = decodeHtmlEntities([subject, block, blockAttachNameForExtract].join('\n'))
+            const blockRegexFields = extractCandidateFieldsRegex(blockRegexBodyText, blockAttachText)
+            const blockProseFields = extractFromProse(blockRegexBodyText, blockAttachText)
 
             const blockResolvedName = blockRegexFields.name
-              ?? extractNameFallback([blockRegexBodyText, attachText].join('\n'))
+              ?? extractNameFallback([blockRegexBodyText, blockAttachText].join('\n'))
               ?? extractCandidateCode(subject)
               ?? '不明'
             const blockRemoteAvailable = blockProseFields.workStyle === 'フルリモート'
@@ -2766,10 +2835,14 @@ Deno.serve(async (req: Request) => {
                 from, subject,
                 emailReceivedAt,
                 attachmentCount: allAttachments.length,
-                attachmentNames: [
-                  ...allAttachments.map(a => a.name ?? a.mimeType),
-                  ...officeTextContents.map(t => t.label),
-                ],
+                // 個人別割り当てモードの場合はマッチした添付のラベルのみ記録
+                // 共有モード（汎用添付）の場合は全添付を記録（従来動作）
+                attachmentNames: useBlockAttachMatching
+                  ? (matchedTextContent ? [matchedTextContent.label] : [])
+                  : [
+                      ...allAttachments.map(a => a.name ?? a.mimeType),
+                      ...officeTextContents.map(t => t.label),
+                    ],
                 driveLinks: driveTexts.map(t => t.label),
                 aiAnalysis: { availableFrom: blockRegexFields.availableFrom },
                 desiredProject: blockRegexFields.desiredProject,
