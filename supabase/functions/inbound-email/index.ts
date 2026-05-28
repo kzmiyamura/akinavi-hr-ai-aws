@@ -2851,10 +2851,10 @@ Deno.serve(async (req: Request) => {
               created_by: 'make-inbound',
               box_url: blockBoxUrls[0] ?? null,
               box_status: blockBoxUrls.length > 0 ? 'pending' : null,
-              // ケースA: 名前マッチ済み → null（添付テキストで代替）
-              // ケースB: 共有経歴書 → null（全員に同じURLを付けない）
-              // ケースC: 名前取得失敗フォールバック → resumeUrlをそのまま使用
-              resume_url: blockNameForMatch ? null : resumeUrl,
+              // ケースA: 名前マッチあり → resumeUrl（そのメールの添付 = その人のファイル）
+              // ケースB: 名前あり・マッチなし → null（共有経歴書を全員に付けない）
+              // ケースC: 名前取得失敗 → resumeUrl（フォールバック）
+              resume_url: (matchedTextContent || !blockNameForMatch) ? resumeUrl : null,
               desired_rate: blockRegexFields.desiredRate ?? null,
               from_company: sanitizeFromCompany(blockRegexFields.fromCompany),
             }
@@ -2927,8 +2927,8 @@ Deno.serve(async (req: Request) => {
                 desired_rate: blockRegexFields.desiredRate ?? null,
                 created_at: new Date().toISOString(),
               }
-              // ケースC（名前取得失敗フォールバック）のみ resume_url を更新
-              if (!blockNameForMatch && resumeUrl) blockUpdatePayload.resume_url = resumeUrl
+              // ケースA・C のみ resume_url を更新（ケースBは null のまま）
+              if ((matchedTextContent || !blockNameForMatch) && resumeUrl) blockUpdatePayload.resume_url = resumeUrl
               if (blockPayload.from_company) blockUpdatePayload.from_company = blockPayload.from_company
               const { error: blockUpdateError } = await supabase
                 .from('candidates').update(blockUpdatePayload)
