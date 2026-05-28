@@ -778,6 +778,45 @@ function filterBySkillRating(
 }
 
 /**
+ * 案件テキストから「スキル別の必要経験年数」を抽出する。
+ *
+ * 例: 「VB.netのプログラミング経験5年以上 または VB.netプログラミング経験2年以上かつ
+ *      JavaまたはC#.netによるプログラミング経験5年以上」
+ *   → { "VB.NET": [2, 5], "Java": [5], "C#.NET": [5] }
+ *
+ * 同一スキルが複数の年数で言及される場合（5年以上/2年以上）は全て配列で保持する。
+ * スキル名（および skill_master のエイリアス）の直後 25 文字以内（数字・句点・改行を挟まない範囲）に
+ * 現れる「N年」を要求年数とみなす。
+ */
+function extractRequiredSkillYears(
+  text: string,
+  requiredSkills: string[],
+  masterSkills: SkillMasterEntry[],
+): Record<string, number[]> {
+  if (!text || requiredSkills.length === 0) return {}
+  // 全角数字 → 半角
+  const norm = text.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
+  const aliasMap = new Map(masterSkills.map(s => [s.name, s.aliases ?? []]))
+  const result: Record<string, number[]> = {}
+  for (const skill of requiredSkills) {
+    const terms = [skill, ...(aliasMap.get(skill) ?? [])].filter(t => t && t.length >= 2)
+    const years = new Set<number>()
+    for (const term of terms) {
+      const escaped = term.replace(/[.+*?()[\]{}\\|^$]/g, '\\$&')
+      // term の直後 25 文字以内（数字・句点・改行を挟まない）に現れる「N年」を拾う
+      const re = new RegExp(`${escaped}[^。\\n0-9]{0,25}?(\\d{1,2})\\s*年`, 'gi')
+      let m: RegExpExecArray | null
+      while ((m = re.exec(norm)) !== null) {
+        const y = parseInt(m[1], 10)
+        if (y >= 1 && y <= 30) years.add(y)
+      }
+    }
+    if (years.size > 0) result[skill] = [...years].sort((a, b) => a - b)
+  }
+  return result
+}
+
+/**
  * 件名から候補者内部コードを抽出する（例: "IA62", "AS400", "FE3"）
  * name=不明のとき代替名として使用
  */
@@ -2525,6 +2564,7 @@ Deno.serve(async (req: Request) => {
       const PROJECT_SOLICITATION_KEYWORDS = [
         '対応可能な人材がいらっしゃいましたら',
         '案件情報のご紹介でございます',
+        '案件情報のご紹介となります',
         '案件のご紹介でございます',
         '案件のご紹介をいたします',
         '案件のご紹介です',
@@ -2541,6 +2581,11 @@ Deno.serve(async (req: Request) => {
         'ご検討いただける人材がいれば',
         'ご参画いただける人材',
         '見合う要員様',
+        // 案件メールが人材BOXに誤着するパターン（2026-05-29追加）
+        'マッチされる方がいらっしゃいましたら',
+        'ご支援頂けます技術者様が居られましたら',
+        '弊社プロジェクトでの募集情報をお送りいたします',
+        '成約時には派遣契約かつ貴社から支援費',
       ]
       // 営業・広告・メルマガメールのスキップ（研修販売・サービス紹介等）
       const COMMERCIAL_SOLICITATION_KEYWORDS = [
@@ -2550,6 +2595,7 @@ Deno.serve(async (req: Request) => {
         'メルマガ登録',
         '受信拒否はこちら',
         'このメールは配信専用',
+        '本メールは配信専用アドレス',
         'こちらのメールは送信専用',
         '新人向けインフラ研修',
         '新人エンジニア育成',
@@ -2567,6 +2613,7 @@ Deno.serve(async (req: Request) => {
         // 会社説明会・セミナー招待
         'セミナーのご案内', 'ウェビナーのご案内', '説明会のご案内',
         '無料セミナー', '無料ウェビナー',
+        'オンライン開催（Zoom）',
         // 社内業務メール・システム通知（人材メールboxへの誤配信）
         '勤務明細書を提出', '客先向けの勤務表', 'SAP Fieldglass',
         // 案件メールが人材boxに誤配信されるパターン
@@ -2579,6 +2626,9 @@ Deno.serve(async (req: Request) => {
         '注文書', '発注書', '請求書', '納品書', '契約書送付',
         '新体制', '組織変更', '移転のご案内',
         '定例会', '定例MTG',
+        // 業務連絡・通知系（人材メールboxへの誤配信・2026-05-29追加）
+        '作業依頼書', 'コラボレーション依頼',
+        'failure notice',  // MAILER-DAEMON配信失敗通知
       ]
       const isTraining = TRAINING_KEYWORDS.some(kw => body.includes(kw))
       const isSolicitation = PROJECT_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))
@@ -2631,7 +2681,7 @@ Deno.serve(async (req: Request) => {
 
     // 駅マスターをDBから先行ロード（以降の inferPrefectureFromStation がDB値を使う）
     await preloadStationMap()
-    console.log('[inbound] build=20260529-nat-station-fix')
+    console.log('[inbound] build=20260529-csharpnet-skillyears')
 
     tracePhase = 'pre_supabase'
 
@@ -3682,12 +3732,23 @@ Deno.serve(async (req: Request) => {
       const PROJECT_ROLE_LABELS = new Set(['PM・PMO', 'PL・テックリード', 'SE・設計', 'PG・実装', 'インフラ・SRE', 'データエンジニア', 'スクラムマスター'])
       const resolvedRoleSummary = proseResult.roles.filter(r => PROJECT_ROLE_LABELS.has(r)).join('・') || null
 
+      // ── スキル別の必要経験年数（例: VB.NET 5年/2年, C#.NET 5年） ──────────
+      const requiredSkillYears = extractRequiredSkillYears(
+        allProjectText,
+        projectRequiredSkills,
+        masterSkills,
+      )
+      if (Object.keys(requiredSkillYears).length > 0) {
+        console.log('[project] requiredSkillYears=', JSON.stringify(requiredSkillYears))
+      }
+
       const result = {
         title: cleanTitle,
         client,
         description: projectDescription,
         requiredSkills: projectRequiredSkills,
         niceToHaveSkills: projectNiceToHaveSkills,
+        requiredSkillYears,
         budgetMin,
         budgetMax,
         startDate,
@@ -3757,6 +3818,7 @@ Deno.serve(async (req: Request) => {
             ...sharedRawMeta,
             batchIndex,
             niceToHaveSkills,
+            requiredSkillYears: (raw as { requiredSkillYears?: Record<string, number[]> }).requiredSkillYears ?? {},
             aiAnalysis: {
               ...raw,
               requiredSkills,
