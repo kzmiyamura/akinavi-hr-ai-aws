@@ -1,0 +1,520 @@
+#!/usr/bin/env node
+// =============================================================================
+// メール抽出ロジック ローカルテストスクリプト
+// =============================================================================
+// 使い方:
+//   node scripts/test_extraction.mjs "メール本文テキスト"
+//   node scripts/test_extraction.mjs --file path/to/email.txt
+//   echo "本文" | node scripts/test_extraction.mjs
+//   node scripts/test_extraction.mjs  # 対話入力（Ctrl+D で確定）
+//
+// オプション:
+//   --type candidate|project  解析タイプ（既定: candidate）
+//   --attach "添付テキスト"   添付ファイルのテキスト
+//   --file <path>             ファイルから本文を読み込む
+//
+// 目的:
+//   inbound-email をデプロイせずにローカルで抽出結果を確認できる。
+//   regex 修正 → このスクリプトで即確認 → 正しければ deploy の流れで
+//   deploy サイクルを削減する。
+//
+// 注意:
+//   skill_master DB照合はローカルでは実行できないため "（デプロイ後確認）" と表示する。
+//   このスクリプトの関数は inbound-email/index.ts と同期が必要。
+//   最終同期コミット: 697f063 (2026-05-29)
+// =============================================================================
+
+import { readFileSync } from 'fs'
+
+// ─── inbound-email/index.ts から複製した関数群 ────────────────────────────
+// 変更時は index.ts と両方を更新すること
+
+function decodeHtmlEntities(text) {
+  return text
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+}
+
+function stripUrlsForSkillMatching(text) {
+  if (!text) return text
+  return text.replace(/https?:\/\/[^\s\u3000<>"'\(\)\[\]｝】、，。]+/gi, ' ')
+}
+
+function stripSenderSignature(text) {
+  if (!text) return text
+  const lines = text.split(/\r?\n/)
+  const separatorRe = /[━─=＝]{8,}/
+  for (let i = 0; i < lines.length; i++) {
+    if (separatorRe.test(lines[i])) {
+      if (i / lines.length >= 0.5) return lines.slice(0, i).join('\n')
+    }
+  }
+  return text
+}
+
+function flexLabel(label) {
+  const META = /[.*+?()[\]{}\\|^$]/
+  let result = ''
+  for (let i = 0; i < label.length; i++) {
+    const ch = label[i]
+    const isMeta = META.test(ch)
+    result += isMeta ? ch : ch.replace(/[.*+?()[\]{}\\|^$]/g, '\\$&')
+    if (i < label.length - 1) {
+      const nextIsMeta = META.test(label[i + 1])
+      if (!nextIsMeta) result += '[　 ]*'
+    }
+  }
+  return result
+}
+
+function extractFieldTwoPhase(labels, bodyText, attachText, validate, maxLen = 30, phase3MinLen = 3) {
+  const esc = labels.map(flexLabel).join('|')
+  const SEP     = `(?:[：:\\t\\]】◆◇●■▼★]|　+| {2,})`
+  const SEP_ATT = `(?:[：:\\t\\],，】◆◇●■▼★]|　+| {2,})`
+  const DECO_RE = /[◆◇●■▼★◎※▪]+([^◆◇●■▼★◎※▪\n]{1,30})[◆◇●■▼★◎※▪]+/g
+  const normalBody   = bodyText.replace(DECO_RE,   (_, inner) => inner.trim())
+  const normalAttach = (attachText ?? '').replace(DECO_RE, (_, inner) => inner.trim())
+  const check = (v, minLen = 1) => {
+    const t = v.trim().replace(/[　 ]+$/, '')
+    if (!t || t.length < minLen || t.length > maxLen) return null
+    if (validate && !validate(t)) return null
+    return t
+  }
+  const rSameLine = (sep) =>
+    new RegExp(`(?:${esc})(?:（[^）]{1,20}）)?[　 ]?${sep}[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
+  const bodyBlocks = normalBody.split(/\n{2,}/)
+  if (bodyBlocks.length > 1) {
+    const labelPresent = new RegExp(`(?:${esc})`, 'i')
+    const block = bodyBlocks.find(b => labelPresent.test(b))
+    if (block && block !== normalBody) {
+      const m = block.match(rSameLine(SEP))
+      if (m) { const v = check(m[1]); if (v) return v }
+    }
+  }
+  const mBody = normalBody.match(rSameLine(SEP))
+  if (mBody) { const v = check(mBody[1]); if (v) return v }
+  {
+    const labelOnly1b = new RegExp(`^[　 ]*(?:${esc})[　 ]?[：:,，]?[　 ]*$`, 'i')
+    const bodyLines = normalBody.split(/\r?\n/)
+    for (let i = 0; i < bodyLines.length - 1; i++) {
+      if (!labelOnly1b.test(bodyLines[i])) continue
+      for (let j = i + 1; j < Math.min(i + 3, bodyLines.length); j++) {
+        const v = check(bodyLines[j])
+        if (v) return v
+      }
+    }
+  }
+  if (normalAttach.trim()) {
+    const mAtt = normalAttach.match(rSameLine(SEP_ATT))
+    if (mAtt) { const v = check(mAtt[1]); if (v) return v }
+  }
+  const allText = normalBody + '\n' + normalAttach
+  const rSingle = new RegExp(`(?:${esc}) ([^ \\t,，\\n　]{1,${maxLen}})`, 'i')
+  const mSingle = allText.match(rSingle)
+  if (mSingle) { const v = check(mSingle[1], phase3MinLen); if (v) return v }
+  return null
+}
+
+const PREFECTURES = [
+  '北海道','青森県','岩手県','宮城県','秋田県','山形県','福島県',
+  '茨城県','栃木県','群馬県','埼玉県','千葉県','東京都','神奈川県',
+  '新潟県','富山県','石川県','福井県','山梨県','長野県','岐阜県',
+  '静岡県','愛知県','三重県','滋賀県','京都府','大阪府','兵庫県',
+  '奈良県','和歌山県','鳥取県','島根県','岡山県','広島県','山口県',
+  '徳島県','香川県','愛媛県','高知県','福岡県','佐賀県','長崎県',
+  '熊本県','大分県','宮崎県','鹿児島県','沖縄県',
+]
+
+// ※ ローカルテスト用の簡易マップ（DB版より少ない）
+// 実際は station_master テーブルで管理
+const STATION_TO_PREFECTURE = {
+  '東京': '東京都', '品川': '東京都', '渋谷': '東京都', '新宿': '東京都',
+  '池袋': '東京都', '上野': '東京都', '秋葉原': '東京都', '有楽町': '東京都',
+  '新橋': '東京都', '浜松町': '東京都', '田町': '東京都', '目黒': '東京都',
+  '恵比寿': '東京都', '五反田': '東京都', '大崎': '東京都', '高田馬場': '東京都',
+  '中野': '東京都', '吉祥寺': '東京都', '立川': '東京都', '八王子': '東京都',
+  '葛西': '東京都', '西葛西': '東京都', '葛西臨海公園': '東京都',
+  '五反野': '東京都', '大手町': '東京都', '神田': '東京都', '飯田橋': '東京都',
+  '横浜': '神奈川県', '川崎': '神奈川県', '町田': '神奈川県',
+  '鶴見': '神奈川県', '大船': '神奈川県', '元住吉': '神奈川県',
+  '日吉': '神奈川県', '青葉台': '神奈川県', 'たまプラーザ': '神奈川県',
+  '溝の口': '神奈川県', '海老名': '神奈川県', '藤沢': '神奈川県',
+  '大宮': '埼玉県', '浦和': '埼玉県', '川口': '埼玉県', '所沢': '埼玉県',
+  '柏': '千葉県', '松戸': '千葉県', '市川': '千葉県', '船橋': '千葉県',
+  '千葉': '千葉県', '八街': '千葉県', '佐倉': '千葉県',
+  '梅田': '大阪府', '難波': '大阪府', '天王寺': '大阪府', '新大阪': '大阪府',
+  '名古屋': '愛知県', '栄': '愛知県',
+  '札幌': '北海道', '仙台': '宮城県', '博多': '福岡県', '天神': '福岡県',
+  '広島': '広島県', '岡山': '岡山県', '金沢': '石川県', '高松': '香川県',
+  '那覇': '沖縄県',
+}
+
+function inferPrefectureFromStation(station) {
+  if (!station) return null
+  const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim()
+  if (!cleaned) return null
+  return STATION_TO_PREFECTURE[cleaned] ?? null
+}
+
+function sanitizeFromCompany(s) {
+  if (!s) return null
+  const cleaned = s.trim().replace(/[様御中殿]\s*$/, '').trim()
+  return cleaned.length >= 3 ? cleaned : null
+}
+
+function extractCandidateFieldsRegex(bodyText, attachText) {
+  const rawName = extractFieldTwoPhase(
+    ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
+    bodyText, attachText,
+    v => v.length >= 1 && !/^\d+$/.test(v), 20, 2,
+  )
+  const cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
+  let age = null, gender = null, nameStripped = cleanedName || ''
+  const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][ 　]*[/／：:・．][ 　]*(男性|女性|男|女)(?:[/／]([^)）]*))?[\)）]/)
+  const genderAgeUnified = !agGenderUnified ? nameStripped.match(/[\(（](男性|女性|男|女)[ 　]*[/／：:・．][ 　]*(\d{2})[才歳][\)）]/) : null
+  let nationality = null
+  if (agGenderUnified) {
+    age = parseInt(agGenderUnified[1], 10); gender = agGenderUnified[2]
+    if (agGenderUnified[3]?.trim()) nationality = agGenderUnified[3].trim()
+    nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][ 　]*[/／：:・．][ 　]*(?:男性|女性|男|女)(?:[/／][^)）]*)?[\)）]/, '').trim()
+  } else if (genderAgeUnified) {
+    gender = genderAgeUnified[1]; age = parseInt(genderAgeUnified[2], 10)
+    nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[ 　]*[/／：:・．][ 　]*\d{2}[才歳][\)）]/, '').trim()
+  } else {
+    const ageMatch = nameStripped.match(/[\s　]?[\(（](\d{2})[才歳][\)）]?/)
+    if (ageMatch) { age = parseInt(ageMatch[1], 10); nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][\)）]?/, '').trim() }
+    const genderMatch = nameStripped.match(/[\s　]?[\(（](男性|女性|男|女)[\)）]/)
+    if (genderMatch) { gender = genderMatch[1]; nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[\)）]/, '').trim() }
+    if (gender === null) {
+      const bareGenderMatch = nameStripped.match(/[ 　]?(男性|女性|男|女)$/)
+      if (bareGenderMatch) { gender = bareGenderMatch[1]; nameStripped = nameStripped.replace(/[ 　]?(?:男性|女性|男|女)$/, '').trim() }
+    }
+    if (age === null) {
+      const bareAgeMatch = nameStripped.match(/[\s　]?[\(（](\d{2})[\)）]/)
+      if (bareAgeMatch) { age = parseInt(bareAgeMatch[1], 10); nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[\)）]/, '').trim() }
+    }
+  }
+  let name = nameStripped || null
+  if (!name || age === null || gender === null) {
+    const allTextForName = bodyText + '\n' + attachText
+    const noLabelPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([^\d\s　（(\n【]{1,20})[ 　]?[（(](\d{2})[才歳][ 　]*[/／：: ][ 　]*(男性|女性|男|女)(?:[/／][^)）]*)?[）)]/m
+    const noLabelPatGF = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([^\d\s　（(\n【]{1,20})[ 　]?[（(](男性|女性|男|女)[ 　]*[/／][ 　]*(\d{2})[才歳][）)]/m
+    const nlM = allTextForName.match(noLabelPat)
+    const nlMGF = !nlM ? allTextForName.match(noLabelPatGF) : null
+    if (nlM) {
+      if (!name)           name   = nlM[1].trim().replace(/^\[[^\]]{1,10}\]/, '') || null
+      if (age === null)    age    = parseInt(nlM[2], 10)
+      if (gender === null) gender = nlM[3]
+    } else if (nlMGF) {
+      if (!name)           name   = nlMGF[1].trim().replace(/^\[[^\]]{1,10}\]/, '') || null
+      if (gender === null) gender = nlMGF[2]
+      if (age === null)    age    = parseInt(nlMGF[3], 10)
+    }
+  }
+  if (!nationality) {
+    const natInName = nameStripped.match(/[\s　]?[\(（]([^)）\d]{1,15}[籍人国])[\)）]/)
+    if (natInName) { nationality = natInName[1].trim(); nameStripped = nameStripped.replace(/[\s　]?[\(（][^)）\d]{1,15}[籍人国][\)）]/, '').trim() }
+  }
+  if (!nationality) {
+    const natMark = (bodyText + '\n' + attachText).match(/[※＊\*][ 　]?([^\s,、。（）「」【】\t]{1,15}[籍国人])/)
+    if (natMark) nationality = natMark[1].trim()
+  }
+  name = name || nameStripped || null
+  if (name) name = name.replace(/[ 　]*[/／][ 　]*(男性|女性|男|女)[ 　]*(?:[/／][^）)]*)?[）)]?\s*$/, '').trim() || null
+  if (name) name = name.replace(/[ 　]*(男性|女性|男|女)[）)]\s*$/, '').trim() || null
+  if (name && !age) {
+    const trailingAgeM = name.match(/[ 　]+(\d{2})[才歳]$/)
+    if (trailingAgeM) { age = parseInt(trailingAgeM[1], 10); name = name.replace(/[ 　]+\d{2}[才歳]$/, '').trim() || null }
+  }
+  if (name && !age) {
+    const ageOnlyM = name.match(/[ 　]?[（(](\d{2})[）)]$/)
+    if (ageOnlyM) { age = parseInt(ageOnlyM[1], 10); name = name.replace(/[ 　]?[（(]\d{2}[）)]$/, '').trim() || null }
+  }
+  if (name && name.includes('】【')) {
+    name = name.replace(/】【.*$/, '').trim() || null
+    if (name) name = name.replace(/^【([^】]+)】$/, '$1').trim() || null
+  }
+  if (!name) {
+    const allTextForInitials = bodyText + '\n' + attachText
+    const initialsPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])[ 　]?[（(](\d{2})[才歳][^)）]*[）)]/m
+    const initialsOnlyPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])(?:[ 　]|$)/m
+    const imatch = allTextForInitials.match(initialsPat)
+    const imatchOnly = !imatch ? allTextForInitials.match(initialsOnlyPat) : null
+    if (imatch) { name = imatch[1].trim(); if (age === null) age = parseInt(imatch[2], 10) }
+    else if (imatchOnly) name = imatchOnly[1].trim()
+  }
+  if (age === null) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/年\s*[　 ]*齢[\s　 ]*[：:]\s*(\d{2})[才歳]/)
+    if (m) age = parseInt(m[1], 10)
+  }
+  if (gender === null) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/性\s*[　 ]*別[\s　 ]*[：:]\s*(男性|女性|男|女)/)
+    if (m) gender = m[1]
+  }
+  if (!nationality) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/国\s*[　 ]*籍[\s　 ]*[：:]\s*([^\s\n、。]{1,15})/)
+    if (m) nationality = m[1].trim()
+  }
+  if (!nationality) {
+    const natInline = (bodyText + '\n' + attachText).match(/(?:^|[\s　/／・,、|｜（(])((?:[ァ-ヶー]{2,8}|[一-龠]{2,6})籍)/m)
+    const EXCLUDE_NAT = /^(在籍|本籍|戸籍|書籍|移籍|国籍|原籍|入籍|除籍|学籍|党籍|軍籍|転籍|復籍|船籍)$/
+    if (natInline && !EXCLUDE_NAT.test(natInline[1])) nationality = natInline[1].trim()
+  }
+  let nearestStation = extractFieldTwoPhase(
+    ['最寄り?駅','最寄駅','最寄り?','沿線','通勤駅'],
+    bodyText, attachText, v => /[駅線]$/.test(v) || v.length <= 10, 15, 2,
+  )
+  if (!nearestStation) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/([^\s,、。（）「」【】\t]{1,10}駅)(?:[\s　_\-）」】徒歩]|$)/)
+    if (m) nearestStation = m[1].trim()
+  }
+  if (nearestStation) {
+    const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
+    if (colonMatch) nearestStation = colonMatch[1].trim()
+    if (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation) || nearestStation.includes('イニシャル') || nearestStation.includes('最寄駅')) nearestStation = null
+    if (nearestStation) {
+      const stationOnly = nearestStation.match(/([^\s　]{2,12}駅)$/)
+      if (stationOnly && stationOnly[1] !== nearestStation) nearestStation = stationOnly[1]
+    }
+  }
+  let prefecture = extractFieldTwoPhase(
+    ['住所','居住地','在住','現住所','都道府県','居住エリア','在住地'],
+    bodyText, attachText, v => PREFECTURES.some(p => v.includes(p)), 40,
+  )
+  if (prefecture) {
+    const found = PREFECTURES.find(p => prefecture.includes(p))
+    if (found) prefecture = found
+  }
+  if (!prefecture) {
+    const allText = stripSenderSignature(bodyText) + '\n' + attachText
+    let firstIdx = Infinity, firstPref = null
+    for (const p of PREFECTURES) {
+      const idx = allText.indexOf(p)
+      if (idx !== -1 && idx < firstIdx) { firstIdx = idx; firstPref = p }
+    }
+    prefecture = firstPref
+  }
+  const stationPrefecture = inferPrefectureFromStation(nearestStation)
+  if (stationPrefecture && prefecture !== stationPrefecture) prefecture = stationPrefecture
+
+  const normalizeDigits = (s) => s.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
+  const allTextNorm = normalizeDigits(bodyText + '\n' + attachText)
+  let experienceYears = null
+  for (const p of [
+    /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)歴\s*[約]?\s*(\d+)\s*年/,
+    /経験[：:\s]*[約]?\s*(\d+)\s*年/,
+    /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
+    /(?:経験年数|開発経験)[：:\s]*[約]?\s*(\d+)年/,
+    /(?:社会人歴|就労歴)[：:\s]*(\d+)年/,
+  ]) {
+    const m = allTextNorm.match(p)
+    if (m) { const y = parseInt(m[1], 10); if (y > 0 && y <= 50 && String(y).length < 4) { experienceYears = y; break } }
+  }
+
+  let desiredRate = extractFieldTwoPhase(
+    ['希望単価','目安単価','単価','単金','単　金','単 金','希望報酬','希望月額','月額','月単価','希望料金'],
+    bodyText, attachText, v => /\d/.test(v), 20,
+  )
+  if (!desiredRate) {
+    const rateM1 = allTextNorm.match(/(?:希望[単]?価|単価|月額|月単価)[：:\s　]*(\d{2,3}[〜~－\-]?\d{0,3})\s*万\s*円?(?:[以上\/月程度台〜~]|$|\D)/)
+    const rateM2 = !rateM1 ? allTextNorm.match(/(\d{2,3})\s*[〜~]\s*(\d{2,3})\s*万\s*円?/) : null
+    const rateM3 = (!rateM1 && !rateM2) ? allTextNorm.match(/(\d{2,3})\s*万\s*円?(?:以上|\/月|程度|台)/) : null
+    if (rateM1) desiredRate = `${rateM1[1]}万円`
+    else if (rateM2) { const lo = parseInt(rateM2[1]), hi = parseInt(rateM2[2]); if (lo >= 20 && hi <= 300) desiredRate = `${lo}〜${hi}万円` }
+    else if (rateM3) { const amount = parseInt(rateM3[1]); if (amount >= 20 && amount <= 300) desiredRate = `${amount}万円` }
+  }
+
+  const normalizedAllText = allTextNorm.replace(/稼\s+働/g, '稼働').replace(/参\s+画/g, '参画')
+  let availableFrom = extractFieldTwoPhase(
+    ['参画開始可能日','参画可能時期','参画可能','稼働開始月','稼働開始','稼働可能時期','稼働可能','稼働時期','開始可能日','稼動時期','稼働','参画時期','参画開始','就業開始','就業時期','就業可能時期'],
+    normalizedAllText, attachText, v => v.length >= 2, 30,
+  )
+  if (!availableFrom && /(?:^|[\s　【:：])即日(?:[\s　】]|$)/.test(normalizedAllText)) availableFrom = '即日'
+  if (!availableFrom) {
+    const dateM = normalizedAllText.match(/(?:稼働|参画|就業)[^。\n]{0,10}?([0-9０-９]{1,4}[\/年\-][0-9０-９]{1,2}(?:[\/月\-][0-9０-９]{1,2}日?)?)/i)
+      ?? normalizedAllText.match(/(?:稼働|参画)[^。\n]{0,5}?([0-9]{1,2}月(?:上旬|中旬|下旬|初旬)?(?:[〜~])?)/i)
+    if (dateM) availableFrom = dateM[1].trim()
+  }
+
+  const desiredProject = extractFieldTwoPhase(
+    ['希望案件','希望職種','希望業界','希望条件','希望業務','ご希望案件','ご希望','希望'],
+    bodyText, attachText, v => v.length >= 2, 50,
+  )
+
+  let fromCompany = null
+  const sigArea = (bodyText + '\n' + attachText).slice(-1200)
+  const mPre = sigArea.match(/(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)([\S]{2,20})/)
+  if (mPre) fromCompany = sanitizeFromCompany(`${mPre[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${mPre[1]}`)
+  if (!fromCompany) {
+    const mPost = sigArea.match(/([\S]{2,20})(?:株式会社|有限会社|合同会社)/)
+    if (mPost) fromCompany = sanitizeFromCompany(`${mPost[1]}${mPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
+  }
+
+  return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany }
+}
+
+function splitMultiCandidateBody(body) {
+  const DELIM_RE = /^[\*\-=＊＝]{8,}\s*$/
+  const lines = body.split(/\r?\n/)
+  const delimIndices = []
+  for (let i = 0; i < lines.length; i++) {
+    if (DELIM_RE.test(lines[i])) delimIndices.push(i)
+  }
+  if (delimIndices.length < 2) return null
+  const delimSet = new Set(delimIndices)
+  const allParts = []
+  let current = []
+  for (let i = 0; i < lines.length; i++) {
+    if (delimSet.has(i)) { allParts.push(current.join('\n')); current = [] }
+    else current.push(lines[i])
+  }
+  if (current.length > 0) allParts.push(current.join('\n'))
+  const blocks = []
+  for (let i = 1; i < allParts.length; i += 2) {
+    const content = allParts[i].trim()
+    if (!content) continue
+    const prevPart = allParts[i - 1] ?? ''
+    const prevLines = prevPart.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+    const nameLine = prevLines[prevLines.length - 1] ?? ''
+    const block = nameLine ? `${nameLine}\n${content}` : content
+    if (block.length >= 50) blocks.push(block)
+  }
+  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*(?:名前|氏名)[　 ]*[：:]/
+  const validBlocks = blocks.filter(b => CANDIDATE_FIELD_RE.test(b))
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|^氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]/m
+  const blocksWithName = validBlocks.filter(b => NAME_FIELD_RE.test(b))
+  return blocksWithName.length >= 2 ? validBlocks : null
+}
+
+// ─── 引数パース ───────────────────────────────────────────────────────────────
+
+const args = process.argv.slice(2)
+let bodyText = ''
+let attachText = ''
+let type = 'candidate'
+let filePath = null
+
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--type' && args[i + 1]) { type = args[++i] }
+  else if (args[i] === '--attach' && args[i + 1]) { attachText = args[++i] }
+  else if (args[i] === '--file' && args[i + 1]) { filePath = args[++i] }
+  else if (!args[i].startsWith('--')) { bodyText += (bodyText ? '\n' : '') + args[i] }
+}
+
+if (filePath) {
+  bodyText = readFileSync(filePath, 'utf8')
+} else if (!bodyText) {
+  // stdin から読み込み
+  if (process.stdin.isTTY) {
+    console.log('メール本文を入力してください（Ctrl+D で確定）:')
+  }
+  const chunks = []
+  for await (const chunk of process.stdin) chunks.push(chunk)
+  bodyText = Buffer.concat(chunks).toString('utf8')
+}
+
+bodyText = decodeHtmlEntities(bodyText.trim())
+
+// ─── 表示ヘルパー ────────────────────────────────────────────────────────────
+
+const ok = (v) => v != null ? `✅ ${v}` : '❌ null'
+const dim = (s) => `\x1b[2m${s}\x1b[0m`
+const bold = (s) => `\x1b[1m${s}\x1b[0m`
+const green = (s) => `\x1b[32m${s}\x1b[0m`
+const red = (s) => `\x1b[31m${s}\x1b[0m`
+
+// ─── 前処理 ──────────────────────────────────────────────────────────────────
+
+console.log(bold('\n======== メール抽出テスト ========'))
+console.log(dim(`タイプ: ${type} | 本文: ${bodyText.length}文字`))
+
+const stripped = stripSenderSignature(stripUrlsForSkillMatching(bodyText))
+if (stripped.length !== bodyText.length) {
+  console.log(dim(`前処理: 署名/URL除去 ${bodyText.length} → ${stripped.length}文字`))
+}
+
+// ─── 複数人材チェック ─────────────────────────────────────────────────────────
+
+const multiBlocks = splitMultiCandidateBody(bodyText)
+if (multiBlocks) {
+  console.log(green(`\n▶ 複数人材検出: ${multiBlocks.length}ブロック`))
+  multiBlocks.forEach((block, i) => {
+    console.log(bold(`\n── ブロック ${i + 1} ──────────────────────`))
+    const blockBody = decodeHtmlEntities([block].join('\n'))
+    const fields = extractCandidateFieldsRegex(blockBody, attachText)
+    printFields(fields)
+  })
+} else {
+  // ─── 単一人材 ────────────────────────────────────────────────────────────────
+  if (type === 'candidate') {
+    console.log(bold('\n── 人材フィールド ──────────────────────'))
+    const fields = extractCandidateFieldsRegex(bodyText, attachText)
+    printFields(fields)
+  } else {
+    console.log(bold('\n── 案件フィールド ──────────────────────'))
+    printProjectFields(bodyText, attachText)
+  }
+}
+
+console.log(dim('\n[skills] skill_master DB照合はローカル不可 → デプロイ後に確認'))
+console.log(bold('=====================================\n'))
+
+function printFields(f) {
+  console.log(`  氏名        : ${ok(f.name)}`)
+  console.log(`  年齢        : ${ok(f.age)}`)
+  console.log(`  性別        : ${ok(f.gender)}`)
+  console.log(`  国籍        : ${ok(f.nationality)}`)
+  console.log(`  最寄駅      : ${ok(f.nearestStation)}`)
+  console.log(`  都道府県    : ${ok(f.prefecture)}`)
+  console.log(`  経験年数    : ${ok(f.experienceYears ? f.experienceYears + '年' : null)}`)
+  console.log(`  希望単価    : ${ok(f.desiredRate)}`)
+  console.log(`  稼働時期    : ${ok(f.availableFrom)}`)
+  console.log(`  希望案件    : ${ok(f.desiredProject)}`)
+  console.log(`  送信元会社  : ${ok(f.fromCompany)}`)
+}
+
+function printProjectFields(bodyText, attachText) {
+  const WS = '[ \\t\\u3000]*'
+  const location = extractFieldTwoPhase(
+    ['場所','場　所','勤務地','作業場所','就業場所','常駐先','勤務先'],
+    bodyText, attachText, v => v.length >= 2, 30,
+  )
+  const budget = extractFieldTwoPhase(
+    ['単価','単　価','単金','月額','予算','報酬'],
+    bodyText, attachText, v => /\d/.test(v), 30,
+  )
+  const period = extractFieldTwoPhase(
+    ['時期','参画時期','開始時期','開始日','稼働開始','契約期間'],
+    bodyText, attachText, v => v.length >= 2, 40,
+  )
+  const headcount = extractFieldTwoPhase(
+    ['募集','募　集','人数','募集人数'],
+    bodyText, attachText, v => v.length >= 1, 20,
+  )
+  const interview = extractFieldTwoPhase(
+    ['面談','面　談','面接'],
+    bodyText, attachText, v => v.length >= 1, 30,
+  )
+  console.log(`  勤務地      : ${ok(location)}`)
+  console.log(`  単価/予算   : ${ok(budget)}`)
+  console.log(`  時期        : ${ok(period)}`)
+  console.log(`  募集        : ${ok(headcount)}`)
+  console.log(`  面談        : ${ok(interview)}`)
+  // スキルセクション検出
+  const skillStart = bodyText.search(/【スキル[^】]*】/)
+  if (skillStart >= 0) {
+    const afterSkill = bodyText.slice(skillStart)
+    const rest = afterSkill.slice(afterSkill.indexOf('】') + 1)
+    const niceIdx = rest.search(/[＜<]尚可[＞>]|尚可[：:]/)
+    const requiredText = niceIdx >= 0 ? rest.slice(0, niceIdx) : rest.slice(0, 500)
+    const niceText = niceIdx >= 0 ? rest.slice(niceIdx, niceIdx + 300) : ''
+    console.log(`  必須スキル欄: ${dim('(DB照合でのみ確定)')} 先頭: ${requiredText.slice(0, 80).replace(/\n/g, ' ').trim()}`)
+    if (niceText) console.log(`  尚可スキル欄: 先頭: ${niceText.slice(0, 60).replace(/\n/g, ' ').trim()}`)
+  }
+}
