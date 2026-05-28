@@ -2864,7 +2864,24 @@ Deno.serve(async (req: Request) => {
               blockExistingId = batchNameToId.get(blockResolvedName)!
               console.log(`[multi-candidate dedup] 同一バッチ内重複 → UPDATE: ${blockResolvedName}`)
             }
-            // ② DBに同名が存在するか確認
+            // ② 同一メール（同一 from + subject）から同名が既に登録済み → 必ずUPDATE
+            // 　 スキル差があってもJaccardに依存せず同一人物と判定（2重送信・再解析防止）
+            if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明') {
+              const { data: sameEmail } = await supabase
+                .from('candidates').select('id')
+                .eq('data_env', inboundDataEnv)
+                .eq('name', blockResolvedName)
+                .eq('duplicate_flag', false)
+                .is('merged_into', null)
+                .eq('raw_profile->>from', from)
+                .eq('raw_profile->>subject', subject)
+                .limit(1)
+              if (sameEmail && sameEmail.length > 0) {
+                blockExistingId = sameEmail[0].id
+                console.log(`[multi-candidate dedup] 同一メール再送→ UPDATE: ${blockResolvedName}`)
+              }
+            }
+            // ③ DBに同名が存在するか確認（Jaccard類似度による同一人物判定）
             if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明') {
               const { data: similar } = await supabase
                 .from('candidates').select('id, name, skills, raw_profile, experience_years')
