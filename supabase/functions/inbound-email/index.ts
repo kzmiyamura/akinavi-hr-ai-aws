@@ -698,7 +698,7 @@ function extractAndRemoveSkills(
       const isShortLowerAscii = /^[a-z]{2,3}$/.test(term)
       const pattern = isShortLowerAscii
         ? `(?<![a-zA-Z0-9_#])${escaped}(?=[\\s\\u3000-\\u9FFF、。！？）」』]|$)`
-        : `(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_])`
+        : `(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_.])`
 
       const regex = new RegExp(pattern, 'gi')
       if (regex.test(matchTarget)) {
@@ -2631,6 +2631,7 @@ Deno.serve(async (req: Request) => {
 
     // 駅マスターをDBから先行ロード（以降の inferPrefectureFromStation がDB値を使う）
     await preloadStationMap()
+    console.log('[inbound] build=20260529-nat-station-fix')
 
     tracePhase = 'pre_supabase'
 
