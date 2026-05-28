@@ -179,7 +179,8 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
   //   2. 必須スキルを「希望」と明示している人 → 5年相当(8/15)の部分クレジット
   //   3. 総経験年数（experienceYears） → スキル特化情報なし
   let exp = candidate.experienceYears
-  let expLabel = exp == null ? '不明' : `${exp}年`
+  // 総経験年数であることを明示（スキル特化情報なし）→ AI がスキル別年数と混同しないよう「総経験」を付与
+  let expLabel = exp == null ? '不明' : `総経験${exp}年`
   let skillYearsUsed = false
 
   // 1. skillYears チェック

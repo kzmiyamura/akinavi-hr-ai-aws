@@ -2480,11 +2480,20 @@ Deno.serve(async (req: Request) => {
         // 案件メールが人材boxに誤配信されるパターン
         '支払いサイト', '【案件名】',
       ]
+      // 件名ベースのスキップキーワード（業務連絡・勤務表・発注書・打合せ等）
+      const SUBJECT_SKIP_KEYWORDS = [
+        '勤務表', '勤怠表', '作業報告書', '月報', '週報',
+        'お打合せ', 'ミーティング', '打ち合わせ',
+        '注文書', '発注書', '請求書', '納品書', '契約書送付',
+        '新体制', '組織変更', '移転のご案内',
+        '定例会', '定例MTG',
+      ]
       const isTraining = TRAINING_KEYWORDS.some(kw => body.includes(kw))
       const isSolicitation = PROJECT_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))
       const isCommercial = COMMERCIAL_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))
-      if (isTraining || isSolicitation || isCommercial) {
-        const skipReason = isTraining ? 'TRAINING_REPORT' : isSolicitation ? 'PROJECT_SOLICITATION' : 'COMMERCIAL_SOLICITATION'
+      const isSubjectSkip = SUBJECT_SKIP_KEYWORDS.some(kw => subject.includes(kw))
+      if (isTraining || isSolicitation || isCommercial || isSubjectSkip) {
+        const skipReason = isTraining ? 'TRAINING_REPORT' : isSolicitation ? 'PROJECT_SOLICITATION' : isSubjectSkip ? 'SUBJECT_KEYWORD' : 'COMMERCIAL_SOLICITATION'
         console.warn(`[SKIP_IRRELEVANT] ${skipReason}`, { rid: traceRid, subject })
         return new Response(
           JSON.stringify({ ok: true, skipped: true, reason: skipReason }),
