@@ -254,8 +254,8 @@ function toExperienceYears(value: unknown): number | null {
   const m = s.match(/^(\d+)/)
   if (!m) return null
   const years = parseInt(m[1], 10)
-  // 0〜60年の範囲外はAIのハルシネーション（職歴計算ミス等）として null に落とす
-  if (years < 0 || years > 60) return null
+  // 0〜50年の範囲外は異常値（年号4桁誤マッチ・ハルシネーション等）として null に落とす
+  if (years < 0 || years > 50) return null
   return years
 }
 
@@ -1249,7 +1249,8 @@ function extractCandidateFieldsRegex(
     const m = allText.match(p)
     if (m) {
       const y = parseInt(m[1], 10)
-      if (y > 0 && y <= 60) { experienceYears = y; break }
+      // 4桁は西暦年（2020年等）の誤マッチの可能性が高いため除外
+      if (y > 0 && y <= 50 && String(y).length < 4) { experienceYears = y; break }
     }
   }
 

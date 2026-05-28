@@ -441,6 +441,23 @@ function RankingRestAccordion({
   )
 }
 
+function CandidateRawEmailToggle({ rawText }: { rawText: string }) {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="mt-1">
+      <button type="button" onClick={() => setShow(v => !v)}
+        className="inline-flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 transition-colors">
+        {show ? '▲ 元メールを隠す' : '▼ 元メールを表示'}
+      </button>
+      {show && (
+        <pre className="mt-1 text-[10px] text-gray-500 whitespace-pre-wrap break-words bg-gray-50 border border-gray-100 rounded p-2 max-h-48 overflow-y-auto">
+          {rawText.slice(0, 1500)}
+        </pre>
+      )}
+    </div>
+  )
+}
+
 function ProjectModeRankCard({
   s,
   rankIndex,
@@ -1867,11 +1884,31 @@ const { data: projects = [] } = useQuery({
                       ← 一覧に戻る
                     </button>
                     <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <h3 className="text-base font-semibold text-gray-800 break-words">{selectedCandidate.name}</h3>
                         {selectedCandidate.email && (
                           <p className="text-xs text-gray-500 mt-0.5 break-all">{selectedCandidate.email}</p>
                         )}
+                        {(() => {
+                          const rp = selectedCandidate.raw_profile as Record<string, unknown>
+                          const from = rp?.from as string | null
+                          const receivedAt = rp?.emailReceivedAt as string | null
+                          const rawText = rp?.text as string | null
+                          return (
+                            <>
+                              {from && <p className="text-[10px] text-gray-400 mt-0.5 break-all">{from}{receivedAt && ` ／ ${new Date(receivedAt).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`}</p>}
+                              {selectedCandidate.drive_url && (
+                                <a href={toViewerUrl(selectedCandidate.drive_url)} target="_blank" rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-1">
+                                  <FileText size={11} />経歴書
+                                </a>
+                              )}
+                              {rawText && (
+                                <CandidateRawEmailToggle rawText={rawText} />
+                              )}
+                            </>
+                          )
+                        })()}
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         {onOpenCandidateDetail && (
