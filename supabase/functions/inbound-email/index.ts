@@ -2834,7 +2834,9 @@ Deno.serve(async (req: Request) => {
               created_by: 'make-inbound',
               box_url: blockBoxUrls[0] ?? null,
               box_status: blockBoxUrls.length > 0 ? 'pending' : null,
-              resume_url: resumeUrl,
+              // 複数人材メールでは Drive URL / Storage URL を全員共有させない
+              // 誰のものか判別できないためnullにする（名前マッチした添付テキストで代替）
+              resume_url: null,
               desired_rate: blockRegexFields.desiredRate ?? null,
               from_company: sanitizeFromCompany(blockRegexFields.fromCompany),
             }
@@ -2907,7 +2909,7 @@ Deno.serve(async (req: Request) => {
                 desired_rate: blockRegexFields.desiredRate ?? null,
                 created_at: new Date().toISOString(),
               }
-              if (resumeUrl) blockUpdatePayload.resume_url = resumeUrl
+              // 複数人材メールでは resume_url を共有させない（null のまま維持）
               if (blockPayload.from_company) blockUpdatePayload.from_company = blockPayload.from_company
               const { error: blockUpdateError } = await supabase
                 .from('candidates').update(blockUpdatePayload)
