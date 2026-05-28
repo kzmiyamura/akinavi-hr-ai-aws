@@ -1049,6 +1049,14 @@ function extractCandidateFieldsRegex(
         nameStripped = nameStripped.replace(/[ 　]?(?:男性|女性|男|女)$/, '').trim()
       }
     }
+    // 括弧付き2桁数字（才歳なし）の年齢除去: T.N（34）→ T.N（CyTech等の形式）
+    if (age === null) {
+      const bareAgeMatch = nameStripped.match(/[\s　]?[\(（](\d{2})[\)）]/)
+      if (bareAgeMatch) {
+        age = parseInt(bareAgeMatch[1], 10)
+        nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[\)）]/, '').trim()
+      }
+    }
   }
 
   // ── ラベルなし 名前+年齢+性別 フォールバック ─────────────────────
@@ -2245,14 +2253,15 @@ function splitMultiCandidateBody(body: string): string[] | null {
   }
 
   // 構造化フィールドを含むブロックのみ採用
-  // 【氏名】形式 または ◇名前： / ◆スキルセット 等の ◇◆ ラベル形式 の両方を検出
-  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]/
+  // 【氏名】形式 / ◇名前： / ◆スキルセット 等の ◇◆ ラベル形式 に加え、
+  // 「名前　　：T.N」のようなブラケットなし・ラベルなし形式（CyTech 等）も対応
+  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*(?:名前|氏名)[　 ]*[：:]/
   const validBlocks = blocks.filter(b => CANDIDATE_FIELD_RE.test(b))
 
   // 氏名フィールドを含むブロックが2つ以上あるかで最終判定する
   // 「【直個人】フルスタックエンジニア...」のような装飾ラベルは除外するため
-  // 「氏名　　　：D.S」のようなラベルなし（ブラケットなし）形式にも対応
-  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|^氏名[　 ]*[：:]/m
+  // 「氏名　　：D.S」「名前　：T.N」「◇名前：K.Y」のようなラベルなし形式にも対応
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|^氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]/m
   const blocksWithName = validBlocks.filter(b => NAME_FIELD_RE.test(b))
   return blocksWithName.length >= 2 ? validBlocks : null
 }
