@@ -1150,18 +1150,29 @@ function extractCandidateFieldsRegex(
   // 名前から取れなかった場合に本文ラベルから補完する
   if (age === null) {
     const allText = bodyText + '\n' + attachText
-    const m = allText.match(/年\s*[　 ]*齢\s*[：:]\s*(\d{2})[才歳]/)
+    const m = allText.match(/年\s*[　 ]*齢[\s　 ]*[：:]\s*(\d{2})[才歳]/)
     if (m) age = parseInt(m[1], 10)
   }
   if (gender === null) {
     const allText = bodyText + '\n' + attachText
-    const m = allText.match(/性\s*[　 ]*別\s*[：:]\s*(男性|女性|男|女)/)
+    const m = allText.match(/性\s*[　 ]*別[\s　 ]*[：:]\s*(男性|女性|男|女)/)
     if (m) gender = m[1]
   }
   if (!nationality) {
     const allText = bodyText + '\n' + attachText
-    const m = allText.match(/国\s*[　 ]*籍\s*[：:]\s*([^\s\n、。]{1,15})/)
+    const m = allText.match(/国\s*[　 ]*籍[\s　 ]*[：:]\s*([^\s\n、。]{1,15})/)
     if (m) nationality = m[1].trim()
+  }
+  // 国籍 — ラベル・括弧・マーカーなしのベタ書き（例: "K.Y男性　香港籍" "中国籍" "外国籍"）
+  // 区切り（空白/スラッシュ/読点/括弧/行頭）の直後の「XX籍」を拾う。
+  // 在籍・本籍・戸籍・書籍など一般語、および日本人前提の "日本籍" は誤検出を避けるため除外しない（情報として有用）
+  if (!nationality) {
+    const allTextForNatInline = bodyText + '\n' + attachText
+    const natInline = allTextForNatInline.match(/(?:^|[\s　/／・,、|｜（(])((?:[ァ-ヶー]{2,8}|[一-龠]{2,6})籍)/m)
+    const EXCLUDE_NAT = /^(在籍|本籍|戸籍|書籍|移籍|国籍|原籍|入籍|除籍|学籍|党籍|軍籍|転籍|復籍|船籍)$/
+    if (natInline && !EXCLUDE_NAT.test(natInline[1])) {
+      nationality = natInline[1].trim()
+    }
   }
 
   // ── 最寄駅 ────────────────────────────────────────────────────
@@ -2195,37 +2206,75 @@ async function unmarkEmailProcessed(
 }
 
 /**
- * 複数人材メールで、ブロック（人材）と添付ファイルを名前・駅名でマッチングする。
+ * 複数人材メールで、ブロック（人材）と添付ファイルを名前・駅名で「全体最適」に割り当てる。
  *
  * 送信側が「1メール複数人材 + 各人のExcelを1ファイルずつ添付」する形式に対応:
- *   - ファイル名 "Y.N_神立.xlsx" → ブロック名 "Y.N" または駅名 "神立" にマッチ
- *   - マッチした場合、そのブロックのみが添付テキストを使用（他ブロックは使用しない）
- *   - allTextContents が1件でも名前マッチを試みる（1件だからといってスキップしない）
- *   - マッチなし → null（そのブロックは添付を使わない）
+ *   - ファイル名 "Y.N_神立.xlsx" → 名前 "Y.N" もしくは駅名 "神立" を手がかりに紐付け
+ *
+ * 2 パス方式で誤割当を防ぐ:
+ *   - パス1 名前マッチ（厳密）: ファイル名にイニシャル/フルネームが含まれるブロックへ確実に割り当て
+ *   - パス2 駅名マッチ（弱い手がかり）: パス1で残ったブロックのみ対象。
+ *           同じ駅を共有する未割当ブロックが複数あれば駅マッチは諦める（誤割当防止）
+ *
+ * 例: N.U（浦和駅）と D.U（浦和駅）が同一メール、添付が "D.U_浦和駅.xlsx" のとき
+ *   - パス1: D.U が名前マッチ → D.U に割当
+ *   - パス2: N.U は残るが駅マッチを試みると D.U の添付に当たってしまう → ブロックが2件以上残るなら駅マッチは無効化
+ *
+ * @returns Map<blockIdx, attachment>
  */
-function findMatchingTextContent(
-  blockName: string,
-  blockStation: string | null,
-  allTextContents: Array<{ label: string; content?: string }>,
-): { label: string; content?: string } | null {
-  if (allTextContents.length === 0) return null
+function assignAttachmentsToBlocks(
+  blocks: Array<{ name: string | null; station: string | null }>,
+  attachments: Array<{ label: string; content?: string }>,
+): Map<number, { label: string; content?: string }> {
+  const result = new Map<number, { label: string; content?: string }>()
+  if (attachments.length === 0 || blocks.length === 0) return result
 
-  // ブロック名を正規化（イニシャル "Y.N" → "yn" / "yn"）
-  const normName = blockName.replace(/[.\s　]/g, '').toLowerCase()
+  const normFiles = attachments.map(att => {
+    const filenameMatch = att.label.match(/\(([^)]+)\)/)
+    const raw = filenameMatch ? filenameMatch[1] : att.label
+    return raw.toLowerCase().replace(/[.\s　]/g, '')
+  })
+  const used = new Set<number>()
 
-  for (const tc of allTextContents) {
-    // ラベル例: "Excelファイル(Y.N_神立.xlsx)" → ファイル名部分を取り出す
-    const filenameMatch = tc.label.match(/\(([^)]+)\)/)
-    const filename = (filenameMatch ? filenameMatch[1] : tc.label).toLowerCase().replace(/[.\s　]/g, '')
+  blocks.forEach((b, blockIdx) => {
+    if (!b.name) return
+    const normName = b.name.replace(/[.\s　]/g, '').toLowerCase()
+    if (normName.length < 2) return
+    for (let i = 0; i < attachments.length; i++) {
+      if (used.has(i)) continue
+      if (normFiles[i].includes(normName)) {
+        result.set(blockIdx, attachments[i])
+        used.add(i)
+        console.log(`[attach-assign] パス1 名前: block#${blockIdx}(${b.name}) → ${attachments[i].label}`)
+        break
+      }
+    }
+  })
 
-    // ブロック名（イニシャル）がファイル名に含まれるか
-    if (normName.length >= 2 && filename.includes(normName)) return tc
+  const unassigned = blocks
+    .map((b, idx) => ({ idx, station: b.station ?? null, name: b.name ?? null }))
+    .filter(o => !result.has(o.idx))
 
-    // 駅名がファイル名に含まれるか
-    if (blockStation && blockStation.length >= 2 && filename.includes(blockStation.toLowerCase())) return tc
-  }
+  unassigned.forEach(({ idx, station, name }) => {
+    if (!station || station.length < 2) return
+    const stationLower = station.toLowerCase()
+    const conflicts = unassigned.filter(o => o.idx !== idx && (o.station ?? '') === station).length
+    if (conflicts > 0) {
+      console.log(`[attach-assign] パス2 駅名スキップ: block#${idx}(${name ?? '?'}・駅=${station}) 他 ${conflicts} ブロックと同駅のため誤マッチ防止`)
+      return
+    }
+    for (let i = 0; i < attachments.length; i++) {
+      if (used.has(i)) continue
+      if (normFiles[i].includes(stationLower)) {
+        result.set(idx, attachments[i])
+        used.add(i)
+        console.log(`[attach-assign] パス2 駅名: block#${idx}(${name ?? '?'}・駅=${station}) → ${attachments[i].label}`)
+        break
+      }
+    }
+  })
 
-  return null
+  return result
 }
 
 /**
@@ -2737,6 +2786,7 @@ Deno.serve(async (req: Request) => {
       const multiBlocks = splitMultiCandidateBody(effectiveBody)
       if (multiBlocks && multiBlocks.length >= 2) {
         console.log(`[multi-candidate] ${multiBlocks.length}人検出 from=${from} subject=${subject.slice(0, 80)}`)
+        console.log(`[multi-candidate] resumeUrl=${resumeUrl ?? 'null'} allTextContents=[${allTextContents.map(t => t.label).join(', ')}]`)
         tracePhase = 'multi_candidate'
 
         const attachmentNames = [
@@ -2750,36 +2800,43 @@ Deno.serve(async (req: Request) => {
         // 同一メール内のループ内重複防止: このバッチで既に登録/更新した name → id のマップ
         const batchNameToId = new Map<string, string>()
 
-        for (const block of multiBlocks) {
-          try {
-            // ── Step1: 本文のみから名前・駅名を先行抽出（添付マッチングに使用） ──
-            const blockPreText = decodeHtmlEntities([subject, block].join('\n'))
-            const blockPreFields = extractCandidateFieldsRegex(blockPreText, '')
-            const blockNameForMatch = blockPreFields.name ?? extractNameFallback(blockPreText) ?? null
-            const blockStationForMatch = blockPreFields.nearestStation ?? null
+        // ── Pre-pass: 全ブロックの名前・駅名を一括抽出 → 添付ファイルとの「全体最適」割当を先に確定 ──
+        // 旧版は各ブロックの for-loop 内で個別に findMatchingTextContent を呼んでおり、
+        // 同じ駅に住む別人材の Excel が「駅名一致」だけで誤って割り当たる事故が発生していた。
+        const blockMetas = multiBlocks.map((block) => {
+          const text = decodeHtmlEntities([subject, block].join('\n'))
+          const fields = extractCandidateFieldsRegex(text, '')
+          return {
+            name: fields.name ?? extractNameFallback(text) ?? null,
+            station: fields.nearestStation ?? null,
+          }
+        })
+        const blockAttachAssignment = assignAttachmentsToBlocks(blockMetas, allTextContents)
 
-            // ── Step2: 名前でファイル名マッチング（複数人材限定） ────────────────
-            // ケースA: 名前取得成功 + ファイル名一致 → その人の添付のみ使用
-            // ケースB: 名前取得成功 + ファイル名不一致 → 添付なし（共有経歴書は無視）
-            // ケースC: 名前取得失敗 → 全添付を共有（フォールバック・従来動作）
-            let matchedTextContent: { label: string; content?: string } | null = null
+        for (const [blockIdx, block] of multiBlocks.entries()) {
+          try {
+            // ── Step1: 本文のみから名前・駅名を先行抽出（フィールド抽出側で利用） ──
+            const blockNameForMatch = blockMetas[blockIdx].name
+            const blockStationForMatch = blockMetas[blockIdx].station
+
+            // ── Step2: 事前計算した添付割当を参照（複数人材限定・2 パス済み） ────────
+            // ケースA: 名前または駅名で割り当てられた添付がある → その人の経歴書
+            // ケースB: 名前はあるが添付が割当てられない → 添付なし（共有経歴書 or 同駅衝突）
+            // ケースC: そもそも本ブロックの名前が取れていない → フォールバックで全添付共有（従来動作）
+            console.log(`[multi-candidate] block#${blockIdx} blockName=${blockNameForMatch ?? 'null'} station=${blockStationForMatch ?? 'null'}`)
+            const matchedTextContent = blockAttachAssignment.get(blockIdx) ?? null
             let blockAttachText: string
             let blockAttachLabel: string
-            if (blockNameForMatch && allTextContents.length > 0) {
-              matchedTextContent = findMatchingTextContent(blockNameForMatch, blockStationForMatch, allTextContents)
-              if (matchedTextContent) {
-                // ケースA: ファイル名に名前が含まれる → その人の経歴書
-                console.log(`[multi-candidate] 添付マッチ: ${blockNameForMatch} → ${matchedTextContent.label}`)
-                blockAttachText = matchedTextContent.content ?? ''
-                blockAttachLabel = matchedTextContent.label
-              } else {
-                // ケースB: 名前はあるがファイル名に一致なし → 全員共有経歴書なので無視
-                console.log(`[multi-candidate] 添付スキップ（共有経歴書）: ${blockNameForMatch}`)
-                blockAttachText = ''
-                blockAttachLabel = ''
-              }
+            if (matchedTextContent) {
+              console.log(`[multi-candidate] ケースA 添付マッチ: ${blockNameForMatch ?? '?'} → ${matchedTextContent.label}`)
+              blockAttachText = matchedTextContent.content ?? ''
+              blockAttachLabel = matchedTextContent.label
+            } else if (blockNameForMatch && allTextContents.length > 0) {
+              console.log(`[multi-candidate] ケースB 添付スキップ（共有経歴書 or 同駅衝突）: ${blockNameForMatch}`)
+              blockAttachText = ''
+              blockAttachLabel = ''
             } else {
-              // ケースC: 名前が取れない → フォールバックで全添付共有（従来動作）
+              console.log(`[multi-candidate] ケースC 名前なし フォールバック`)
               blockAttachText = attachText
               blockAttachLabel = attachmentNames
             }
