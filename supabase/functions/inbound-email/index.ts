@@ -2759,17 +2759,30 @@ Deno.serve(async (req: Request) => {
             const blockStationForMatch = blockPreFields.nearestStation ?? null
 
             // ── Step2: 名前でファイル名マッチング（複数人材限定） ────────────────
-            // 「名前が取れたら → ファイル名に名前が含まれるか確認 → 一致したらその人の添付」
-            // 名前が取れない / マッチなし → 添付なし（他人のデータを混入させない）
+            // ケースA: 名前取得成功 + ファイル名一致 → その人の添付のみ使用
+            // ケースB: 名前取得成功 + ファイル名不一致 → 添付なし（共有経歴書は無視）
+            // ケースC: 名前取得失敗 → 全添付を共有（フォールバック・従来動作）
             let matchedTextContent: { label: string; content?: string } | null = null
+            let blockAttachText: string
+            let blockAttachLabel: string
             if (blockNameForMatch && allTextContents.length > 0) {
               matchedTextContent = findMatchingTextContent(blockNameForMatch, blockStationForMatch, allTextContents)
               if (matchedTextContent) {
+                // ケースA: ファイル名に名前が含まれる → その人の経歴書
                 console.log(`[multi-candidate] 添付マッチ: ${blockNameForMatch} → ${matchedTextContent.label}`)
+                blockAttachText = matchedTextContent.content ?? ''
+                blockAttachLabel = matchedTextContent.label
+              } else {
+                // ケースB: 名前はあるがファイル名に一致なし → 全員共有経歴書なので無視
+                console.log(`[multi-candidate] 添付スキップ（共有経歴書）: ${blockNameForMatch}`)
+                blockAttachText = ''
+                blockAttachLabel = ''
               }
+            } else {
+              // ケースC: 名前が取れない → フォールバックで全添付共有（従来動作）
+              blockAttachText = attachText
+              blockAttachLabel = attachmentNames
             }
-            const blockAttachText = matchedTextContent?.content ?? ''
-            const blockAttachLabel = matchedTextContent?.label ?? ''
 
             // ── Step3: ブロック固有のスキル照合 ──────────────────────────────────
             const blockBodyText = [subject, block].join('\n')
@@ -2823,8 +2836,12 @@ Deno.serve(async (req: Request) => {
                 from, subject,
                 emailReceivedAt,
                 attachmentCount: allAttachments.length,
-                // マッチした添付のラベルのみ記録（マッチなし = この人の添付なし）
-                attachmentNames: matchedTextContent ? [matchedTextContent.label] : [],
+                // ケースA: マッチした添付のラベルのみ / ケースB: [] / ケースC: 全添付（フォールバック）
+                attachmentNames: matchedTextContent
+                  ? [matchedTextContent.label]
+                  : blockNameForMatch
+                    ? []
+                    : [...allAttachments.map(a => a.name ?? a.mimeType), ...officeTextContents.map(t => t.label)],
                 driveLinks: driveTexts.map(t => t.label),
                 aiAnalysis: { availableFrom: blockRegexFields.availableFrom },
                 desiredProject: blockRegexFields.desiredProject,
@@ -2834,9 +2851,10 @@ Deno.serve(async (req: Request) => {
               created_by: 'make-inbound',
               box_url: blockBoxUrls[0] ?? null,
               box_status: blockBoxUrls.length > 0 ? 'pending' : null,
-              // 複数人材メールでは Drive URL / Storage URL を全員共有させない
-              // 誰のものか判別できないためnullにする（名前マッチした添付テキストで代替）
-              resume_url: null,
+              // ケースA: 名前マッチ済み → null（添付テキストで代替）
+              // ケースB: 共有経歴書 → null（全員に同じURLを付けない）
+              // ケースC: 名前取得失敗フォールバック → resumeUrlをそのまま使用
+              resume_url: blockNameForMatch ? null : resumeUrl,
               desired_rate: blockRegexFields.desiredRate ?? null,
               from_company: sanitizeFromCompany(blockRegexFields.fromCompany),
             }
@@ -2909,7 +2927,8 @@ Deno.serve(async (req: Request) => {
                 desired_rate: blockRegexFields.desiredRate ?? null,
                 created_at: new Date().toISOString(),
               }
-              // 複数人材メールでは resume_url を共有させない（null のまま維持）
+              // ケースC（名前取得失敗フォールバック）のみ resume_url を更新
+              if (!blockNameForMatch && resumeUrl) blockUpdatePayload.resume_url = resumeUrl
               if (blockPayload.from_company) blockUpdatePayload.from_company = blockPayload.from_company
               const { error: blockUpdateError } = await supabase
                 .from('candidates').update(blockUpdatePayload)
