@@ -1691,7 +1691,7 @@ function parseYearMonth(s: string): Date | null {
 }
 
 function calcWordProjectMonths(json: WordHtmlJson): number | null {
-  const PROJECT_HEADER_RE = /期間|業務経歴|職務経歴/
+  const PROJECT_HEADER_RE = /期\s*間|業\s*務\s*経\s*歴|職\s*務\s*経\s*歴/
   const dates: Date[] = []
   for (const rows of json.tables) {
     const hasHeader = rows.some(row => row.some(cell => PROJECT_HEADER_RE.test(cell)))
