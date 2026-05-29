@@ -294,8 +294,9 @@ function extractSectionsByLabels(text: string, labels: string[]): string | null 
 /** 候補者本人の自己PR（自己PR / PR / アピールポイント / 強み 等）を抽出する。
  * スプレッドシート等の添付データは対象外（誤マッチ防止）。 */
 function extractSelfPR(body: string, _attachText: string): string | null {
+  // 'PR' 単体は短すぎてURL中・一般テキスト（PR会社等）に誤マッチするため除外
   return extractSectionsByLabels(body, [
-    '自己PR', 'PR', 'アピールポイント', '特徴・強み', '強み', '紹介文',
+    '自己PR', 'アピールポイント', '特徴・強み', '強み', '紹介文',
   ])
 }
 
@@ -1140,8 +1141,27 @@ function extractCandidateFieldsRegex(
   name = name || nameStripped || null
 
   // ── 名前後処理: 残留汚染パターンを除去 ──────────────────────────
+  // スラッシュ区切りで年齢が続くパターンを除去（例: "K.Y / 40歳 / 男性 / ベトナム籍" → "K.Y"）
+  if (name) {
+    const slashAgeM = name.match(/^([^/／]+?)[ 　]*[/／][ 　]*\d{1,2}[才歳]/)
+    if (slashAgeM) {
+      const beforeSlash = slashAgeM[1].trim()
+      // スラッシュ前が1文字以上かつ数字のみでなければ名前として採用
+      if (beforeSlash.length >= 1 && !/^\d+$/.test(beforeSlash)) {
+        name = beforeSlash
+      }
+    }
+  }
   // スラッシュ区切りの性別・国籍残留 (例: "O.A / 男性 / 日本）" → "O.A")
   if (name) name = name.replace(/[ 　]*[/／][ 　]*(男性|女性|男|女)[ 　]*(?:[/／][^）)]*)?[）)]?\s*$/, '').trim() || null
+  // 末尾に国籍がベタ書きされているパターンを除去（例: "K.Y バングラデシュ籍" → "K.Y", nationality設定）
+  if (name) {
+    const natSuffix = name.match(/[ 　]([^\s　\d]{2,15}[籍])$/)
+    if (natSuffix) {
+      if (!nationality) nationality = natSuffix[1]
+      name = name.replace(/[ 　][^\s　\d]{2,15}[籍]$/, '').trim() || null
+    }
+  }
   // 末尾に性別+閉じ括弧が残留 (例: "R・K　男性）" → "R・K")
   if (name) name = name.replace(/[ 　]*(男性|女性|男|女)[）)]\s*$/, '').trim() || null
   // 末尾にスペース+年齢が残留 (例: "MO 35歳", "AA　39歳")
@@ -2253,11 +2273,13 @@ async function unmarkEmailProcessed(
  * 2 パス方式で誤割当を防ぐ:
  *   - パス1 名前マッチ（厳密）: ファイル名にイニシャル/フルネームが含まれるブロックへ確実に割り当て
  *   - パス2 駅名マッチ（弱い手がかり）: パス1で残ったブロックのみ対象。
- *           同じ駅を共有する未割当ブロックが複数あれば駅マッチは諦める（誤割当防止）
+ *           ただし「ファイル名に自分以外のブロック名が含まれる」場合は他人の経歴書とみなしスキップ
  *
  * 例: N.U（浦和駅）と D.U（浦和駅）が同一メール、添付が "D.U_浦和駅.xlsx" のとき
  *   - パス1: D.U が名前マッチ → D.U に割当
- *   - パス2: N.U は残るが駅マッチを試みると D.U の添付に当たってしまう → ブロックが2件以上残るなら駅マッチは無効化
+ *   - パス2: N.U が駅(浦和)で当たるが、ファイル名に他人 "D.U" が含まれるため奪わずスキップ
+ *
+ * 一方、ファイル名が駅名のみ（例: "浦和.xlsx"）で他人名を含まなければ、駅マッチで正常に割り当てる。
  *
  * @returns Map<blockIdx, attachment>
  */
@@ -2273,8 +2295,13 @@ function assignAttachmentsToBlocks(
     const raw = filenameMatch ? filenameMatch[1] : att.label
     return raw.toLowerCase().replace(/[.\s　]/g, '')
   })
+  // 全ブロックの正規化名（パス2で「他人の名前を含むファイル」を除外するため）
+  const allNormNames = blocks
+    .map(b => (b.name ? b.name.replace(/[.\s　]/g, '').toLowerCase() : ''))
+    .filter(n => n.length >= 2)
   const used = new Set<number>()
 
+  // ── パス1: 名前マッチ（ファイル名にブロック名が含まれる） ──
   blocks.forEach((b, blockIdx) => {
     if (!b.name) return
     const normName = b.name.replace(/[.\s　]/g, '').toLowerCase()
@@ -2290,26 +2317,26 @@ function assignAttachmentsToBlocks(
     }
   })
 
-  const unassigned = blocks
-    .map((b, idx) => ({ idx, station: b.station ?? null, name: b.name ?? null }))
-    .filter(o => !result.has(o.idx))
-
-  unassigned.forEach(({ idx, station, name }) => {
+  // ── パス2: 駅名マッチ（パス1で未割当のブロックのみ・他人名を含むファイルは除外） ──
+  blocks.forEach((b, blockIdx) => {
+    if (result.has(blockIdx)) return
+    const station = b.station
     if (!station || station.length < 2) return
+    const myNorm = b.name ? b.name.replace(/[.\s　]/g, '').toLowerCase() : ''
     const stationLower = station.toLowerCase()
-    const conflicts = unassigned.filter(o => o.idx !== idx && (o.station ?? '') === station).length
-    if (conflicts > 0) {
-      console.log(`[attach-assign] パス2 駅名スキップ: block#${idx}(${name ?? '?'}・駅=${station}) 他 ${conflicts} ブロックと同駅のため誤マッチ防止`)
-      return
-    }
     for (let i = 0; i < attachments.length; i++) {
       if (used.has(i)) continue
-      if (normFiles[i].includes(stationLower)) {
-        result.set(idx, attachments[i])
-        used.add(i)
-        console.log(`[attach-assign] パス2 駅名: block#${idx}(${name ?? '?'}・駅=${station}) → ${attachments[i].label}`)
-        break
+      if (!normFiles[i].includes(stationLower)) continue
+      // ファイル名に自分以外のブロック名が含まれる → 他人の経歴書なので奪わない
+      const belongsToOther = allNormNames.some(n => n !== myNorm && normFiles[i].includes(n))
+      if (belongsToOther) {
+        console.log(`[attach-assign] パス2 駅名スキップ: block#${blockIdx}(${b.name ?? '?'}・駅=${station}) ${attachments[i].label} は他ブロック名を含むため除外`)
+        continue
       }
+      result.set(blockIdx, attachments[i])
+      used.add(i)
+      console.log(`[attach-assign] パス2 駅名: block#${blockIdx}(${b.name ?? '?'}・駅=${station}) → ${attachments[i].label}`)
+      break
     }
   })
 
@@ -2684,7 +2711,7 @@ Deno.serve(async (req: Request) => {
 
     // 駅マスターをDBから先行ロード（以降の inferPrefectureFromStation がDB値を使う）
     await preloadStationMap()
-    console.log('[inbound] build=20260529-csharpnet-skillyears')
+    console.log('[inbound] build=20260529-attach-assign-fix')
 
     tracePhase = 'pre_supabase'
 
@@ -3155,12 +3182,18 @@ Deno.serve(async (req: Request) => {
       const regexFields = extractCandidateFieldsRegex(regexBodyText, attachText)
 
       // name: AI → regex(ラベル抽出) → extractNameFallback(イニシャル) → 件名コード
-      const resolvedName = (analyzed.name && analyzed.name !== '不明')
+      const _rawName = (analyzed.name && analyzed.name !== '不明')
         ? analyzed.name
         : (regexFields.name
             ?? extractNameFallback([regexBodyText, attachText].join('\n'))
             ?? extractCandidateCode(subject)
             ?? '不明')
+      // 駅名が名前として取得されてしまうケース（例: 「大宮（33歳/男性）」→ 名前=大宮）を除外
+      const stationMap = _stationDbMap ?? STATION_TO_PREFECTURE
+      const _bareRawName = _rawName.replace(/駅$/, '')
+      const resolvedName = (_rawName !== '不明' && (stationMap[_bareRawName] || _bareRawName !== _rawName))
+        ? (console.log(`[inbound] 駅名が名前として抽出されたため除外: ${_rawName}`), '不明')
+        : _rawName
 
       // AI空項目にregexフォールバックを適用
       const resolvedStation = analyzed.nearestStation || regexFields.nearestStation
@@ -3180,6 +3213,15 @@ Deno.serve(async (req: Request) => {
           resolvedExperienceYears = estimatedMonths / 12
           const src = totalProjectMonths ? 'プロジェクト合計' : 'スキル最大値'
           console.log(`[inbound] skillYearsから経験年数推定(${src}): ${resolvedExperienceYears.toFixed(1)}年 (${estimatedMonths}ヶ月)`)
+        }
+      }
+      // 年齢フォールバック: 経験年数が取れない場合、年齢から22を引いて推定（新卒22歳基準）
+      if (resolvedExperienceYears == null) {
+        const resolvedAge = analyzed.age ?? regexFields.age
+        if (resolvedAge != null && resolvedAge >= 24 && resolvedAge <= 70) {
+          const estimated = resolvedAge - 22
+          resolvedExperienceYears = estimated
+          console.log(`[inbound] 年齢から経験年数推定: ${resolvedAge}歳 → ${estimated}年`)
         }
       }
       const resolvedDesiredRate = analyzed.desiredRate || regexFields.desiredRate
