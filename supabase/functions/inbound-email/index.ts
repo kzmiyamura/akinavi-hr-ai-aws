@@ -1711,7 +1711,42 @@ function calcWordProjectMonths(json: WordHtmlJson): number | null {
   return months > 0 ? months : null
 }
 
-async function extractWordText(base64: string): Promise<{ text: string; totalProjectMonths?: number }> {
+/**
+ * WordHtmlJson の段落・セルから「スキル名 N年」パターンを抽出して
+ * { スキル名: 月数 } を返す。
+ *
+ * 対象: カンマ/読点で区切られた各セグメント内で
+ *   - "Laravel 4年" → { Laravel: 48 }
+ *   - "React 4年, Next 3年" → { React: 48, Next: 36 }
+ */
+function extractWordSkillYears(json: WordHtmlJson): Record<string, number> {
+  const result: Record<string, number> = {}
+  const allTexts = [
+    ...json.paragraphs,
+    ...json.tables.flat(2),
+  ]
+  for (const text of allTexts) {
+    const segments = text.split(/[,、，\n]/)
+    for (const seg of segments) {
+      const m = seg.trim().match(/^(.+?)\s+(\d+(?:\.\d+)?)年\s*$/)
+      if (!m) continue
+      let skill = m[1].trim()
+      // "フレームワーク/ライブラリ: Laravel" → "Laravel"（ラベルプレフィックス除去）
+      const colonIdx = Math.max(skill.lastIndexOf(':'), skill.lastIndexOf('：'))
+      if (colonIdx >= 0) skill = skill.slice(colonIdx + 1).trim()
+      const years = parseFloat(m[2])
+      if (skill && years > 0 && years <= 50 && !/^\d/.test(skill)) {
+        result[skill] = Math.round(years * 12)
+      }
+    }
+  }
+  if (Object.keys(result).length > 0) {
+    console.log('[Word] extractWordSkillYears:', JSON.stringify(result))
+  }
+  return result
+}
+
+async function extractWordText(base64: string): Promise<{ text: string; totalProjectMonths?: number; skillYears?: Record<string, number> }> {
   try {
     const mammothMod = npmDefault(await import('npm:mammoth@1.8.0'))
     const mammoth = mammothMod as {
@@ -1743,7 +1778,8 @@ async function extractWordText(base64: string): Promise<{ text: string; totalPro
           const wordJson = await htmlToWordJson(html)
           const text = wordJsonToText(wordJson)
           const totalProjectMonths = calcWordProjectMonths(wordJson) ?? undefined
-          return { text, totalProjectMonths }
+          const skillYears = extractWordSkillYears(wordJson)
+          return { text, totalProjectMonths, skillYears: Object.keys(skillYears).length > 0 ? skillYears : undefined }
         }
       } catch (e) {
         console.warn('[Word] convertToHtml 失敗、extractRawText へフォールバック', e)
@@ -2708,13 +2744,18 @@ Deno.serve(async (req: Request) => {
       const isWordByExt = /\.(docx?|doc)$/.test(attNameLower) && !isExcelByMime
       const isExcelByExt = /\.(xlsx?|xls|ods|csv)$/.test(attNameLower) && !isWordByMime
       if (isWordByMime || isWordByExt) {
-        const { text: rawText, totalProjectMonths: wordMonths } = await extractWordText(att.data)
+        const { text: rawText, totalProjectMonths: wordMonths, skillYears: wordSkillYears } = await extractWordText(att.data)
         if (rawText.trim()) {
           const text = cleanseWordText(rawText)
           officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
         } else console.warn(`[Word] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
+        // Word のスキル別経験年数を excelSkillYears にマージ（Excel優先）
+        if (wordSkillYears && Object.keys(excelSkillYears).length === 0) {
+          excelSkillYears = { ...wordSkillYears }
+          console.log(`[Word] skillYears → excelSkillYears にセット: ${Object.keys(wordSkillYears).length}件`)
+        }
         // Word のプロジェクト期間合計を経験年数フォールバック用に保存（Excel優先）
-        if (wordMonths && Object.keys(excelSkillYears).length === 0) {
+        if (wordMonths && !excelSkillYears['_totalProjectMonths']) {
           excelSkillYears['_totalProjectMonths'] = wordMonths
           console.log(`[Word] totalProjectMonths → excelSkillYears にセット: ${wordMonths}ヶ月`)
         }
