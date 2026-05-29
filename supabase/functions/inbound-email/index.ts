@@ -1576,34 +1576,97 @@ function extractDocRawText(bytes: Uint8Array): string {
 }
 
 /** Word(.docx/.doc)をテキストに変換 */
+/**
+ * mammoth の convertToHtml 出力を構造化テキストに変換する。
+ *
+ * テーブル行 → 「セル1 | セル2 | ...」形式（既存 SEP_ATT の | に対応）
+ * テーブル外の段落 → プレーンテキストとして末尾に追加
+ *
+ * 例:
+ *   <tr><td>氏名</td><td>山田太郎</td></tr>  →  氏名 | 山田太郎
+ *   <tr><td>最寄駅</td><td>渋谷</td></tr>    →  最寄駅 | 渋谷
+ */
+function htmlTableToText(html: string): string {
+  const decodeEntities = (s: string) => s
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+
+  const tableLines: string[] = []
+
+  // テーブル行ごとにセルを抽出
+  const tableBodyRe = /<table[\s\S]*?<\/table>/gi
+  let tableMatch: RegExpExecArray | null
+  while ((tableMatch = tableBodyRe.exec(html)) !== null) {
+    const tableHtml = tableMatch[0]
+    const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi
+    let rowMatch: RegExpExecArray | null
+    while ((rowMatch = rowRe.exec(tableHtml)) !== null) {
+      const cells: string[] = []
+      const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi
+      let cellMatch: RegExpExecArray | null
+      while ((cellMatch = cellRe.exec(rowMatch[1])) !== null) {
+        const cellText = decodeEntities(cellMatch[1].replace(/<[^>]+>/g, '')).trim()
+        if (cellText) cells.push(cellText)
+      }
+      if (cells.length > 0) tableLines.push(cells.join(' | '))
+    }
+  }
+
+  // テーブル外の段落テキスト（自己PR・職務概要等）
+  const withoutTables = html.replace(/<table[\s\S]*?<\/table>/gi, '')
+  const paraLines = decodeEntities(withoutTables.replace(/<[^>]+>/g, '\n'))
+    .split('\n').map(l => l.trim()).filter(Boolean)
+
+  const result = [...tableLines, ...paraLines].join('\n')
+  console.log(`[Word] htmlTableToText: tableLines=${tableLines.length} paraLines=${paraLines.length} totalLen=${result.length}`)
+  return result
+}
+
 async function extractWordText(base64: string): Promise<string> {
   try {
     const mammothMod = npmDefault(await import('npm:mammoth@1.8.0'))
-    const extractRawText = (mammothMod as { extractRawText?: (o: Record<string, unknown>) => Promise<{ value?: string }> })
-      .extractRawText
-    if (!extractRawText) throw new Error('mammoth.extractRawText がありません')
+    const mammoth = mammothMod as {
+      extractRawText?: (o: Record<string, unknown>) => Promise<{ value?: string }>
+      convertToHtml?:  (o: Record<string, unknown>) => Promise<{ value?: string }>
+    }
+    if (!mammoth.extractRawText && !mammoth.convertToHtml) throw new Error('mammoth が見つかりません')
+
     const bytes = base64ToUint8Array(base64)
     if (bytes.byteLength === 0) throw new Error('Word添付のBase64が空です')
 
-    // mammoth は実行環境により受け付けるキーが違うことがあるためフォールバックする
-    try {
+    const tryCall = async (fn: (o: Record<string, unknown>) => Promise<{ value?: string }>): Promise<string | null> => {
       const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-      const r1 = await extractRawText({ arrayBuffer: ab })
-      return r1.value ?? ''
-    } catch (e1) {
-      console.warn('[Word] arrayBuffer 経路失敗、buffer 経路へフォールバック', e1)
-      // Node互換ランタイムでは Buffer が使えることが多い
-      const Buf = (globalThis as unknown as { Buffer?: { from: (u: Uint8Array) => unknown } }).Buffer
-      if (Buf) {
-        const r2 = await extractRawText({ buffer: Buf.from(bytes) as unknown })
-        return r2.value ?? ''
+      try {
+        return (await fn({ arrayBuffer: ab })).value ?? null
+      } catch {
+        const Buf = (globalThis as unknown as { Buffer?: { from: (u: Uint8Array) => unknown } }).Buffer
+        if (Buf) return (await fn({ buffer: Buf.from(bytes) as unknown })).value ?? null
+        return (await fn({ buffer: bytes as unknown })).value ?? null
       }
-      const r3 = await extractRawText({ buffer: bytes as unknown })
-      return r3.value ?? ''
     }
+
+    // convertToHtml を優先: テーブル構造をセル単位で保持できるため精度が高い
+    if (mammoth.convertToHtml) {
+      try {
+        const html = await tryCall(mammoth.convertToHtml)
+        if (html) {
+          console.log('[Word] convertToHtml 成功 → htmlTableToText で構造化')
+          return htmlTableToText(html)
+        }
+      } catch (e) {
+        console.warn('[Word] convertToHtml 失敗、extractRawText へフォールバック', e)
+      }
+    }
+
+    // フォールバック: extractRawText（従来動作）
+    if (mammoth.extractRawText) {
+      const text = await tryCall(mammoth.extractRawText)
+      if (text) return text
+    }
+
+    throw new Error('mammoth いずれの変換も失敗')
   } catch (e) {
     console.warn('[Word] mammoth失敗、.doc バイナリ抽出へフォールバック', e)
-    // .doc（旧バイナリ形式）フォールバック
     const bytes = base64ToUint8Array(base64)
     return extractDocRawText(bytes)
   }
