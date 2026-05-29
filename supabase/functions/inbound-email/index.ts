@@ -1684,7 +1684,12 @@ function wordJsonToText(json: WordHtmlJson): string {
 
 /** Wordプロジェクト経歴テーブルから YYYY年MM月 / 現在 を収集して総月数を返す */
 function parseYearMonth(s: string): Date | null {
-  const m = s.match(/(\d{4})年\s*(\d{1,2})月/)
+  // 康熙部首の⽉(U+2F49/U+2F54)を標準の月(U+6708)に正規化してからマッチ
+  const normalized = s.replace(/[\u2F00-\u2FFF]/g, c => {
+    const map: Record<string, string> = { '\u2F49': '月', '\u2F54': '月', '\u2F22': '年' }
+    return map[c] ?? c
+  })
+  const m = normalized.match(/(\d{4})年\s*(\d{1,2})月/)
   if (m) return new Date(parseInt(m[1]), parseInt(m[2]) - 1)
   if (/^(現在|現職|present)$/i.test(s.trim())) return new Date()
   return null
