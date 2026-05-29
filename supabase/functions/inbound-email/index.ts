@@ -1576,51 +1576,61 @@ function extractDocRawText(bytes: Uint8Array): string {
 }
 
 /** Word(.docx/.doc)をテキストに変換 */
+/** Word HTML を JSON 構造に変換する型 */
+interface WordHtmlJson {
+  tables: string[][][]   // tables[tableIdx][rowIdx][cellIdx]
+  paragraphs: string[]   // テーブル外の段落テキスト
+}
+
 /**
- * mammoth の convertToHtml 出力を構造化テキストに変換する。
+ * mammoth の convertToHtml 出力を JSON 構造に変換する（node-html-parser 使用）。
  *
- * テーブル行 → 「セル1 | セル2 | ...」形式（既存 SEP_ATT の | に対応）
- * テーブル外の段落 → プレーンテキストとして末尾に追加
- *
- * 例:
- *   <tr><td>氏名</td><td>山田太郎</td></tr>  →  氏名 | 山田太郎
- *   <tr><td>最寄駅</td><td>渋谷</td></tr>    →  最寄駅 | 渋谷
+ * tables: テーブルごとに行・セルの2次元配列
+ *   例: [[["氏名","山田太郎"],["最寄駅","渋谷"]], [["スキル","経験年数"],["Java","8年"]]]
+ * paragraphs: テーブル外の段落テキスト一覧
  */
-function htmlTableToText(html: string): string {
-  const decodeEntities = (s: string) => s
-    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
+  const { parse } = await import('npm:node-html-parser@6.1.13')
+  const root = parse(html)
 
-  const tableLines: string[] = []
-
-  // テーブル行ごとにセルを抽出
-  const tableBodyRe = /<table[\s\S]*?<\/table>/gi
-  let tableMatch: RegExpExecArray | null
-  while ((tableMatch = tableBodyRe.exec(html)) !== null) {
-    const tableHtml = tableMatch[0]
-    const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi
-    let rowMatch: RegExpExecArray | null
-    while ((rowMatch = rowRe.exec(tableHtml)) !== null) {
-      const cells: string[] = []
-      const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi
-      let cellMatch: RegExpExecArray | null
-      while ((cellMatch = cellRe.exec(rowMatch[1])) !== null) {
-        const cellText = decodeEntities(cellMatch[1].replace(/<[^>]+>/g, '')).trim()
-        if (cellText) cells.push(cellText)
-      }
-      // SEP_ATT に含まれる「：」で区切ることで既存の extractFieldTwoPhase にそのまま対応させる
-      if (cells.length > 0) tableLines.push(cells.join('：'))
+  const tables: string[][][] = []
+  for (const table of root.querySelectorAll('table')) {
+    const rows: string[][] = []
+    for (const tr of table.querySelectorAll('tr')) {
+      const cells = tr.querySelectorAll('td, th').map(cell => cell.text.trim()).filter(Boolean)
+      if (cells.length > 0) rows.push(cells)
     }
+    if (rows.length > 0) tables.push(rows)
   }
 
-  // テーブル外の段落テキスト（自己PR・職務概要等）
-  const withoutTables = html.replace(/<table[\s\S]*?<\/table>/gi, '')
-  const paraLines = decodeEntities(withoutTables.replace(/<[^>]+>/g, '\n'))
-    .split('\n').map(l => l.trim()).filter(Boolean)
+  const paragraphs: string[] = []
+  for (const p of root.querySelectorAll('p, li')) {
+    const text = p.text.trim()
+    if (text) paragraphs.push(text)
+  }
 
-  const result = [...tableLines, ...paraLines].join('\n')
-  console.log(`[Word] htmlTableToText: tableLines=${tableLines.length} paraLines=${paraLines.length} totalLen=${result.length}`)
-  return result
+  console.log(`[Word] htmlToWordJson: tables=${tables.length} paragraphs=${paragraphs.length}`)
+  return { tables, paragraphs }
+}
+
+/**
+ * WordHtmlJson をフィールド抽出用テキストに変換する。
+ *
+ * テーブル行: 「ラベル：値」形式（SEP_ATT の ： に対応）
+ *   例: 氏名：山田太郎 / スキル：Java：経験年数：8年
+ * 段落: そのままテキストとして追加
+ */
+function wordJsonToText(json: WordHtmlJson): string {
+  const lines: string[] = []
+  for (const rows of json.tables) {
+    for (const cells of rows) {
+      lines.push(cells.join('：'))
+    }
+  }
+  for (const p of json.paragraphs) {
+    lines.push(p)
+  }
+  return lines.join('\n')
 }
 
 async function extractWordText(base64: string): Promise<string> {
@@ -1651,8 +1661,9 @@ async function extractWordText(base64: string): Promise<string> {
       try {
         const html = await tryCall(mammoth.convertToHtml)
         if (html) {
-          console.log('[Word] convertToHtml 成功 → htmlTableToText で構造化')
-          return htmlTableToText(html)
+          console.log('[Word] convertToHtml 成功 → htmlToWordJson で構造化')
+          const wordJson = await htmlToWordJson(html)
+          return wordJsonToText(wordJson)
         }
       } catch (e) {
         console.warn('[Word] convertToHtml 失敗、extractRawText へフォールバック', e)
