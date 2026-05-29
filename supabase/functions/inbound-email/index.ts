@@ -1613,11 +1613,16 @@ function splitRowIntoLines(cells: string[]): string[] {
   for (let i = 1; i < cells.length; i++) {
     const bare = cells[i].replace(/[\s　]/g, '')
     if (bare.length <= 8 && WORD_LABEL_RE.test(bare)) {
-      lines.push(cells.slice(start, i).join('：'))
+      // ラベル(start) + 値セル群をスペース結合 → "氏名：田中 太郎"
+      const label = cells[start]
+      const values = cells.slice(start + 1, i).join(' ')
+      lines.push(values ? `${label}：${values}` : label)
       start = i
     }
   }
-  lines.push(cells.slice(start).join('：'))
+  const label = cells[start]
+  const values = cells.slice(start + 1).join(' ')
+  lines.push(values ? `${label}：${values}` : label)
   return lines.filter(l => l.trim())
 }
 
