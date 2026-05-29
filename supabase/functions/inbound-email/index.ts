@@ -1589,6 +1589,38 @@ interface WordHtmlJson {
  *   例: [[["氏名","山田太郎"],["最寄駅","渋谷"]], [["スキル","経験年数"],["Java","8年"]]]
  * paragraphs: テーブル外の段落テキスト一覧
  */
+// セル内 <br> を \n に変換してテキスト抽出するヘルパー
+function cellInnerText(el: { innerHTML: string }): string {
+  return el.innerHTML
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
+    .trim()
+}
+
+// 日本語履歴書の典型的なラベル語を検出するパターン
+const WORD_LABEL_RE = /氏名|ふりがな|フリガナ|年齢|性別|住所|最寄|学歴|卒業|生年|連絡|電話|メール|経験年|スキル|希望|単価|参画|勤務|国籍|資格|姓|名|性|在住/
+
+/**
+ * テーブル行の cells を複数ラベル判定で分割して行文字列の配列を返す。
+ *   ["氏　　名","H","S","性　　別","男"] → ["氏　　名：H：S", "性　　別：男"]
+ *   ["スキル","Java"] → ["スキル：Java"]
+ */
+function splitRowIntoLines(cells: string[]): string[] {
+  if (cells.length <= 2) return [cells.join('：')]
+  const lines: string[] = []
+  let start = 0
+  for (let i = 1; i < cells.length; i++) {
+    const bare = cells[i].replace(/[\s　]/g, '')
+    if (bare.length <= 8 && WORD_LABEL_RE.test(bare)) {
+      lines.push(cells.slice(start, i).join('：'))
+      start = i
+    }
+  }
+  lines.push(cells.slice(start).join('：'))
+  return lines.filter(l => l.trim())
+}
+
 async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
   const { parse } = await import('npm:node-html-parser@6.1.13')
   const root = parse(html)
@@ -1597,7 +1629,7 @@ async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
   for (const table of root.querySelectorAll('table')) {
     const rows: string[][] = []
     for (const tr of table.querySelectorAll('tr')) {
-      const cells = tr.querySelectorAll('td, th').map(cell => cell.text.trim()).filter(Boolean)
+      const cells = tr.querySelectorAll('td, th').map(cell => cellInnerText(cell as unknown as { innerHTML: string })).filter(Boolean)
       if (cells.length > 0) rows.push(cells)
     }
     if (rows.length > 0) tables.push(rows)
@@ -1605,7 +1637,7 @@ async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
 
   const paragraphs: string[] = []
   for (const p of root.querySelectorAll('p, li')) {
-    const text = p.text.trim()
+    const text = cellInnerText(p as unknown as { innerHTML: string })
     if (text) paragraphs.push(text)
   }
 
@@ -1617,15 +1649,16 @@ async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
 /**
  * WordHtmlJson をフィールド抽出用テキストに変換する。
  *
- * テーブル行: 「ラベル：値」形式（SEP_ATT の ： に対応）
- *   例: 氏名：山田太郎 / スキル：Java：経験年数：8年
- * 段落: そのままテキストとして追加
+ * 行内に複数ラベルがある場合は splitRowIntoLines で分割して出力。
+ * セル内の \n（<br>由来）はそのまま保持。
  */
 function wordJsonToText(json: WordHtmlJson): string {
   const lines: string[] = []
   for (const rows of json.tables) {
     for (const cells of rows) {
-      lines.push(cells.join('：'))
+      for (const line of splitRowIntoLines(cells)) {
+        lines.push(line)
+      }
     }
   }
   for (const p of json.paragraphs) {
