@@ -1601,9 +1601,18 @@ function cellInnerText(el: { innerHTML: string }): string {
 // 日本語履歴書の典型的なラベル語を検出するパターン
 const WORD_LABEL_RE = /氏名|ふりがな|フリガナ|年齢|性別|住所|最寄|学歴|卒業|生年|連絡|電話|メール|経験年|スキル|希望|単価|参画|勤務|国籍|資格|姓|名|性|在住/
 
+/** 値セル群を結合。全セルが1文字アルファベット（イニシャル）なら "H.S." 形式に */
+function joinValueCells(valCells: string[]): string {
+  if (valCells.length === 0) return ''
+  const allInitials = valCells.length >= 2 && valCells.every(c => /^[A-Za-z]$/.test(c.trim()))
+  if (allInitials) return valCells.map(c => c.trim()).join('.') + '.'
+  return valCells.join(' ')
+}
+
 /**
  * テーブル行の cells を複数ラベル判定で分割して行文字列の配列を返す。
- *   ["氏　　名","H","S","性　　別","男"] → ["氏　　名：H：S", "性　　別：男"]
+ *   ["氏　　名","H","S","性　　別","男"] → ["氏　　名：H.S.", "性　　別：男"]
+ *   ["氏　　名","田中","太郎","性　　別","男"] → ["氏　　名：田中 太郎", "性　　別：男"]
  *   ["スキル","Java"] → ["スキル：Java"]
  */
 function splitRowIntoLines(cells: string[]): string[] {
@@ -1613,15 +1622,16 @@ function splitRowIntoLines(cells: string[]): string[] {
   for (let i = 1; i < cells.length; i++) {
     const bare = cells[i].replace(/[\s　]/g, '')
     if (bare.length <= 8 && WORD_LABEL_RE.test(bare)) {
-      // ラベル(start) + 値セル群をスペース結合 → "氏名：田中 太郎"
+      // ラベル(start) + 値セル群を結合 → "氏名：田中 太郎" / "氏名：H.S."
       const label = cells[start]
-      const values = cells.slice(start + 1, i).join(' ')
+      const valCells = cells.slice(start + 1, i)
+      const values = joinValueCells(valCells)
       lines.push(values ? `${label}：${values}` : label)
       start = i
     }
   }
   const label = cells[start]
-  const values = cells.slice(start + 1).join(' ')
+  const values = joinValueCells(cells.slice(start + 1))
   lines.push(values ? `${label}：${values}` : label)
   return lines.filter(l => l.trim())
 }
