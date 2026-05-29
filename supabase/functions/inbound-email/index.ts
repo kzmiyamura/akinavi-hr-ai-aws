@@ -1610,6 +1610,7 @@ async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
   }
 
   console.log(`[Word] htmlToWordJson: tables=${tables.length} paragraphs=${paragraphs.length}`)
+  console.log('[Word] htmlToWordJson JSON:', JSON.stringify({ tables, paragraphs }).slice(0, 2000))
   return { tables, paragraphs }
 }
 
