@@ -1608,7 +1608,8 @@ function htmlTableToText(html: string): string {
         const cellText = decodeEntities(cellMatch[1].replace(/<[^>]+>/g, '')).trim()
         if (cellText) cells.push(cellText)
       }
-      if (cells.length > 0) tableLines.push(cells.join(' | '))
+      // SEP_ATT に含まれる「：」で区切ることで既存の extractFieldTwoPhase にそのまま対応させる
+      if (cells.length > 0) tableLines.push(cells.join('：'))
     }
   }
 
@@ -3251,11 +3252,11 @@ Deno.serve(async (req: Request) => {
             ?? extractNameFallback([regexBodyText, attachText].join('\n'))
             ?? extractCandidateCode(subject)
             ?? '不明')
-      // 駅名が名前として取得されてしまうケース（例: 「大宮（33歳/男性）」→ 名前=大宮）を除外
-      const stationMap = _stationDbMap ?? STATION_TO_PREFECTURE
+      // 「渋谷駅」のように 駅 サフィックスが付いたまま名前として取れたケースのみ除外
+      // 駅名と同じ苗字（渋谷・大宮・藤沢等）は正当な人名のため除外しない
       const _bareRawName = _rawName.replace(/駅$/, '')
-      const resolvedName = (_rawName !== '不明' && (stationMap[_bareRawName] || _bareRawName !== _rawName))
-        ? (console.log(`[inbound] 駅名が名前として抽出されたため除外: ${_rawName}`), '不明')
+      const resolvedName = (_rawName !== '不明' && _bareRawName !== _rawName)
+        ? (console.log(`[inbound] 駅サフィックス付き名前を除外: ${_rawName}`), '不明')
         : _rawName
 
       // AI空項目にregexフォールバックを適用
