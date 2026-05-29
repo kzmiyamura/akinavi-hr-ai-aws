@@ -2737,6 +2737,7 @@ Deno.serve(async (req: Request) => {
     // Word/Excelのテキスト抽出（MIMEタイプ + 拡張子の両方で判定）
     const officeTextContents: { label: string; content: string }[] = []
     let excelSkillYears: Record<string, number> = {}
+    let wordSkillYearsForDisplay: Record<string, number> = {}  // 表示用のみ・経験年数推定には使わない
     for (const att of attachments) {
       const attNameLower = (att.name ?? '').toLowerCase()
       const isWordByMime = WORD_MIME.includes(att.mimeType)
@@ -2749,13 +2750,13 @@ Deno.serve(async (req: Request) => {
           const text = cleanseWordText(rawText)
           officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
         } else console.warn(`[Word] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
-        // Word のスキル別経験年数を excelSkillYears にマージ（Excel優先）
-        if (wordSkillYears && Object.keys(excelSkillYears).length === 0) {
-          excelSkillYears = { ...wordSkillYears }
-          console.log(`[Word] skillYears → excelSkillYears にセット: ${Object.keys(wordSkillYears).length}件`)
+        // Word スキル別経験年数は表示用のみ（経験年数推定には使わない）
+        if (wordSkillYears && Object.keys(wordSkillYearsForDisplay).length === 0) {
+          wordSkillYearsForDisplay = { ...wordSkillYears }
+          console.log(`[Word] skillYears → 表示用にセット: ${Object.keys(wordSkillYears).length}件`)
         }
-        // Word のプロジェクト期間合計を経験年数フォールバック用に保存（Excel優先）
-        if (wordMonths && !excelSkillYears['_totalProjectMonths']) {
+        // Word のプロジェクト期間合計のみ経験年数フォールバックに使用（Excel優先）
+        if (wordMonths && Object.keys(excelSkillYears).length === 0) {
           excelSkillYears['_totalProjectMonths'] = wordMonths
           console.log(`[Word] totalProjectMonths → excelSkillYears にセット: ${wordMonths}ヶ月`)
         }
@@ -3522,7 +3523,11 @@ Deno.serve(async (req: Request) => {
           selfPR: extractSelfPR(body, attachText) ?? null,
           agentComment: extractAgentComment(body, attachText) ?? null,
           geminiParseFallback: parseFallback,
-          skillYears: Object.keys(excelSkillYears).length > 0 ? excelSkillYears : undefined,
+          skillYears: Object.keys(excelSkillYears).length > 0
+            ? excelSkillYears
+            : Object.keys(wordSkillYearsForDisplay).length > 0
+              ? wordSkillYearsForDisplay
+              : undefined,
         },
         duplicate_flag: false,
         created_by: 'make-inbound',
