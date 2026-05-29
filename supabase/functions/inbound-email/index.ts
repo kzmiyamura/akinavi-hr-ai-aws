@@ -1682,7 +1682,36 @@ function wordJsonToText(json: WordHtmlJson): string {
   return lines.join('\n')
 }
 
-async function extractWordText(base64: string): Promise<string> {
+/** Wordプロジェクト経歴テーブルから YYYY年MM月 / 現在 を収集して総月数を返す */
+function parseYearMonth(s: string): Date | null {
+  const m = s.match(/(\d{4})年\s*(\d{1,2})月/)
+  if (m) return new Date(parseInt(m[1]), parseInt(m[2]) - 1)
+  if (/^(現在|現職|present)$/i.test(s.trim())) return new Date()
+  return null
+}
+
+function calcWordProjectMonths(json: WordHtmlJson): number | null {
+  const PROJECT_HEADER_RE = /期間|業務経歴|職務経歴/
+  const dates: Date[] = []
+  for (const rows of json.tables) {
+    const hasHeader = rows.some(row => row.some(cell => PROJECT_HEADER_RE.test(cell)))
+    if (!hasHeader) continue
+    for (const row of rows) {
+      for (const cell of row) {
+        const d = parseYearMonth(cell.split('\n')[0].trim())
+        if (d) dates.push(d)
+      }
+    }
+  }
+  if (dates.length < 2) return null
+  dates.sort((a, b) => a.getTime() - b.getTime())
+  const min = dates[0], max = dates[dates.length - 1]
+  const months = (max.getFullYear() - min.getFullYear()) * 12 + (max.getMonth() - min.getMonth())
+  console.log(`[Word] calcWordProjectMonths: ${dates.length}件 最古=${min.getFullYear()}/${min.getMonth()+1} 最新=${max.getFullYear()}/${max.getMonth()+1} → ${months}ヶ月`)
+  return months > 0 ? months : null
+}
+
+async function extractWordText(base64: string): Promise<{ text: string; totalProjectMonths?: number }> {
   try {
     const mammothMod = npmDefault(await import('npm:mammoth@1.8.0'))
     const mammoth = mammothMod as {
@@ -1712,7 +1741,9 @@ async function extractWordText(base64: string): Promise<string> {
         if (html) {
           console.log('[Word] convertToHtml 成功 → htmlToWordJson で構造化')
           const wordJson = await htmlToWordJson(html)
-          return wordJsonToText(wordJson)
+          const text = wordJsonToText(wordJson)
+          const totalProjectMonths = calcWordProjectMonths(wordJson) ?? undefined
+          return { text, totalProjectMonths }
         }
       } catch (e) {
         console.warn('[Word] convertToHtml 失敗、extractRawText へフォールバック', e)
@@ -1722,14 +1753,14 @@ async function extractWordText(base64: string): Promise<string> {
     // フォールバック: extractRawText（従来動作）
     if (mammoth.extractRawText) {
       const text = await tryCall(mammoth.extractRawText)
-      if (text) return text
+      if (text) return { text }
     }
 
     throw new Error('mammoth いずれの変換も失敗')
   } catch (e) {
     console.warn('[Word] mammoth失敗、.doc バイナリ抽出へフォールバック', e)
     const bytes = base64ToUint8Array(base64)
-    return extractDocRawText(bytes)
+    return { text: extractDocRawText(bytes) }
   }
 }
 
@@ -2042,9 +2073,11 @@ async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Respons
 async function fetchGoogleLinks(body: string): Promise<{
   textContents: { label: string; content: string }[]
   pdfAttachments: Attachment[]
+  driveWordProjectMonths: number | null
 }> {
   const textContents: { label: string; content: string }[] = []
   const pdfAttachments: Attachment[] = []
+  let driveWordProjectMonths: number | null = null
 
   const sheetsMatchesPreview = [...body.matchAll(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]{25,})[^\s]*/g)]
   const docsMatchesPreview = [...body.matchAll(/https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{25,})/g)]
@@ -2128,13 +2161,14 @@ async function fetchGoogleLinks(body: string): Promise<{
           }
         } else if (isWord) {
           const b64 = arrayBufferToBase64(await res.arrayBuffer())
-          const rawText = await extractWordText(b64)
+          const { text: rawText, totalProjectMonths: wm } = await extractWordText(b64)
           if (rawText.trim()) {
             const text = cleanseWordText(rawText)
             textContents.push({ label: `Drive Word(${filename})`, content: text })
           } else {
             console.warn(`[DriveLink] Drive Word テキスト抽出結果が空: ${id}`)
           }
+          if (wm && !driveWordProjectMonths) driveWordProjectMonths = wm
         } else {
           console.warn(`[DriveLink] Drive 未対応タイプ(${ct}) ファイル名(${filename}): ${id}`)
         }
@@ -2144,7 +2178,7 @@ async function fetchGoogleLinks(body: string): Promise<{
     } catch (e) { console.warn(`[DriveLink] Drive fetch error: ${id}`, e) }
   }
 
-  return { textContents, pdfAttachments }
+  return { textContents, pdfAttachments, driveWordProjectMonths }
 }
 
 /** HTMLタグを除去してプレーンテキストに変換 */
@@ -2674,11 +2708,16 @@ Deno.serve(async (req: Request) => {
       const isWordByExt = /\.(docx?|doc)$/.test(attNameLower) && !isExcelByMime
       const isExcelByExt = /\.(xlsx?|xls|ods|csv)$/.test(attNameLower) && !isWordByMime
       if (isWordByMime || isWordByExt) {
-        const rawText = await extractWordText(att.data)
+        const { text: rawText, totalProjectMonths: wordMonths } = await extractWordText(att.data)
         if (rawText.trim()) {
           const text = cleanseWordText(rawText)
           officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
         } else console.warn(`[Word] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
+        // Word のプロジェクト期間合計を経験年数フォールバック用に保存（Excel優先）
+        if (wordMonths && Object.keys(excelSkillYears).length === 0) {
+          excelSkillYears['_totalProjectMonths'] = wordMonths
+          console.log(`[Word] totalProjectMonths → excelSkillYears にセット: ${wordMonths}ヶ月`)
+        }
       } else if (isExcelByMime || isExcelByExt) {
         const text = await extractExcelText(att.data)
         if (text.trim()) officeTextContents.push({ label: `Excelファイル(${att.name ?? 'spreadsheet'})`, content: text })
@@ -2691,6 +2730,11 @@ Deno.serve(async (req: Request) => {
       }
     }
     tracePhase = 'step3_office_done'
+    // Drive Word のプロジェクト期間も Excel 未取得時のフォールバックとして使用
+    if (driveWordProjectMonths && Object.keys(excelSkillYears).length === 0) {
+      excelSkillYears['_totalProjectMonths'] = driveWordProjectMonths
+      console.log(`[DriveWord] totalProjectMonths → excelSkillYears にセット: ${driveWordProjectMonths}ヶ月`)
+    }
 
     // ② 本文が極端に短い（50文字未満）かつ添付なし → 自動返信・通知メール等として即スキップ
     const plainBodyLength = body.trim().length
@@ -2878,7 +2922,7 @@ Deno.serve(async (req: Request) => {
     tracePhase = 'drive_links_fetch'
     pipe(traceRid, tracePhase)
     // Google Drive / Sheets / Docs リンクの取得
-    const { textContents: driveTexts, pdfAttachments: drivePdfs } = await fetchGoogleLinks(body)
+    const { textContents: driveTexts, pdfAttachments: drivePdfs, driveWordProjectMonths } = await fetchGoogleLinks(body)
     const rawAllAttachments = [...supportedAttachments, ...drivePdfs]
     tracePhase = 'drive_links_done'
     console.log('[STEP4 DriveLink完了]', {
