@@ -2771,11 +2771,6 @@ Deno.serve(async (req: Request) => {
       }
     }
     tracePhase = 'step3_office_done'
-    // Drive Word のプロジェクト期間も Excel 未取得時のフォールバックとして使用
-    if (driveWordProjectMonths && Object.keys(excelSkillYears).length === 0) {
-      excelSkillYears['_totalProjectMonths'] = driveWordProjectMonths
-      console.log(`[DriveWord] totalProjectMonths → excelSkillYears にセット: ${driveWordProjectMonths}ヶ月`)
-    }
 
     // ② 本文が極端に短い（50文字未満）かつ添付なし → 自動返信・通知メール等として即スキップ
     const plainBodyLength = body.trim().length
@@ -2964,6 +2959,11 @@ Deno.serve(async (req: Request) => {
     pipe(traceRid, tracePhase)
     // Google Drive / Sheets / Docs リンクの取得
     const { textContents: driveTexts, pdfAttachments: drivePdfs, driveWordProjectMonths } = await fetchGoogleLinks(body)
+    // Drive Word のプロジェクト期間も Excel 未取得時のフォールバックとして使用
+    if (driveWordProjectMonths && Object.keys(excelSkillYears).length === 0) {
+      excelSkillYears['_totalProjectMonths'] = driveWordProjectMonths
+      console.log(`[DriveWord] totalProjectMonths → excelSkillYears にセット: ${driveWordProjectMonths}ヶ月`)
+    }
     const rawAllAttachments = [...supportedAttachments, ...drivePdfs]
     tracePhase = 'drive_links_done'
     console.log('[STEP4 DriveLink完了]', {
