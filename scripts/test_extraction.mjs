@@ -168,7 +168,7 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   const rawName = extractFieldTwoPhase(
     ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
     bodyText, attachText,
-    v => v.length >= 1 && !/^\d+$/.test(v), 20, 2,
+    v => v.length >= 1 && !/^\d+$/.test(v), 40, 2,
   )
   const cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
   let age = null, gender = null, nameStripped = cleanedName || ''
@@ -245,7 +245,8 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     if (ageOnlyM) { age = parseInt(ageOnlyM[1], 10); name = name.replace(/[ 　]?[（(]\d{2}[）)]$/, '').trim() || null }
   }
   if (name && name.includes('】【')) {
-    name = name.replace(/】【.*$/, '').trim() || null
+    // lookbehind で最初の 】 を残してそれ以降の【...】を除去（例:「【T・N】【豊岡】」→「【T・N】」→「T・N」）
+    name = name.replace(/(?<=】)【.*$/, '').trim() || null
     if (name) name = name.replace(/^【([^】]+)】$/, '$1').trim() || null
   }
   // ── 最終安全網: 残留する年齢・性別を名前から除去 ─────────────────
@@ -401,9 +402,10 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
 }
 
 function splitMultiCandidateBody(body) {
-  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*(?:名前|氏名)[　 ]*[：:]/
-  // 【 氏 名 】（半角スペース区切り形式）にも対応
-  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]/m
+  // ■氏名：形式（■●▪▶ 等のビュレット付き）も認識
+  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]/
+  // 【 氏 名 】（半角スペース区切り形式）・■氏名：形式にも対応
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]/m
   const lines = body.split(/\r?\n/)
 
   function trySplit(delimRe) {
@@ -436,10 +438,10 @@ function splitMultiCandidateBody(body) {
     return blocksWithName.length >= 2 ? blocks : null
   }
 
-  // Pass 1: = と ー のみ（- を除外して laize 形式の内部 ---- による誤分割を防ぐ）
-  // Pass 2: - を含む全パターン（ical 等の --- のみの形式に対応）
-  return trySplit(/^[\*=＊＝ー]{8,}\s*$/)
-      ?? trySplit(/^[\*\-=＊＝ー]{8,}\s*$/)
+  // Pass 1: - を除外（laize 内部の ---- による誤分割防止）。― U+2015 / ─ U+2500 / — U+2014 / ー U+30FC を含む
+  // Pass 2: - も含む（ical 等の --- のみ形式に対応）
+  return trySplit(/^[\*=＊＝ーー─―—]{8,}\s*$/)
+      ?? trySplit(/^[\*\-=＊＝ーー─―—]{8,}\s*$/)
 }
 
 // ─── 引数パース ───────────────────────────────────────────────────────────────
@@ -487,6 +489,7 @@ if (args.includes('--test')) {
   runCase('C.S女性スウェーデン籍','氏名：C.S女性スウェーデン籍\n最寄駅：渋谷\n経験年数：5年', '', { name: 'C.S', gender: '女性' })
   runCase('EN　30才　日本人',     '氏名：EN　30才　日本人\n最寄駅：渋谷\n経験年数：5年', '', { name: 'EN', age: 30 })
   runCase('国PF（男性/48歳、中国）', '氏名：国PF（男性/48歳、中国）\n最寄駅：渋谷\n経験年数：10年', '', { name: '国PF', age: 48, gender: '男性', nationality: '中国' })
+  runCase('【T・N】【豊岡】（男性/26歳/日本人）', '■氏名：【T・N】【豊岡】（男性/26歳/日本人）\n■最寄：東向島\n■単金：56万円+精算', '', { name: 'T・N', age: 26, gender: '男性', nationality: '日本人' })
 
   // ── デグレチェック: 既存パターンが引き続き正しく動作すること ─────────────
   console.log('\n【デグレチェック: 既存パターン】')

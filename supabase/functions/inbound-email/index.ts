@@ -1044,7 +1044,7 @@ function extractCandidateFieldsRegex(
     ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
     bodyText, attachText,
     v => v.length >= 1 && !/^\d+$/.test(v),
-    20,
+    40,
     2,
   )
   // 先頭の区切り文字（：: 等）を除去（「：T.B（27）」→「T.B（27）」）
@@ -1191,7 +1191,8 @@ function extractCandidateFieldsRegex(
   }
   // 名前中に【駅名】等の別フィールドが混入 (例: "【T・N】【豊岡】（男性..." → "T・N")
   if (name && name.includes('】【')) {
-    name = name.replace(/】【.*$/, '').trim() || null
+    // lookbehind で最初の 】 を残してそれ以降の【...】を除去（例:「【T・N】【豊岡】」→「T・N」）
+    name = name.replace(/(?<=】)【.*$/, '').trim() || null
     if (name) name = name.replace(/^【([^】]+)】$/, '$1').trim() || null
   }
 
@@ -2623,9 +2624,10 @@ function assignAttachmentsToBlocks(
  */
 function splitMultiCandidateBody(body: string): string[] | null {
   // 構造化フィールドを含む判定（【氏名】/ ◇◆ ラベル / 名前：ラベルなし形式）
-  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*(?:名前|氏名)[　 ]*[：:]/
-  // 氏名フィールドの最終判定（【 氏 名 】半角スペース区切り形式も対応）
-  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]/m
+  // ■氏名：形式（■●▪▶ 等のビュレット付き）も認識
+  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]/
+  // 【 氏 名 】（半角スペース区切り形式）・■氏名：形式にも対応
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]/m
   const lines = body.split(/\r?\n/)
 
   function trySplit(delimRe: RegExp): string[] | null {
@@ -2660,8 +2662,10 @@ function splitMultiCandidateBody(body: string): string[] | null {
 
   // Pass 1: = と ー のみ（- を除外して laize 形式の内部 ---- による誤分割を防ぐ）
   // Pass 2: - を含む全パターン（ical 等の --- のみの形式に対応）
-  return trySplit(/^[\*=＊＝ー]{8,}\s*$/)
-      ?? trySplit(/^[\*\-=＊＝ー]{8,}\s*$/)
+  // Pass 1: - を除外（laize 内部の ---- による誤分割防止）。― U+2015 / ─ U+2500 / — U+2014 / ー U+30FC を含む
+  // Pass 2: - も含む（ical 等の --- のみ形式に対応）
+  return trySplit(/^[\*=＊＝ーー─―—]{8,}\s*$/)
+      ?? trySplit(/^[\*\-=＊＝ーー─―—]{8,}\s*$/)
 }
 
 Deno.serve(async (req: Request) => {
