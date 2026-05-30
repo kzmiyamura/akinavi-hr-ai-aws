@@ -173,7 +173,8 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   const cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
   let age = null, gender = null, nameStripped = cleanedName || ''
   const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][ 　]*[/／：:・．][ 　]*(男性|女性|男|女)(?:[/／]([^)）]*))?[\)）]/)
-  const genderAgeUnified = !agGenderUnified ? nameStripped.match(/[\(（](男性|女性|男|女)[ 　]*(?:[/／：:・．][ 　]*|[ 　]+)(\d{2})[才歳][\)）]/) : null
+  // 「（男性/48歳、中国）」のように括弧内に国籍が続く形式にも対応
+  const genderAgeUnified = !agGenderUnified ? nameStripped.match(/[\(（](男性|女性|男|女)[ 　]*(?:[/／：:・．][ 　]*|[ 　]+)(\d{2})[才歳](?:[、,\/／]([^)）]{1,15}))?[\)）]/) : null
   let nationality = null
   if (agGenderUnified) {
     age = parseInt(agGenderUnified[1], 10); gender = agGenderUnified[2]
@@ -181,7 +182,8 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][ 　]*[/／：:・．][ 　]*(?:男性|女性|男|女)(?:[/／][^)）]*)?[\)）]/, '').trim()
   } else if (genderAgeUnified) {
     gender = genderAgeUnified[1]; age = parseInt(genderAgeUnified[2], 10)
-    nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[ 　]*(?:[/／：:・．][ 　]*|[ 　]+)\d{2}[才歳][\)）]/, '').trim()
+    if (genderAgeUnified[3]?.trim() && !nationality) nationality = genderAgeUnified[3].trim()
+    nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[ 　]*(?:[/／：:・．][ 　]*|[ 　]+)\d{2}[才歳](?:[、,\/／][^)）]{1,15})?[\)）]/, '').trim()
   } else {
     const ageMatch = nameStripped.match(/[\s　]?[\(（](\d{2})[才歳][\)）]?/)
     if (ageMatch) { age = parseInt(ageMatch[1], 10); nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][\)）]?/, '').trim() }
@@ -273,6 +275,8 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
       name = genderInNameM[1].trim() || null
     }
   }
+  // ④ 名前末尾の孤立した括弧・区切り記号を除去（例:「国PF（」→「国PF」）
+  if (name) name = name.replace(/[（(【,、\/／・\s　]+$/, '').trim() || null
   if (!name) {
     const allTextForInitials = bodyText + '\n' + attachText
     const initialsPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])[ 　]?[（(](\d{2})[才歳][^)）]*[）)]/m
@@ -482,6 +486,7 @@ if (args.includes('--test')) {
   runCase('ISAR　男',            '氏名：ISAR　男\n最寄駅：渋谷\n経験年数：3年', '',   { name: 'ISAR',       gender: '男' })
   runCase('C.S女性スウェーデン籍','氏名：C.S女性スウェーデン籍\n最寄駅：渋谷\n経験年数：5年', '', { name: 'C.S', gender: '女性' })
   runCase('EN　30才　日本人',     '氏名：EN　30才　日本人\n最寄駅：渋谷\n経験年数：5年', '', { name: 'EN', age: 30 })
+  runCase('国PF（男性/48歳、中国）', '氏名：国PF（男性/48歳、中国）\n最寄駅：渋谷\n経験年数：10年', '', { name: '国PF', age: 48, gender: '男性', nationality: '中国' })
 
   // ── デグレチェック: 既存パターンが引き続き正しく動作すること ─────────────
   console.log('\n【デグレチェック: 既存パターン】')
