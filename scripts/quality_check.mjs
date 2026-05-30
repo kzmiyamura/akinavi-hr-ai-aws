@@ -3,9 +3,13 @@
  * quality_check.mjs — 品質チェック自動スクリプト
  *
  * 使い方:
- *   node scripts/quality_check.mjs            # 全チェック（直近7日）
- *   node scripts/quality_check.mjs --logs     # Edge Functionログ解析も含む（PAT必須）
- *   node scripts/quality_check.mjs --days 14  # 期間指定
+ *   node scripts/quality_check.mjs              # 全チェック（直近1日）
+ *   node scripts/quality_check.mjs --logs       # Edge Functionログ解析も含む（PAT必須）
+ *   node scripts/quality_check.mjs --days 3     # 期間指定
+ *   node scripts/quality_check.mjs --fetch-body # 問題人材のメール本文を表示（原因分析用）
+ *   node scripts/quality_check.mjs --fetch-body --target noname   # 名前不明のみ
+ *   node scripts/quality_check.mjs --fetch-body --target noexp    # 経験年数nullのみ
+ *   node scripts/quality_check.mjs --fetch-body --target nopref   # 都道府県nullのみ
  *
  * 環境変数（.env.local から自動読み込み）:
  *   VITE_SUPABASE_URL         必須
@@ -50,6 +54,10 @@ if (!SUPABASE_URL || !ANON_KEY) {
 const args = process.argv.slice(2)
 const DAYS = parseInt(args.find((_, i) => args[i - 1] === '--days') ?? '1')
 const INCLUDE_LOGS = args.includes('--logs')
+const FETCH_BODY = args.includes('--fetch-body')
+const FETCH_TARGET = args.find((_, i) => args[i - 1] === '--target') ?? 'all'
+// --fetch-body 時に表示する本文の最大文字数
+const BODY_MAX = 1500
 
 const since = new Date(Date.now() - DAYS * 24 * 60 * 60 * 1000).toISOString()
 
@@ -158,6 +166,42 @@ try {
     console.log('\n  【名前不明の人材】')
     candidates.filter(c => !c.name || c.name === '不明' || c.name === '氏名不明')
       .forEach(c => console.log(`    - ${c.id.slice(0, 8)} created=${c.created_at.slice(0, 16)}`))
+  }
+
+  // ── --fetch-body: 問題人材のメール本文を表示 ──────────────────
+  if (FETCH_BODY) {
+    const targets = {
+      noname: candidates.filter(c => !c.name || c.name === '不明' || c.name === '氏名不明'),
+      noexp:  candidates.filter(c => c.experience_years == null),
+      nopref: candidates.filter(c => !c.raw_profile?.prefecture),
+    }
+    const toShow = FETCH_TARGET === 'all'
+      ? [...new Map([...targets.noname, ...targets.noexp, ...targets.nopref].map(c => [c.id, c])).values()].slice(0, 10)
+      : (targets[FETCH_TARGET] ?? []).slice(0, 10)
+
+    if (toShow.length === 0) {
+      ok('fetch-body: 対象なし')
+    } else {
+      H(`📄 問題人材のメール本文（最大10件・各${BODY_MAX}字）`)
+      for (const c of toShow) {
+        const issues = [
+          !c.name || c.name === '不明' ? '名前不明' : null,
+          c.experience_years == null ? '経験年数null' : null,
+          !c.raw_profile?.prefecture ? '都道府県null' : null,
+        ].filter(Boolean).join(' / ')
+        console.log(`\n${'─'.repeat(50)}`)
+        console.log(`  ID: ${c.id.slice(0, 8)}  created: ${c.created_at.slice(0, 16)}  問題: ${issues}`)
+        console.log(`  name: ${c.name ?? '(null)'}  exp: ${c.experience_years ?? '(null)'}  skills: ${(c.skills ?? []).slice(0, 5).join(',')}`)
+        const text = c.raw_profile?.text ?? ''
+        if (text) {
+          console.log(`\n  【本文（先頭${BODY_MAX}字）】`)
+          console.log(text.slice(0, BODY_MAX).split('\n').map(l => `    ${l}`).join('\n'))
+          if (text.length > BODY_MAX) console.log(`    ...（残り${text.length - BODY_MAX}字省略）`)
+        } else {
+          console.log('  【本文なし】')
+        }
+      }
+    }
   }
 } catch (e) {
   warn(`人材クエリ失敗: ${e.message}`)
