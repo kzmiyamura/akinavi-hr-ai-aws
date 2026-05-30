@@ -236,6 +236,33 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     name = name.replace(/】【.*$/, '').trim() || null
     if (name) name = name.replace(/^【([^】]+)】$/, '$1').trim() || null
   }
+  // ── 最終安全網: 残留する年齢・性別を名前から除去 ─────────────────
+  // ① カンマ・読点・スラッシュ区切りの年齢を除去 "W000085、57歳 男性..." → "W000085" / "MS/31歳/" → "MS"
+  if (name) {
+    const commaAgeM = name.match(/[、,/／]\s*(\d+)[才歳][\s\u3000]?(女性|男性|女|男)?/)
+    if (commaAgeM) {
+      if (age === null) age = parseInt(commaAgeM[1], 10)
+      if (gender === null && commaAgeM[2]) gender = commaAgeM[2]
+      name = name.replace(/[、,/／]\s*\d+[才歳].*$/, '').trim() || null
+    }
+  }
+  // ② 年齢（2〜3桁+才/歳）が名前に含まれる場合はそこで切り捨て（直後の性別も同時に取得）
+  if (name) {
+    const ageInNameM = name.match(/^(.*?[^\d\s\u3000])[\s\u3000]?(\d{2,3})[才歳][\s\u3000]?(女性|男性|女|男)?/)
+    if (ageInNameM && ageInNameM[1].trim().length >= 1) {
+      if (age === null) age = parseInt(ageInNameM[2], 10)
+      if (gender === null && ageInNameM[3]) gender = ageInNameM[3]
+      name = ageInNameM[1].trim() || null
+    }
+  }
+  // ③ 性別（男性/女性/男/女）が名前に含まれる場合はそこで切り捨て
+  if (name) {
+    const genderInNameM = name.match(/^(.+?)[\s\u3000]?(男性|女性|男|女)(?:[\s\u3000].*)?$/)
+    if (genderInNameM && genderInNameM[1].trim().length >= 1) {
+      if (gender === null) gender = genderInNameM[2]
+      name = genderInNameM[1].trim() || null
+    }
+  }
   if (!name) {
     const allTextForInitials = bodyText + '\n' + attachText
     const initialsPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])[ 　]?[（(](\d{2})[才歳][^)）]*[）)]/m

@@ -1186,6 +1186,37 @@ function extractCandidateFieldsRegex(
     if (name) name = name.replace(/^【([^】]+)】$/, '$1').trim() || null
   }
 
+  // ── 最終安全網: 残留する年齢・性別を名前から除去 ─────────────────
+  // 既存ロジックで捕捉しきれなかったパターンへの対策
+  // ① カンマ・読点・スラッシュ区切りの年齢を除去 "W000085、57歳 男性..." → "W000085" / "MS/31歳/" → "MS"
+  if (name) {
+    const commaAgeM = name.match(/[、,/／]\s*(\d+)[才歳][\s\u3000]?(女性|男性|女|男)?/)
+    if (commaAgeM) {
+      if (age === null) age = parseInt(commaAgeM[1], 10)
+      if (gender === null && commaAgeM[2]) gender = commaAgeM[2]
+      name = name.replace(/[、,/／]\s*\d+[才歳].*$/, '').trim() || null
+    }
+  }
+  // ② 年齢（2〜3桁+才/歳）が名前に含まれる場合はそこで切り捨て（直後の性別も同時に取得）
+  // "YY　49才女性　日本籍..." → "YY" age=49 gender=女性 / "劉　KU　33歳　女性..." → "劉　KU" age=33
+  if (name) {
+    const ageInNameM = name.match(/^(.*?[^\d\s\u3000])[\s\u3000]?(\d{2,3})[才歳][\s\u3000]?(女性|男性|女|男)?/)
+    if (ageInNameM && ageInNameM[1].trim().length >= 1) {
+      if (age === null) age = parseInt(ageInNameM[2], 10)
+      if (gender === null && ageInNameM[3]) gender = ageInNameM[3]
+      name = ageInNameM[1].trim() || null
+    }
+  }
+  // ③ 性別（男性/女性/男/女）が名前に含まれる場合はそこで切り捨て（スペースなし・後続テキスト付きでも対応）
+  // "K.Y男性　香港籍" → "K.Y" / "K・M　男性" → "K・M" / "MOSN 男" → "MOSN"
+  if (name) {
+    const genderInNameM = name.match(/^(.+?)[\s\u3000]?(男性|女性|男|女)(?:[\s\u3000].*)?$/)
+    if (genderInNameM && genderInNameM[1].trim().length >= 1) {
+      if (gender === null) gender = genderInNameM[2]
+      name = genderInNameM[1].trim() || null
+    }
+  }
+
   // ── イニシャルのみパターン フォールバック ─────────────────────
   // 「A.M」「K・S」「K.S（45歳/男性）」のようにラベルなしでイニシャルが記載されている場合
   // 既に名前が取れている場合はスキップ
@@ -1657,7 +1688,11 @@ async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
   }
 
   console.log(`[Word] htmlToWordJson: tables=${tables.length} paragraphs=${paragraphs.length}`)
-  console.log('[Word] htmlToWordJson JSON:', JSON.stringify({ tables, paragraphs }).slice(0, 2000))
+  const _fullJson = JSON.stringify({ tables, paragraphs })
+  const _chunkSize = 1800
+  for (let _i = 0; _i < _fullJson.length; _i += _chunkSize) {
+    console.log(`[Word] JSON[${Math.floor(_i/_chunkSize)}]:`, _fullJson.slice(_i, _i + _chunkSize))
+  }
   return { tables, paragraphs }
 }
 
@@ -1695,20 +1730,38 @@ function parseYearMonth(s: string): Date | null {
   return null
 }
 
+/** セル全体から YYYY年MM月 / 現在 パターンをすべて抽出して Date[] で返す */
+function extractDatesFromCell(cell: string): Date[] {
+  const normalized = cell.replace(/[\u2F00-\u2FFF]/g, c => {
+    const map: Record<string, string> = { '\u2F49': '月', '\u2F54': '月', '\u2F22': '年' }
+    return map[c] ?? c
+  })
+  const results: Date[] = []
+  // YYYY年MM月 を全件マッチ
+  for (const m of normalized.matchAll(/(\d{4})年\s*(\d{1,2})月/g)) {
+    results.push(new Date(parseInt(m[1]), parseInt(m[2]) - 1))
+  }
+  // "現在" / "現職" / "present" が含まれていれば今日を追加（重複防止のため1回だけ）
+  if (results.length === 0 && /現在|現職|present/i.test(normalized)) {
+    results.push(new Date())
+  }
+  return results
+}
+
 function calcWordProjectMonths(json: WordHtmlJson): number | null {
-  const PROJECT_HEADER_RE = /期\s*間|業\s*務\s*経\s*歴|職\s*務\s*経\s*歴/
+  // ヘッダーチェックなし：職歴テーブルはページ分割で複数テーブルに分かれるため全テーブルをスキャン
   const dates: Date[] = []
   for (const rows of json.tables) {
-    const hasHeader = rows.some(row => row.some(cell => PROJECT_HEADER_RE.test(cell)))
-    if (!hasHeader) continue
     for (const row of rows) {
       for (const cell of row) {
-        const d = parseYearMonth(cell.split('\n')[0].trim())
-        if (d) dates.push(d)
+        for (const d of extractDatesFromCell(cell)) dates.push(d)
       }
     }
   }
-  if (dates.length < 2) return null
+  if (dates.length < 2) {
+    console.log(`[Word] calcWordProjectMonths: 日付${dates.length}件のみ → スキップ`)
+    return null
+  }
   dates.sort((a, b) => a.getTime() - b.getTime())
   const min = dates[0], max = dates[dates.length - 1]
   const months = (max.getFullYear() - min.getFullYear()) * 12 + (max.getMonth() - min.getMonth())
@@ -1733,7 +1786,7 @@ function extractWordSkillYears(json: WordHtmlJson): Record<string, number> {
   for (const text of allTexts) {
     const segments = text.split(/[,、，\n]/)
     for (const seg of segments) {
-      const m = seg.trim().match(/^(.+?)\s+(\d+(?:\.\d+)?)年\s*$/)
+      const m = seg.trim().match(/^(.+?)\s+(\d+(?:\.\d+)?)年(?:[^\d]|$)/)
       if (!m) continue
       let skill = m[1].trim()
       // "フレームワーク/ライブラリ: Laravel" → "Laravel"（ラベルプレフィックス除去）
@@ -2826,6 +2879,10 @@ Deno.serve(async (req: Request) => {
         'ご支援頂けます技術者様が居られましたら',
         '弊社プロジェクトでの募集情報をお送りいたします',
         '成約時には派遣契約かつ貴社から支援費',
+        // 案件募集が人材BOXに届くパターン（2026-05-30追加）
+        '下記案件にて要員を募集',
+        '下記の案件で要員を募集',
+        '案件にて技術者を募集',
       ]
       // 営業・広告・メルマガメールのスキップ（研修販売・サービス紹介等）
       const COMMERCIAL_SOLICITATION_KEYWORDS = [
@@ -2861,7 +2918,7 @@ Deno.serve(async (req: Request) => {
       ]
       // 件名ベースのスキップキーワード（業務連絡・勤務表・発注書・打合せ等）
       const SUBJECT_SKIP_KEYWORDS = [
-        '勤務表', '勤怠表', '作業報告書', '月報', '週報',
+        '勤務表', '勤怠表', '作業報告書', '作業報告', '月報', '週報',
         'お打合せ', 'ミーティング', '打ち合わせ',
         '注文書', '発注書', '請求書', '納品書', '契約書送付',
         '新体制', '組織変更', '移転のご案内',
@@ -3048,8 +3105,8 @@ Deno.serve(async (req: Request) => {
       : []
     // スキルシート形式（A〜E 評価テーブル）を検出し D/E 評価スキルを除外
     const attachRated = filterBySkillRating(attachText, attachRawMatched)
-    // 添付は上位20件に絞る（スキルシート一覧等の過剰ヒットを防ぐ）
-    const attachDeduped = attachRated.filter(s => !bodyMatchedNames.has(s.name)).slice(0, 20)
+    // 添付は上位40件に絞る（スキルシート一覧等の過剰ヒットを防ぐ。Wordの職務経歴書は40件超もありうる）
+    const attachDeduped = attachRated.filter(s => !bodyMatchedNames.has(s.name)).slice(0, 40)
     const attachDedupCount = attachRated.filter(s => bodyMatchedNames.has(s.name)).length
 
     const dbMatchedSkills = [...bodyMatched, ...attachDeduped]
@@ -3528,11 +3585,15 @@ Deno.serve(async (req: Request) => {
           selfPR: extractSelfPR(body, attachText) ?? null,
           agentComment: extractAgentComment(body, attachText) ?? null,
           geminiParseFallback: parseFallback,
-          skillYears: Object.keys(excelSkillYears).length > 0
-            ? excelSkillYears
-            : Object.keys(wordSkillYearsForDisplay).length > 0
-              ? wordSkillYearsForDisplay
-              : undefined,
+          skillYears: (() => {
+            // _totalProjectMonths は経験年数推定用の内部キーなので表示用 skillYears からは除外
+            const displayExcel = Object.fromEntries(
+              Object.entries(excelSkillYears).filter(([k]) => k !== '_totalProjectMonths')
+            )
+            if (Object.keys(displayExcel).length > 0) return displayExcel
+            if (Object.keys(wordSkillYearsForDisplay).length > 0) return wordSkillYearsForDisplay
+            return undefined
+          })(),
         },
         duplicate_flag: false,
         created_by: 'make-inbound',
