@@ -17,7 +17,12 @@
     "quality:logs": "node scripts/quality_check.mjs --logs",
     "quality:body": "node scripts/quality_check.mjs --fetch-body",
     "quality:noname": "node scripts/quality_check.mjs --fetch-body --target noname",
-    "quality:noexp": "node scripts/quality_check.mjs --fetch-body --target noexp"
+    "quality:noexp": "node scripts/quality_check.mjs --fetch-body --target noexp",
+    "logs": "node scripts/fetch_logs.mjs",
+    "logs:word": "node scripts/fetch_logs.mjs \"[Word]\"",
+    "logs:skill": "node scripts/fetch_logs.mjs \"[skill_master]\"",
+    "logs:station": "node scripts/fetch_logs.mjs \"station_unmapped\"",
+    "logs:error": "node scripts/fetch_logs.mjs \"ERROR\""
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
