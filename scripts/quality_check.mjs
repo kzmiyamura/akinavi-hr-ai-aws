@@ -208,43 +208,133 @@ try {
 }
 
 // ============================================================
-// 2. AI ログ（モデル別・日次）
+// 2. AI ログ（モデル別・日次・異常監視・コスト）
 // ============================================================
-H('② AIコスト監視（直近 ' + DAYS + ' 日）')
+H('② AIコスト監視 / 異常監視（直近14日）')
+let aiLogs14 = []
 try {
-  const LOG_LIMIT = 2000
-  const logs = await dbQuery(
+  const since14 = new Date(Date.now() - 14 * 86400000).toISOString()
+  const LOG_LIMIT = 5000
+  aiLogs14 = await dbQuery(
     'ai_logs',
     `select=model,created_at,duration_ms,error_message,status` +
-    `&created_at=gte.${since}&order=created_at.desc&limit=${LOG_LIMIT}`
+    `&created_at=gte.${since14}&order=created_at.desc&limit=${LOG_LIMIT}`
   )
-  if (logs.length >= LOG_LIMIT) warn(`取得件数が上限(${LOG_LIMIT})に達しています → limit 増加を検討`)
+  if (aiLogs14.length >= LOG_LIMIT) warn(`取得件数が上限(${LOG_LIMIT})に達しています → limit 増加を検討`)
 
-  // モデル別集計
+  // ── モデル別集計（total / errors / avg_ms）──────────────
   const byModel = {}
-  let errCount = 0
-  for (const l of logs) {
-    byModel[l.model] = (byModel[l.model] ?? 0) + 1
-    if (l.error_message || l.status === 'error') errCount++
+  for (const l of aiLogs14) {
+    const m = l.model ?? 'unknown'
+    if (!byModel[m]) byModel[m] = { cnt: 0, err: 0, totalMs: 0 }
+    byModel[m].cnt++
+    if (l.error_message || l.status === 'error') byModel[m].err++
+    if (l.duration_ms) byModel[m].totalMs += l.duration_ms
   }
-  row('総呼び出し', `${logs.length} 件`)
-  row('エラー', errCount > 0 ? `⚠️  ${errCount} 件` : `✅ 0 件`)
-  for (const [model, cnt] of Object.entries(byModel).sort((a, b) => b[1] - a[1])) {
-    row(`  ${model}`, `${cnt} 件`)
+  const totalCalls = aiLogs14.length
+  const totalErr = Object.values(byModel).reduce((s, v) => s + v.err, 0)
+  row('総呼び出し', `${totalCalls} 件`)
+  row('総エラー', totalErr > 0 ? `⚠️  ${totalErr} 件` : `✅ 0 件`)
+  console.log('\n  【モデル別: total / errors / avg_ms】')
+  for (const [model, v] of Object.entries(byModel).sort((a, b) => b[1].cnt - a[1].cnt)) {
+    const errRate = totalCalls > 0 ? Math.round(100 * v.err / v.cnt) : 0
+    const avgMs = v.cnt > 0 ? Math.round(v.totalMs / v.cnt) : 0
+    const errMark = errRate > 10 ? ' ⚠️' : ''
+    console.log(`    ${model.padEnd(30)} ${String(v.cnt).padStart(5)}件  err:${v.err}(${errRate}%)${errMark}  avg:${avgMs}ms`)
   }
 
-  // 日次トレンド
+  // ── 日次トレンド（gemini / groq / cerebras / no-ai）──────
   const byDay = {}
-  for (const l of logs) {
+  for (const l of aiLogs14) {
     const day = l.created_at.slice(0, 10)
-    byDay[day] = (byDay[day] ?? 0) + 1
+    if (!byDay[day]) byDay[day] = { gemini: 0, geminiErr: 0, groq: 0, cerebras: 0, bedrock: 0, noAi: 0 }
+    const m = (l.model ?? '').toLowerCase()
+    const isErr = !!(l.error_message || l.status === 'error')
+    if (m.includes('gemini'))                          { byDay[day].gemini++; if (isErr) byDay[day].geminiErr++ }
+    else if (m.includes('groq') || m.includes('llama')) byDay[day].groq++
+    else if (m.includes('cerebras') || m === 'llama3.1-8b') byDay[day].cerebras++
+    else if (m.includes('bedrock'))                    byDay[day].bedrock++
+    else if (m === 'no-ai')                            byDay[day].noAi++
   }
-  console.log('\n  【日次呼び出し数（直近5日）】')
-  Object.entries(byDay).sort().slice(-5).forEach(([day, cnt]) => {
-    console.log(`    ${day}: ${cnt} 件`)
+  console.log('\n  【日次内訳（直近7日）gemini / groq / cerebras / bedrock / no-ai】')
+  Object.entries(byDay).sort().slice(-7).forEach(([day, v]) => {
+    const bedrockMark = v.bedrock > 0 ? ` ⚠️Bedrock:${v.bedrock}` : ''
+    const geminiMark = v.gemini > 1000 ? ' ⚠️無料枠圧迫' : ''
+    console.log(`    ${day}: gemini=${v.gemini}(err=${v.geminiErr})${geminiMark}  groq=${v.groq}  cerebras=${v.cerebras}${bedrockMark}  no-ai=${v.noAi}`)
   })
+
+  // ── フォールバック多発チェック ────────────────────────────
+  const since7 = new Date(Date.now() - 7 * 86400000).toISOString()
+  const recent7 = aiLogs14.filter(l => l.created_at >= since7)
+  const geminiTotal7 = recent7.filter(l => (l.model ?? '').toLowerCase().includes('gemini')).length
+  const groqTotal7 = recent7.filter(l => {
+    const m = (l.model ?? '').toLowerCase()
+    return m.includes('groq') || (m.includes('llama') && !m.includes('cerebras') && m !== 'llama3.1-8b')
+  }).length
+  if (geminiTotal7 > groqTotal7 * 2 && geminiTotal7 > 10) {
+    warn(`フォールバック多発疑い: 直近7日 gemini=${geminiTotal7} groq=${groqTotal7}（Cerebras/Groq枯渇の可能性）`)
+  }
+
+  // ── Gemini クレジットエラー確認 ────────────────────────────
+  const geminiErrors = aiLogs14.filter(l =>
+    (l.model ?? '').toLowerCase().includes('gemini') && l.error_message
+  )
+  if (geminiErrors.length > 0) {
+    const errGroups = {}
+    for (const l of geminiErrors) {
+      const key = (l.error_message ?? '').slice(0, 80)
+      errGroups[key] = (errGroups[key] ?? 0) + 1
+    }
+    console.log('\n  【Gemini エラー内訳（直近14日・上位5種）】')
+    Object.entries(errGroups).sort((a, b) => b[1] - a[1]).slice(0, 5).forEach(([msg, cnt]) => {
+      const mark = msg.includes('prepayment') ? ' ⚠️ クレジット枯渇!' : msg.includes('429') ? ' ⚠️ 無料枠超過' : ''
+      console.log(`    ${cnt}回: ${msg}${mark}`)
+    })
+  }
 } catch (e) {
   warn(`ai_logs クエリ失敗: ${e.message}`)
+}
+
+// ── submissions 集計（auto-match 処理量・重複スコアリング）──
+try {
+  const since14 = new Date(Date.now() - 14 * 86400000).toISOString()
+  const subs = await dbQuery(
+    'submissions',
+    `select=candidate_id,project_id,created_at` +
+    `&data_env=eq.prod&created_at=gte.${since14}&order=created_at.desc&limit=3000`
+  )
+  // 日次集計
+  const subByDay = {}
+  for (const s of subs) {
+    const day = s.created_at.slice(0, 10)
+    if (!subByDay[day]) subByDay[day] = { cnt: 0, candidates: new Set(), projects: new Set() }
+    subByDay[day].cnt++
+    subByDay[day].candidates.add(s.candidate_id)
+    subByDay[day].projects.add(s.project_id)
+  }
+  console.log('\n  【submissions 日次生成数（直近7日）】')
+  Object.entries(subByDay).sort().slice(-7).forEach(([day, v]) => {
+    const surge = v.cnt > 200 ? ' ⚠️ 急増（手動全件マッチング？）' : ''
+    console.log(`    ${day}: ${v.cnt}件  候補者:${v.candidates.size}人  案件:${v.projects.size}件${surge}`)
+  })
+  // 重複スコアリング検出
+  const pairCount = {}
+  for (const s of subs) {
+    const key = `${s.candidate_id}__${s.project_id}`
+    pairCount[key] = (pairCount[key] ?? 0) + 1
+  }
+  const dupes = Object.entries(pairCount).filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1])
+  if (dupes.length > 0) {
+    warn(`重複スコアリング: ${dupes.length} ペア`)
+    dupes.slice(0, 5).forEach(([key, n]) => {
+      const [cid, pid] = key.split('__')
+      console.log(`    candidate:${cid.slice(0, 8)} × project:${pid.slice(0, 8)} → ${n}件`)
+    })
+  } else {
+    ok('重複スコアリングなし')
+  }
+} catch (e) {
+  warn(`submissions クエリ失敗: ${e.message}`)
 }
 
 // ============================================================
@@ -362,6 +452,194 @@ if (INCLUDE_LOGS && ACCESS_TOKEN) {
   warn('SUPABASE_ACCESS_TOKEN が未設定のためスキップ')
   info('.env.local に追加: SUPABASE_ACCESS_TOKEN=sbp_xxxx...')
   info('取得先: https://supabase.com/dashboard/account/tokens')
+}
+
+// ============================================================
+// 6. 年齢・性別取得率（直近14日）
+// ============================================================
+H('⑥ 年齢・性別取得率（直近14日）')
+try {
+  const since14 = new Date(Date.now() - 14 * 86400000).toISOString()
+  const cands14 = await dbQuery(
+    'candidates',
+    `select=id,name,raw_profile,created_at` +
+    `&created_at=gte.${since14}&data_env=eq.prod&order=created_at.desc&limit=500`
+  )
+  if (cands14.length === 0) {
+    ok('対象データなし')
+  } else {
+    const total = cands14.length
+    const ageFilled = cands14.filter(c => c.raw_profile?.age != null).length
+    const genderFilled = cands14.filter(c => c.raw_profile?.gender != null).length
+    const ageRate = Math.round(100 * ageFilled / total)
+    const genderRate = Math.round(100 * genderFilled / total)
+    row('対象件数', `${total} 件`)
+    row('年齢 取得率', ageRate < 50 ? `⚠️  ${ageFilled}/${total} (${ageRate}%)` : `✅ ${ageFilled}/${total} (${ageRate}%)`)
+    row('性別 取得率', genderRate < 50 ? `⚠️  ${genderFilled}/${total} (${genderRate}%)` : `✅ ${genderFilled}/${total} (${genderRate}%)`)
+    if (ageRate < 80 || genderRate < 80) {
+      const samples = cands14.filter(c =>
+        (c.raw_profile?.age == null || c.raw_profile?.gender == null) &&
+        c.name && c.name !== '不明'
+      ).slice(0, 5)
+      if (samples.length > 0) {
+        console.log('\n  【未取得サンプル（最大5件）】')
+        for (const c of samples) {
+          console.log(`    ID:${c.id.slice(0, 8)}  name:${c.name}  age:${c.raw_profile?.age ?? 'null'}  gender:${c.raw_profile?.gender ?? 'null'}`)
+          const body = (c.raw_profile?.text ?? '').slice(0, 150).replace(/\n/g, ' ')
+          if (body) console.log(`    本文先頭: ${body}`)
+        }
+      }
+    } else {
+      ok('年齢・性別取得率は正常（80%以上）')
+    }
+  }
+} catch (e) {
+  warn(`年齢・性別チェック失敗: ${e.message}`)
+}
+
+// ============================================================
+// 7. フィールド充足率（国籍・自己PR・agentComment、直近14日）
+// ============================================================
+H('⑦ フィールド充足率（直近14日）')
+try {
+  const since14 = new Date(Date.now() - 14 * 86400000).toISOString()
+  const cands14f = await dbQuery(
+    'candidates',
+    `select=id,name,raw_profile,created_at` +
+    `&created_at=gte.${since14}&data_env=eq.prod&order=created_at.desc&limit=500`
+  )
+  if (cands14f.length === 0) {
+    ok('対象データなし')
+  } else {
+    const total = cands14f.length
+    const natFilled = cands14f.filter(c => c.raw_profile?.nationality != null).length
+    const prFilled = cands14f.filter(c => c.raw_profile?.selfPR != null).length
+    const agentFilled = cands14f.filter(c => c.raw_profile?.agentComment != null).length
+    const natPct = Math.round(100 * natFilled / total)
+    const prPct = Math.round(100 * prFilled / total)
+    const agentPct = Math.round(100 * agentFilled / total)
+    row('対象件数', `${total} 件`)
+    row('nationality 充足率', `${natFilled}/${total} (${natPct}%)`)
+    row('selfPR 充足率', prPct < 20 ? `⚠️  ${prFilled}/${total} (${prPct}%)` : `${prFilled}/${total} (${prPct}%)`)
+    row('agentComment 充足率', agentPct < 20 ? `⚠️  ${agentFilled}/${total} (${agentPct}%)` : `${agentFilled}/${total} (${agentPct}%)`)
+    if (prPct < 20 || agentPct < 20) {
+      const samples = cands14f.filter(c =>
+        (c.raw_profile?.selfPR == null || c.raw_profile?.agentComment == null) &&
+        c.name && c.name !== '不明'
+      ).slice(0, 3)
+      if (samples.length > 0) {
+        console.log('\n  【未取得サンプル（最大3件）】')
+        for (const c of samples) {
+          console.log(`    ID:${c.id.slice(0, 8)}  name:${c.name}  selfPR:${c.raw_profile?.selfPR != null ? 'あり' : 'null'}  agentComment:${c.raw_profile?.agentComment != null ? 'あり' : 'null'}`)
+          const body = (c.raw_profile?.text ?? '').slice(0, 150).replace(/\n/g, ' ')
+          if (body) console.log(`    本文先頭: ${body}`)
+        }
+      }
+    }
+  }
+} catch (e) {
+  warn(`フィールド充足率チェック失敗: ${e.message}`)
+}
+
+// ============================================================
+// 8. 名前汚染チェック（直近14日）
+// ============================================================
+H('⑧ 名前汚染チェック（直近14日）')
+try {
+  const since14 = new Date(Date.now() - 14 * 86400000).toISOString()
+  const cands14n = await dbQuery(
+    'candidates',
+    `select=id,name,created_at,raw_profile` +
+    `&created_at=gte.${since14}&data_env=eq.prod&order=created_at.desc&limit=500`
+  )
+  const CONTAMINATED_RE = /男性|女性|男$|女$|\d+歳|\d+才|[（(]\d+[）)]|重複|NULL/
+  const dirty = cands14n.filter(c => c.name && CONTAMINATED_RE.test(c.name))
+  if (dirty.length === 0) {
+    ok('名前汚染なし')
+  } else {
+    warn(`名前汚染: ${dirty.length} 件`)
+    dirty.slice(0, 10).forEach(c => {
+      const body = (c.raw_profile?.text ?? '').slice(0, 100).replace(/\n/g, ' ')
+      console.log(`    ID:${c.id.slice(0, 8)}  name: "${c.name}"  本文先頭: ${body}`)
+    })
+  }
+} catch (e) {
+  warn(`名前汚染チェック失敗: ${e.message}`)
+}
+
+// ============================================================
+// 9. 非人材メール混入チェック（直近14日）
+// ============================================================
+H('⑨ 非人材メール混入チェック（直近14日）')
+try {
+  const since14 = new Date(Date.now() - 14 * 86400000).toISOString()
+  const cands14m = await dbQuery(
+    'candidates',
+    `select=id,name,created_at,raw_profile` +
+    `&created_at=gte.${since14}&data_env=eq.prod&order=created_at.desc&limit=500`
+  )
+  const BUSI_SUBJ_RE = /契約|確認|ご連絡|報告|請求|お知らせ|案内|返信|RE:|Fwd:/i
+  const BUSI_BODY_RE = /契約|請求|報告/i
+  const mixed = cands14m.filter(c => {
+    const subj = c.raw_profile?.subject ?? ''
+    const body = c.raw_profile?.text ?? ''
+    return BUSI_SUBJ_RE.test(subj) || ((!c.name || c.name === '不明') && BUSI_BODY_RE.test(body))
+  })
+  if (mixed.length === 0) {
+    ok('非人材メール混入なし')
+  } else {
+    warn(`非人材疑い: ${mixed.length} 件`)
+    mixed.slice(0, 10).forEach(c => {
+      const subj = c.raw_profile?.subject ?? '(件名なし)'
+      const from = c.raw_profile?.from ?? ''
+      const body = (c.raw_profile?.text ?? '').slice(0, 80).replace(/\n/g, ' ')
+      console.log(`    ID:${c.id.slice(0, 8)}  name:"${c.name}"  from:${from}`)
+      console.log(`      件名: ${subj}`)
+      console.log(`      本文: ${body}`)
+    })
+  }
+} catch (e) {
+  warn(`非人材混入チェック失敗: ${e.message}`)
+}
+
+// ============================================================
+// 10. 複数人メール分割失敗チェック（直近14日）
+// ============================================================
+H('⑩ 複数人メール分割失敗チェック（直近14日）')
+try {
+  const since14 = new Date(Date.now() - 14 * 86400000).toISOString()
+  const cands14s = await dbQuery(
+    'candidates',
+    `select=id,name,created_at,raw_profile` +
+    `&created_at=gte.${since14}&data_env=eq.prod&order=created_at.desc&limit=500`
+  )
+  // from_email × 日付でグループ化
+  const groups = {}
+  for (const c of cands14s) {
+    const fromEmail = c.raw_profile?.from ?? 'unknown'
+    const day = c.created_at.slice(0, 10)
+    const key = `${fromEmail}__${day}`
+    if (!groups[key]) groups[key] = { from: fromEmail, day, records: [] }
+    groups[key].records.push(c)
+  }
+  // 登録1件 & 本文2000字超
+  const suspects = Object.values(groups).filter(g => {
+    if (g.records.length !== 1) return false
+    const bodyLen = (g.records[0].raw_profile?.text ?? '').length
+    return bodyLen > 2000
+  }).sort((a, b) => (b.records[0].raw_profile?.text?.length ?? 0) - (a.records[0].raw_profile?.text?.length ?? 0))
+  if (suspects.length === 0) {
+    ok('複数人メール分割失敗の疑いなし')
+  } else {
+    warn(`分割失敗疑い: ${suspects.length} 件（1送信元・同日・本文2000字超）`)
+    suspects.slice(0, 5).forEach(g => {
+      const c = g.records[0]
+      const bodyLen = (c.raw_profile?.text ?? '').length
+      console.log(`    ID:${c.id.slice(0, 8)}  from:${g.from}  day:${g.day}  本文長:${bodyLen}字`)
+    })
+  }
+} catch (e) {
+  warn(`分割失敗チェック失敗: ${e.message}`)
 }
 
 // ============================================================
