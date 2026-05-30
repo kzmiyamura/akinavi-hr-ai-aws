@@ -94,12 +94,12 @@ async function fetchEdgeLogs(query, hours = 24) {
   if (!ACCESS_TOKEN || !PROJECT_REF) return null
   const end = new Date()
   const start = new Date(end.getTime() - hours * 60 * 60 * 1000)
+  const escaped = query.replace(/'/g, "''")
+  const sql = `SELECT timestamp, event_message, metadata FROM function_logs WHERE event_message LIKE '%${escaped}%' ORDER BY timestamp DESC LIMIT 500`
   const params = new URLSearchParams({
-    product: 'edge-runtime',
-    q: query,
+    sql,
     iso_timestamp_start: start.toISOString(),
     iso_timestamp_end: end.toISOString(),
-    limit: '500',
   })
   const res = await fetch(
     `https://api.supabase.com/v1/projects/${PROJECT_REF}/analytics/endpoints/logs.all?${params}`,
