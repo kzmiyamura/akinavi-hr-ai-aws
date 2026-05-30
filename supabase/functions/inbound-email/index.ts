@@ -2618,60 +2618,46 @@ function assignAttachmentsToBlocks(
  * 戻り値: ブロックが2件以上あれば string[] を返す。1件以下なら null。
  */
 function splitMultiCandidateBody(body: string): string[] | null {
-  // ＝（全角イコール）を追加 — CyTech 等の「＝＝＝...」区切り線に対応
-  const DELIM_RE = /^[\*\-=＊＝]{8,}\s*$/
+  // 構造化フィールドを含む判定（【氏名】/ ◇◆ ラベル / 名前：ラベルなし形式）
+  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*(?:名前|氏名)[　 ]*[：:]/
+  // 氏名フィールドの最終判定（【 氏 名 】半角スペース区切り形式も対応）
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]/m
   const lines = body.split(/\r?\n/)
 
-  const delimIndices: number[] = []
-  for (let i = 0; i < lines.length; i++) {
-    if (DELIM_RE.test(lines[i])) delimIndices.push(i)
-  }
-
-  // 区切り線が2本未満 → 複数人材なし
-  if (delimIndices.length < 2) return null
-
-  // 区切り線で parts に分割
-  // parts[0] = 前置き（1人目の名前行を末尾に含む可能性）
-  // parts[1] = 1人目の内容
-  // parts[2] = 空行＋2人目の名前行
-  // parts[3] = 2人目の内容 … と交互に続く
-  const delimSet = new Set(delimIndices)
-  const allParts: string[] = []
-  let current: string[] = []
-  for (let i = 0; i < lines.length; i++) {
-    if (delimSet.has(i)) {
-      allParts.push(current.join('\n'))
-      current = []
-    } else {
-      current.push(lines[i])
+  function trySplit(delimRe: RegExp): string[] | null {
+    const delimIndices: number[] = []
+    for (let i = 0; i < lines.length; i++) {
+      if (delimRe.test(lines[i])) delimIndices.push(i)
     }
+    if (delimIndices.length < 2) return null
+    const delimSet = new Set(delimIndices)
+    const allParts: string[] = []
+    let current: string[] = []
+    for (let i = 0; i < lines.length; i++) {
+      if (delimSet.has(i)) { allParts.push(current.join('\n')); current = [] }
+      else current.push(lines[i])
+    }
+    if (current.length > 0) allParts.push(current.join('\n'))
+    const blocks: string[] = []
+    for (let i = 1; i < allParts.length; i++) {
+      const content = allParts[i].trim()
+      if (!content || content.length < 50) continue
+      if (!CANDIDATE_FIELD_RE.test(content)) continue
+      const prevPart = allParts[i - 1] ?? ''
+      const prevLines = prevPart.split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean)
+      const nameLine = prevLines[prevLines.length - 1] ?? ''
+      const block = (nameLine && prevPart.trim().length < 80 && !CANDIDATE_FIELD_RE.test(prevPart.trim()))
+        ? `${nameLine}\n${content}` : content
+      blocks.push(block)
+    }
+    const blocksWithName = blocks.filter(b => NAME_FIELD_RE.test(b))
+    return blocksWithName.length >= 2 ? blocks : null
   }
-  if (current.length > 0) allParts.push(current.join('\n'))
 
-  const blocks: string[] = []
-  for (let i = 1; i < allParts.length; i += 2) {
-    const content = allParts[i].trim()
-    if (!content) continue
-    // 直前の偶数パートの末尾非空行 = 名前行
-    const prevPart = allParts[i - 1] ?? ''
-    const prevLines = prevPart.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-    const nameLine = prevLines[prevLines.length - 1] ?? ''
-    const block = nameLine ? `${nameLine}\n${content}` : content
-    if (block.length >= 50) blocks.push(block)
-  }
-
-  // 構造化フィールドを含むブロックのみ採用
-  // 【氏名】形式 / ◇名前： / ◆スキルセット 等の ◇◆ ラベル形式 に加え、
-  // 「名前　　：T.N」のようなブラケットなし・ラベルなし形式（CyTech 等）も対応
-  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*(?:名前|氏名)[　 ]*[：:]/
-  const validBlocks = blocks.filter(b => CANDIDATE_FIELD_RE.test(b))
-
-  // 氏名フィールドを含むブロックが2つ以上あるかで最終判定する
-  // 「【直個人】フルスタックエンジニア...」のような装飾ラベルは除外するため
-  // 「氏名　　：D.S」「名前　：T.N」「◇名前：K.Y」のようなラベルなし形式にも対応
-  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|^氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]/m
-  const blocksWithName = validBlocks.filter(b => NAME_FIELD_RE.test(b))
-  return blocksWithName.length >= 2 ? validBlocks : null
+  // Pass 1: = と ー のみ（- を除外して laize 形式の内部 ---- による誤分割を防ぐ）
+  // Pass 2: - を含む全パターン（ical 等の --- のみの形式に対応）
+  return trySplit(/^[\*=＊＝ー]{8,}\s*$/)
+      ?? trySplit(/^[\*\-=＊＝ー]{8,}\s*$/)
 }
 
 Deno.serve(async (req: Request) => {

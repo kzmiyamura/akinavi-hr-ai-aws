@@ -397,36 +397,45 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
 }
 
 function splitMultiCandidateBody(body) {
-  const DELIM_RE = /^[\*\-=＊＝]{8,}\s*$/
-  const lines = body.split(/\r?\n/)
-  const delimIndices = []
-  for (let i = 0; i < lines.length; i++) {
-    if (DELIM_RE.test(lines[i])) delimIndices.push(i)
-  }
-  if (delimIndices.length < 2) return null
-  const delimSet = new Set(delimIndices)
-  const allParts = []
-  let current = []
-  for (let i = 0; i < lines.length; i++) {
-    if (delimSet.has(i)) { allParts.push(current.join('\n')); current = [] }
-    else current.push(lines[i])
-  }
-  if (current.length > 0) allParts.push(current.join('\n'))
-  const blocks = []
-  for (let i = 1; i < allParts.length; i += 2) {
-    const content = allParts[i].trim()
-    if (!content) continue
-    const prevPart = allParts[i - 1] ?? ''
-    const prevLines = prevPart.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-    const nameLine = prevLines[prevLines.length - 1] ?? ''
-    const block = nameLine ? `${nameLine}\n${content}` : content
-    if (block.length >= 50) blocks.push(block)
-  }
   const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*(?:名前|氏名)[　 ]*[：:]/
-  const validBlocks = blocks.filter(b => CANDIDATE_FIELD_RE.test(b))
-  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|^氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]/m
-  const blocksWithName = validBlocks.filter(b => NAME_FIELD_RE.test(b))
-  return blocksWithName.length >= 2 ? validBlocks : null
+  // 【 氏 名 】（半角スペース区切り形式）にも対応
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]/m
+  const lines = body.split(/\r?\n/)
+
+  function trySplit(delimRe) {
+    const delimIndices = []
+    for (let i = 0; i < lines.length; i++) {
+      if (delimRe.test(lines[i])) delimIndices.push(i)
+    }
+    if (delimIndices.length < 2) return null
+    const delimSet = new Set(delimIndices)
+    const allParts = []
+    let current = []
+    for (let i = 0; i < lines.length; i++) {
+      if (delimSet.has(i)) { allParts.push(current.join('\n')); current = [] }
+      else current.push(lines[i])
+    }
+    if (current.length > 0) allParts.push(current.join('\n'))
+    const blocks = []
+    for (let i = 1; i < allParts.length; i++) {
+      const content = allParts[i].trim()
+      if (!content || content.length < 50) continue
+      if (!CANDIDATE_FIELD_RE.test(content)) continue
+      const prevPart = allParts[i - 1] ?? ''
+      const prevLines = prevPart.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+      const nameLine = prevLines[prevLines.length - 1] ?? ''
+      const block = (nameLine && prevPart.trim().length < 80 && !CANDIDATE_FIELD_RE.test(prevPart.trim()))
+        ? `${nameLine}\n${content}` : content
+      blocks.push(block)
+    }
+    const blocksWithName = blocks.filter(b => NAME_FIELD_RE.test(b))
+    return blocksWithName.length >= 2 ? blocks : null
+  }
+
+  // Pass 1: = と ー のみ（- を除外して laize 形式の内部 ---- による誤分割を防ぐ）
+  // Pass 2: - を含む全パターン（ical 等の --- のみの形式に対応）
+  return trySplit(/^[\*=＊＝ー]{8,}\s*$/)
+      ?? trySplit(/^[\*\-=＊＝ー]{8,}\s*$/)
 }
 
 // ─── 引数パース ───────────────────────────────────────────────────────────────
@@ -487,6 +496,66 @@ if (args.includes('--test')) {
   runCase('最寄駅（通常）',        '氏名：鈴木\n最寄駅：渋谷\n経験年数：3年', '',         { nearestStation: '渋谷' })
   runCase('国籍（括弧あり）',      '氏名：R.B（バングラデシュ籍）\n最寄駅：渋谷\n経験年数：5年', '', { nationality: 'バングラデシュ籍' })
   runCase('スラッシュ年齢（K.Y / 40歳）', '氏名：K.Y / 40歳 / 男性 / ベトナム籍\n最寄駅：渋谷\n経験年数：5年', '', { name: 'K.Y', age: 40, gender: '男性' })
+
+  // ── ⑩ 複数人メール分割テスト ──────────────────────────────────────────────────
+  console.log('\n【⑩ 複数人メール分割テスト】')
+  function runSplitCase(desc, body, expectedCount) {
+    const blocks = splitMultiCandidateBody(body)
+    const got = blocks ? blocks.length : 0
+    const ok2 = got === expectedCount
+    results.push({ ok: ok2, label: `${desc} | split`, got, expected: expectedCount })
+    if (ok2) passed++; else failed++
+  }
+
+  const LAIZE_BODY = [
+    '========================================',
+    '【氏名】Ａ・Ｂ',
+    '【最寄駅】品川',
+    '【経験年数】10年',
+    '【スキル】Java, Spring Boot',
+    '----------------------------------------',
+    '【資格】基本情報技術者',
+    '========================================',
+    '【氏名】Ｃ・Ｄ',
+    '【最寄駅】新宿',
+    '【経験年数】8年',
+    '【スキル】Python, Django',
+    '----------------------------------------',
+    '【資格】AWS',
+    '========================================',
+  ].join('\n')
+
+  const TECHNICATION_BODY = [
+    'ーーーーーーーーーーーーーーーーーーーーーーーーー',
+    '【氏名】田中一郎',
+    '【最寄駅】渋谷',
+    '【経験年数】5年',
+    '【スキル】Java, Spring Boot, MySQL',
+    'ーーーーーーーーーーーーーーーーーーーーーーーーー',
+    '【氏名】鈴木二郎',
+    '【最寄駅】横浜',
+    '【経験年数】3年',
+    '【スキル】Python, Django, PostgreSQL',
+    'ーーーーーーーーーーーーーーーーーーーーーーーーー',
+  ].join('\n')
+
+  const ICAL_BODY = [
+    '------------------------------',
+    '【 氏 名 】山田太郎',
+    '【 最 寄 駅 】渋谷',
+    '【 経験年数 】5年',
+    '【 スキル 】Java, Spring Boot, MySQL',
+    '------------------------------',
+    '【 氏 名 】田中花子',
+    '【 最 寄 駅 】新宿',
+    '【 経験年数 】3年',
+    '【 スキル 】Python, Django, PostgreSQL',
+    '------------------------------',
+  ].join('\n')
+
+  runSplitCase('laize形式（= + 内部 - 混在）', LAIZE_BODY, 2)
+  runSplitCase('technication形式（ーーー区切り）', TECHNICATION_BODY, 2)
+  runSplitCase('ical形式（--- + 【 氏 名 】スペース区切り）', ICAL_BODY, 2)
 
   // ── 出力 ──
   console.log('\n' + '='.repeat(60))
