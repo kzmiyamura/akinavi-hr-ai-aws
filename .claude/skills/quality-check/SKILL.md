@@ -367,6 +367,25 @@ LIMIT 20;
 
 ---
 
+## ⑪ 抽出ロジック回帰テスト
+
+品質チェックの最後に必ず実行する。
+
+```bash
+node scripts/test_extraction.mjs --test
+```
+
+- **45 passed, 0 failed** なら「異常なし」と報告して終了
+- **失敗があった場合**:
+  1. 失敗したテストケースの内容を報告する
+  2. `supabase/functions/inbound-email/index.ts` の該当 regex を修正する
+  3. `scripts/test_extraction.mjs` にも同じ修正を反映する（両ファイルの同期を保つこと）
+  4. 再度 `node scripts/test_extraction.mjs --test` を実行して全件パスを確認
+  5. `bash scripts/check-and-deploy-edge.sh inbound-email` でデプロイする
+  6. commit & push する
+
+---
+
 ## 完了報告
 
 各ステップの結果を箇条書きで報告すること。問題なしの項目も「異常なし」と明記する。
