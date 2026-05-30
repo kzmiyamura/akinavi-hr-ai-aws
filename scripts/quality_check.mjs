@@ -48,7 +48,7 @@ if (!SUPABASE_URL || !ANON_KEY) {
 }
 
 const args = process.argv.slice(2)
-const DAYS = parseInt(args.find((_, i) => args[i - 1] === '--days') ?? '7')
+const DAYS = parseInt(args.find((_, i) => args[i - 1] === '--days') ?? '1')
 const INCLUDE_LOGS = args.includes('--logs')
 
 const since = new Date(Date.now() - DAYS * 24 * 60 * 60 * 1000).toISOString()
@@ -125,10 +125,12 @@ try {
   const candidates = await dbQuery(
     'candidates',
     `select=id,name,experience_years,desired_rate,created_at,data_env,skills,raw_profile` +
-    `&created_at=gte.${since}&data_env=eq.prod&order=created_at.desc&limit=200`
+    `&created_at=gte.${since}&data_env=eq.prod&order=created_at.desc&limit=500`
   )
 
+  const CAND_LIMIT = 500
   const total = candidates.length
+  if (total >= CAND_LIMIT) warn(`取得件数が上限(${CAND_LIMIT})に達しています → --days を絞るか limit 増加を検討`)
   const noName = candidates.filter(c => !c.name || c.name === '不明' || c.name === '氏名不明').length
   const noExp = candidates.filter(c => c.experience_years == null).length
   const noPref = candidates.filter(c => !c.raw_profile?.prefecture).length
@@ -166,11 +168,13 @@ try {
 // ============================================================
 H('② AIコスト監視（直近 ' + DAYS + ' 日）')
 try {
+  const LOG_LIMIT = 2000
   const logs = await dbQuery(
     'ai_logs',
     `select=model,created_at,duration_ms,error_message,status` +
-    `&created_at=gte.${since}&order=created_at.desc&limit=2000`
+    `&created_at=gte.${since}&order=created_at.desc&limit=${LOG_LIMIT}`
   )
+  if (logs.length >= LOG_LIMIT) warn(`取得件数が上限(${LOG_LIMIT})に達しています → limit 増加を検討`)
 
   // モデル別集計
   const byModel = {}
