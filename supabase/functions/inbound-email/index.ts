@@ -2794,7 +2794,7 @@ Deno.serve(async (req: Request) => {
     const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
 
     // Word/Excelのテキスト抽出（MIMEタイプ + 拡張子の両方で判定）
-    const officeTextContents: { label: string; content: string }[] = []
+    const officeTextContents: { label: string; content: string; skillYears?: Record<string, number> }[] = []
     let excelSkillYears: Record<string, number> = {}
     let wordSkillYearsForDisplay: Record<string, number> = {}  // 表示用のみ・経験年数推定には使わない
     for (const att of attachments) {
@@ -2821,12 +2821,16 @@ Deno.serve(async (req: Request) => {
         }
       } else if (isExcelByMime || isExcelByExt) {
         const text = await extractExcelText(att.data)
-        if (text.trim()) officeTextContents.push({ label: `Excelファイル(${att.name ?? 'spreadsheet'})`, content: text })
+        const years = await extractSkillYearsFromExcel(att.data)
+        if (text.trim()) officeTextContents.push({
+          label: `Excelファイル(${att.name ?? 'spreadsheet'})`,
+          content: text,
+          skillYears: Object.keys(years).length > 0 ? years : undefined,
+        })
         else console.warn(`[Excel] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
-        // スキル別経験年数を抽出（プロジェクト経歴型 / スキル一覧型の両対応）
-        if (Object.keys(excelSkillYears).length === 0) {
-          const years = await extractSkillYearsFromExcel(att.data)
-          if (Object.keys(years).length > 0) excelSkillYears = years
+        // 単体候補者パス用: 最初の非空 Excel の skillYears を excelSkillYears に保存
+        if (Object.keys(excelSkillYears).length === 0 && Object.keys(years).length > 0) {
+          excelSkillYears = years
         }
       }
     }
@@ -3229,7 +3233,25 @@ Deno.serve(async (req: Request) => {
               email: null as string | null,
               phone: null as string | null,
               skills: blockSkillNames,
-              experience_years: toExperienceYears(blockRegexFields.experienceYears),
+              experience_years: (() => {
+                let expYears = blockRegexFields.experienceYears
+                // Excel skillYears フォールバック（本文に経験年数がない場合）
+                if (expYears == null && matchedTextContent?.skillYears) {
+                  const sy = matchedTextContent.skillYears
+                  const totalMonths = sy['_totalProjectMonths']
+                  const maxSkillMonths = Object.entries(sy)
+                    .filter(([k]) => k !== '_totalProjectMonths')
+                    .map(([, v]) => v)
+                    .reduce((a, b) => Math.max(a, b), 0)
+                  const estimatedMonths = totalMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
+                  if (estimatedMonths && estimatedMonths > 0) {
+                    expYears = estimatedMonths / 12
+                    const src = totalMonths ? 'プロジェクト合計' : 'スキル最大値'
+                    console.log(`[multi-candidate] block#${blockIdx}(${blockNameForMatch ?? '?'}) skillYearsから経験年数推定(${src}): ${expYears.toFixed(1)}年`)
+                  }
+                }
+                return toExperienceYears(expYears)
+              })(),
               raw_profile: {
                 text: effectiveBody.slice(0, 10000),
                 summary: '',
