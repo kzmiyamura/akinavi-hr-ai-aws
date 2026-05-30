@@ -173,7 +173,7 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   const cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
   let age = null, gender = null, nameStripped = cleanedName || ''
   const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][ 　]*[/／：:・．][ 　]*(男性|女性|男|女)(?:[/／]([^)）]*))?[\)）]/)
-  const genderAgeUnified = !agGenderUnified ? nameStripped.match(/[\(（](男性|女性|男|女)[ 　]*[/／：:・．][ 　]*(\d{2})[才歳][\)）]/) : null
+  const genderAgeUnified = !agGenderUnified ? nameStripped.match(/[\(（](男性|女性|男|女)[ 　]*(?:[/／：:・．][ 　]*|[ 　]+)(\d{2})[才歳][\)）]/) : null
   let nationality = null
   if (agGenderUnified) {
     age = parseInt(agGenderUnified[1], 10); gender = agGenderUnified[2]
@@ -181,7 +181,7 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][ 　]*[/／：:・．][ 　]*(?:男性|女性|男|女)(?:[/／][^)）]*)?[\)）]/, '').trim()
   } else if (genderAgeUnified) {
     gender = genderAgeUnified[1]; age = parseInt(genderAgeUnified[2], 10)
-    nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[ 　]*[/／：:・．][ 　]*\d{2}[才歳][\)）]/, '').trim()
+    nameStripped = nameStripped.replace(/[\s　]?[\(（](?:男性|女性|男|女)[ 　]*(?:[/／：:・．][ 　]*|[ 　]+)\d{2}[才歳][\)）]/, '').trim()
   } else {
     const ageMatch = nameStripped.match(/[\s　]?[\(（](\d{2})[才歳][\)）]?/)
     if (ageMatch) { age = parseInt(ageMatch[1], 10); nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[才歳][\)）]?/, '').trim() }
@@ -222,11 +222,21 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     if (natMark) nationality = natMark[1].trim()
   }
   name = name || nameStripped || null
-  if (name) name = name.replace(/[ 　]*[/／][ 　]*(男性|女性|男|女)[ 　]*(?:[/／][^）)]*)?[）)]?\s*$/, '').trim() || null
+  if (name) {
+    const trailGenderM = name.match(/[ 　]*[/／][ 　]*(男性|女性|男|女)[ 　]*(?:[/／][^）)]*)?[）)]?\s*$/)
+    if (trailGenderM) {
+      if (gender === null) gender = trailGenderM[1]
+      name = name.replace(/[ 　]*[/／][ 　]*(男性|女性|男|女)[ 　]*(?:[/／][^）)]*)?[）)]?\s*$/, '').trim() || null
+    }
+  }
   if (name) name = name.replace(/[ 　]*(男性|女性|男|女)[）)]\s*$/, '').trim() || null
   if (name && !age) {
     const trailingAgeM = name.match(/[ 　]+(\d{2})[才歳]$/)
-    if (trailingAgeM) { age = parseInt(trailingAgeM[1], 10); name = name.replace(/[ 　]+\d{2}[才歳]$/, '').trim() || null }
+    if (trailingAgeM) {
+      age = parseInt(trailingAgeM[1], 10)
+      name = name.replace(/[ 　]+\d{2}[才歳]$/, '').trim() || null
+      if (name) name = name.replace(/[ 　]*[/／、，・][ 　]*$/, '').trim() || null
+    }
   }
   if (name && !age) {
     const ageOnlyM = name.match(/[ 　]?[（(](\d{2})[）)]$/)
@@ -257,7 +267,7 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   }
   // ③ 性別（男性/女性/男/女）が名前に含まれる場合はそこで切り捨て
   if (name) {
-    const genderInNameM = name.match(/^(.+?)[\s\u3000]?(男性|女性|男|女)(?:[\s\u3000].*)?$/)
+    const genderInNameM = name.match(/^(.+?)[\s\u3000]?(男性|女性|男|女).*$/)
     if (genderInNameM && genderInNameM[1].trim().length >= 1) {
       if (gender === null) gender = genderInNameM[2]
       name = genderInNameM[1].trim() || null
@@ -426,6 +436,68 @@ let bodyText = ''
 let attachText = ''
 let type = 'candidate'
 let filePath = null
+
+// ─── --test モード: 自動テストスイート ────────────────────────────────────────
+if (args.includes('--test')) {
+  let passed = 0, failed = 0
+  const results = []
+
+  function assert(label, got, expected) {
+    const ok = got === expected || (expected === undefined)
+    results.push({ ok, label, got, expected })
+    if (ok) passed++; else failed++
+  }
+
+  function runCase(desc, body, attach, exp) {
+    const f = extractCandidateFieldsRegex(decodeHtmlEntities(body), attach ?? '')
+    const prefix = `${desc}`
+    if ('name'        in exp) assert(`${prefix} | name`,        f.name,               exp.name)
+    if ('age'         in exp) assert(`${prefix} | age`,         f.age,                exp.age)
+    if ('gender'      in exp) assert(`${prefix} | gender`,      f.gender,             exp.gender)
+    if ('nationality' in exp) assert(`${prefix} | nationality`, f.nationality,        exp.nationality)
+    if ('experienceYears' in exp) assert(`${prefix} | exp`,     f.experienceYears,    exp.experienceYears)
+    if ('nearestStation'  in exp) assert(`${prefix} | station`, f.nearestStation,     exp.nearestStation)
+    if ('desiredRate'     in exp) assert(`${prefix} | rate`,    f.desiredRate,        exp.desiredRate)
+  }
+
+  // ── ⑧ 名前汚染修正パターン（今回の修正が効いていること）─────────────────
+  console.log('\n【⑧ 名前汚染修正パターン】')
+  runCase('K・M　男性',           '氏名：K・M　男性\n最寄駅：渋谷\n経験年数：8年', '',   { name: 'K・M',      gender: '男性' })
+  runCase('K.Y男性　香港籍',      '氏名：K.Y男性　香港籍\n最寄駅：品川\n経験年数：5年', '', { name: 'K.Y', gender: '男性', nationality: '香港籍' })
+  runCase('YY　49才女性　日本籍', '氏名：YY　49才女性　日本籍帰化された\n最寄駅：新宿\n経験年数：3年', '', { name: 'YY', age: 49, gender: '女性' })
+  runCase('劉　KU　33歳　女性',   '氏名：劉　KU　33歳　女性　弊社の正社員\n最寄駅：大阪\n経験年数：7年', '', { name: '劉　KU', age: 33, gender: '女性' })
+  runCase('MOSN 男',             '氏名：MOSN 男\n最寄駅：名古屋\n経験年数：4年', '',   { name: 'MOSN',       gender: '男' })
+  runCase('MS/31歳/',            '氏名：MS/31歳/\n最寄駅：横浜\n経験年数：5年', '',    { name: 'MS',         age: 31 })
+  runCase('W000085、57歳 男性',  '氏名：W000085、57歳 男性、日本籍\n最寄駅：渋谷\n経験年数：10年', '', { name: 'W000085', age: 57, gender: '男性' })
+  runCase('中谷（NT）44歳',       '氏名：中谷（NT）44歳\n最寄駅：渋谷\n経験年数：6年', '', { name: '中谷（NT）', age: 44 })
+  runCase('ISAR　男',            '氏名：ISAR　男\n最寄駅：渋谷\n経験年数：3年', '',   { name: 'ISAR',       gender: '男' })
+  runCase('C.S女性スウェーデン籍','氏名：C.S女性スウェーデン籍\n最寄駅：渋谷\n経験年数：5年', '', { name: 'C.S', gender: '女性' })
+  runCase('EN　30才　日本人',     '氏名：EN　30才　日本人\n最寄駅：渋谷\n経験年数：5年', '', { name: 'EN', age: 30 })
+
+  // ── デグレチェック: 既存パターンが引き続き正しく動作すること ─────────────
+  console.log('\n【デグレチェック: 既存パターン】')
+  runCase('田中太郎 (通常)',       '氏名：田中太郎\n最寄駅：渋谷\n経験年数：8年', '',      { name: '田中太郎' })
+  runCase('K.T（32才）女性',      '氏名：K.T（32才）女性\n最寄駅：新宿\n経験年数：3年', '', { name: 'K.T', age: 32, gender: '女性' })
+  runCase('YS(26歳)',             '氏名：YS(26歳)\n最寄駅：渋谷\n経験年数：5年', '',     { age: 26 })
+  runCase('SM（男性 55歳）',      '氏名：SM（男性 55歳）\n最寄駅：渋谷\n経験年数：10年', '', { name: 'SM', age: 55, gender: '男性' })
+  runCase('A・N（男性/36歳）',    '氏名：A・N（男性/36歳）\n最寄駅：渋谷\n経験年数：6年', '', { age: 36, gender: '男性' })
+  runCase('T.N（34）',           '氏名：T.N（34）\n最寄駅：渋谷\n経験年数：5年', '',    { name: 'T.N', age: 34 })
+  runCase('経験年数（通常）',      '氏名：佐藤一郎\n最寄駅：渋谷\n経験年数：10年', '',    { experienceYears: 10 })
+  runCase('希望単価（通常）',      '氏名：田中\n最寄駅：品川\n希望単価：65万\n経験年数：5年', '', { desiredRate: '65万' })
+  runCase('最寄駅（通常）',        '氏名：鈴木\n最寄駅：渋谷\n経験年数：3年', '',         { nearestStation: '渋谷' })
+  runCase('国籍（括弧あり）',      '氏名：R.B（バングラデシュ籍）\n最寄駅：渋谷\n経験年数：5年', '', { nationality: 'バングラデシュ籍' })
+  runCase('スラッシュ年齢（K.Y / 40歳）', '氏名：K.Y / 40歳 / 男性 / ベトナム籍\n最寄駅：渋谷\n経験年数：5年', '', { name: 'K.Y', age: 40, gender: '男性' })
+
+  // ── 出力 ──
+  console.log('\n' + '='.repeat(60))
+  const failedList = results.filter(r => !r.ok)
+  if (failedList.length > 0) {
+    console.log('\n❌ 失敗したテスト:')
+    failedList.forEach(r => console.log(`  ${r.label}\n    got:      ${JSON.stringify(r.got)}\n    expected: ${JSON.stringify(r.expected)}`))
+  }
+  console.log(`\nテスト結果: ${passed} passed, ${failed} failed`)
+  process.exit(failed > 0 ? 1 : 0)
+}
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--type' && args[i + 1]) { type = args[++i] }
