@@ -2101,10 +2101,23 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
 
 /** スキル別経験月数を Excel ファイル（base64）から抽出 */
 async function extractSkillYearsFromExcel(base64: string): Promise<Record<string, number>> {
+  const { skillYears } = await extractExcelAll(base64)
+  return skillYears
+}
+
+/**
+ * Excel を 1 回だけパースし、テキストと skillYears を同時に返す。
+ * extractExcelText / extractSkillYearsFromExcel を別々に呼ぶと 2 回パースになるため
+ * 添付ループではこちらを使う。
+ */
+async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number> }> {
   try {
     const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
-      utils: { sheet_to_json: (sheet: unknown, opts: object) => unknown[][] }
+      utils: {
+        sheet_to_csv: (sheet: unknown) => string
+        sheet_to_json: (sheet: unknown, opts: object) => unknown[][]
+      }
     }
     const bytes = base64ToUint8Array(base64)
     const workbook = XLSX.read(bytes, { type: 'array' })
@@ -2114,54 +2127,36 @@ async function extractSkillYearsFromExcel(base64: string): Promise<Record<string
       const bp = PRIORITY_KEYWORDS.some(kw => b.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
       return ap - bp
     })
+    const texts: string[] = []
+    let skillYears: Record<string, number> = {}
     for (const sheetName of sortedNames.slice(0, 3)) {
-      const ws = workbook.Sheets[sheetName]
-      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as string[][]
-      const result = extractSkillYearsFromSheetData(data)
-      if (Object.keys(result).length > 0) {
-        console.log(`[skillYears] sheet=${sheetName} skills=${Object.keys(result).length}`)
-        return result
+      const sheet = workbook.Sheets[sheetName]
+      // テキスト抽出
+      const csv = XLSX.utils.sheet_to_csv(sheet)
+      if (csv.trim()) texts.push(`--- シート: ${sheetName} ---\n${cleanseExcelCsv(csv)}`)
+      // skillYears 抽出（最初に見つかったシートで確定）
+      if (Object.keys(skillYears).length === 0) {
+        const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as string[][]
+        const sy = extractSkillYearsFromSheetData(data)
+        if (Object.keys(sy).length > 0) {
+          console.log(`[skillYears] sheet=${sheetName} skills=${Object.keys(sy).length}`)
+          skillYears = sy
+        }
       }
     }
-    return {}
+    const text = texts.join('\n\n')
+    console.log(`[Excel] 抽出完了 totalLen=${text.length}`)
+    return { text, skillYears }
   } catch (e) {
-    console.warn('[skillYears] 抽出失敗', e)
-    return {}
+    console.warn('[Excel] 抽出失敗', e)
+    return { text: '', skillYears: {} }
   }
 }
 
 /** Excel(.xlsx/.xls)をCSVテキストに変換してクレンジング（最初の3シートまで） */
 async function extractExcelText(base64: string): Promise<string> {
-  try {
-    const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
-      read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
-      utils: { sheet_to_csv: (sheet: unknown) => string }
-    }
-    const bytes = base64ToUint8Array(base64)
-    const workbook = XLSX.read(bytes, { type: 'array' })
-    const texts: string[] = []
-    // スキル・経歴関連のシートを優先、それ以外を後ろに（最大3シート）
-    const PRIORITY_SHEET_KEYWORDS = ['スキル', '経歴', '職務', 'スキルシート', 'skill', 'career', 'profile', '人材']
-    const sortedSheetNames = [...workbook.SheetNames].sort((a, b) => {
-      const aPri = PRIORITY_SHEET_KEYWORDS.some(kw => a.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
-      const bPri = PRIORITY_SHEET_KEYWORDS.some(kw => b.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
-      return aPri - bPri
-    })
-    for (const sheetName of sortedSheetNames.slice(0, 3)) {
-      const sheet = workbook.Sheets[sheetName]
-      const csv = XLSX.utils.sheet_to_csv(sheet)
-      if (csv.trim()) {
-        const cleansed = cleanseExcelCsv(csv)
-        texts.push(`--- シート: ${sheetName} ---\n${cleansed}`)
-      }
-    }
-    const result = texts.join('\n\n')
-    console.log(`[Excel] 抽出完了 totalLen=${result.length}`)
-    return result
-  } catch (e) {
-    console.warn('[Excel] テキスト抽出失敗', e)
-    return ''
-  }
+  const { text } = await extractExcelAll(base64)
+  return text
 }
 
 /** 10秒タイムアウト付きfetch */
@@ -2820,8 +2815,8 @@ Deno.serve(async (req: Request) => {
           console.log(`[Word] totalProjectMonths → excelSkillYears にセット: ${wordMonths}ヶ月`)
         }
       } else if (isExcelByMime || isExcelByExt) {
-        const text = await extractExcelText(att.data)
-        const years = await extractSkillYearsFromExcel(att.data)
+        // 1 回のパースで text と skillYears を同時取得（二重パース防止）
+        const { text, skillYears: years } = await extractExcelAll(att.data)
         if (text.trim()) officeTextContents.push({
           label: `Excelファイル(${att.name ?? 'spreadsheet'})`,
           content: text,
