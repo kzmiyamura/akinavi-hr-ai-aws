@@ -1298,6 +1298,8 @@ function extractCandidateFieldsRegex(
   if (nearestStation) {
     // 路線名カッコを除去: 「綾瀬駅（東京メトロ千代田線 / JR常磐線）」→「綾瀬駅」
     nearestStation = nearestStation.replace(/（[^）]*）.*$/, '').trim()
+    // 路線名スラッシュ区切りを除去: 「JR京浜東北線／蕨駅」「相鉄線／西谷駅」→「蕨駅」「西谷駅」
+    nearestStation = nearestStation.replace(/^.+[/／]/, '').trim()
     // 「最寄：北13条東駅」のようにコロン区切りで前半がラベルの場合、後半だけ取る
     const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
     if (colonMatch) nearestStation = colonMatch[1].trim()
@@ -1307,11 +1309,16 @@ function extractCandidateFieldsRegex(
       || nearestStation.includes('最寄駅')) {
       nearestStation = null
     }
-    // 「西武池袋線　飯能駅」→「飯能駅」（路線名+駅名 → 駅名だけ取る）
+    // 「西武池袋線　飯能駅」→「飯能駅」（路線名+スペース+駅名 → 駅名だけ取る）
+    // 「汐入駅常駐可」→「汐入駅」（駅名以降の余分な語句を除去）
     if (nearestStation) {
       const stationOnly = nearestStation.match(/([^\s　]{2,12}駅)$/)
       if (stationOnly && stationOnly[1] !== nearestStation) {
         nearestStation = stationOnly[1]
+      } else if (!nearestStation.endsWith('駅')) {
+        // 末尾が駅でない場合: 先頭の駅名部分だけ取る
+        const stationStart = nearestStation.match(/^([^\s　]{1,12}駅)/)
+        if (stationStart) nearestStation = stationStart[1]
       }
     }
   }
