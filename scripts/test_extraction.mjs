@@ -309,7 +309,9 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   }
   let nearestStation = extractFieldTwoPhase(
     ['最寄り?駅','最寄駅','最寄り?','沿線','通勤駅'],
-    bodyText, attachText, v => /[駅線]$/.test(v) || v.length <= 10, 15, 2,
+    bodyText, attachText,
+    v => { const c = v.replace(/（[^）]*）.*$/, '').trim(); return /[駅線]$/.test(c) || c.length <= 10 },
+    30, 2,
   )
   if (!nearestStation) {
     const allText = bodyText + '\n' + attachText
@@ -317,6 +319,8 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     if (m) nearestStation = m[1].trim()
   }
   if (nearestStation) {
+    // 路線名カッコを除去: 「綾瀬駅（東京メトロ千代田線 / JR常磐線）」→「綾瀬駅」
+    nearestStation = nearestStation.replace(/（[^）]*）.*$/, '').trim()
     const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
     if (colonMatch) nearestStation = colonMatch[1].trim()
     if (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation) || nearestStation.includes('イニシャル') || nearestStation.includes('最寄駅')) nearestStation = null

@@ -1283,8 +1283,8 @@ function extractCandidateFieldsRegex(
   let nearestStation = extractFieldTwoPhase(
     ['最寄り?駅','最寄駅','最寄り?','沿線','通勤駅'],
     bodyText, attachText,
-    v => /[駅線]$/.test(v) || v.length <= 10,
-    15,
+    v => { const c = v.replace(/（[^）]*）.*$/, '').trim(); return /[駅線]$/.test(c) || c.length <= 10 },
+    30,
     2,
   )
   // ラベルなしフォールバック: 「○○駅徒歩N分」や「○○駅 」
@@ -1296,6 +1296,8 @@ function extractCandidateFieldsRegex(
   // 後処理: ラベル自体が値になっているケースを除外
   // 例: 「最寄駅」「イニシャル+最寄駅」「最寄：北13条東駅」→ 実駅名のみに修正
   if (nearestStation) {
+    // 路線名カッコを除去: 「綾瀬駅（東京メトロ千代田線 / JR常磐線）」→「綾瀬駅」
+    nearestStation = nearestStation.replace(/（[^）]*）.*$/, '').trim()
     // 「最寄：北13条東駅」のようにコロン区切りで前半がラベルの場合、後半だけ取る
     const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
     if (colonMatch) nearestStation = colonMatch[1].trim()
