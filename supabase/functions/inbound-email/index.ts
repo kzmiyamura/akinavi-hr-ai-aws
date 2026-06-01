@@ -1271,7 +1271,8 @@ function extractCandidateFieldsRegex(
   if (!nationality) {
     const allTextForNatInline = bodyText + '\n' + attachText
     const natInline = allTextForNatInline.match(/(?:^|[\s　/／・,、|｜（(])((?:[ァ-ヶー]{2,8}|[一-龠]{2,6})籍)/m)
-    const EXCLUDE_NAT = /^(在籍|本籍|戸籍|書籍|移籍|国籍|原籍|入籍|除籍|学籍|党籍|軍籍|転籍|復籍|船籍)$/
+    // 「在籍」を含む語（大学在籍・現在在籍等）も除外する
+    const EXCLUDE_NAT = /^(在籍|本籍|戸籍|書籍|移籍|国籍|原籍|入籍|除籍|学籍|党籍|軍籍|転籍|復籍|船籍)$|在籍$/
     if (natInline && !EXCLUDE_NAT.test(natInline[1])) {
       nationality = natInline[1].trim()
     }
@@ -3216,6 +3217,11 @@ Deno.serve(async (req: Request) => {
               ?? extractNameFallback([blockRegexBodyText, blockAttachText].join('\n'))
               ?? extractCandidateCode(subject)
               ?? '不明'
+            // 名前が取れないブロックは署名・フッター等とみなしてスキップ
+            if (blockResolvedName === '不明' && blockRegexFields.name == null) {
+              console.log(`[multi-candidate] block#${blockIdx} 名前なし → スキップ（署名/フッター判定）`)
+              continue
+            }
             const blockRemoteAvailable = blockProseFields.workStyle === 'フルリモート'
               || blockProseFields.workStyle === 'リモート可'
               || blockProseFields.workStyle === 'リモート希望'
