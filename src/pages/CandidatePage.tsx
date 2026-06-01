@@ -711,11 +711,12 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     setReplayingId(c.id)
     setReplayMsg(null)
     try {
+      const originalFrom = (c.raw_profile as RawProfile)?.from ?? `replay+${c.id}@demo.invalid`
       const { error } = await supabase.functions.invoke('inbound-email', {
         body: {
-          subject: `【再解析】${c.name}`,
+          subject: (c.raw_profile as RawProfile)?.subject ?? `【再解析】${c.name}`,
           body: rawText,
-          from: `replay+${c.id}@demo.invalid`,
+          from: originalFrom,
           attachments: [],
           mode: dataEnv,
           type: 'candidate',
