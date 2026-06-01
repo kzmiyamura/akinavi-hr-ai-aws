@@ -495,6 +495,13 @@ async function markAsUnread(accessToken: string, messageId: string): Promise<voi
   })
 }
 
+async function deleteMessage(accessToken: string, messageId: string): Promise<void> {
+  await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+}
+
 // ---- Microsoft Graph: 添付ファイル取得 ----
 
 interface GraphAttachment {
@@ -756,11 +763,11 @@ async function pollAccount(
     const ruleResolved = preFilterResults.filter(r => r.preResult !== 'skip' && r.preResult !== 'unknown')
     const needAi       = preFilterResults.filter(r => r.preResult === 'unknown')
 
-    // ルールでスキップ確定したものを既読にする
+    // ルールでスキップ確定したものを削除
     for (const { email } of ruleSkipped) {
       try {
-        if (mode === 'incremental') await markAsRead(accessToken, email.id)
-        console.log(`[poll] 事前フィルタースキップ: "${email.subject}"`)
+        if (mode === 'incremental') await deleteMessage(accessToken, email.id)
+        console.log(`[poll] 事前フィルタースキップ・削除: "${email.subject}"`)
         skipped++
       } catch { /* ignore */ }
     }
@@ -792,8 +799,8 @@ async function pollAccount(
     for (const { email, emailType } of toProcess) {
       try {
         if (emailType === 'other') {
-          if (mode === 'incremental') await markAsRead(accessToken, email.id)
-          console.log(`[poll] スキップ (other): "${email.subject}" (${config.configKey})`)
+          if (mode === 'incremental') await deleteMessage(accessToken, email.id)
+          console.log(`[poll] スキップ・削除 (other): "${email.subject}" (${config.configKey})`)
           skipped++
           continue
         }
@@ -814,7 +821,7 @@ async function pollAccount(
           }
         }
 
-        // 既読マーク（incremental: 二重処理防止 / full: 処理済みマーク）
+        // 処理中の二重取得防止のため先に既読マーク（処理完了後に削除）
         await markAsRead(accessToken, email.id)
 
         // 添付取得 → inbound-email へ渡す
@@ -842,7 +849,9 @@ async function pollAccount(
           await callInboundEmail(email, attachments, finalType, config.dataEnv)
         }
         processed++
-        console.log(`[poll] 処理完了: "${email.subject}" type=${finalType} (${config.configKey})`)
+        // 処理完了後にメールを削除（DB に保存済みのため Outlook 側は不要）
+        try { await deleteMessage(accessToken, email.id) } catch { /* ignore */ }
+        console.log(`[poll] 処理完了・削除: "${email.subject}" type=${finalType} (${config.configKey})`)
       } catch (e) {
         // 失敗したら未読に戻して次回ポーリングで再試行
         const msg = `メール処理失敗 "${email.subject}": ${String(e)}`
