@@ -96,7 +96,7 @@ function extractFieldTwoPhase(labels, bodyText, attachText, validate, maxLen = 3
   const mBody = normalBody.match(rSameLine(SEP))
   if (mBody) { const v = check(mBody[1]); if (v) return v }
   {
-    const labelOnly1b = new RegExp(`^[　 ]*(?:${esc})[　 ]?[：:,，]?[　 ]*$`, 'i')
+    const labelOnly1b = new RegExp(`^[　 ]*[■●▪▶【]?[　 ]?(?:${esc})[　 ]?[】：:,，]?[　 ]*$`, 'i')
     const bodyLines = normalBody.split(/\r?\n/)
     for (let i = 0; i < bodyLines.length - 1; i++) {
       if (!labelOnly1b.test(bodyLines[i])) continue

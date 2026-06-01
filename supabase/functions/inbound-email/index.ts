@@ -942,7 +942,7 @@ function extractFieldTwoPhase(
 
   // ── Phase1b: 本文 次行（◆氏名◆\n値 等のデコレータ付きラベル対応） ──
   {
-    const labelOnly1b = new RegExp(`^[　 ]*(?:${esc})[　 ]?[：:,，]?[　 ]*$`, 'i')
+    const labelOnly1b = new RegExp(`^[　 ]*[■●▪▶【]?[　 ]?(?:${esc})[　 ]?[】：:,，]?[　 ]*$`, 'i')
     const bodyLines = normalBody.split(/\r?\n/)
     for (let i = 0; i < bodyLines.length - 1; i++) {
       if (!labelOnly1b.test(bodyLines[i])) continue
