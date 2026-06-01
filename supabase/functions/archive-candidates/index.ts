@@ -37,6 +37,7 @@ Deno.serve(async (req) => {
       .eq('data_env', 'prod')
       .lt('created_at', cutoff.toISOString())
       .order('created_at', { ascending: true })
+      .limit(5000)
 
     if (fetchError) throw fetchError
     if (!candidates || candidates.length === 0) {
