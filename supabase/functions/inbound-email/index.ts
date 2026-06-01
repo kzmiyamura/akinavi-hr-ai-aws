@@ -3306,21 +3306,42 @@ Deno.serve(async (req: Request) => {
               blockExistingId = batchNameToId.get(blockResolvedName)!
               console.log(`[multi-candidate dedup] 同一バッチ内重複 → UPDATE: ${blockResolvedName}`)
             }
-            // ② 同一メール（同一 from + subject）から同名が既に登録済み → 必ずUPDATE
-            // 　 スキル差があってもJaccardに依存せず同一人物と判定（2重送信・再解析防止）
+            // ② 同エージェント（同一 from）から同名が既に登録済み → UPDATE 判定
+            // 　 件名一致 → 同一メール確定。件名違い → 駅・都道府県・年齢・経験年数の2つ以上一致で同一人物
             if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明') {
-              const { data: sameEmail } = await supabase
-                .from('candidates').select('id')
+              const { data: sameAgent } = await supabase
+                .from('candidates').select('id, raw_profile, experience_years')
                 .eq('data_env', inboundDataEnv)
                 .eq('name', blockResolvedName)
                 .eq('duplicate_flag', false)
                 .is('merged_into', null)
                 .eq('raw_profile->>from', from)
-                .eq('raw_profile->>subject', subject)
-                .limit(1)
-              if (sameEmail && sameEmail.length > 0) {
-                blockExistingId = sameEmail[0].id
-                console.log(`[multi-candidate dedup] 同一メール再送→ UPDATE: ${blockResolvedName}`)
+                .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
+                .limit(5)
+              if (sameAgent && sameAgent.length > 0) {
+                for (const s of sameAgent) {
+                  const theirRp = s.raw_profile as any
+                  const sameSubject = theirRp?.subject === subject
+                  let attrMatches = 0
+                  const myStation = blockRegexFields.nearestStation ?? null
+                  const theirStation = theirRp?.nearestStation ?? null
+                  if (myStation && theirStation && myStation === theirStation) attrMatches++
+                  const myPref = blockRegexFields.prefecture ?? null
+                  const theirPref = theirRp?.prefecture ?? null
+                  if (myPref && theirPref && myPref === theirPref) attrMatches++
+                  const myAge = blockRegexFields.age ?? null
+                  const theirAge = theirRp?.age ?? null
+                  if (myAge != null && theirAge != null && myAge === theirAge) attrMatches++
+                  const myExp = toExperienceYears(blockRegexFields.experienceYears)
+                  const theirExp = (s as any).experience_years ?? null
+                  if (myExp != null && theirExp != null && Math.abs(myExp - theirExp) < 2) attrMatches++
+                  if (sameSubject || attrMatches >= 2) {
+                    blockExistingId = s.id
+                    const reason = sameSubject ? '同一メール再送' : `同エージェント属性${attrMatches}件一致`
+                    console.log(`[multi-candidate dedup] ${reason}→ UPDATE: ${blockResolvedName}`)
+                    break
+                  }
+                }
               }
             }
             // ③ DBに同名が存在するか確認（Jaccard類似度による同一人物判定）
@@ -3638,6 +3659,46 @@ Deno.serve(async (req: Request) => {
       // 新方式: INSERT前にチェック → 同一人物なら既存レコードを最新情報で更新 + created_at をリセット
       let existingCandidateId: string | null = null
       if (resolvedName && resolvedName !== '不明') {
+        // ステップ①: 同エージェント（同一 from）優先チェック
+        // 　件名一致 → 同一メール確定。件名違い → 駅・都道府県・年齢・経験年数の2つ以上一致で同一人物
+        const { data: sameAgentSingle } = await supabase
+          .from('candidates')
+          .select('id, raw_profile, experience_years')
+          .eq('data_env', inboundDataEnv)
+          .eq('name', resolvedName)
+          .eq('duplicate_flag', false)
+          .is('merged_into', null)
+          .eq('raw_profile->>from', from)
+          .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
+          .limit(5)
+        if (sameAgentSingle && sameAgentSingle.length > 0) {
+          for (const s of sameAgentSingle) {
+            const theirRp = s.raw_profile as any
+            const sameSubject = theirRp?.subject === subject
+            let attrMatches = 0
+            const myStation = resolvedStation ?? null
+            const theirStation = theirRp?.nearestStation ?? null
+            if (myStation && theirStation && myStation === theirStation) attrMatches++
+            const myPref = resolvedPrefecture ?? null
+            const theirPref = theirRp?.prefecture ?? null
+            if (myPref && theirPref && myPref === theirPref) attrMatches++
+            const myAge = regexFields.age ?? null
+            const theirAge = theirRp?.age ?? null
+            if (myAge != null && theirAge != null && myAge === theirAge) attrMatches++
+            const myExp = toExperienceYears(resolvedExperienceYears)
+            const theirExp = (s as any).experience_years ?? null
+            if (myExp != null && theirExp != null && Math.abs(myExp - theirExp) < 2) attrMatches++
+            if (sameSubject || attrMatches >= 2) {
+              existingCandidateId = s.id
+              const reason = sameSubject ? '同一メール再送' : `同エージェント属性${attrMatches}件一致`
+              console.log(`[dedup] ${reason}→ UPDATE: ${resolvedName}`)
+              break
+            }
+          }
+        }
+      }
+      // ステップ②: 別エージェント含む全候補でJaccard類似度チェック
+      if (existingCandidateId === null && resolvedName && resolvedName !== '不明') {
         const { data: similar } = await supabase
           .from('candidates')
           .select('id, name, skills, raw_profile, experience_years')
