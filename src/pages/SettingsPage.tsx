@@ -16,6 +16,8 @@ import {
   saveCandidateRetentionDays,
   getAppMemo,
   saveAppMemo,
+  getOwnEmailDomain,
+  saveOwnEmailDomain,
 } from '../lib/db/emailSettings'
 import {
   getMatchingSettings,
@@ -124,6 +126,18 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
   const memoMutation = useMutation({
     mutationFn: (text: string) => saveAppMemo(text),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['appMemo'] }),
+  })
+
+  // 自社ドメイン
+  const { data: savedOwnDomain = '' } = useQuery({
+    queryKey: ['ownEmailDomain'],
+    queryFn: getOwnEmailDomain,
+  })
+  const [ownDomainInput, setOwnDomainInput] = useState('')
+  useEffect(() => { setOwnDomainInput(savedOwnDomain) }, [savedOwnDomain])
+  const ownDomainMutation = useMutation({
+    mutationFn: (domain: string) => saveOwnEmailDomain(domain),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ownEmailDomain'] }),
   })
 
   // GitHub Issues
@@ -587,6 +601,41 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
               )}
             </div>
           </div>
+        </section>
+
+        {/* ---- 自社ドメインスキップ ---- */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">自社ドメインスキップ</h2>
+          <p className="text-xs text-gray-400 mb-4">
+            設定したドメインからの受信メールをスキップします（返信・業務連絡の混入対策）。<br />
+            手動登録・再解析ボタンはこの設定に関わらず常に登録可能です。
+          </p>
+          <div className="flex items-center gap-3">
+            <input
+              type="text"
+              value={ownDomainInput}
+              onChange={e => setOwnDomainInput(e.target.value)}
+              placeholder="例: i-voice.co.jp（未設定で無効）"
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+            <button
+              type="button"
+              onClick={() => ownDomainMutation.mutate(ownDomainInput)}
+              disabled={ownDomainMutation.isPending}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors shrink-0"
+            >
+              {ownDomainMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              保存
+            </button>
+          </div>
+          {ownDomainMutation.isSuccess && (
+            <p className="mt-2 text-xs text-green-600">
+              {ownDomainInput ? `「${ownDomainInput}」からのメールをスキップします` : 'スキップ設定を解除しました'}
+            </p>
+          )}
+          {ownDomainMutation.isError && (
+            <p className="mt-2 text-xs text-red-600">保存に失敗しました: {String(ownDomainMutation.error)}</p>
+          )}
         </section>
 
         {/* 全件取り込みセクションは非表示（7日以上前のデータは不要のため運用上使用しない） */}

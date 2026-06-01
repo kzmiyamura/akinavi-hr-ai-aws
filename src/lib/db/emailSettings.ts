@@ -208,6 +208,24 @@ export async function saveCandidateRetentionDays(days: number): Promise<void> {
   if (error) throw new Error(`保持日数の保存に失敗しました: ${error.message}`)
 }
 
+/** 自社ドメインを取得（例: i-voice.co.jp）。未設定なら空文字 */
+export async function getOwnEmailDomain(): Promise<string> {
+  const { data } = await supabase
+    .from('app_config')
+    .select('value')
+    .eq('key', 'own_email_domain')
+    .maybeSingle()
+  return data?.value?.trim() ?? ''
+}
+
+/** 自社ドメインを保存（空文字で無効化） */
+export async function saveOwnEmailDomain(domain: string): Promise<void> {
+  const { error } = await supabase
+    .from('app_config')
+    .upsert({ key: 'own_email_domain', value: domain.trim() }, { onConflict: 'key' })
+  if (error) throw new Error(`自社ドメイン設定の保存に失敗しました: ${error.message}`)
+}
+
 /** アプリメモを取得 */
 export async function getAppMemo(): Promise<string> {
   const { data } = await supabase

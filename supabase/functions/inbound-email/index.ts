@@ -579,6 +579,33 @@ const STATION_TO_PREFECTURE: Record<string, string> = {
 /** station_master DB から取得したマップ（関数インスタンス内でキャッシュ） */
 let _stationDbMap: Record<string, string> | null = null
 
+/** own_email_domain キャッシュ（undefined = 未ロード、null = 未設定） */
+let _ownEmailDomain: string | null | undefined = undefined
+let _ownEmailDomainLoadedAt = 0
+const OWN_DOMAIN_CACHE_MS = 5 * 60 * 1000
+
+/** app_config から own_email_domain を取得（5分キャッシュ） */
+async function loadOwnEmailDomain(supabaseUrl: string, serviceKey: string): Promise<string | null> {
+  const now = Date.now()
+  if (_ownEmailDomain !== undefined && now - _ownEmailDomainLoadedAt < OWN_DOMAIN_CACHE_MS) {
+    return _ownEmailDomain
+  }
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/app_config?select=value&key=eq.own_email_domain&limit=1`,
+      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+    )
+    if (res.ok) {
+      const rows = await res.json() as { value: string }[]
+      _ownEmailDomain = rows[0]?.value?.trim() || null
+    }
+  } catch {
+    _ownEmailDomain = null
+  }
+  _ownEmailDomainLoadedAt = Date.now()
+  return _ownEmailDomain
+}
+
 /** DB の station_master を取得してハードコードマップとマージ */
 async function loadStationMap(): Promise<Record<string, string>> {
   if (_stationDbMap) return _stationDbMap
@@ -2739,6 +2766,32 @@ Deno.serve(async (req: Request) => {
     const forceProcess: boolean = raw.force === true || raw.force === 'true'
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
+
+    // ── MAILER-DAEMON: 配信失敗通知は無条件スキップ ──────────────────────
+    if (/^mailer-daemon/i.test(from) || /^mailer-daemon/i.test(subject)) {
+      console.warn('[SKIP_MAILER_DAEMON]', { rid: traceRid, from, subject })
+      return new Response(
+        JSON.stringify({ ok: true, skipped: true, reason: 'MAILER_DAEMON' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
+
+    // ── 自社ドメインスキップ: force=true（手動登録・再解析）はバイパス ──────
+    if (!forceProcess) {
+      const supabaseUrl2 = Deno.env.get('SUPABASE_URL') ?? ''
+      const serviceKey2 = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      const ownDomain = await loadOwnEmailDomain(supabaseUrl2, serviceKey2)
+      if (ownDomain) {
+        const fromDomain = from.split('@')[1]?.toLowerCase() ?? ''
+        if (fromDomain === ownDomain.toLowerCase()) {
+          console.warn('[SKIP_OWN_DOMAIN]', { rid: traceRid, from, ownDomain })
+          return new Response(
+            JSON.stringify({ ok: true, skipped: true, reason: 'OWN_DOMAIN' }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+          )
+        }
+      }
+    }
     // Outlookがメールを実際に受信した日時（poll-emailから渡される）
     const emailReceivedAt: string | null = typeof raw.email_received_at === 'string' ? raw.email_received_at : null
     const pickedPlain = pickEmailPlainBody(raw)
