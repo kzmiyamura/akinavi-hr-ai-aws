@@ -3136,7 +3136,8 @@ Deno.serve(async (req: Request) => {
     // ── 人材メール ────────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
       // body が空の場合はsubjectを本文代わりに使う（cy-tech等の件名のみメール対策）
-      const effectiveBody = body.trim() ? body : subject
+      // HTMLエンティティをデコードして保存（&#26684; → 格 等）
+      const effectiveBody = decodeHtmlEntities(body.trim() ? body : subject)
 
       // ── 複数人材検出（*****や-----の区切り線） ─────────────────────────────
       // earlyMultiCheck は body で事前計算済み（effectiveBody と同一の場合は再利用）
@@ -3809,7 +3810,7 @@ Deno.serve(async (req: Request) => {
         status: 'success',
         duration_ms: durationMs,
         linked_id: savedCandidateId,
-        raw_body: body.slice(0, 3000),
+        raw_body: decodeHtmlEntities(body).slice(0, 3000),
       })
       if (logError) console.error('[ai_logs INSERT error]', logError)
 
@@ -4189,7 +4190,7 @@ Deno.serve(async (req: Request) => {
       }
 
       const sharedRawMeta = {
-        text: body.slice(0, 5000),
+        text: decodeHtmlEntities(body).slice(0, 5000),
         from,
         subject,
         emailReceivedAt,
@@ -4264,7 +4265,7 @@ Deno.serve(async (req: Request) => {
             status: 'success',
             duration_ms: durationMs,
             linked_id: row.id,
-            raw_body: body.slice(0, 3000),
+            raw_body: decodeHtmlEntities(body).slice(0, 3000),
           })
         ),
       )
