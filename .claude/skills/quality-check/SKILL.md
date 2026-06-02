@@ -367,7 +367,89 @@ LIMIT 20;
 
 ---
 
-## ⑪ 抽出ロジック回帰テスト
+## ⑪ スキル別経験年数（skillYears）取得率チェック
+
+`skillYears` は Excel スキルシート添付がある場合のみ取得できる。取得率が低い場合はシート形式が未対応の可能性がある。
+
+### 11-1. 取得率の集計（直近14日）
+
+```sql
+SELECT
+  COUNT(*) AS total,
+  SUM(CASE WHEN raw_profile ? 'skillYears'
+            AND raw_profile->'skillYears' != '{}'::jsonb THEN 1 ELSE 0 END) AS skill_years_filled,
+  ROUND(100.0 * SUM(CASE WHEN raw_profile ? 'skillYears'
+            AND raw_profile->'skillYears' != '{}'::jsonb THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) AS skill_years_pct,
+  -- drive_url/resume_url あり（Excel添付の可能性が高い）の内訳
+  SUM(CASE WHEN drive_url IS NOT NULL OR resume_url IS NOT NULL THEN 1 ELSE 0 END) AS has_drive_link,
+  SUM(CASE WHEN (drive_url IS NOT NULL OR resume_url IS NOT NULL)
+            AND raw_profile ? 'skillYears'
+            AND raw_profile->'skillYears' != '{}'::jsonb THEN 1 ELSE 0 END) AS drive_with_skill_years
+FROM candidates
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days';
+```
+
+- `skill_years_pct` が **10% 未満** であれば「低取得率」として 11-2 へ進む
+- `has_drive_link` が多いのに `drive_with_skill_years` が少ない場合 → Excel フォーマット未対応の可能性大
+
+### 11-2. 未取得サンプルの確認（スキル10件以上なのに skillYears なし）
+
+スキルが多く抽出されているのに skillYears がない候補者は Excel 添付がある可能性が高い。
+
+```sql
+SELECT
+  id, name,
+  jsonb_array_length(skills) AS skill_count,
+  drive_url IS NOT NULL AS has_drive,
+  resume_url IS NOT NULL AS has_resume,
+  LEFT(raw_profile->>'text', 500) AS body_head
+FROM candidates
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days'
+  AND (NOT (raw_profile ? 'skillYears') OR raw_profile->'skillYears' = '{}'::jsonb)
+  AND jsonb_array_length(skills) >= 10
+ORDER BY skill_count DESC, created_at DESC
+LIMIT 10;
+```
+
+- `body_head` を確認し、Excel 添付があったかどうか・経験年数の書き方を調査する
+- 未対応フォーマットのパターンを特定したら `extractSkillYearsFromSheetData` の修正候補を提示
+- ユーザー確認後に `inbound-email/index.ts` を修正 → `bash scripts/check-and-deploy-edge.sh inbound-email`
+
+### 11-3. 取得できているサンプルの確認（正常ケースの把握）
+
+```sql
+SELECT
+  id, name,
+  jsonb_array_length(skills) AS skill_count,
+  raw_profile->'skillYears' AS skill_years
+FROM candidates
+WHERE data_env = 'prod'
+  AND created_at > now() - interval '14 days'
+  AND raw_profile ? 'skillYears'
+  AND raw_profile->'skillYears' != '{}'::jsonb
+ORDER BY created_at DESC
+LIMIT 5;
+```
+
+- `skill_years` の中身を確認し、スキル名と年数が正しく対応しているか確認する
+- `_totalProjectMonths` キーが含まれている場合は Method 1（案件一覧形式）で取得済み
+
+### 11-4. skillYears の仕組み（参考）
+
+| Method | シート形式 | 取得条件 |
+|---|---|---|
+| Method 1 | 案件一覧（期間列あり） | 「期間」「PJ期間」等の列 + 「年」「ヶ月」形式の値がある |
+| Method 2 | スキルリスト（経験年数列あり） | スキル名 + 隣接セルに「N年Mヶ月」または数値がある |
+
+- `parseDurationToMonths` が `> 50年` をガード → 西暦年（2020年等）の誤マッチは除外済み
+- `SKILL_LABEL_BLOCKLIST` で「自己PR」「氏名」等のセクションヘッダーは除外済み
+- 未対応の主なパターン: 「経験年数」列の値が「3」等の数値のみ（単位なし）
+
+---
+
+## ⑫ 抽出ロジック回帰テスト
 
 品質チェックの最後に必ず実行する。
 
