@@ -1334,7 +1334,7 @@ function extractCandidateFieldsRegex(
     if (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation)
       || nearestStation.includes('イニシャル')
       || nearestStation.includes('最寄駅')
-      || /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|スキル|経験|希望|現住所|住所|氏名|年齢|性別|国籍|連絡先)$/.test(nearestStation)) {
+      || /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|スキル|経験|希望|現住所|住所|氏名|年齢|性別|国籍|連絡先|所属|担当|役職)$/.test(nearestStation)) {
       nearestStation = null
     }
     // 「西武池袋線　飯能駅」→「飯能駅」（路線名+スペース+駅名 → 駅名だけ取る）
@@ -2966,6 +2966,8 @@ Deno.serve(async (req: Request) => {
         '下記案件にて要員を募集',
         '下記の案件で要員を募集',
         '案件にて技術者を募集',
+        // 注力案件の紹介メールが人材boxに届くパターン
+        '注力している案件',
       ]
       // 営業・広告・メルマガメールのスキップ（研修販売・サービス紹介等）
       const COMMERCIAL_SOLICITATION_KEYWORDS = [
@@ -2998,6 +3000,8 @@ Deno.serve(async (req: Request) => {
         '勤務明細書を提出', '客先向けの勤務表', 'SAP Fieldglass',
         // 案件メールが人材boxに誤配信されるパターン
         '支払いサイト', '【案件名】',
+        // 採用動画・パスワード通知等のDM
+        '採用動画', 'パスワードのご連絡',
       ]
       // 件名ベースのスキップキーワード（業務連絡・勤務表・発注書・打合せ等）
       const SUBJECT_SKIP_KEYWORDS = [
@@ -3009,6 +3013,8 @@ Deno.serve(async (req: Request) => {
         // 業務連絡・通知系（人材メールboxへの誤配信・2026-05-29追加）
         '作業依頼書', 'コラボレーション依頼',
         'failure notice',  // MAILER-DAEMON配信失敗通知
+        // 給与・経費・許可証等の業務連絡
+        '控除について', '稼働時間について', '請求関連', '許可証',
       ]
       const isTraining = TRAINING_KEYWORDS.some(kw => body.includes(kw))
       const isSolicitation = PROJECT_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))
