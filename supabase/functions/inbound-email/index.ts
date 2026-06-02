@@ -1132,6 +1132,7 @@ function extractCandidateFieldsRegex(
   // 「■C-TN（44歳 / 男性）」のようにラベルなしで氏名・年齢・性別が記載されている場合
   // name/age/gender のいずれかが未取得なら全文スキャンで補完する
   let name: string | null = nameStripped || null
+  let bracketStation: string | null = null
   if (!name || age === null || gender === null) {
     const allTextForName = bodyText + '\n' + attachText
     // 行頭デコレータ（任意）＋名前＋（年齢 / 性別）パターン — 年齢先
@@ -1140,6 +1141,9 @@ function extractCandidateFieldsRegex(
     const noLabelPatGF = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([^\d\s　（(\n【]{1,20})[ 　]?[（(](男性|女性|男|女)[ 　]*[/／][ 　]*(\d{2})[才歳][）)]/m
     const nlM = allTextForName.match(noLabelPat)
     const nlMGF = !nlM ? allTextForName.match(noLabelPatGF) : null
+    // 【YY、46歳、男性、馬橋駅、弊社正社員】 形式（全情報をカンマ区切りで1行に記載）
+    const bracketPat = /【([^\d、,】]{1,15})、(\d{1,3})[才歳]、(男性|女性)、([^、】]{2,20}?)(?:、[^】]*)?】/
+    const nlBracket = (!nlM && !nlMGF) ? allTextForName.match(bracketPat) : null
     if (nlM) {
       // [氏名]OY のような半角ブラケットラベル前置きを除去
       if (!name)           name   = (nlM[1].trim().replace(/^\[[^\]]{1,10}\]/, '') || null)
@@ -1149,6 +1153,12 @@ function extractCandidateFieldsRegex(
       if (!name)           name   = (nlMGF[1].trim().replace(/^\[[^\]]{1,10}\]/, '') || null)
       if (gender === null) gender = nlMGF[2]
       if (age === null)    age    = parseInt(nlMGF[3], 10)
+    } else if (nlBracket) {
+      if (!name)           name   = nlBracket[1].trim() || null
+      if (age === null)    age    = parseInt(nlBracket[2], 10)
+      if (gender === null) gender = nlBracket[3]
+      // 4番目の要素が駅名であれば nearestStation にも設定（後でoverrideされる可能性あり）
+      if (nlBracket[4]?.includes('駅')) bracketStation = nlBracket[4].trim()
     }
   }
 
@@ -1314,6 +1324,8 @@ function extractCandidateFieldsRegex(
     30,
     2,
   )
+  // 【YY、46歳、男性、馬橋駅、...】形式から取得した駅名をフォールバックとして適用
+  if (!nearestStation && bracketStation) nearestStation = bracketStation
   // ラベルなしフォールバック: 「○○駅徒歩N分」や「○○駅 」
   if (!nearestStation) {
     const allText = bodyText + '\n' + attachText

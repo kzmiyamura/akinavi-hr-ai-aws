@@ -199,12 +199,15 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     }
   }
   let name = nameStripped || null
+  let bracketStation = null
   if (!name || age === null || gender === null) {
     const allTextForName = bodyText + '\n' + attachText
     const noLabelPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([^\d\s　（(\n【]{1,20})[ 　]?[（(](\d{2})[才歳][ 　]*[/／：: ][ 　]*(男性|女性|男|女)(?:[/／][^)）]*)?[）)]/m
     const noLabelPatGF = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([^\d\s　（(\n【]{1,20})[ 　]?[（(](男性|女性|男|女)[ 　]*[/／][ 　]*(\d{2})[才歳][）)]/m
     const nlM = allTextForName.match(noLabelPat)
     const nlMGF = !nlM ? allTextForName.match(noLabelPatGF) : null
+    const bracketPat = /【([^\d、,】]{1,15})、(\d{1,3})[才歳]、(男性|女性)、([^、】]{2,20}?)(?:、[^】]*)?】/
+    const nlBracket = (!nlM && !nlMGF) ? allTextForName.match(bracketPat) : null
     if (nlM) {
       if (!name)           name   = nlM[1].trim().replace(/^\[[^\]]{1,10}\]/, '') || null
       if (age === null)    age    = parseInt(nlM[2], 10)
@@ -213,6 +216,11 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
       if (!name)           name   = nlMGF[1].trim().replace(/^\[[^\]]{1,10}\]/, '') || null
       if (gender === null) gender = nlMGF[2]
       if (age === null)    age    = parseInt(nlMGF[3], 10)
+    } else if (nlBracket) {
+      if (!name)           name   = nlBracket[1].trim() || null
+      if (age === null)    age    = parseInt(nlBracket[2], 10)
+      if (gender === null) gender = nlBracket[3]
+      bracketStation = nlBracket[4]?.includes('駅') ? nlBracket[4].trim() : null
     }
   }
   if (!nationality) {
@@ -313,6 +321,7 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     v => { const c = v.replace(/（[^）]*）.*$/, '').trim(); return /[駅線]$/.test(c) || c.length <= 10 },
     30, 2,
   )
+  if (!nearestStation && bracketStation) nearestStation = bracketStation
   if (!nearestStation) {
     const allText = bodyText + '\n' + attachText
     const m = allText.match(/([^\s,、。（）「」【】\t]{1,10}駅)(?:[\s　_\-）」】徒歩]|$)/)
