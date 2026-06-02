@@ -1325,15 +1325,16 @@ function extractCandidateFieldsRegex(
   if (nearestStation) {
     // 路線名カッコを除去: 「綾瀬駅（東京メトロ千代田線 / JR常磐線）」→「綾瀬駅」
     nearestStation = nearestStation.replace(/（[^）]*）.*$/, '').trim()
-    // 路線名スラッシュ区切りを除去: 「JR京浜東北線／蕨駅」「相鉄線／西谷駅」→「蕨駅」「西谷駅」
-    nearestStation = nearestStation.replace(/^.+[/／]/, '').trim()
+    // 路線名スラッシュ・中点区切りを除去: 「JR京浜東北線／蕨駅」「西武池袋線・東長崎駅」→「蕨駅」「東長崎駅」
+    nearestStation = nearestStation.replace(/^.+[/／・]/, '').trim()
     // 「最寄：北13条東駅」のようにコロン区切りで前半がラベルの場合、後半だけ取る
     const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
     if (colonMatch) nearestStation = colonMatch[1].trim()
-    // ラベルそのものや template text は除外
+    // ラベルそのものや template text・セクション見出しは除外
     if (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation)
       || nearestStation.includes('イニシャル')
-      || nearestStation.includes('最寄駅')) {
+      || nearestStation.includes('最寄駅')
+      || /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|スキル|経験|希望|現住所|住所|氏名|年齢|性別|国籍|連絡先)$/.test(nearestStation)) {
       nearestStation = null
     }
     // 「西武池袋線　飯能駅」→「飯能駅」（路線名+スペース+駅名 → 駅名だけ取る）
