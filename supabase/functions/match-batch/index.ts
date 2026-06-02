@@ -302,32 +302,34 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
   const locationScore = Math.round(locRatio * wLoc)
 
   // ── リモート対応 ──
+  // 案件側にリモート記載があるか（フルリモート含む）
+  const projectHasRemote = isFullRemote || /リモート|remote|在宅/i.test(project.remotePolicy ?? '')
   let remoteScore = 0
   let remoteDetail: string
-  if (!isFullRemote && candidate.remoteAvailable && /リモート|remote|在宅/i.test(project.remotePolicy ?? '')) {
+  if (candidate.wantsFullRemote && !projectHasRemote) {
+    // フルリモート希望なのに常駐・リモートなし案件 → 減点
+    remoteScore = -wRemote
+    remoteDetail = `リモート-${wRemote}/${wRemote}(フルリモート希望・常駐案件)`
+  } else if (!isFullRemote && candidate.remoteAvailable && /リモート|remote|在宅/i.test(project.remotePolicy ?? '')) {
+    // リモート可 × 週リモート案件 → 加点
     remoteScore = wRemote
     remoteDetail = `リモート${wRemote}/${wRemote}(可・週リモート案件)`
-  } else if (candidate.remoteAvailable) {
-    remoteScore = 0
-    remoteDetail = `リモート0/${wRemote}(可だがフルリモート案件のため対象外)`
+  } else if (candidate.remoteAvailable == null) {
+    // リモート可否不明 → 中間点
+    remoteScore = Math.round(wRemote * 0.5)
+    remoteDetail = `リモート${Math.round(wRemote * 0.5)}/${wRemote}(可否不明)`
   } else {
     remoteScore = 0
-    remoteDetail = `リモート0/${wRemote}(不可)`
+    remoteDetail = `リモート0/${wRemote}(${candidate.remoteAvailable ? '可・案件リモートなし' : '不可'})`
   }
 
-  let total = Math.min(wSkill + wExp + wRate + wLoc + wRemote, cappedSkillScore + expScore + rateScore + locationScore + remoteScore)
+  let total = Math.max(0, Math.min(wSkill + wExp + wRate + wLoc + wRemote, cappedSkillScore + expScore + rateScore + locationScore + remoteScore))
   // 必須スキルが1件以上あってかつ1件も合致しない場合は上限35ptに制限
   // （スキル全不一致なのに経験年数・単価・勤務地が良い人材が上位に来るのを防ぐ）
   if (required.length > 0 && hits === 0) {
     total = Math.min(total, 35)
   }
-  // フルリモート希望の人材が常駐・リモートなし案件にマッチングされるのを防ぐ
-  // 案件がフルリモートでも部分リモートでもない場合、上限30ptでキャップ
-  const projectHasRemote = isFullRemote || /リモート|remote|在宅/i.test(project.remotePolicy ?? '')
-  if (candidate.wantsFullRemote && !projectHasRemote) {
-    total = Math.min(total, 30)
-  }
-  const fullRemoteNote = (candidate.wantsFullRemote && !projectHasRemote) ? ' [フルリモート希望・常駐案件のため30pt上限]' : ''
+  const fullRemoteNote = (candidate.wantsFullRemote && !projectHasRemote) ? ' [フルリモート希望・常駐案件]' : ''
   const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt${fullRemoteNote}`
 
   return { total, breakdown }
