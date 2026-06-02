@@ -202,11 +202,17 @@ export async function fetchCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
     .select('*')
     .eq('data_env', dataEnv)
     .is('merged_into', null)
-    .order('updated_at', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(500)
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
-  return (data ?? []) as Candidate[]
+  // emailReceivedAt（raw_profile内）がある場合はそれを優先して降順ソート
+  const rows = (data ?? []) as Candidate[]
+  return rows.sort((a, b) => {
+    const aDate = (a.raw_profile as Record<string, unknown>)?.emailReceivedAt as string | null ?? a.created_at ?? ''
+    const bDate = (b.raw_profile as Record<string, unknown>)?.emailReceivedAt as string | null ?? b.created_at ?? ''
+    return bDate.localeCompare(aDate)
+  })
 }
 
 /** 人材を100件ずつページ取得 */
@@ -216,7 +222,7 @@ export async function fetchCandidatesPage(dataEnv: DataEnv, offset: number, limi
     .select('*')
     .eq('data_env', dataEnv)
     .is('merged_into', null)
-    .order('updated_at', { ascending: false })
+    .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
