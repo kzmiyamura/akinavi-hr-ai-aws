@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail, SlidersHorizontal, RotateCcw } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
+import { CandidateProfileFields } from './CandidatePage'
 import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates, DEFAULT_SCORING_WEIGHTS } from '../lib/db/candidates'
 import type { ScoringWeights } from '../lib/db/candidates'
 import { logError } from '../lib/errorLog'
@@ -1954,6 +1955,12 @@ const { data: projects = [] } = useQuery({
                         </button>
                       </div>
                     </div>
+
+                    {/* プロフィール詳細（CandidatePage と同等の情報） */}
+                    <div className="bg-white border border-gray-100 rounded-lg p-3">
+                      <CandidateProfileFields c={selectedCandidate} isExpanded detailMode />
+                    </div>
+
                     {matchByCandidateMutation.isPending && matchByCandidateMutation.variables === selectedCandidate.id && matchRunProgress && (
                       <p className="text-xs text-blue-700 bg-blue-50 rounded px-3 py-2">
                         {formatMatchRunProgressLine(matchRunProgress)}
