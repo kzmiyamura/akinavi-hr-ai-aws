@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail, SlidersHorizontal, RotateCcw } from 'lucide-react'
+import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail, SlidersHorizontal, RotateCcw, Reply, ExternalLink } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { CandidateProfileFields } from './CandidatePage'
 import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates, DEFAULT_SCORING_WEIGHTS } from '../lib/db/candidates'
@@ -1902,64 +1902,100 @@ const { data: projects = [] } = useQuery({
                     >
                       ← 一覧に戻る
                     </button>
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <div className="min-w-0 flex-1">
-                        <h3 className="text-base font-semibold text-gray-800 break-words">{selectedCandidate.name}</h3>
-                        {selectedCandidate.email && (
-                          <p className="text-xs text-gray-500 mt-0.5 break-all">{selectedCandidate.email}</p>
-                        )}
-                        {(() => {
-                          const rp = selectedCandidate.raw_profile as Record<string, unknown>
-                          const from = rp?.from as string | null
-                          const receivedAt = rp?.emailReceivedAt as string | null
-                          const rawText = rp?.text as string | null
-                          return (
-                            <>
-                              {from && <p className="text-[10px] text-gray-400 mt-0.5 break-all">{from}{receivedAt && ` ／ ${new Date(receivedAt).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`}</p>}
-                              {selectedCandidate.drive_url && (
-                                <a href={toViewerUrl(selectedCandidate.drive_url)} target="_blank" rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-1">
-                                  <FileText size={11} />経歴書
+                    {/* ヘッダー: 名前・タグ・ボタン群（CandidatePage の右パネルと同等） */}
+                    {(() => {
+                      const rp = selectedCandidate.raw_profile as Record<string, unknown>
+                      const from = rp?.from as string | null
+                      const rawText = rp?.text as string | null
+                      const subject = rp?.subject as string | null
+                      const receivedAt = rp?.emailReceivedAt as string | null
+                      const desiredRate = (selectedCandidate as unknown as { desired_rate?: string }).desired_rate
+                      const fromCompany = (selectedCandidate as unknown as { from_company?: string }).from_company
+                      const resumeLink = selectedCandidate.drive_url || selectedCandidate.resume_url || (() => {
+                        const m = (rawText ?? '').match(/https:\/\/drive\.google\.com\/[^\s"'<>\]）]+/)
+                        return m ? m[0] : null
+                      })()
+                      return (
+                        <>
+                          <div className="flex items-start justify-between gap-3 flex-wrap">
+                            <div className="min-w-0">
+                              <h3 className="text-base font-semibold text-gray-800 break-words">{selectedCandidate.name}</h3>
+                              <div className="flex flex-wrap gap-2 mt-1">
+                                {fromCompany && (
+                                  <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">{fromCompany}</span>
+                                )}
+                                {desiredRate && (
+                                  <span className="text-xs text-green-700 bg-green-50 rounded px-2 py-0.5 font-medium">{desiredRate}</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              {resumeLink && (
+                                <a href={toViewerUrl(resumeLink)} target="_blank" rel="noopener noreferrer"
+                                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors">
+                                  <ExternalLink size={13} />経歴書
                                 </a>
                               )}
-                              {rawText && (
-                                <CandidateRawEmailToggle rawText={rawText} />
+                              {from && (() => {
+                                const reSubject = encodeURIComponent(`Re: ${subject ?? ''}`)
+                                const quoted = encodeURIComponent([
+                                  '', '',
+                                  '--- 元のメッセージ ---',
+                                  `差出人: ${from}`,
+                                  `件名: ${subject ?? ''}`,
+                                  receivedAt ? `日時: ${new Date(receivedAt).toLocaleString('ja-JP')}` : '',
+                                  '',
+                                  (rawText ?? '').slice(0, 800),
+                                  (rawText ?? '').length > 800 ? '\n...[以下省略]' : '',
+                                ].join('\n'))
+                                return (
+                                  <a href={`mailto:${from}?subject=${reSubject}&body=${quoted}`}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                                    title="返信（元メール引用）">
+                                    <Reply size={13} />返信
+                                  </a>
+                                )
+                              })()}
+                              {onOpenCandidateDetail && (
+                                <button type="button"
+                                  onClick={() => onOpenCandidateDetail(selectedCandidate.id)}
+                                  className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors">
+                                  詳細ページ
+                                </button>
                               )}
-                            </>
-                          )
-                        })()}
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {onOpenCandidateDetail && (
-                          <button
-                            type="button"
-                            onClick={() => onOpenCandidateDetail(selectedCandidate.id)}
-                            className="px-3 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
-                          >
-                            詳細ページ
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMessage(null)
-                            matchByCandidateMutation.mutate(selectedCandidate.id)
-                          }}
-                          disabled={projectList.length === 0 || busy}
-                          className="inline-flex items-center gap-1.5 bg-blue-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {matchByCandidateMutation.isPending && matchByCandidateMutation.variables === selectedCandidate.id
-                            ? <Loader2 size={13} className="animate-spin" />
-                            : <RefreshCw size={13} />}
-                          再実行
-                        </button>
-                      </div>
-                    </div>
+                              <button type="button"
+                                onClick={() => { setMessage(null); matchByCandidateMutation.mutate(selectedCandidate.id) }}
+                                disabled={projectList.length === 0 || busy}
+                                className="inline-flex items-center gap-1.5 bg-blue-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                                {matchByCandidateMutation.isPending && matchByCandidateMutation.variables === selectedCandidate.id
+                                  ? <Loader2 size={13} className="animate-spin" />
+                                  : <RefreshCw size={13} />}
+                                再実行
+                              </button>
+                            </div>
+                          </div>
 
-                    {/* プロフィール詳細（CandidatePage と同等の情報） */}
-                    <div className="bg-white border border-gray-100 rounded-lg p-3">
-                      <CandidateProfileFields c={selectedCandidate} isExpanded detailMode />
-                    </div>
+                          {/* プロフィール詳細（CandidatePage 右パネルと同等） */}
+                          <CandidateProfileFields c={selectedCandidate} isExpanded detailMode />
+
+                          {/* 元メール本文 */}
+                          {rawText?.trim() && (
+                            <details className="border border-gray-200 rounded-lg">
+                              <summary className="px-3 py-2 text-xs font-medium text-gray-500 cursor-pointer select-none hover:bg-gray-50 rounded-lg">
+                                元メール本文
+                              </summary>
+                              <div className="px-3 pb-3 pt-1">
+                                {subject && <p className="text-xs text-gray-400 mb-1">件名: {subject}</p>}
+                                {from && <p className="text-xs text-gray-400 mb-2">差出人: {from}</p>}
+                                <pre className="text-xs text-gray-700 whitespace-pre-wrap break-words leading-relaxed bg-gray-50 rounded p-2 max-h-96 overflow-y-auto">
+                                  {rawText}
+                                </pre>
+                              </div>
+                            </details>
+                          )}
+                        </>
+                      )
+                    })()}
 
                     {matchByCandidateMutation.isPending && matchByCandidateMutation.variables === selectedCandidate.id && matchRunProgress && (
                       <p className="text-xs text-blue-700 bg-blue-50 rounded px-3 py-2">
