@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Pencil, Loader2 } from 'lucide-react'
+import { ArrowLeft, Pencil, Loader2, ExternalLink, Reply } from 'lucide-react'
 import { fetchCandidateById } from '../lib/db/candidates'
 import { CandidateProfileFields, CandidateEditModal } from './CandidatePage'
+import { toViewerUrl } from '../lib/viewerUrl'
 import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
@@ -48,6 +49,55 @@ export function CandidateDetailPage({ candidateId, nickname, dataEnv, onBack }: 
           <ArrowLeft size={16} />
           戻る
         </button>
+        {candidate && (() => {
+          const rp = candidate.raw_profile as Record<string, unknown>
+          const rawText = rp?.text as string | null
+          const from = rp?.from as string | null
+          const subject = rp?.subject as string | null
+          const receivedAt = rp?.emailReceivedAt as string | null
+          const resumeLink = candidate.drive_url || candidate.resume_url || (() => {
+            const m = (rawText ?? '').match(/https:\/\/drive\.google\.com\/[^\s"'<>\]）]+/)
+            return m ? m[0] : null
+          })()
+          return (
+            <>
+              {resumeLink && (
+                <a
+                  href={toViewerUrl(resumeLink)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 text-sm border border-blue-200 rounded-lg px-4 py-2 text-blue-600 hover:bg-blue-50 transition-colors"
+                >
+                  <ExternalLink size={15} />
+                  経歴書
+                </a>
+              )}
+              {from && (() => {
+                const reSubject = encodeURIComponent(`Re: ${subject ?? ''}`)
+                const quoted = encodeURIComponent([
+                  '', '',
+                  '--- 元のメッセージ ---',
+                  `差出人: ${from}`,
+                  `件名: ${subject ?? ''}`,
+                  receivedAt ? `日時: ${new Date(receivedAt).toLocaleString('ja-JP')}` : '',
+                  '',
+                  (rawText ?? '').slice(0, 800),
+                  (rawText ?? '').length > 800 ? '\n...[以下省略]' : '',
+                ].join('\n'))
+                return (
+                  <a
+                    href={`mailto:${from}?subject=${reSubject}&body=${quoted}`}
+                    className="inline-flex items-center gap-2 text-sm border border-gray-200 rounded-lg px-4 py-2 text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                    title="返信（元メール引用）"
+                  >
+                    <Reply size={15} />
+                    返信
+                  </a>
+                )
+              })()}
+            </>
+          )
+        })()}
         {candidate && (
           <button
             type="button"
