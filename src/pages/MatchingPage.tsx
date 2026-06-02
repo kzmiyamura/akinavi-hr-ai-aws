@@ -1455,13 +1455,31 @@ const { data: projects = [] } = useQuery({
                 <span className="text-xs font-mono text-blue-700 w-8 text-right shrink-0">{scoringWeights[key]}pt</span>
               </div>
             ))}
-            <button
-              type="button"
-              onClick={() => setScoringWeights({ ...DEFAULT_SCORING_WEIGHTS })}
-              className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 transition-colors"
-            >
-              <RotateCcw size={11} />デフォルトに戻す（スキル40/経験15/単価15/勤務地20/リモート10）
-            </button>
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setScoringWeights({ ...DEFAULT_SCORING_WEIGHTS })}
+                className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded px-2 py-1 transition-colors"
+              >
+                <RotateCcw size={11} />標準
+              </button>
+              <button
+                type="button"
+                onClick={() => setScoringWeights({ skill: 30, exp: 10, rate: 10, location: 40, remote: 10 })}
+                className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 border border-blue-200 rounded px-2 py-1 transition-colors"
+                title="大阪・地方案件など勤務地を重視する場合"
+              >
+                📍 地域重視
+              </button>
+              <button
+                type="button"
+                onClick={() => setScoringWeights({ skill: 55, exp: 15, rate: 15, location: 10, remote: 5 })}
+                className="inline-flex items-center gap-1.5 text-xs text-purple-600 hover:text-purple-800 border border-purple-200 rounded px-2 py-1 transition-colors"
+                title="スキルの一致度を最優先する場合"
+              >
+                🔧 スキル重視
+              </button>
+            </div>
           </div>
         )}
       </div>
