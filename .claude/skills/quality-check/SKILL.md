@@ -393,7 +393,23 @@ WHERE data_env = 'prod'
 - `skill_years_pct` が **10% 未満** であれば「低取得率」として 11-2 へ進む
 - `has_drive_link` が多いのに `drive_with_skill_years` が少ない場合 → Excel フォーマット未対応の可能性大
 
-### 11-2. 未取得サンプルの確認（スキル10件以上なのに skillYears なし）
+### 11-2. Edge Function ログで直接確認
+
+Supabase Dashboard → Functions → inbound-email → Logs で以下のキーワードを検索する。
+
+| キーワード | 意味 |
+|---|---|
+| `[Excel-raw]` | シートの生データ（先頭50行・2000文字チャンク）。何が来ているか確認できる |
+| `[skillYears]` | 取得成功。`keys=` にスキル名リストが出る |
+| `[skillYears-miss]` | 取得失敗。`head=` に先頭3行×8列が出るのでフォーマットを診断できる |
+
+**`[skillYears-miss]` の診断手順:**
+1. `head=` の内容を見て列構成を確認する
+2. 「使用言語」「FW」「ツール」列ヘッダーがあるか → Method 1 の対象
+3. スキル名と年数が同行にあるか → Method 2 の対象
+4. どちらにも当てはまらない新フォーマットなら `extractSkillYearsFromSheetData` に新ケースを追加
+
+### 11-3. 未取得サンプルの確認（スキル10件以上なのに skillYears なし）
 
 スキルが多く抽出されているのに skillYears がない候補者は Excel 添付がある可能性が高い。
 

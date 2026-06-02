@@ -2179,18 +2179,30 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       // テキスト抽出
       const csv = XLSX.utils.sheet_to_csv(sheet)
       if (csv.trim()) texts.push(`--- シート: ${sheetName} ---\n${cleanseExcelCsv(csv)}`)
+      // 生データ（2D配列）取得 → ログ → skillYears 抽出
+      const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as string[][]
+      // raw データを最大50行・2000文字チャンクでログ（品質チェック用）
+      const rawJson = JSON.stringify(data.slice(0, 50))
+      const CHUNK = 2000
+      const totalChunks = Math.ceil(rawJson.length / CHUNK)
+      for (let ci = 0; ci < totalChunks; ci++) {
+        console.log(`[Excel-raw] sheet="${sheetName}" chunk=${ci + 1}/${totalChunks} rows=${data.length} ${rawJson.slice(ci * CHUNK, (ci + 1) * CHUNK)}`)
+      }
       // skillYears 抽出（最初に見つかったシートで確定）
       if (Object.keys(skillYears).length === 0) {
-        const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as string[][]
         const sy = extractSkillYearsFromSheetData(data)
         if (Object.keys(sy).length > 0) {
-          console.log(`[skillYears] sheet=${sheetName} skills=${Object.keys(sy).length}`)
+          console.log(`[skillYears] sheet="${sheetName}" skills=${Object.keys(sy).length} keys=${JSON.stringify(Object.keys(sy).slice(0, 10))}`)
           skillYears = sy
+        } else {
+          // 取れなかった場合は先頭3行・8列をログして診断できるようにする
+          const headRows = data.slice(0, 3).map(r => r.slice(0, 8))
+          console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${data.length} cols=${data[0]?.length ?? 0} head=${JSON.stringify(headRows)}`)
         }
       }
     }
     const text = texts.join('\n\n')
-    console.log(`[Excel] 抽出完了 totalLen=${text.length}`)
+    console.log(`[Excel] 抽出完了 totalLen=${text.length} sheets=${sortedNames.slice(0, 3).join(',')} skillYearsKeys=${Object.keys(skillYears).length}`)
     return { text, skillYears }
   } catch (e) {
     console.warn('[Excel] 抽出失敗', e)
