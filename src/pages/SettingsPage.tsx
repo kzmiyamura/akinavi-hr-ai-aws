@@ -616,7 +616,7 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
               value={ownDomainInput}
               onChange={e => setOwnDomainInput(e.target.value)}
               placeholder="例: i-voice.co.jp（未設定で無効）"
-              className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-base font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
             <button
               type="button"
