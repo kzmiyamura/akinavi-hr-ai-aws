@@ -2031,7 +2031,12 @@ function parseDurationToMonths(text: string): number | null {
   let months = 0
   const yearMatch = t.match(/(\d+)\s*年/)
   const monthMatch = t.match(/(\d+)\s*[ヶか]月/)
-  if (yearMatch) months += parseInt(yearMatch[1]) * 12
+  if (yearMatch) {
+    const y = parseInt(yearMatch[1])
+    // 50年超は西暦年（例: 2020年）の誤マッチとして無視
+    if (y > 50) return null
+    months += y * 12
+  }
   if (monthMatch) months += parseInt(monthMatch[1])
   return months > 0 ? months : null
 }
@@ -2118,6 +2123,8 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
     }
   }
   // ── Method 2: スキル一覧型 ──
+  // セクション見出し語（スキル名として誤採用しないもの）
+  const SKILL_LABEL_BLOCKLIST = /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|勤務先|担当|役割|役職|所属|評価|合計|スコア|レベル|備考欄|担当工程|プロジェクト名|案件名|企業名|会社名|規模|人数|期間|開始|終了|備考・コメント)$/
   const skillMonths2: Record<string, number> = {}
   for (const row of data) {
     if (!row || row.length < 2) continue
@@ -2127,7 +2134,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       for (let k = Math.max(0, j - 3); k <= Math.min(row.length - 1, j + 3); k++) {
         if (k === j) continue
         const candidate = String(row[k] ?? '').trim()
-        if (candidate.length >= 2 && !/^\d+$/.test(candidate) && !/^[\s\-－◎○●▲×]+$/.test(candidate)) {
+        if (candidate.length >= 2 && !/^\d+$/.test(candidate) && !/^[\s\-－◎○●▲×]+$/.test(candidate) && !SKILL_LABEL_BLOCKLIST.test(candidate)) {
           skillMonths2[candidate] = Math.max(skillMonths2[candidate] ?? 0, months)
           break
         }
