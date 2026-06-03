@@ -2105,11 +2105,11 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   let langColIdx = -1
   let fwColIdx = -1
   let headerRowIdx = -1
-  for (let i = 0; i < Math.min(40, data.length); i++) {
+  for (let i = 0; i < Math.min(60, data.length); i++) {
     const row = data[i]
     for (let j = 0; j < row.length; j++) {
       const v = String(row[j] ?? '').trim()
-      if ((v.includes('使用言語') || v === '言語') && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
+      if ((v.includes('使用言語') || v === '言語' || v.includes('使用技術') || v.includes('技術スタック') || v === '技術' || v === '言語/技術') && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
       if ((v.includes('FW') || v.includes('ツール') || v.includes('フレームワーク') || v.includes('ミドル')) && fwColIdx < 0) fwColIdx = j
     }
     if (langColIdx >= 0) break
@@ -2145,6 +2145,41 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       return skillMonths
     }
   }
+  // ── Method 3: スキル一覧型（経験年数列が数値のみ） ──
+  // 例: "スキル名 | 5 | ◎" のように経験年数が整数で表現されている形式
+  {
+    const EXP_YEAR_HEADER = /^(経験年数|経験年|経験\(年\)|年数|年|Years?|Exp\.?)$/i
+    const SKILL_COL_HEADER = /^(スキル名?|技術名?|使用技術|言語|技術スタック|item|技術項目)$/i
+    let expYrCol = -1
+    let skillCol3 = -1
+    let hdrRow3 = -1
+    for (let i = 0; i < Math.min(60, data.length); i++) {
+      const row = data[i]
+      for (let j = 0; j < row.length; j++) {
+        const v = String(row[j] ?? '').trim()
+        if (EXP_YEAR_HEADER.test(v) && expYrCol < 0) { expYrCol = j; hdrRow3 = i }
+        if (SKILL_COL_HEADER.test(v) && skillCol3 < 0) skillCol3 = j
+      }
+      if (expYrCol >= 0 && skillCol3 >= 0) break
+    }
+    if (expYrCol >= 0 && skillCol3 >= 0 && skillCol3 !== expYrCol) {
+      const SM3: Record<string, number> = {}
+      const BLOCKLIST3 = /^(自己PR|PR|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|担当|役割|評価|合計|スコア|レベル|プロジェクト名|企業名|規模|人数|期間|開始|終了)$/
+      for (let i = hdrRow3 + 1; i < data.length; i++) {
+        const row = data[i]
+        const expRaw = String(row[expYrCol] ?? '').trim()
+        // 数値のみを年数として解釈（"5" → 60ヶ月、"2.5" → 30ヶ月）
+        const yearsNum = parseFloat(expRaw)
+        if (isNaN(yearsNum) || yearsNum <= 0 || yearsNum > 50) continue
+        const skillName = String(row[skillCol3] ?? '').trim()
+        if (!skillName || skillName.length < 2 || /^\d+$/.test(skillName) || BLOCKLIST3.test(skillName)) continue
+        const months = Math.round(yearsNum * 12)
+        SM3[skillName] = Math.max(SM3[skillName] ?? 0, months)
+      }
+      if (Object.keys(SM3).length > 0) return SM3
+    }
+  }
+
   // ── Method 2: スキル一覧型 ──
   // セクション見出し語（スキル名として誤採用しないもの）
   const SKILL_LABEL_BLOCKLIST = /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|勤務先|担当|役割|役職|所属|評価|合計|スコア|レベル|備考欄|担当工程|プロジェクト名|案件名|企業名|会社名|規模|人数|期間|開始|終了|備考・コメント)$/
