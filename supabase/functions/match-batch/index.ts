@@ -51,7 +51,7 @@ interface CandidateInput {
   name: string
   skills: string[]
   experienceYears: number | null
-  desiredRate: string | null
+  desiredRate: string | number | null
   summary: string
   remoteAvailable?: boolean | null
   wantsFullRemote?: boolean | null
@@ -117,9 +117,10 @@ function getRegion(prefCore: string): string | null {
 
 // ─── ルールベーススコアリング ─────────────────────────────────────────────────
 
-/** 希望単価文字列を月額万円に変換 */
-function parseRateWan(rate: string | null | undefined): number | null {
-  if (!rate) return null
+/** 希望単価（文字列 or 数値）を月額万円に変換 */
+function parseRateWan(rate: string | number | null | undefined): number | null {
+  if (rate == null) return null
+  if (typeof rate === 'number') return rate > 0 ? rate : null
   const m = rate.match(/(\d+(?:\.\d+)?)[\s　]*万/)
   return m ? parseFloat(m[1]) : null
 }

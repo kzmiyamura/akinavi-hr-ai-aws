@@ -1131,7 +1131,8 @@ function extractCandidateFieldsRegex(
   // ── ラベルなし 名前+年齢+性別 フォールバック ─────────────────────
   // 「■C-TN（44歳 / 男性）」のようにラベルなしで氏名・年齢・性別が記載されている場合
   // name/age/gender のいずれかが未取得なら全文スキャンで補完する
-  let name: string | null = nameStripped || null
+  // 数字のみになった名前は不明扱い（例: 氏名：0004 → null）(#67)
+  let name: string | null = (nameStripped && !/^\d+$/.test(nameStripped)) ? nameStripped : null
   let bracketStation: string | null = null
   if (!name || age === null || gender === null) {
     const allTextForName = bodyText + '\n' + attachText
@@ -1178,6 +1179,11 @@ function extractCandidateFieldsRegex(
   }
   // 国籍除去後のnameStrippedで上書き（フォールバックで取得済みなら維持）
   name = name || nameStripped || null
+  // ※XX籍（在日N年）等が name に残っている場合は除去（#72）
+  // 例: "A.E ※ナイジェリア籍（在日37年）" → "A.E"
+  if (name) {
+    name = name.replace(/[\s　]?[※＊\*][ 　]?[^\s,、。（）「」【】\t]{1,20}[籍国人](?:（[^）]*）)?/g, '').trim() || null
+  }
 
   // ── 名前後処理: 残留汚染パターンを除去 ──────────────────────────
   // スラッシュ区切りで年齢が続くパターンを除去（例: "K.Y / 40歳 / 男性 / ベトナム籍" → "K.Y"）
@@ -1320,7 +1326,12 @@ function extractCandidateFieldsRegex(
   let nearestStation = extractFieldTwoPhase(
     ['最寄り?駅','最寄駅','最寄り?','沿線','通勤駅'],
     bodyText, attachText,
-    v => { const c = v.replace(/（[^）]*）.*$/, '').trim(); return /[駅線]$/.test(c) || c.length <= 10 },
+    v => {
+      const c = v.replace(/（[^）]*）.*$/, '').trim()
+      // セクション見出しと判定されるラベルは駅名として拒否（#58）
+      if (/^(自己PR|PR|アピール|強み|備考|補足|資格|スキル|経験|氏名|年齢|性別|国籍|連絡先|住所|現住所|職歴|学歴|希望|稼働|単価|単金|ご担当|担当者|得意)/.test(c)) return false
+      return /[駅線]$/.test(c) || c.length <= 10
+    },
     30,
     2,
   )
@@ -2980,6 +2991,10 @@ Deno.serve(async (req: Request) => {
         '案件にて技術者を募集',
         // 注力案件の紹介メールが人材boxに届くパターン
         '注力している案件',
+        // 案件リスト・マッチング依頼メール（#68）
+        '注力案件リスト',
+        'スキルマッチする案件がございましたら',
+        '弊社営業.*名の注力',
       ]
       // 営業・広告・メルマガメールのスキップ（研修販売・サービス紹介等）
       const COMMERCIAL_SOLICITATION_KEYWORDS = [
@@ -3702,7 +3717,7 @@ Deno.serve(async (req: Request) => {
         skills,
         experience_years: toExperienceYears(resolvedExperienceYears),
         raw_profile: {
-          text: effectiveBody.slice(0, 5000),
+          text: effectiveBody.slice(0, 10000),
           summary: analyzed.summary ?? '',
           skillsByCategory: dbMatchedSkills.reduce((acc, s) => {
             if (!acc[s.category]) acc[s.category] = []
@@ -4288,7 +4303,7 @@ Deno.serve(async (req: Request) => {
       }
 
       const sharedRawMeta = {
-        text: decodeHtmlEntities(body).slice(0, 5000),
+        text: decodeHtmlEntities(body).slice(0, 10000),
         from,
         subject,
         emailReceivedAt,
