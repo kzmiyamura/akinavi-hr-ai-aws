@@ -2888,13 +2888,24 @@ Deno.serve(async (req: Request) => {
 
     // 転送・返信メールの引用ヘッダを除去（「取得 Outlook for Mac 差出人:...」等が先頭に追加される）
     // 引用区切り行以降を除去して本文だけを残す
-    const QUOTE_DELIMITERS = [
+    // 【強区切り】転送/返信ヘッダは位置に関係なく除去
+    const STRONG_QUOTE_DELIMITERS = [
+      // 日本語転送パターン: 「---------- 転送メッセージ ----------」
+      /^[-─━=＝*]{5,}[ 　]*(?:転送|Forwarded|Original)/mi,
+      // 差出人ブロック: 「--- 差出人: ---」や Outlook 形式
       /^[-_]{3,}[\s\S]*?差出人[:：]/m,
+    ]
+    for (const delim of STRONG_QUOTE_DELIMITERS) {
+      const m = body.search(delim)
+      if (m > 0) { body = body.slice(0, m).trim(); break }
+    }
+    // 【弱区切り】位置 > 200 のときのみ除去（本文内の区切り線との誤混同を防止）
+    const WEAK_QUOTE_DELIMITERS = [
       /^_{3,}\s*$/m,
       /^From:\s+/m,
       /^送信元：/m,
     ]
-    for (const delim of QUOTE_DELIMITERS) {
+    for (const delim of WEAK_QUOTE_DELIMITERS) {
       const m = body.search(delim)
       if (m > 200) { body = body.slice(0, m).trim(); break }
     }
@@ -3289,6 +3300,15 @@ Deno.serve(async (req: Request) => {
       // earlyMultiCheck は body で事前計算済み（effectiveBody と同一の場合は再利用）
       const multiBlocks = earlyMultiCheck ?? splitMultiCandidateBody(effectiveBody)
       if (multiBlocks && multiBlocks.length >= 2) {
+        // 区切り線より前のプリアンブル（共通スキルリスト等）を抽出してスキル照合に使う
+        // multiBlocks の最初のブロックが effectiveBody のどこから始まるかで判定
+        const firstBlockStart = effectiveBody.indexOf(multiBlocks[0].trim().slice(0, 30))
+        const multiPreamble = firstBlockStart > 50
+          ? effectiveBody.slice(0, firstBlockStart).trim()
+          : ''
+        if (multiPreamble) {
+          console.log(`[multi-candidate] preamble ${multiPreamble.length}文字 → 各ブロックのスキル照合に追加`)
+        }
         console.log(`[multi-candidate] ${multiBlocks.length}人検出 from=${from} subject=${subject.slice(0, 80)}`)
         console.log(`[multi-candidate] resumeUrl=${resumeUrl ?? 'null'} allTextContents=[${allTextContents.map(t => t.label).join(', ')}]`)
         tracePhase = 'multi_candidate'
@@ -3346,7 +3366,8 @@ Deno.serve(async (req: Request) => {
             }
 
             // ── Step3: ブロック固有のスキル照合 ──────────────────────────────────
-            const blockBodyText = [subject, block].join('\n')
+            // プリアンブル（区切り線前の共通スキルリスト等）もスキル照合に含める
+            const blockBodyText = [subject, multiPreamble, block].filter(Boolean).join('\n')
             const { matched: blockBodyMatched } = extractAndRemoveSkills(blockBodyText, masterSkills, { looseCert: false })
             const blockBodyMatchedNames = new Set(blockBodyMatched.map(s => s.name))
             const blockAttachRaw = blockAttachText.trim()
