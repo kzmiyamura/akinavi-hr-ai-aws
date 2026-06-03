@@ -84,12 +84,14 @@ export async function fetchSubmissionStats(dataEnv: DataEnv): Promise<Submission
 }
 
 /** 案件に対するマッチングランキングを取得（スコア降順） */
-export async function fetchSubmissionsByProject(projectId: string, dataEnv: DataEnv): Promise<Submission[]> {
+export async function fetchSubmissionsByProject(projectId: string, dataEnv: DataEnv, limit = 200): Promise<Submission[]> {
   const { data, error } = await supabase
     .from('submissions')
     .select('*')
     .eq('data_env', dataEnv)
     .eq('project_id', projectId)
+    .order('match_score', { ascending: false })
+    .limit(limit)
 
   if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Submission[]

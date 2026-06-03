@@ -2255,10 +2255,12 @@ async function fetchGoogleLinks(body: string): Promise<{
   textContents: { label: string; content: string }[]
   pdfAttachments: Attachment[]
   driveWordProjectMonths: number | null
+  driveSheetSkillYears: Record<string, number>
 }> {
   const textContents: { label: string; content: string }[] = []
   const pdfAttachments: Attachment[] = []
   let driveWordProjectMonths: number | null = null
+  let driveSheetSkillYears: Record<string, number> = {}
 
   const sheetsMatchesPreview = [...body.matchAll(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]{25,})[^\s]*/g)]
   const docsMatchesPreview = [...body.matchAll(/https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{25,})/g)]
@@ -2278,7 +2280,29 @@ async function fetchGoogleLinks(body: string): Promise<{
     try {
       const res = await fetchWithTimeout(exportUrl)
       if (res.ok) {
-        textContents.push({ label: `Googleスプレッドシート(${id})`, content: await res.text() })
+        const csvText = await res.text()
+        textContents.push({ label: `Googleスプレッドシート(${id})`, content: csvText })
+        // CSV → 2D配列に変換して skillYears を抽出（まだ未取得の場合）
+        if (Object.keys(driveSheetSkillYears).length === 0) {
+          const csvRows = csvText.split(/\r?\n/).map(row => {
+            const cells: string[] = []
+            let cur = ''
+            let inQuote = false
+            for (let i = 0; i < row.length; i++) {
+              const ch = row[i]
+              if (ch === '"') { inQuote = !inQuote }
+              else if (ch === ',' && !inQuote) { cells.push(cur); cur = '' }
+              else { cur += ch }
+            }
+            cells.push(cur)
+            return cells
+          })
+          const sy = extractSkillYearsFromSheetData(csvRows)
+          if (Object.keys(sy).length > 0) {
+            driveSheetSkillYears = sy
+            console.log(`[DriveSheets skillYears] id=${id} keys=${Object.keys(sy).length}`)
+          }
+        }
       } else {
         // フォールバックDLは認証が必要なSheetsではHTMLゴミを返すためスキップ
         console.warn(`[DriveLink] Sheetsエクスポート失敗(${res.status}): ${id} - スキップ（公開設定を確認してください）`)
@@ -2334,11 +2358,15 @@ async function fetchGoogleLinks(body: string): Promise<{
           textContents.push({ label: `Driveファイル(${filename})`, content: await res.text() })
         } else if (isExcel) {
           const b64 = arrayBufferToBase64(await res.arrayBuffer())
-          const text = await extractExcelText(b64)
+          const { text, skillYears: excelSY } = await extractExcelAll(b64)
           if (text.trim()) {
             textContents.push({ label: `Drive Excel(${filename})`, content: text })
           } else {
             console.warn(`[DriveLink] Drive Excel テキスト抽出結果が空: ${id}`)
+          }
+          if (Object.keys(excelSY).length > 0 && Object.keys(driveSheetSkillYears).length === 0) {
+            driveSheetSkillYears = excelSY
+            console.log(`[DriveExcel skillYears] file=${filename} keys=${Object.keys(excelSY).length}`)
           }
         } else if (isWord) {
           const b64 = arrayBufferToBase64(await res.arrayBuffer())
@@ -2359,7 +2387,7 @@ async function fetchGoogleLinks(body: string): Promise<{
     } catch (e) { console.warn(`[DriveLink] Drive fetch error: ${id}`, e) }
   }
 
-  return { textContents, pdfAttachments, driveWordProjectMonths }
+  return { textContents, pdfAttachments, driveWordProjectMonths, driveSheetSkillYears }
 }
 
 /** HTMLタグを除去してプレーンテキストに変換 */
@@ -3137,11 +3165,16 @@ Deno.serve(async (req: Request) => {
     tracePhase = 'drive_links_fetch'
     pipe(traceRid, tracePhase)
     // Google Drive / Sheets / Docs リンクの取得
-    const { textContents: driveTexts, pdfAttachments: drivePdfs, driveWordProjectMonths } = await fetchGoogleLinks(body)
+    const { textContents: driveTexts, pdfAttachments: drivePdfs, driveWordProjectMonths, driveSheetSkillYears } = await fetchGoogleLinks(body)
     // Drive Word のプロジェクト期間も Excel 未取得時のフォールバックとして使用
     if (driveWordProjectMonths && Object.keys(excelSkillYears).length === 0) {
       excelSkillYears['_totalProjectMonths'] = driveWordProjectMonths
       console.log(`[DriveWord] totalProjectMonths → excelSkillYears にセット: ${driveWordProjectMonths}ヶ月`)
+    }
+    // Drive Excel / Google Sheets の skillYears（添付 Excel が取れなかった場合のフォールバック）
+    if (Object.keys(excelSkillYears).length === 0 && Object.keys(driveSheetSkillYears).length > 0) {
+      excelSkillYears = { ...driveSheetSkillYears }
+      console.log(`[DriveSheets/Excel] skillYears フォールバック適用: keys=${Object.keys(excelSkillYears).length}`)
     }
     const rawAllAttachments = [...supportedAttachments, ...drivePdfs]
     tracePhase = 'drive_links_done'

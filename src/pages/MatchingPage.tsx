@@ -1314,8 +1314,9 @@ const { data: projects = [] } = useQuery({
       return
     }
     let cancelled = false
+    // 重複チェックは上位100件のみ（全件チェックはネットワーク負荷が大きいため制限）
     Promise.all(
-      selectedProjectRanked.map(async (s) => {
+      selectedProjectRanked.slice(0, 100).map(async (s) => {
         const raw = await findDuplicateCandidates(s.candidate.name, s.candidate.id, dataEnv)
         const scored: DuplicateCandidate[] = raw
           .map(d => ({ ...d, duplicateScore: calcDuplicateScore(d, s.candidate) }))
