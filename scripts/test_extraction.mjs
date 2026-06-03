@@ -382,7 +382,7 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   let experienceYears = null
   for (const p of [
     /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)歴\s*[約]?\s*(\d+)\s*年/,
-    /経験[：:\s]*[約]?\s*(\d+)\s*年/,
+    /経験[：:\s　]+[約]?\s*(\d+)\s*年/,
     /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
     /(?:経験年数|開発経験)[：:\s]*[約]?\s*(\d+)年/,
     /(?:社会人歴|就労歴)[：:\s]*(\d+)年/,
@@ -546,6 +546,8 @@ if (args.includes('--test')) {
   runCase('最寄駅（通常）',        '氏名：鈴木\n最寄駅：渋谷\n経験年数：3年', '',         { nearestStation: '渋谷' })
   runCase('最寄駅（ファイル名から）', 'Excelファイル(D.U_浦和駅.xlsx)', '', { nearestStation: '浦和駅' })
   runCase('年齢（Excel CSV /形式）',  '', '氏名 / D.U\n年齢 / 34\n性別 / 男', { age: 34, gender: '男' })
+  runCase('経験年数（凡例テキスト誤マッチなし）', '', '凡例：◎＝業務経験1年以上 ○＝業務経験有', { experienceYears: null })
+  runCase('経験年数（セパレータあり正常）', '経験：7年\n最寄駅：渋谷', '', { experienceYears: 7 })
   runCase('国籍（括弧あり）',      '氏名：R.B（バングラデシュ籍）\n最寄駅：渋谷\n経験年数：5年', '', { nationality: 'バングラデシュ籍' })
   runCase('スラッシュ年齢（K.Y / 40歳）', '氏名：K.Y / 40歳 / 男性 / ベトナム籍\n最寄駅：渋谷\n経験年数：5年', '', { name: 'K.Y', age: 40, gender: '男性' })
 
