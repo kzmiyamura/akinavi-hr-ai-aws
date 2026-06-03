@@ -643,6 +643,84 @@ try {
 }
 
 // ============================================================
+// 11. skillYears 取得率チェック（直近14日）
+// ============================================================
+H('⑪ skillYears 取得率（直近14日）')
+try {
+  const since14 = new Date(Date.now() - 14 * 86400000).toISOString()
+  const cands14sy = await dbQuery(
+    'candidates',
+    `select=id,name,skills,drive_url,resume_url,raw_profile,created_at` +
+    `&created_at=gte.${since14}&data_env=eq.prod&order=created_at.desc&limit=500`
+  )
+  if (cands14sy.length === 0) {
+    ok('対象データなし')
+  } else {
+    const total = cands14sy.length
+    const withSY = cands14sy.filter(c => {
+      const sy = c.raw_profile?.skillYears
+      return sy && typeof sy === 'object' && Object.keys(sy).filter(k => k !== '_totalProjectMonths').length > 0
+    }).length
+    const hasDrive = cands14sy.filter(c => c.drive_url || c.resume_url).length
+    const driveWithSY = cands14sy.filter(c => {
+      const sy = c.raw_profile?.skillYears
+      const hasLink = c.drive_url || c.resume_url
+      return hasLink && sy && Object.keys(sy).filter(k => k !== '_totalProjectMonths').length > 0
+    }).length
+    const syRate = Math.round(100 * withSY / total)
+    row('対象件数', `${total} 件`)
+    row('skillYears 取得率', syRate < 10 ? `⚠️  ${withSY}/${total} (${syRate}%)` : `${withSY}/${total} (${syRate}%)`)
+    row('Drive/resumeリンクあり', `${hasDrive} 件`)
+    row('  うち skillYears あり', hasDrive > 0 ? `${driveWithSY}/${hasDrive}` : '-')
+    if (hasDrive > 0 && driveWithSY < hasDrive * 0.2) {
+      warn('Drive/resumeリンクあり候補者の skillYears 取得率が低い（Excel フォーマット未対応の可能性）')
+      const samples = cands14sy.filter(c => {
+        const sy = c.raw_profile?.skillYears
+        const hasLink = c.drive_url || c.resume_url
+        const skillCount = Array.isArray(c.skills) ? c.skills.length : 0
+        return hasLink && !(sy && Object.keys(sy).filter(k => k !== '_totalProjectMonths').length > 0) && skillCount >= 5
+      }).slice(0, 3)
+      if (samples.length > 0) {
+        console.log('\n  【skillYears 未取得サンプル（Drive/resumenリンクあり・スキル5件以上）】')
+        samples.forEach(c => {
+          const skillCount = Array.isArray(c.skills) ? c.skills.length : 0
+          console.log(`    ID:${c.id.slice(0, 8)}  name:${c.name ?? '?'}  skills:${skillCount}件  drive:${c.drive_url ? 'あり' : '-'}  resume:${c.resume_url ? 'あり' : '-'}`)
+        })
+      }
+    }
+  }
+} catch (e) {
+  warn(`skillYears チェック失敗: ${e.message}`)
+}
+
+// ============================================================
+// 12. 抽出ロジック回帰テスト
+// ============================================================
+H('⑫ 抽出ロジック回帰テスト')
+try {
+  const { execSync } = await import('child_process')
+  const output = execSync('node scripts/test_extraction.mjs --test', {
+    cwd: ROOT,
+    encoding: 'utf-8',
+    timeout: 30000,
+  })
+  // 最後の「テスト結果: N passed, M failed」行を抽出
+  const resultLine = output.split('\n').findLast(l => l.includes('テスト結果:') || l.includes('passed'))
+  if (resultLine) {
+    const failed = resultLine.match(/(\d+)\s*failed/)
+    if (failed && parseInt(failed[1]) > 0) {
+      warn(`回帰テスト失敗: ${resultLine.trim()}`)
+    } else {
+      ok(resultLine.trim())
+    }
+  } else {
+    ok('テスト完了（詳細は node scripts/test_extraction.mjs --test で確認）')
+  }
+} catch (e) {
+  warn(`回帰テスト失敗: ${e.message.slice(0, 120)}`)
+}
+
+// ============================================================
 // 完了
 // ============================================================
 console.log(`\n${'─'.repeat(60)}`)
