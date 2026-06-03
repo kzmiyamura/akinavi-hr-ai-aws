@@ -3081,11 +3081,17 @@ Deno.serve(async (req: Request) => {
         'failure notice',  // MAILER-DAEMON配信失敗通知
         // 給与・経費・許可証等の業務連絡
         '控除について', '稼働時間について', '請求関連', '許可証',
+        // 派遣更新・NDA交渉等の業務往来メール（2026-06-03追加）
+        '派遣更新連絡', '情報交換のご相談',
       ]
+      // 件名が「【スキル名】~XX万｜条件がある方｜XX歳まで」形式の案件条件メールをスキップ
+      // rightarm.co.jp 等が人材BOXに案件要件メールを誤送信するパターン（2026-06-03追加）
+      const isJobRequirementSubject = /【.{1,20}】[〜~]?\d+万.*(がある方|できる方|歳まで|以上の経験|歳以下)/.test(subject)
       const isTraining = TRAINING_KEYWORDS.some(kw => body.includes(kw))
       const isSolicitation = PROJECT_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))
-      const isCommercial = COMMERCIAL_SOLICITATION_KEYWORDS.some(kw => body.includes(kw))
-      const isSubjectSkip = SUBJECT_SKIP_KEYWORDS.some(kw => subject.includes(kw))
+      const isCommercial = COMMERCIAL_SOLICITATION_KEYWORDS.some(kw => body.includes(kw)) ||
+        body.includes('NDAにつきましては') || body.includes('CloudSignでの締結')
+      const isSubjectSkip = SUBJECT_SKIP_KEYWORDS.some(kw => subject.includes(kw)) || isJobRequirementSubject
       if (isTraining || isSolicitation || isCommercial || isSubjectSkip) {
         const skipReason = isTraining ? 'TRAINING_REPORT' : isSolicitation ? 'PROJECT_SOLICITATION' : isSubjectSkip ? 'SUBJECT_KEYWORD' : 'COMMERCIAL_SOLICITATION'
         console.warn(`[SKIP_IRRELEVANT] ${skipReason}`, { rid: traceRid, subject })
