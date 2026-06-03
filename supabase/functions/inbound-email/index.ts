@@ -2214,7 +2214,37 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       }
     }
   }
-  return skillMonths2
+  if (Object.keys(skillMonths2).length > 0) return skillMonths2
+
+  // ── 最終フォールバック: Excelシリアル日付の最小〜最大期間から総経験月数を算出 ──
+  // プロジェクト経歴の「期間」列に含まれるシリアル日付（数値）を収集し、
+  // 最も古い開始日〜最も新しい終了日の差分を総経験月数とみなす。
+  // Excelシリアル日付の範囲: ~36526(2000-01-01) 〜 ~48000(2031-07-01)
+  // Wordの calcWordProjectMonths と同じ考え方（最小〜最大の引き算）
+  {
+    const SERIAL_MIN = 36526  // 2000-01-01
+    const SERIAL_MAX = 48000  // 2031-07-01
+    const serialDates: number[] = []
+    for (const row of data) {
+      for (const cell of row) {
+        const num = parseFloat(String(cell ?? ''))
+        if (!isNaN(num) && num === Math.floor(num) && num >= SERIAL_MIN && num <= SERIAL_MAX) {
+          serialDates.push(num)
+        }
+      }
+    }
+    if (serialDates.length >= 2) {
+      const minSerial = Math.min(...serialDates)
+      const maxSerial = Math.max(...serialDates)
+      const months = Math.round((maxSerial - minSerial) / 30.44)
+      if (months > 0 && months < 600) {
+        console.log(`[skillYears-serial] minSerial=${minSerial} maxSerial=${maxSerial} months=${months}`)
+        return { _totalProjectMonths: months }
+      }
+    }
+  }
+
+  return {}
 }
 
 /** スキル別経験月数を Excel ファイル（base64）から抽出 */
