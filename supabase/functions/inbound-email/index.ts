@@ -379,8 +379,9 @@ function isInboundMakeSoftFail(): boolean {
 }
 
 /** 1 リクエストを追跡（Supabase ログで rid で検索） */
-function pipe(rid: string, phase: string, detail?: Record<string, unknown>) {
-  console.log(`[PIPE] rid=${rid} phase=${phase}`, detail ?? {})
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function pipe(_rid: string, _phase: string, _detail?: Record<string, unknown>) {
+  // no-op: verbose logging removed
 }
 
 
@@ -621,7 +622,6 @@ async function loadStationMap(): Promise<Record<string, string>> {
         const dbMap: Record<string, string> = {}
         for (const r of rows) dbMap[r.name] = r.prefecture
         _stationDbMap = { ...STATION_TO_PREFECTURE, ...dbMap }
-        console.log(`[station] DBから${rows.length}駅を読み込み（合計${Object.keys(_stationDbMap).length}駅）`)
         return _stationDbMap
       }
     }
@@ -787,8 +787,6 @@ function filterBySkillRating(
     // スキルシート形式ではない → フィルターしない
     return skills
   }
-
-  console.log(`[skill_rating] スキルシート形式を検出 (評価行 ${ratingLineCount} 行)`)
 
   return skills.filter(skill => {
     const escaped = skill.name.replace(/[.*+?()[\]{}\\|^$]/g, '\\$&')
@@ -1423,7 +1421,6 @@ function extractCandidateFieldsRegex(
   const stationPrefecture = inferPrefectureFromStation(nearestStation)
   if (stationPrefecture) {
     if (!prefecture || prefecture !== stationPrefecture) {
-      console.log(`[prefecture] 駅由来で上書き: ${prefecture ?? 'null'} → ${stationPrefecture} (station=${nearestStation})`)
       prefecture = stationPrefecture
     }
   }
@@ -1632,7 +1629,6 @@ function extractFromProse(bodyText: string, attachText: string): {
     if (re.test(allText)) { workStyle = label; break }
   }
 
-  console.log(`[prose_extract] roles=${roles.length} industries=${industries.length} workStyle=${workStyle ?? 'null'}`)
   return { roles, industries, workStyle }
 }
 
@@ -1774,12 +1770,6 @@ async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
     if (text) paragraphs.push(text)
   }
 
-  console.log(`[Word] htmlToWordJson: tables=${tables.length} paragraphs=${paragraphs.length}`)
-  const _fullJson = JSON.stringify({ tables, paragraphs })
-  const _chunkSize = 1800
-  for (let _i = 0; _i < _fullJson.length; _i += _chunkSize) {
-    console.log(`[Word] JSON[${Math.floor(_i/_chunkSize)}]:`, _fullJson.slice(_i, _i + _chunkSize))
-  }
   return { tables, paragraphs }
 }
 
@@ -1846,13 +1836,11 @@ function calcWordProjectMonths(json: WordHtmlJson): number | null {
     }
   }
   if (dates.length < 2) {
-    console.log(`[Word] calcWordProjectMonths: 日付${dates.length}件のみ → スキップ`)
     return null
   }
   dates.sort((a, b) => a.getTime() - b.getTime())
   const min = dates[0], max = dates[dates.length - 1]
   const months = (max.getFullYear() - min.getFullYear()) * 12 + (max.getMonth() - min.getMonth())
-  console.log(`[Word] calcWordProjectMonths: ${dates.length}件 最古=${min.getFullYear()}/${min.getMonth()+1} 最新=${max.getFullYear()}/${max.getMonth()+1} → ${months}ヶ月`)
   return months > 0 ? months : null
 }
 
@@ -1885,9 +1873,6 @@ function extractWordSkillYears(json: WordHtmlJson): Record<string, number> {
       }
     }
   }
-  if (Object.keys(result).length > 0) {
-    console.log('[Word] extractWordSkillYears:', JSON.stringify(result))
-  }
   return result
 }
 
@@ -1919,7 +1904,6 @@ async function extractWordText(base64: string): Promise<{ text: string; totalPro
       try {
         const html = await tryCall(mammoth.convertToHtml)
         if (html) {
-          console.log('[Word] convertToHtml 成功 → htmlToWordJson で構造化')
           const wordJson = await htmlToWordJson(html)
           const text = wordJsonToText(wordJson)
           const totalProjectMonths = calcWordProjectMonths(wordJson) ?? undefined
@@ -2262,9 +2246,6 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       const maxYM = Math.max(...ymValues)
       const months = maxYM - minYM
       if (months > 0 && months < 600) {
-        const minY = Math.floor(minYM / 12), minM = minYM % 12 + 1
-        const maxY = Math.floor(maxYM / 12), maxM = maxYM % 12 + 1
-        console.log(`[skillYears-daterange] min=${minY}/${String(minM).padStart(2,'0')} max=${maxY}/${String(maxM).padStart(2,'0')} months=${months}`)
         return { _totalProjectMonths: months }
       }
     }
@@ -2308,20 +2289,12 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       // テキスト抽出
       const csv = XLSX.utils.sheet_to_csv(sheet)
       if (csv.trim()) texts.push(`--- シート: ${sheetName} ---\n${cleanseExcelCsv(csv)}`)
-      // 生データ（2D配列）取得 → ログ → skillYears 抽出
+      // 生データ（2D配列）取得 → skillYears 抽出
       const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as string[][]
-      // raw データを最大150行・2000文字チャンクでログ（品質チェック用）
-      const rawJson = JSON.stringify(data.slice(0, 150))
-      const CHUNK = 2000
-      const totalChunks = Math.ceil(rawJson.length / CHUNK)
-      for (let ci = 0; ci < totalChunks; ci++) {
-        console.log(`[Excel-raw] sheet="${sheetName}" chunk=${ci + 1}/${totalChunks} rows=${data.length} ${rawJson.slice(ci * CHUNK, (ci + 1) * CHUNK)}`)
-      }
       // skillYears 抽出（最初に見つかったシートで確定）
       if (Object.keys(skillYears).length === 0) {
         const sy = extractSkillYearsFromSheetData(data)
         if (Object.keys(sy).length > 0) {
-          console.log(`[skillYears] sheet="${sheetName}" skills=${Object.keys(sy).length} keys=${JSON.stringify(Object.keys(sy).slice(0, 10))}`)
           skillYears = sy
         } else {
           // 取れなかった場合は先頭3行・8列をログして診断できるようにする
@@ -2331,7 +2304,6 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       }
     }
     const text = texts.join('\n\n')
-    console.log(`[Excel] 抽出完了 totalLen=${text.length} sheets=${sortedNames.slice(0, 3).join(',')} skillYearsKeys=${Object.keys(skillYears).length}`)
     return { text, skillYears }
   } catch (e) {
     console.warn('[Excel] 抽出失敗', e)
@@ -2371,11 +2343,6 @@ async function fetchGoogleLinks(body: string): Promise<{
   const sheetsMatchesPreview = [...body.matchAll(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]{25,})[^\s]*/g)]
   const docsMatchesPreview = [...body.matchAll(/https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{25,})/g)]
   const driveMatchesPreview = [...body.matchAll(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)([a-zA-Z0-9_-]{25,})/g)]
-  console.log('[STEP4 fetchGoogleLinks] 開始', {
-    bodyLen: body.length,
-    linkCounts: { sheets: sheetsMatchesPreview.length, docs: docsMatchesPreview.length, drive: driveMatchesPreview.length },
-  })
-
   // Google Sheets → CSV
   const sheetsMatches = sheetsMatchesPreview
   for (const match of sheetsMatches) {
@@ -2406,7 +2373,6 @@ async function fetchGoogleLinks(body: string): Promise<{
           const sy = extractSkillYearsFromSheetData(csvRows)
           if (Object.keys(sy).length > 0) {
             driveSheetSkillYears = sy
-            console.log(`[DriveSheets skillYears] id=${id} keys=${Object.keys(sy).length}`)
           }
         }
       } else {
@@ -2472,7 +2438,6 @@ async function fetchGoogleLinks(body: string): Promise<{
           }
           if (Object.keys(excelSY).length > 0 && Object.keys(driveSheetSkillYears).length === 0) {
             driveSheetSkillYears = excelSY
-            console.log(`[DriveExcel skillYears] file=${filename} keys=${Object.keys(excelSY).length}`)
           }
         } else if (isWord) {
           const b64 = arrayBufferToBase64(await res.arrayBuffer())
@@ -2555,7 +2520,6 @@ async function uploadToStorage(
     }
     const { data: urlData } = client.storage.from('attachments').getPublicUrl(path)
     const publicUrl = urlData.publicUrl
-    console.log(`[Storage Upload] アップロード成功: ${filename} → ${publicUrl}`)
     return publicUrl
   } catch (e) {
     console.error('[Storage Upload] 例外:', e)
@@ -2663,8 +2627,6 @@ async function appendToBoxSpreadsheet(boxUrls: string[]): Promise<void> {
     })
     if (!res.ok) {
       console.error('[BoxSheet] スプレッドシート書き込みエラー', res.status, await res.text())
-    } else {
-      console.log('[BoxSheet] スプレッドシート書き込み成功:', boxUrls)
     }
   } catch (e) {
     console.error('[BoxSheet] スプレッドシート書き込み例外:', e)
@@ -2784,7 +2746,6 @@ function assignAttachmentsToBlocks(
       if (normFiles[i].includes(normName)) {
         result.set(blockIdx, attachments[i])
         used.add(i)
-        console.log(`[attach-assign] パス1 名前: block#${blockIdx}(${b.name}) → ${attachments[i].label}`)
         break
       }
     }
@@ -2803,12 +2764,10 @@ function assignAttachmentsToBlocks(
       // ファイル名に自分以外のブロック名が含まれる → 他人の経歴書なので奪わない
       const belongsToOther = allNormNames.some(n => n !== myNorm && normFiles[i].includes(n))
       if (belongsToOther) {
-        console.log(`[attach-assign] パス2 駅名スキップ: block#${blockIdx}(${b.name ?? '?'}・駅=${station}) ${attachments[i].label} は他ブロック名を含むため除外`)
         continue
       }
       result.set(blockIdx, attachments[i])
       used.add(i)
-      console.log(`[attach-assign] パス2 駅名: block#${blockIdx}(${b.name ?? '?'}・駅=${station}) → ${attachments[i].label}`)
       break
     }
   })
@@ -2936,7 +2895,6 @@ Deno.serve(async (req: Request) => {
     } catch { /* ignore */ }
     const inboundDataEnv = resolveInboundDataEnv(pickedMode)
     tracePhase = 'resolved_env_type'
-    console.log('[inbound] data_env=', inboundDataEnv, 'pickedMode=', pickedMode ?? '', 'raw.mode=', raw.mode ?? '', 'rid=', traceRid)
 
     const type: string = normalizeInboundType(raw.type)
     /** 手動登録など、app_config フラグをバイパスして強制処理する場合は true */
@@ -3058,12 +3016,10 @@ Deno.serve(async (req: Request) => {
         // Word スキル別経験年数は表示用のみ（経験年数推定には使わない）
         if (wordSkillYears && Object.keys(wordSkillYearsForDisplay).length === 0) {
           wordSkillYearsForDisplay = { ...wordSkillYears }
-          console.log(`[Word] skillYears → 表示用にセット: ${Object.keys(wordSkillYears).length}件`)
         }
         // Word のプロジェクト期間合計のみ経験年数フォールバックに使用（Excel優先）
         if (wordMonths && Object.keys(excelSkillYears).length === 0) {
           excelSkillYears['_totalProjectMonths'] = wordMonths
-          console.log(`[Word] totalProjectMonths → excelSkillYears にセット: ${wordMonths}ヶ月`)
         }
       } else if (isExcelByMime || isExcelByExt) {
         // 1 回のパースで text と skillYears を同時取得（二重パース防止）
@@ -3245,7 +3201,6 @@ Deno.serve(async (req: Request) => {
 
     // 駅マスターをDBから先行ロード（以降の inferPrefectureFromStation がDB値を使う）
     await preloadStationMap()
-    console.log('[inbound] build=20260529-attach-assign-fix')
 
     tracePhase = 'pre_supabase'
 
@@ -3292,21 +3247,13 @@ Deno.serve(async (req: Request) => {
     // Drive Word のプロジェクト期間も Excel 未取得時のフォールバックとして使用
     if (driveWordProjectMonths && Object.keys(excelSkillYears).length === 0) {
       excelSkillYears['_totalProjectMonths'] = driveWordProjectMonths
-      console.log(`[DriveWord] totalProjectMonths → excelSkillYears にセット: ${driveWordProjectMonths}ヶ月`)
     }
     // Drive Excel / Google Sheets の skillYears（添付 Excel が取れなかった場合のフォールバック）
     if (Object.keys(excelSkillYears).length === 0 && Object.keys(driveSheetSkillYears).length > 0) {
       excelSkillYears = { ...driveSheetSkillYears }
-      console.log(`[DriveSheets/Excel] skillYears フォールバック適用: keys=${Object.keys(excelSkillYears).length}`)
     }
     const rawAllAttachments = [...supportedAttachments, ...drivePdfs]
     tracePhase = 'drive_links_done'
-    console.log('[STEP4 DriveLink完了]', {
-      rid: traceRid,
-      texts: driveTexts.map(t => ({ label: t.label, length: t.content.length })),
-      pdfs: drivePdfs.map(p => p.name),
-      elapsed: elapsed(),
-    })
 
     // PDF は解析しない。Storage へのアップロードのみ（後続処理では除外）
     const allAttachments = rawAllAttachments.filter(a => a.mimeType !== 'application/pdf')
@@ -3400,8 +3347,6 @@ Deno.serve(async (req: Request) => {
     console.log(
       `[skill_master] DB照合: body=${bodyMatched.length}件 attach生=${attachRawMatched.length}件(D/E除外${attachRatingFiltered}件→評価後${attachRated.length}件→重複除外${attachDedupCount}件→${attachDeduped.length}件) 合計=${dbMatchedSkills.length}件`,
     )
-    if (certNames.length > 0) console.log(`[skill_master] 資格タグ: ${certNames.join(', ')}`)
-
     // ── 人材メール ────────────────────────────────────────────
     if (type === 'candidate' || type === 'human') {
       // body が空の場合はsubjectを本文代わりに使う（cy-tech等の件名のみメール対策）
@@ -3418,11 +3363,7 @@ Deno.serve(async (req: Request) => {
         const multiPreamble = firstBlockStart > 50
           ? effectiveBody.slice(0, firstBlockStart).trim()
           : ''
-        if (multiPreamble) {
-          console.log(`[multi-candidate] preamble ${multiPreamble.length}文字 → 各ブロックのスキル照合に追加`)
-        }
         console.log(`[multi-candidate] ${multiBlocks.length}人検出 from=${from} subject=${subject.slice(0, 80)}`)
-        console.log(`[multi-candidate] resumeUrl=${resumeUrl ?? 'null'} allTextContents=[${allTextContents.map(t => t.label).join(', ')}]`)
         tracePhase = 'multi_candidate'
 
         const attachmentNames = [
@@ -3459,20 +3400,16 @@ Deno.serve(async (req: Request) => {
             // ケースA: 名前または駅名で割り当てられた添付がある → その人の経歴書
             // ケースB: 名前はあるが添付が割当てられない → 添付なし（共有経歴書 or 同駅衝突）
             // ケースC: そもそも本ブロックの名前が取れていない → フォールバックで全添付共有（従来動作）
-            console.log(`[multi-candidate] block#${blockIdx} blockName=${blockNameForMatch ?? 'null'} station=${blockStationForMatch ?? 'null'}`)
             const matchedTextContent = blockAttachAssignment.get(blockIdx) ?? null
             let blockAttachText: string
             let blockAttachLabel: string
             if (matchedTextContent) {
-              console.log(`[multi-candidate] ケースA 添付マッチ: ${blockNameForMatch ?? '?'} → ${matchedTextContent.label}`)
               blockAttachText = matchedTextContent.content ?? ''
               blockAttachLabel = matchedTextContent.label
             } else if (blockNameForMatch && allTextContents.length > 0) {
-              console.log(`[multi-candidate] ケースB 添付スキップ（共有経歴書 or 同駅衝突）: ${blockNameForMatch}`)
               blockAttachText = ''
               blockAttachLabel = ''
             } else {
-              console.log(`[multi-candidate] ケースC 名前なし フォールバック`)
               blockAttachText = attachText
               blockAttachLabel = attachmentNames
             }
@@ -3501,7 +3438,6 @@ Deno.serve(async (req: Request) => {
               ?? '不明'
             // 名前が取れないブロックは署名・フッター等とみなしてスキップ
             if (blockResolvedName === '不明' && blockRegexFields.name == null) {
-              console.log(`[multi-candidate] block#${blockIdx} 名前なし → スキップ（署名/フッター判定）`)
               continue
             }
             const blockRemoteAvailable = blockProseFields.workStyle === 'フルリモート'
@@ -3529,8 +3465,6 @@ Deno.serve(async (req: Request) => {
                   const estimatedMonths = totalMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
                   if (estimatedMonths && estimatedMonths > 0) {
                     expYears = estimatedMonths / 12
-                    const src = totalMonths ? 'プロジェクト合計' : 'スキル最大値'
-                    console.log(`[multi-candidate] block#${blockIdx}(${blockNameForMatch ?? '?'}) skillYearsから経験年数推定(${src}): ${expYears.toFixed(1)}年`)
                   }
                 }
                 return toExperienceYears(expYears)
@@ -3586,7 +3520,6 @@ Deno.serve(async (req: Request) => {
             // ① 同一メール内の既処理ブロックと名前が一致 → そのIDに UPDATE（DB未コミット分も補足）
             if (blockResolvedName && blockResolvedName !== '不明' && batchNameToId.has(blockResolvedName)) {
               blockExistingId = batchNameToId.get(blockResolvedName)!
-              console.log(`[multi-candidate dedup] 同一バッチ内重複 → UPDATE: ${blockResolvedName}`)
             }
             // ② 同エージェント（同一 from）から同名が既に登録済み → UPDATE 判定
             // 　 件名一致 → 同一メール確定。件名違い → 駅・都道府県・年齢・経験年数の2つ以上一致で同一人物
@@ -3619,8 +3552,6 @@ Deno.serve(async (req: Request) => {
                   if (myExp != null && theirExp != null && Math.abs(myExp - theirExp) < 2) attrMatches++
                   if (sameSubject || attrMatches >= 2) {
                     blockExistingId = s.id
-                    const reason = sameSubject ? '同一メール再送' : `同エージェント属性${attrMatches}件一致`
-                    console.log(`[multi-candidate dedup] ${reason}→ UPDATE: ${blockResolvedName}`)
                     break
                   }
                 }
@@ -3655,7 +3586,6 @@ Deno.serve(async (req: Request) => {
                   const union = new Set([...mySet, ...theirSet]).size
                   if (union > 0 && intersection / union >= 0.4) {
                     blockExistingId = s.id
-                    console.log(`[multi-candidate dedup] 同一人物 → UPDATE: ${blockResolvedName} jaccard=${(intersection / union).toFixed(2)}`)
                     break
                   }
                 }
@@ -3796,7 +3726,7 @@ Deno.serve(async (req: Request) => {
       // 駅名と同じ苗字（渋谷・大宮・藤沢等）は正当な人名のため除外しない
       const _bareRawName = _rawName.replace(/駅$/, '')
       const resolvedName = (_rawName !== '不明' && _bareRawName !== _rawName)
-        ? (console.log(`[inbound] 駅サフィックス付き名前を除外: ${_rawName}`), '不明')
+        ? '不明'
         : _rawName
 
       // AI空項目にregexフォールバックを適用
@@ -3815,8 +3745,6 @@ Deno.serve(async (req: Request) => {
         const estimatedMonths = totalProjectMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
         if (estimatedMonths && estimatedMonths > 0) {
           resolvedExperienceYears = estimatedMonths / 12
-          const src = totalProjectMonths ? 'プロジェクト合計' : 'スキル最大値'
-          console.log(`[inbound] skillYearsから経験年数推定(${src}): ${resolvedExperienceYears.toFixed(1)}年 (${estimatedMonths}ヶ月)`)
         }
       }
       // 年齢フォールバック: 経験年数が取れない場合、年齢から22を引いて推定（新卒22歳基準）
@@ -3825,7 +3753,6 @@ Deno.serve(async (req: Request) => {
         if (resolvedAge != null && resolvedAge >= 24 && resolvedAge <= 70) {
           const estimated = resolvedAge - 22
           resolvedExperienceYears = estimated
-          console.log(`[inbound] 年齢から経験年数推定: ${resolvedAge}歳 → ${estimated}年`)
         }
       }
       const resolvedDesiredRate = analyzed.desiredRate || regexFields.desiredRate
@@ -3972,8 +3899,6 @@ Deno.serve(async (req: Request) => {
             if (myExp != null && theirExp != null && Math.abs(myExp - theirExp) < 2) attrMatches++
             if (sameSubject || attrMatches >= 2) {
               existingCandidateId = s.id
-              const reason = sameSubject ? '同一メール再送' : `同エージェント属性${attrMatches}件一致`
-              console.log(`[dedup] ${reason}→ UPDATE: ${resolvedName}`)
               break
             }
           }
@@ -3996,21 +3921,18 @@ Deno.serve(async (req: Request) => {
             const theirStation = (s.raw_profile as any)?.nearestStation ?? null
             // 駅が両方存在して異なる場合は別人と判断
             if (myStation && theirStation && myStation !== theirStation) {
-              console.log(`[dedup] 駅が異なるため別人: ${resolvedName} my=${myStation} their=${theirStation}`)
               continue
             }
             // 都道府県が両方存在して異なる場合は別人と判断
             const myPref = resolvedPrefecture ?? null
             const theirPref = (s.raw_profile as any)?.prefecture ?? null
             if (myPref && theirPref && myPref !== theirPref) {
-              console.log(`[dedup] 都道府県が異なるため別人: ${resolvedName} my=${myPref} their=${theirPref}`)
               continue
             }
             // 経験年数の差が5年以上の場合は別人と判断
             const myExp = toExperienceYears(resolvedExperienceYears)
             const theirExp = (s as any).experience_years ?? null
             if (myExp != null && theirExp != null && Math.abs(myExp - theirExp) >= 5) {
-              console.log(`[dedup] 経験年数が大きく異なるため別人: ${resolvedName} my=${myExp} their=${theirExp}`)
               continue
             }
             const mySkillSet = new Set(skills.map((sk: string) => sk.toLowerCase()))
@@ -4124,7 +4046,6 @@ Deno.serve(async (req: Request) => {
         .eq('key', 'inbound_project_enabled')
         .maybeSingle()
       if (projectEnabledRow?.value !== 'true' && !forceProcess) {
-        console.log('[inbound] 案件メール解析は無効のためスキップ', { rid: traceRid, subject })
         return new Response(
           JSON.stringify({ ok: true, skipped: true, reason: 'PROJECT_INBOUND_DISABLED' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -4436,10 +4357,6 @@ Deno.serve(async (req: Request) => {
         projectRequiredSkills,
         masterSkills,
       )
-      if (Object.keys(requiredSkillYears).length > 0) {
-        console.log('[project] requiredSkillYears=', JSON.stringify(requiredSkillYears))
-      }
-
       const result = {
         title: cleanTitle,
         client,
