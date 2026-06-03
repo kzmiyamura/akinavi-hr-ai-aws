@@ -1337,10 +1337,11 @@ function extractCandidateFieldsRegex(
   )
   // 【YY、46歳、男性、馬橋駅、...】形式から取得した駅名をフォールバックとして適用
   if (!nearestStation && bracketStation) nearestStation = bracketStation
-  // ラベルなしフォールバック: 「○○駅徒歩N分」や「○○駅 」
+  // ラベルなしフォールバック: 「○○駅徒歩N分」や「○○駅 」「○○駅.xlsx」（ファイル名含む）
   if (!nearestStation) {
     const allText = bodyText + '\n' + attachText
-    const m = allText.match(/([^\s,、。（）「」【】\t]{1,10}駅)(?:[\s　_\-）」】徒歩]|$)/)
+    // 駅名に含まれないセパレータ（_(アンダーバー)・()半角括弧）を除外してファイル名ベースの誤マッチを防ぐ
+    const m = allText.match(/([^\s,、。（）()「」【】\t_]{1,10}駅)(?:[\s　_\-）」】()徒歩.)]|$)/)
     if (m) nearestStation = m[1].trim()
   }
   // 後処理: ラベル自体が値になっているケースを除外

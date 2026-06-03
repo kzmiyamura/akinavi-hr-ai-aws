@@ -324,7 +324,8 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   if (!nearestStation && bracketStation) nearestStation = bracketStation
   if (!nearestStation) {
     const allText = bodyText + '\n' + attachText
-    const m = allText.match(/([^\s,、。（）「」【】\t]{1,10}駅)(?:[\s　_\-）」】徒歩]|$)/)
+    // 駅名に含まれないセパレータ（_(アンダーバー)・()半角括弧）を除外してファイル名ベースの誤マッチを防ぐ
+    const m = allText.match(/([^\s,、。（）()「」【】\t_]{1,10}駅)(?:[\s　_\-）」】()徒歩.)]|$)/)
     if (m) nearestStation = m[1].trim()
   }
   if (nearestStation) {
@@ -533,6 +534,7 @@ if (args.includes('--test')) {
   runCase('経験年数（通常）',      '氏名：佐藤一郎\n最寄駅：渋谷\n経験年数：10年', '',    { experienceYears: 10 })
   runCase('希望単価（通常）',      '氏名：田中\n最寄駅：品川\n希望単価：65万\n経験年数：5年', '', { desiredRate: '65万' })
   runCase('最寄駅（通常）',        '氏名：鈴木\n最寄駅：渋谷\n経験年数：3年', '',         { nearestStation: '渋谷' })
+  runCase('最寄駅（ファイル名から）', 'Excelファイル(D.U_浦和駅.xlsx)', '', { nearestStation: '浦和駅' })
   runCase('国籍（括弧あり）',      '氏名：R.B（バングラデシュ籍）\n最寄駅：渋谷\n経験年数：5年', '', { nationality: 'バングラデシュ籍' })
   runCase('スラッシュ年齢（K.Y / 40歳）', '氏名：K.Y / 40歳 / 男性 / ベトナム籍\n最寄駅：渋谷\n経験年数：5年', '', { name: 'K.Y', age: 40, gender: '男性' })
 
