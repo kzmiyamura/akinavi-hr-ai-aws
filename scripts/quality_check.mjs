@@ -447,6 +447,47 @@ if (INCLUDE_LOGS && ACCESS_TOKEN) {
     row('ERRORログ', errLogs.length > 0 ? `⚠️  ${errLogs.length} 件` : `✅ 0 件`)
     errLogs.slice(0, 5).forEach(r => console.log(`    ${r.timestamp?.slice(0, 16)} ${r.event_message?.slice(0, 80)}`))
   }
+
+  // ── Excel 抽出ログ ──────────────────────────────────────────
+  console.log(`\n  【Excel 抽出ログ（直近 ${DAYS} 日）】`)
+  const excelRawLogs  = await fetchEdgeLogs('[Excel-raw]', 24 * DAYS)
+  const syOkLogs      = await fetchEdgeLogs('[skillYears]', 24 * DAYS)
+  const syMissLogs    = await fetchEdgeLogs('[skillYears-miss]', 24 * DAYS)
+
+  if (excelRawLogs !== null) {
+    row('  Excel 処理数（[Excel-raw]）', `${excelRawLogs.length} 件`)
+  }
+  if (syOkLogs !== null) {
+    // 成功件数と抽出スキル数の集計
+    const keyCounts = syOkLogs.map(r => {
+      const m = r.event_message?.match(/keys=\[([^\]]*)\]/)
+      return m ? m[1].split(',').filter(Boolean).length : 0
+    })
+    const avgKeys = keyCounts.length
+      ? Math.round(keyCounts.reduce((s, n) => s + n, 0) / keyCounts.length)
+      : 0
+    row('  skillYears 取得成功', `✅ ${syOkLogs.length} 件（平均 ${avgKeys} スキル）`)
+  }
+  if (syMissLogs !== null) {
+    row('  skillYears 取得失敗 [miss]', syMissLogs.length > 0 ? `⚠️  ${syMissLogs.length} 件` : `✅ 0 件`)
+    if (syMissLogs.length > 0) {
+      console.log('\n  【[skillYears-miss] サンプル（未対応フォーマット診断）】')
+      // head= を含む行を最大5件表示
+      const samples = syMissLogs.filter(r => r.event_message?.includes('head=')).slice(0, 5)
+      samples.forEach(r => {
+        const ts = r.timestamp?.slice(0, 16) ?? ''
+        // head= 以降を抽出（表示は150字まで）
+        const head = r.event_message?.match(/head=(.+)/s)?.[1]?.slice(0, 150) ?? r.event_message?.slice(0, 150)
+        console.log(`    ${ts}  ${head}`)
+      })
+      if (syMissLogs.length > 5) {
+        info(`    ... 他 ${syMissLogs.length - 5} 件。extractSkillYearsFromSheetData の追加対応を検討`)
+      }
+    }
+  }
+  if (excelRawLogs === null && syOkLogs === null && syMissLogs === null) {
+    info('  Excel ログ取得に失敗しました')
+  }
 } else if (INCLUDE_LOGS && !ACCESS_TOKEN) {
   H('⑤ Edge Function ログ解析')
   warn('SUPABASE_ACCESS_TOKEN が未設定のためスキップ')
