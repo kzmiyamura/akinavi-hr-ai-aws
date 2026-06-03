@@ -396,7 +396,7 @@ try {
   const since7 = new Date(Date.now() - 7 * 86400000).toISOString()
   const [recentCands, recentProjs] = await Promise.all([
     dbQuery('candidates', `select=skills&created_at=gte.${since7}&data_env=eq.prod&limit=500`),
-    dbQuery('projects',   `select=required_skills,nice_to_have_skills&created_at=gte.${since7}&data_env=eq.prod&limit=200`),
+    dbQuery('projects',   `select=required_skills&created_at=gte.${since7}&data_env=eq.prod&limit=200`),
   ])
   // 全スキル名を頻度カウント
   const freqMap = {}
@@ -408,7 +408,7 @@ try {
     })
   })
   recentProjs.forEach(p => {
-    ;[...(p.required_skills ?? []), ...(p.nice_to_have_skills ?? [])].forEach(name => {
+    ;[...(p.required_skills ?? [])].forEach(name => {
       if (name) freqMap[name] = (freqMap[name] ?? 0) + 1
     })
   })
