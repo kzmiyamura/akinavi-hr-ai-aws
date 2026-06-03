@@ -2882,8 +2882,8 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    // ── 自社ドメインスキップ: force=true（手動登録・再解析）はバイパス ──────
-    if (!forceProcess) {
+    // ── 自社ドメインスキップ: force=true（手動登録・再解析）またはデモ環境はバイパス ──────
+    if (!forceProcess && inboundDataEnv === 'prod') {
       const supabaseUrl2 = Deno.env.get('SUPABASE_URL') ?? ''
       const serviceKey2 = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
       const ownDomain = await loadOwnEmailDomain(supabaseUrl2, serviceKey2)
