@@ -300,9 +300,19 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     const m = allText.match(/年\s*[　 ]*齢[\s　 ]*[：:]\s*(\d{2})[才歳]/)
     if (m) age = parseInt(m[1], 10)
   }
+  if (age === null) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/年\s*[　 ]*齢[\s　 ]*[/／]\s*(\d{2,3})(?!\s*[年ヶ月])/)
+    if (m) { const v = parseInt(m[1], 10); if (v >= 18 && v <= 80) age = v }
+  }
   if (gender === null) {
     const allText = bodyText + '\n' + attachText
     const m = allText.match(/性\s*[　 ]*別[\s　 ]*[：:]\s*(男性|女性|男|女)/)
+    if (m) gender = m[1]
+  }
+  if (gender === null) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/性\s*[　 ]*別[\s　 ]*[/／]\s*(男性|女性|男|女)/)
     if (m) gender = m[1]
   }
   if (!nationality) {
@@ -535,6 +545,7 @@ if (args.includes('--test')) {
   runCase('希望単価（通常）',      '氏名：田中\n最寄駅：品川\n希望単価：65万\n経験年数：5年', '', { desiredRate: '65万' })
   runCase('最寄駅（通常）',        '氏名：鈴木\n最寄駅：渋谷\n経験年数：3年', '',         { nearestStation: '渋谷' })
   runCase('最寄駅（ファイル名から）', 'Excelファイル(D.U_浦和駅.xlsx)', '', { nearestStation: '浦和駅' })
+  runCase('年齢（Excel CSV /形式）',  '', '氏名 / D.U\n年齢 / 34\n性別 / 男', { age: 34, gender: '男' })
   runCase('国籍（括弧あり）',      '氏名：R.B（バングラデシュ籍）\n最寄駅：渋谷\n経験年数：5年', '', { nationality: 'バングラデシュ籍' })
   runCase('スラッシュ年齢（K.Y / 40歳）', '氏名：K.Y / 40歳 / 男性 / ベトナム籍\n最寄駅：渋谷\n経験年数：5年', '', { name: 'K.Y', age: 40, gender: '男性' })
 

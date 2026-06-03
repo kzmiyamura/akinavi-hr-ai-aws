@@ -1298,9 +1298,21 @@ function extractCandidateFieldsRegex(
     const m = allText.match(/年\s*[　 ]*齢[\s　 ]*[：:]\s*(\d{2})[才歳]/)
     if (m) age = parseInt(m[1], 10)
   }
+  // Excel CSV 形式フォールバック: 「年齢 / 34」（cleanseExcelCsv が / 区切りに変換する形式）
+  if (age === null) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/年\s*[　 ]*齢[\s　 ]*[/／]\s*(\d{2,3})(?!\s*[年ヶ月])/)
+    if (m) { const v = parseInt(m[1], 10); if (v >= 18 && v <= 80) age = v }
+  }
   if (gender === null) {
     const allText = bodyText + '\n' + attachText
     const m = allText.match(/性\s*[　 ]*別[\s　 ]*[：:]\s*(男性|女性|男|女)/)
+    if (m) gender = m[1]
+  }
+  // Excel CSV 形式フォールバック: 「性別 / 男」
+  if (gender === null) {
+    const allText = bodyText + '\n' + attachText
+    const m = allText.match(/性\s*[　 ]*別[\s　 ]*[/／]\s*(男性|女性|男|女)/)
     if (m) gender = m[1]
   }
   if (!nationality) {
@@ -2091,6 +2103,8 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
     for (let j = 0; j < row.length; j++) {
       const v = String(row[j] ?? '').trim()
       if (!EXP_LABEL.test(v)) continue
+      // 凡例・定義行（「凡例：◎＝業務経験1年以上」等）は経験年数の宣言ではないためスキップ
+      if (/凡例|◎＝|○＝|◇＝|△＝|▲＝/.test(v)) continue
       // 同セル内に年数が含まれる場合: "IT経験: 7年" など
       const inCell = parseDurationToMonths(v)
       if (inCell) { return { _totalProjectMonths: inCell } }
