@@ -2216,29 +2216,54 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   }
   if (Object.keys(skillMonths2).length > 0) return skillMonths2
 
-  // ── 最終フォールバック: Excelシリアル日付の最小〜最大期間から総経験月数を算出 ──
-  // プロジェクト経歴の「期間」列に含まれるシリアル日付（数値）を収集し、
-  // 最も古い開始日〜最も新しい終了日の差分を総経験月数とみなす。
-  // Excelシリアル日付の範囲: ~36526(2000-01-01) 〜 ~48000(2031-07-01)
+  // ── 最終フォールバック: 日付の最小〜最大期間から総経験月数を算出 ──
+  // シリアル日付（数値型）とテキスト日付（"2020/04"等）の両方を収集し、
+  // 最も古い日付〜最も新しい日付の差分を総経験月数とみなす。
   // Wordの calcWordProjectMonths と同じ考え方（最小〜最大の引き算）
   {
-    const SERIAL_MIN = 36526  // 2000-01-01
-    const SERIAL_MAX = 48000  // 2031-07-01
-    const serialDates: number[] = []
+    // 「年月の整数値（year*12+month）」に統一して比較
+    const ymValues: number[] = []
+
+    // Excelシリアル日付（整数で36526〜48000の範囲: 2000年〜2031年）をYM変換
+    const SERIAL_MIN = 36526
+    const SERIAL_MAX = 48000
+    const serialToYM = (serial: number) => {
+      // Excelシリアル日付 → JSのDate（1899-12-30基点）
+      const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000)
+      return d.getUTCFullYear() * 12 + d.getUTCMonth()
+    }
+
+    // テキスト日付パターン: "2020/04" "2020-04" "2020年4月" "2020年4"
+    const TEXT_DATE_RE = /(?<!\d)(\d{4})[\/\-年](\d{1,2})(?:[月]|(?!\d))/
+
     for (const row of data) {
       for (const cell of row) {
-        const num = parseFloat(String(cell ?? ''))
+        const raw = cell ?? ''
+        // シリアル日付
+        const num = parseFloat(String(raw))
         if (!isNaN(num) && num === Math.floor(num) && num >= SERIAL_MIN && num <= SERIAL_MAX) {
-          serialDates.push(num)
+          ymValues.push(serialToYM(num))
+          continue
+        }
+        // テキスト日付
+        const tm = String(raw).match(TEXT_DATE_RE)
+        if (tm) {
+          const y = parseInt(tm[1]), mo = parseInt(tm[2])
+          if (y >= 1990 && y <= 2035 && mo >= 1 && mo <= 12) {
+            ymValues.push(y * 12 + mo)
+          }
         }
       }
     }
-    if (serialDates.length >= 2) {
-      const minSerial = Math.min(...serialDates)
-      const maxSerial = Math.max(...serialDates)
-      const months = Math.round((maxSerial - minSerial) / 30.44)
+
+    if (ymValues.length >= 2) {
+      const minYM = Math.min(...ymValues)
+      const maxYM = Math.max(...ymValues)
+      const months = maxYM - minYM
       if (months > 0 && months < 600) {
-        console.log(`[skillYears-serial] minSerial=${minSerial} maxSerial=${maxSerial} months=${months}`)
+        const minY = Math.floor(minYM / 12), minM = minYM % 12 + 1
+        const maxY = Math.floor(maxYM / 12), maxM = maxYM % 12 + 1
+        console.log(`[skillYears-daterange] min=${minY}/${String(minM).padStart(2,'0')} max=${maxY}/${String(maxM).padStart(2,'0')} months=${months}`)
         return { _totalProjectMonths: months }
       }
     }
@@ -2284,8 +2309,8 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       if (csv.trim()) texts.push(`--- シート: ${sheetName} ---\n${cleanseExcelCsv(csv)}`)
       // 生データ（2D配列）取得 → ログ → skillYears 抽出
       const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as string[][]
-      // raw データを最大50行・2000文字チャンクでログ（品質チェック用）
-      const rawJson = JSON.stringify(data.slice(0, 50))
+      // raw データを最大150行・2000文字チャンクでログ（品質チェック用）
+      const rawJson = JSON.stringify(data.slice(0, 150))
       const CHUNK = 2000
       const totalChunks = Math.ceil(rawJson.length / CHUNK)
       for (let ci = 0; ci < totalChunks; ci++) {
