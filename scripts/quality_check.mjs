@@ -342,17 +342,37 @@ try {
 // ============================================================
 H('③ skill_master 品質')
 try {
-  // AI由来・未マッチエントリ
+  // AI由来・未マッチエントリ（怪しいパターン検出 ＝ skill_master_review.py 相当）
+  const SUSPICIOUS = [
+    [/^.{1,2}$/, '短すぎる（2文字以下）'],
+    [/^\d+$/, '数字のみ'],
+    [/^\d[\d.]+$/, 'バージョン番号'],
+    [/^[ぁ-ん]+$/, 'ひらがなのみ'],
+    [/^[ァ-ン]{1,3}$/, '短いカタカナ（3文字以下）'],
+    [/(経験|以上|対応|管理|設計|構築|運用|実装|業務|機能|処理|開発|作成|担当|実績|習得|使用|利用|活用)/, '技術語でない可能性がある日本語'],
+    [/\s{2,}/, 'スペース多数'],
+    [/.{61,}/, '60文字超（異常に長い）'],
+  ]
   const aiSrc = await dbQuery(
     'skill_master',
     `select=id,name,category,match_count,created_at` +
-    `&source=eq.ai&match_count=eq.0&order=created_at.desc&limit=50`
+    `&source=eq.ai&match_count=eq.0&order=created_at.desc&limit=500`
   )
-  row('AI由来・未マッチ', aiSrc.length > 0 ? `⚠️  ${aiSrc.length} 件（削除候補）` : `✅ 0 件`)
-  if (aiSrc.length > 0) {
-    console.log('\n  【削除候補（source=ai, match_count=0）】')
-    aiSrc.slice(0, 10).forEach(s => console.log(`    - ${s.name} (${s.category})`))
-    if (aiSrc.length > 10) console.log(`    ...他 ${aiSrc.length - 10} 件`)
+  const suspicious = aiSrc.filter(s => SUSPICIOUS.some(([re]) => re.test(s.name)))
+  const clean = aiSrc.filter(s => !SUSPICIOUS.some(([re]) => re.test(s.name)))
+  row('AI由来・未マッチ 合計', aiSrc.length > 0 ? `⚠️  ${aiSrc.length} 件` : `✅ 0 件`)
+  row('  うち怪しいパターン', suspicious.length > 0 ? `⚠️  ${suspicious.length} 件（削除推奨）` : `✅ 0 件`)
+  if (suspicious.length > 0) {
+    console.log('\n  【削除推奨（怪しいパターン一致）】')
+    suspicious.slice(0, 15).forEach(s => {
+      const reason = SUSPICIOUS.find(([re]) => re.test(s.name))?.[1] ?? ''
+      console.log(`    node scripts/add_skill.mjs --delete "${s.name}"  # ${reason}`)
+    })
+    if (suspicious.length > 15) console.log(`    ...他 ${suspicious.length - 15} 件`)
+  }
+  if (clean.length > 0) {
+    console.log(`\n  【AI由来だが正常パターン（match_count=0）: ${clean.length} 件】`)
+    clean.slice(0, 5).forEach(s => console.log(`    ${s.name} (${s.category})`))
   }
 
   // 30日未マッチ
@@ -370,6 +390,49 @@ try {
   )
   const total = countRes.headers.get('content-range')?.split('/')[1] ?? '?'
   row('総登録数', `${total} 件`)
+
+  // ── 未登録スキル検出（直近7日の candidates + projects から）──────
+  console.log('\n  【未登録スキル検出（直近7日）】')
+  const since7 = new Date(Date.now() - 7 * 86400000).toISOString()
+  const [recentCands, recentProjs] = await Promise.all([
+    dbQuery('candidates', `select=skills&created_at=gte.${since7}&data_env=eq.prod&limit=500`),
+    dbQuery('projects',   `select=required_skills,nice_to_have_skills&created_at=gte.${since7}&data_env=eq.prod&limit=200`),
+  ])
+  // 全スキル名を頻度カウント
+  const freqMap = {}
+  recentCands.forEach(c => {
+    if (!Array.isArray(c.skills)) return
+    c.skills.forEach(sk => {
+      const name = typeof sk === 'string' ? sk : sk?.name
+      if (name) freqMap[name] = (freqMap[name] ?? 0) + 1
+    })
+  })
+  recentProjs.forEach(p => {
+    ;[...(p.required_skills ?? []), ...(p.nice_to_have_skills ?? [])].forEach(name => {
+      if (name) freqMap[name] = (freqMap[name] ?? 0) + 1
+    })
+  })
+  // skill_master の既登録名+エイリアスを取得
+  const allSkills = await dbQuery('skill_master', `select=name,aliases&limit=5000`)
+  const knownSet = new Set()
+  allSkills.forEach(s => {
+    knownSet.add(s.name.toLowerCase())
+    if (Array.isArray(s.aliases)) s.aliases.forEach(a => knownSet.add(a.toLowerCase()))
+  })
+  // 未登録を頻度降順で抽出
+  const unregistered = Object.entries(freqMap)
+    .filter(([name]) => !knownSet.has(name.toLowerCase()))
+    .sort((a, b) => b[1] - a[1])
+  if (unregistered.length === 0) {
+    ok('未登録スキルなし')
+  } else {
+    warn(`未登録スキル ${unregistered.length} 件（頻出順上位15件）`)
+    console.log('\n  【add_skill.mjs コマンド候補】')
+    unregistered.slice(0, 15).forEach(([name, cnt]) => {
+      console.log(`    node scripts/add_skill.mjs "${name}" others  # ${cnt}件`)
+    })
+    if (unregistered.length > 15) console.log(`    ...他 ${unregistered.length - 15} 件`)
+  }
 } catch (e) {
   warn(`skill_master クエリ失敗: ${e.message}`)
 }
