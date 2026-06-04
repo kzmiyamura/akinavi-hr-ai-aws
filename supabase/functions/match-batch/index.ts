@@ -64,6 +64,7 @@ interface CandidateInput {
   skillYears?: Record<string, number> | null  // スキル別経験月数（Excelから抽出）
   desiredProject?: string | null              // 希望案件・希望分野（raw_profile.desiredProject）
   hakenOk?: boolean | null                    // 派遣・常駐OK/NG（raw_profile.hakenOk）
+  englishLevel?: 'business' | 'daily' | null // 英語レベル: business=業務レベル / daily=日常会話
 }
 
 interface ProjectReq {
@@ -151,8 +152,16 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
     for (const r of required) {
       const rt = r.toLowerCase().trim()
       if (!rt) continue
+      const isEnglish = rt === '英語' || rt === 'english' || rt.includes('英語')
       if (cSet.has(rt)) {
-        hits += 1
+        if (isEnglish) {
+          // 英語レベルで重みを変える: ビジネス=1.5倍 / 日常会話=0.8倍 / 不明=1.0
+          if (candidate.englishLevel === 'business') hits += 1.5
+          else if (candidate.englishLevel === 'daily') hits += 0.8
+          else hits += 1
+        } else {
+          hits += 1
+        }
       } else if ([...cSet].some(s => s.includes(rt) || rt.includes(s))) {
         hits += 0.5
       }
@@ -332,13 +341,15 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
   if (required.length > 0 && hits === 0) {
     total = Math.min(total, 35)
   }
-  // 派遣案件 × 派遣NG人材は上限20pt（フルリモート希望よりさらに厳しく）
+  // 派遣案件の加減点
   const isHakenProject = project.contractType === '派遣'
-  const hakenNote = isHakenProject && candidate.hakenOk === false
-    ? ' [派遣NG・派遣案件のため20pt上限]'
-    : ''
+  let hakenNote = ''
   if (isHakenProject && candidate.hakenOk === false) {
     total = Math.min(total, 20)
+    hakenNote = ' [派遣NG・派遣案件のため20pt上限]'
+  } else if (isHakenProject && candidate.hakenOk === true) {
+    total = Math.min(100, total + 5)
+    hakenNote = ' [派遣OK+5pt]'
   }
   const fullRemoteNote = (candidate.wantsFullRemote && !projectHasRemote) ? ' [フルリモート希望・常駐案件]' : ''
   const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt${fullRemoteNote}${hakenNote}`

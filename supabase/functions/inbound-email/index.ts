@@ -3801,6 +3801,13 @@ Deno.serve(async (req: Request) => {
         || proseFields.workStyle === 'リモート希望'
       // フルリモート希望: 常駐案件を避けマッチングスコアを下げるために使用
       const resolvedWantsFullRemote = proseFields.workStyle === 'フルリモート'
+      // 英語レベル抽出（ビジネス / 日常会話 / null）
+      const englishLevelRaw = (() => {
+        const t = bodyText + ' ' + attachText
+        if (/英語.{0,15}(ビジネス|業務レベル|ネイティブ|英文メール|英語業務)|ビジネス.{0,10}英語|TOEIC[^\d]*[789]\d\d|英検[12]級|英検準1級/.test(t)) return 'business'
+        if (/英語.{0,15}(日常会話|会話レベル)|日常会話.{0,10}英語|英会話|TOEIC[^\d]*[56]\d\d/.test(t)) return 'daily'
+        return null
+      })()
       // 派遣・常駐 OK/NG
       const hakenOkRaw = (() => {
         const t = bodyText + ' ' + attachText
@@ -3862,6 +3869,7 @@ Deno.serve(async (req: Request) => {
           remoteAvailable: resolvedRemoteAvailable,
           wantsFullRemote: resolvedWantsFullRemote || null,
           hakenOk: hakenOkRaw,
+          englishLevel: englishLevelRaw,
           from, subject,
           emailReceivedAt,
           attachmentCount: allAttachments.length,
