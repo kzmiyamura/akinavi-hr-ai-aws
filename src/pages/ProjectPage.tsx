@@ -19,6 +19,7 @@ import { DemoProjectCandidateGen } from '../components/DemoProjectCandidateGen'
 import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../lib/fileParser'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import { supabase } from '../lib/supabase'
+import { calcProjectWeights } from '../lib/db/candidates'
 
 interface Props {
   nickname: string
@@ -279,13 +280,21 @@ export function ProjectEditModal({ project, nickname, dataEnv, onClose, onSaved 
     setError(null)
     try {
       const niceToHaveSkills = splitComma(form.niceToHaveSkills)
+      const requiredSkillsArr = splitComma(form.requiredSkills)
+      const matchWeights = calcProjectWeights({
+        title: form.title.trim() || '案件',
+        description: form.description ?? '',
+        role_summary: form.roleSummary.trim() || null,
+        required_skills: requiredSkillsArr,
+        remote_policy: form.remotePolicy.trim() || null,
+      })
       await updateProject({
         id: project.id,
         dataEnv,
         title: form.title.trim() || '案件',
         client: form.client.trim() || null,
         description: form.description ?? '',
-        required_skills: splitComma(form.requiredSkills),
+        required_skills: requiredSkillsArr,
         budget_min: form.budgetMin !== '' ? Number(form.budgetMin) : null,
         budget_max: form.budgetMax !== '' ? Number(form.budgetMax) : null,
         start_date: form.startDate.trim() || null,
@@ -303,6 +312,7 @@ export function ProjectEditModal({ project, nickname, dataEnv, onClose, onSaved 
         raw_data: {
           ...(project.raw_data ?? {}),
           niceToHaveSkills,
+          matchWeights,
         },
         updated_by: nickname,
       })
