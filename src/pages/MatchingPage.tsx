@@ -1732,16 +1732,24 @@ const { data: projects = [] } = useQuery({
                     </div>
                     {/* 案件詳細サマリー */}
                     <div className="text-xs space-y-1.5 bg-gray-50 rounded-lg px-3 py-2.5">
-                      {(selectedProject.required_skills?.length ?? 0) > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {(selectedProject.required_skills as string[]).slice(0, 10).map(s => (
-                            <span key={s} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">{s}</span>
-                          ))}
-                          {(selectedProject.required_skills?.length ?? 0) > 10 && (
-                            <span className="text-gray-400">+{(selectedProject.required_skills?.length ?? 0) - 10}</span>
-                          )}
-                        </div>
-                      )}
+                      {(() => {
+                        const req = (selectedProject.required_skills as string[] | null) ?? []
+                        const nice = ((selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] | null) ?? []
+                        if (req.length === 0 && nice.length === 0) return null
+                        return (
+                          <div className="flex flex-wrap gap-1">
+                            {req.slice(0, 10).map(s => (
+                              <span key={s} className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded font-medium text-xs">{s}</span>
+                            ))}
+                            {req.length > 10 && (
+                              <span className="text-gray-400 text-xs">+{req.length - 10}</span>
+                            )}
+                            {nice.map(s => (
+                              <span key={s} className="px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded text-xs">{s}</span>
+                            ))}
+                          </div>
+                        )
+                      })()}
                       <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-gray-500">
                         {(selectedProject.budget_min != null || selectedProject.budget_max != null) && (
                           <span>単価: {selectedProject.budget_min ?? '?'}〜{selectedProject.budget_max ?? '?'}万</span>
