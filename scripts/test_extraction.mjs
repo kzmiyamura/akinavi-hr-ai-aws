@@ -195,7 +195,28 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     }
     if (age === null) {
       const bareAgeMatch = nameStripped.match(/[\s　]?[\(（](\d{2})[\)）]/)
-      if (bareAgeMatch) { age = parseInt(bareAgeMatch[1], 10); nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[\)）]/, '').trim() }
+      if (bareAgeMatch) { age = parseInt(bareAgeMatch[1], 10); nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[\)） ]/, '').trim() }
+    }
+  }
+  // 括弧内に「スキル名 X年」が1つ以上あれば nameSkillYears に抽出して括弧を除去 (#79)
+  let nameSkillYears = null
+  {
+    const skillYearBracket = nameStripped.match(/[\(（]([^)）]{3,80})[\)）]$/)
+    if (skillYearBracket) {
+      const parts = skillYearBracket[1].split(/\s*[\/／・、,]\s*/)
+      const entries = {}
+      for (const part of parts) {
+        const m = part.trim().match(/^(.+?)[ 　]+(\d+(?:\.\d+)?)\s*年/)
+        if (m) {
+          const skillName = m[1].trim()
+          const yrs = parseFloat(m[2])
+          if (skillName && yrs > 0 && yrs <= 50) entries[skillName] = Math.round(yrs * 12)
+        }
+      }
+      if (Object.keys(entries).length > 0) {
+        nameSkillYears = entries
+        nameStripped = nameStripped.replace(/[\s　]?[\(（][^)）]{3,80}[\)） ]$/, '').trim()
+      }
     }
   }
   let name = nameStripped || null
@@ -431,7 +452,7 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     if (mPost) fromCompany = sanitizeFromCompany(`${mPost[1]}${mPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
   }
 
-  return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany }
+  return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
 }
 
 function splitMultiCandidateBody(body) {
@@ -523,6 +544,8 @@ if (args.includes('--test')) {
   runCase('EN　30才　日本人',     '氏名：EN　30才　日本人\n最寄駅：渋谷\n経験年数：5年', '', { name: 'EN', age: 30 })
   runCase('国PF（男性/48歳、中国）', '氏名：国PF（男性/48歳、中国）\n最寄駅：渋谷\n経験年数：10年', '', { name: '国PF', age: 48, gender: '男性', nationality: '中国' })
   runCase('【T・N】【豊岡】（男性/26歳/日本人）', '■氏名：【T・N】【豊岡】（男性/26歳/日本人）\n■最寄：東向島\n■単金：56万円+精算', '', { name: 'T・N', age: 26, gender: '男性', nationality: '日本人' })
+  runCase('nameSkillYears: K.T（Java 5年 / Python 3年）', '氏名：K.T（Java 5年 / Python 3年）\n最寄駅：渋谷', '', { name: 'K.T', nameSkillYears: { Java: 60, Python: 36 } })
+  runCase('nameSkillYears: Spring Boot 7年', '氏名：Y.M（Spring Boot 7年）\n最寄駅：新宿', '', { name: 'Y.M', nameSkillYears: { 'Spring Boot': 84 } })
 
   // ── 駅名後処理: スラッシュ区切り路線名・常駐可サフィックス ─────────────
   console.log('\n【駅名後処理パターン】')
@@ -704,6 +727,10 @@ function printFields(f) {
   console.log(`  稼働時期    : ${ok(f.availableFrom)}`)
   console.log(`  希望案件    : ${ok(f.desiredProject)}`)
   console.log(`  送信元会社  : ${ok(f.fromCompany)}`)
+  if (f.nameSkillYears) {
+    const entries = Object.entries(f.nameSkillYears).map(([k, v]) => `${k}:${v}ヶ月`).join(' / ')
+    console.log(`  スキル年数  : ✅ ${entries}`)
+  }
 }
 
 function printProjectFields(bodyText, attachText) {

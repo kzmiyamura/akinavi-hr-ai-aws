@@ -1132,18 +1132,18 @@ function extractCandidateFieldsRegex(
   // 括弧内に「スキル名 X年」が1つ以上あれば nameSkillYears に抽出して括弧を除去
   let nameSkillYears: Record<string, number> | null = null
   {
-    // スキル名: アルファベット・カタカナ・記号（.#+等）含む1〜20文字 + 年数
-    const SKILL_YEAR_ENTRY = /([A-Za-z\u30A0-\u30FF\u4E00-\u9FFF][A-Za-z0-9\u30A0-\u30FF\u4E00-\u9FFF .#+\-_/]{0,19})[ 　]+(\d+(?:\.\d+)?)\s*年/g
-    const skillYearBracket = nameStripped.match(/[\(（][^)）]{3,80}[\)）]$/)
+    const skillYearBracket = nameStripped.match(/[\(（]([^)）]{3,80})[\)）]$/)
     if (skillYearBracket) {
-      const bracketContent = skillYearBracket[0]
+      // ` / ` や `・` `、` `,` で区切られた各エントリを個別にパース
+      const parts = skillYearBracket[1].split(/\s*[\/／・、,]\s*/)
       const entries: Record<string, number> = {}
-      let m: RegExpExecArray | null
-      SKILL_YEAR_ENTRY.lastIndex = 0
-      while ((m = SKILL_YEAR_ENTRY.exec(bracketContent)) !== null) {
-        const skillName = m[1].trim()
-        const yrs = parseFloat(m[2])
-        if (skillName && yrs > 0 && yrs <= 50) entries[skillName] = Math.round(yrs * 12)
+      for (const part of parts) {
+        const m = part.trim().match(/^(.+?)[ 　]+(\d+(?:\.\d+)?)\s*年/)
+        if (m) {
+          const skillName = m[1].trim()
+          const yrs = parseFloat(m[2])
+          if (skillName && yrs > 0 && yrs <= 50) entries[skillName] = Math.round(yrs * 12)
+        }
       }
       if (Object.keys(entries).length > 0) {
         nameSkillYears = entries
