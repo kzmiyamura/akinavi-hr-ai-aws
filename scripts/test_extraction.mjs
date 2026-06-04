@@ -562,7 +562,7 @@ if (args.includes('--test')) {
       niceSection = niceIdx >= 0 ? sectionText.slice(niceIdx).trim() : null
     }
     // 内　容：コロン形式
-    const colonDescM = body.match(/^内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s　].{1,15}[：:]|\n[【＜<]|$)/m)
+    const colonDescM = body.match(/(?:^|\n)内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s\u3000].{1,15}[：:]|\n[【＜<]|$)/)
     const colonDesc = colonDescM && colonDescM[1].trim().length >= 10 ? colonDescM[1].trim() : null
     const prefix = desc
     if ('budgetMax'        in exp) assert(`${prefix} | budgetMax`,       budgetMax,       exp.budgetMax)
@@ -703,6 +703,10 @@ if (args.includes('--test')) {
   runProjectCase('<スキル・条件>セクション検出', HELPDESK_BODY, { hasRequiredSkillSection: true })
   runProjectCase('<尚可>セクション検出',        HELPDESK_BODY, { hasNiceSection: true })
   runProjectCase('内　容：コロン形式のdesc取得', HELPDESK_BODY, { hasColonDesc: true })
+  // 複数行の内容が取れているか（UAT検証などが含まれるはず）
+  const colonDescCheck = HELPDESK_BODY.match(/(?:^|\n)内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s\u3000].{1,15}[：:]|\n[【＜<]|$)/)
+  const colonDescContent = colonDescCheck ? colonDescCheck[1].trim() : ''
+  assert('内　容：複数行取得（UAT検証含む）', colonDescContent.includes('UAT検証'), true)
 
   // ── 出力 ──
   console.log('\n' + '='.repeat(60))
@@ -850,7 +854,7 @@ function printProjectFields(bodyText, attachText) {
     }
   }
   // description: 内　容：コロン形式
-  const colonDescM = bodyText.match(/^内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s　].{1,15}[：:]|\n[【＜<]|$)/m)
+  const colonDescM = bodyText.match(/(?:^|\n)内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s\u3000].{1,15}[：:]|\n[【＜<]|$)/)
   if (colonDescM && colonDescM[1].trim().length >= 10) {
     console.log(`  内容(colon) : ✅ ${colonDescM[1].trim().slice(0, 100).replace(/\n/g, ' ')}`)
   }

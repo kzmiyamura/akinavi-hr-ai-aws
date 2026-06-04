@@ -4371,7 +4371,7 @@ Deno.serve(async (req: Request) => {
       // 2b. 内　容：（コロン形式）フォールバック — 「内　容：本文...」が複数行にわたる場合
       // 次のラベル行（2文字以上 + ：）が来るまで継続して取得
       if (!projectDescription) {
-        const colonM = bodyClean.match(/^内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s　].{1,15}[：:]|\n[【＜<]|$)/m)
+        const colonM = bodyClean.match(/(?:^|\n)内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s\u3000].{1,15}[：:]|\n[【＜<]|$)/)
         if (colonM && colonM[1].trim().length >= 10) {
           projectDescription = colonM[1]
             .replace(/^[ \t\u3000]+/gm, '')
