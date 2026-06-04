@@ -642,7 +642,19 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([])
   const [fileLoading, setFileLoading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const listScrollRef = useRef<HTMLDivElement>(null)
+  const savedScrollTop = useRef<number>(0)
   const queryClient = useQueryClient()
+
+  // 詳細パネルを閉じた後にリストのスクロール位置を復元する (#80)
+  useEffect(() => {
+    if (selectedId === null && listScrollRef.current && savedScrollTop.current > 0) {
+      const target = savedScrollTop.current
+      requestAnimationFrame(() => {
+        if (listScrollRef.current) listScrollRef.current.scrollTop = target
+      })
+    }
+  }, [selectedId])
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? [])
@@ -1095,7 +1107,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         ) : (
           <div className="flex flex-col md:flex-row">
             {/* Left: candidate list（モバイルで詳細表示中は非表示） */}
-            <div className={`w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px] ${selectedId ? 'hidden md:block' : ''}`}>
+            <div ref={listScrollRef} className={`w-full md:w-64 lg:w-72 shrink-0 border-b md:border-b-0 md:border-r border-gray-100 overflow-y-auto md:max-h-[640px] ${selectedId ? 'hidden md:block' : ''}`}>
               {filteredCandidates.map((c: Candidate) => {
                 const raw = getRaw(c)
                 const sbc = raw.skillsByCategory
@@ -1108,10 +1120,14 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     key={c.id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => setSelectedId(isSelected ? null : c.id)}
+                    onClick={() => {
+                      if (!isSelected) savedScrollTop.current = listScrollRef.current?.scrollTop ?? 0
+                      setSelectedId(isSelected ? null : c.id)
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
+                        if (!isSelected) savedScrollTop.current = listScrollRef.current?.scrollTop ?? 0
                         setSelectedId(isSelected ? null : c.id)
                       }
                     }}
@@ -1169,7 +1185,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   {/* モバイル用「一覧に戻る」ボタン */}
                   <button
                     type="button"
-                    onClick={() => setSelectedId(null)}
+                    onClick={() => { setSelectedId(null) }}
                     className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 md:hidden -mt-1 mb-1"
                   >
                     ← 一覧に戻る
