@@ -258,6 +258,12 @@ export function CandidateProfileFields({
               <Wifi size={10} />リモート可
             </span>
           )}
+          {(raw as Record<string, unknown>).hakenOk === true && (
+            <span className="text-xs bg-green-50 text-green-700 rounded px-1.5 py-0.5">派遣OK</span>
+          )}
+          {(raw as Record<string, unknown>).hakenOk === false && (
+            <span className="text-xs bg-red-50 text-red-600 rounded px-1.5 py-0.5">派遣NG</span>
+          )}
         </div>
       )}
 

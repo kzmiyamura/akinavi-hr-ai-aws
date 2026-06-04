@@ -3801,6 +3801,13 @@ Deno.serve(async (req: Request) => {
         || proseFields.workStyle === 'リモート希望'
       // フルリモート希望: 常駐案件を避けマッチングスコアを下げるために使用
       const resolvedWantsFullRemote = proseFields.workStyle === 'フルリモート'
+      // 派遣・常駐 OK/NG
+      const hakenOkRaw = (() => {
+        const t = bodyText + ' ' + attachText
+        if (/派遣[^\n]{0,10}(不可|NG|×)|常駐[^\n]{0,10}(不可|NG|×)|業務委託のみ|フルリモート(のみ|必須|限定)/.test(t)) return false
+        if (/派遣[^\n]{0,10}(可|OK|希望|対応)|常駐[^\n]{0,10}(可|OK|希望|対応)|SES[^\n]{0,10}(可|OK)|客先常駐[^\n]{0,10}可/.test(t)) return true
+        return null
+      })()
 
       // ── AI必要性チェック用: フィールドごとの情報源を記録 ──────────────────
       // 'ai'=AI提供, 'regex'=正規表現補完, 'prose'=文章スキャン補完, 'none'=取得不可
@@ -3854,6 +3861,7 @@ Deno.serve(async (req: Request) => {
           currentWorkLocation: analyzed.currentWorkLocation ?? null,
           remoteAvailable: resolvedRemoteAvailable,
           wantsFullRemote: resolvedWantsFullRemote || null,
+          hakenOk: hakenOkRaw,
           from, subject,
           emailReceivedAt,
           attachmentCount: allAttachments.length,

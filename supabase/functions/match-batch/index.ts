@@ -63,6 +63,7 @@ interface CandidateInput {
   selfPR?: string | null
   skillYears?: Record<string, number> | null  // スキル別経験月数（Excelから抽出）
   desiredProject?: string | null              // 希望案件・希望分野（raw_profile.desiredProject）
+  hakenOk?: boolean | null                    // 派遣・常駐OK/NG（raw_profile.hakenOk）
 }
 
 interface ProjectReq {
@@ -74,6 +75,7 @@ interface ProjectReq {
   budgetMax?: number | null
   workLocation?: string | null
   remotePolicy?: string | null
+  contractType?: string | null               // 契約形態（'派遣'/'業務委託'/'準委任'/'請負'）
   description?: string | null
   roleSummary?: string | null
 }
@@ -330,8 +332,16 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
   if (required.length > 0 && hits === 0) {
     total = Math.min(total, 35)
   }
+  // 派遣案件 × 派遣NG人材は上限20pt（フルリモート希望よりさらに厳しく）
+  const isHakenProject = project.contractType === '派遣'
+  const hakenNote = isHakenProject && candidate.hakenOk === false
+    ? ' [派遣NG・派遣案件のため20pt上限]'
+    : ''
+  if (isHakenProject && candidate.hakenOk === false) {
+    total = Math.min(total, 20)
+  }
   const fullRemoteNote = (candidate.wantsFullRemote && !projectHasRemote) ? ' [フルリモート希望・常駐案件]' : ''
-  const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt${fullRemoteNote}`
+  const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt${fullRemoteNote}${hakenNote}`
 
   return { total, breakdown }
 }

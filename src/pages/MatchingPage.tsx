@@ -70,6 +70,7 @@ type CandidateBatchInput = {
   selfPR?: string | null
   skillYears?: Record<string, number> | null
   desiredProject?: string | null
+  hakenOk?: boolean | null
 }
 
 function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
@@ -91,6 +92,7 @@ function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
     selfPR: (rp?.selfPR as string | null) ?? null,
     skillYears: (rp?.skillYears as Record<string, number> | null) ?? null,
     desiredProject: (rp?.desiredProject as string | null) ?? null,
+    hakenOk: (rp?.hakenOk as boolean | null) ?? null,
   }
 }
 

@@ -152,7 +152,11 @@ export function ProjectProfileFields({
 
       <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500">
         {p.industry && <span>業界: {p.industry}</span>}
-        {p.contract_type && <span>{p.contract_type}</span>}
+        {p.contract_type && (
+          <span className={p.contract_type === '派遣' ? 'font-medium text-orange-600' : ''}>
+            {p.contract_type === '派遣' ? '派遣（常駐）' : p.contract_type}
+          </span>
+        )}
         {p.headcount != null && <span>募集: {p.headcount}名</span>}
         {p.budget_min != null && (
           <span>予算: {p.budget_min}〜{p.budget_max ?? '?'}万</span>
