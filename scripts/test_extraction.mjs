@@ -381,12 +381,12 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   const allTextNorm = normalizeDigits(bodyText + '\n' + attachText)
   let experienceYears = null
   for (const p of [
-    // 「エンジニア歴：10年」「IT歴：8年」「システム開発歴：7年」など ラベル+コロン形式
-    /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)(?:開発)?歴[：:\s　]*[約]?\s*(\d+)\s*年/,
+    // 「エンジニア歴：10年」「SE歴：8年」「技術歴7年」など 職種/技術 + 歴 形式（セパレータ任意）
+    /(?:IT|エンジニア|SE|PG|開発|プログラム|システム|設計|インフラ|クラウド|技術|現場)(?:開発)?歴[：:\s　]*[約]?\s*(\d+)\s*年/,
     /経験[：:\s　]+[約]?\s*(\d+)\s*年/,
     /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
     /(?:経験年数|開発経験)[：:\s]*[約]?\s*(\d+)年/,
-    /(?:社会人歴|就労歴|通算|合計|累計)[：:\s　]*[約]?\s*(\d+)\s*年/,
+    /(?:社会人歴|就労歴|通算|合計|累計|キャリア)[：:\s　]*[約]?\s*(\d+)\s*年/,
   ]) {
     const m = allTextNorm.match(p)
     if (m) { const y = parseInt(m[1], 10); if (y > 0 && y <= 50 && String(y).length < 4) { experienceYears = y; break } }
@@ -549,6 +549,10 @@ if (args.includes('--test')) {
   runCase('年齢（Excel CSV /形式）',  '', '氏名 / D.U\n年齢 / 34\n性別 / 男', { age: 34, gender: '男' })
   runCase('経験年数（凡例テキスト誤マッチなし）', '', '凡例：◎＝業務経験1年以上 ○＝業務経験有', { experienceYears: null })
   runCase('経験年数（セパレータあり正常）', '経験：7年\n最寄駅：渋谷', '', { experienceYears: 7 })
+  runCase('経験年数（SE歴）',      'SE歴15年\n最寄駅：渋谷', '', { experienceYears: 15 })
+  runCase('経験年数（技術歴）',    '技術歴8年\n最寄駅：渋谷', '', { experienceYears: 8 })
+  runCase('経験年数（現場歴）',    '現場歴8年\n最寄駅：渋谷', '', { experienceYears: 8 })
+  runCase('経験年数（キャリア）',  'キャリア：10年\n最寄駅：渋谷', '', { experienceYears: 10 })
   runCase('国籍（括弧あり）',      '氏名：R.B（バングラデシュ籍）\n最寄駅：渋谷\n経験年数：5年', '', { nationality: 'バングラデシュ籍' })
   runCase('スラッシュ年齢（K.Y / 40歳）', '氏名：K.Y / 40歳 / 男性 / ベトナム籍\n最寄駅：渋谷\n経験年数：5年', '', { name: 'K.Y', age: 40, gender: '男性' })
 
