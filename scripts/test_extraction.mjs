@@ -381,11 +381,12 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   const allTextNorm = normalizeDigits(bodyText + '\n' + attachText)
   let experienceYears = null
   for (const p of [
-    /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)歴\s*[約]?\s*(\d+)\s*年/,
+    // 「エンジニア歴：10年」「IT歴：8年」「システム開発歴：7年」など ラベル+コロン形式
+    /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)(?:開発)?歴[：:\s　]*[約]?\s*(\d+)\s*年/,
     /経験[：:\s　]+[約]?\s*(\d+)\s*年/,
     /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
     /(?:経験年数|開発経験)[：:\s]*[約]?\s*(\d+)年/,
-    /(?:社会人歴|就労歴)[：:\s]*(\d+)年/,
+    /(?:社会人歴|就労歴|通算|合計|累計)[：:\s　]*[約]?\s*(\d+)\s*年/,
   ]) {
     const m = allTextNorm.match(p)
     if (m) { const y = parseInt(m[1], 10); if (y > 0 && y <= 50 && String(y).length < 4) { experienceYears = y; break } }

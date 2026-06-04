@@ -1430,12 +1430,13 @@ function extractCandidateFieldsRegex(
   // 全角数字→半角数字に正規化してからマッチ
   const normalizeDigits = (s: string) => s.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
   const expPatterns = [
-    /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)歴\s*[約]?\s*(\d+)\s*年/,
+    // 「エンジニア歴：10年」「IT歴：8年」「システム開発歴：7年」など ラベル+コロン形式
+    /(?:IT|エンジニア|開発|プログラム|システム|設計|インフラ|クラウド)(?:開発)?歴[：:\s　]*[約]?\s*(\d+)\s*年/,
     // セパレータ必須にして「業務経験1年以上」等の凡例テキストへの誤マッチを防ぐ
     /経験[：:\s　]+[約]?\s*(\d+)\s*年/,
     /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
     /(?:経験年数|開発経験)[：:\s]*[約]?\s*(\d+)年/,
-    /(?:社会人歴|就労歴)[：:\s]*(\d+)年/,
+    /(?:社会人歴|就労歴|通算|合計|累計)[：:\s　]*[約]?\s*(\d+)\s*年/,
   ]
   const allText = normalizeDigits(bodyText + '\n' + attachText)
   for (const p of expPatterns) {
