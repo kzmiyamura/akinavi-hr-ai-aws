@@ -4177,7 +4177,7 @@ Deno.serve(async (req: Request) => {
 
       // 予算: extractFieldTwoPhase で生文字列を取得してからパース
       const budgetRaw = extractFieldTwoPhase(
-        ['単価', '単　価', '報酬', '月額', '予算', '報酬単価'],
+        ['単価', '単　価', '報酬', '月額', '予算', '報酬単価', '金額', '金　額'],
         allProjectText, attachText, null, 50,
       )
       let budgetMin: number | null = null
@@ -4363,6 +4363,17 @@ Deno.serve(async (req: Request) => {
           const raw = nextHeader >= 0 ? contentRest.slice(0, nextHeader) : contentRest
           projectDescription = raw
             .replace(/[＜<][^＞>]+[＞>]/g, '')   // ＜体制＞等のサブ見出しを除去
+            .replace(/^[ \t\u3000]+/gm, '')
+            .trim()
+            .slice(0, 300)
+        }
+      }
+      // 2b. 内　容：（コロン形式）フォールバック — 「内　容：本文...」が複数行にわたる場合
+      // 次のラベル行（2文字以上 + ：）が来るまで継続して取得
+      if (!projectDescription) {
+        const colonM = bodyClean.match(/^内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s　].{1,15}[：:]|\n[【＜<]|$)/m)
+        if (colonM && colonM[1].trim().length >= 10) {
+          projectDescription = colonM[1]
             .replace(/^[ \t\u3000]+/gm, '')
             .trim()
             .slice(0, 300)

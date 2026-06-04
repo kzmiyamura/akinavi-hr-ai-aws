@@ -527,6 +527,48 @@ if (args.includes('--test')) {
     if ('experienceYears' in exp) assert(`${prefix} | exp`,     f.experienceYears,    exp.experienceYears)
     if ('nearestStation'  in exp) assert(`${prefix} | station`, f.nearestStation,     exp.nearestStation)
     if ('desiredRate'     in exp) assert(`${prefix} | rate`,    f.desiredRate,        exp.desiredRate)
+    if ('nameSkillYears' in exp) {
+      const got = JSON.stringify(f.nameSkillYears)
+      const expected = JSON.stringify(exp.nameSkillYears)
+      assert(`${prefix} | nameSkillYears`, got, expected)
+    }
+  }
+
+  function runProjectCase(desc, body, exp) {
+    const WS = '[ \\t\\u3000]*'
+    const budget = extractFieldTwoPhase(
+      ['単価','単　価','単金','月額','予算','報酬','金額','金　額'],
+      body, '', v => /\d/.test(v), 30,
+    )
+    // budget の万円パース
+    let budgetMax = null
+    if (budget) {
+      const rangeM = budget.match(/(\d{2,3})\s*[〜~～]\s*(\d{2,3})\s*万/)
+      if (rangeM) budgetMax = parseInt(rangeM[2], 10)
+      else {
+        const singleM = budget.match(/(\d{2,3})\s*万/)
+        if (singleM) { const v = parseInt(singleM[1], 10); if (v >= 20 && v <= 300) budgetMax = v }
+      }
+    }
+    // <スキル・条件> セクション検出
+    let requiredSection = null, niceSection = null
+    const angleM = body.match(/(?:スキル[ \t\u3000]*[：:]\s*)?[＜<]スキル[・．]?条件[＞>]([\s\S]*)/)
+    if (angleM) {
+      const sectionText = angleM[1]
+      const humanIdx = sectionText.search(/[＜<]人物面[＞>]/)
+      const niceIdx = sectionText.search(/[＜<]尚可[＞>]|尚可[：:]/)
+      const endRequired = Math.min(humanIdx >= 0 ? humanIdx : Infinity, niceIdx >= 0 ? niceIdx : Infinity)
+      requiredSection = (endRequired < Infinity ? sectionText.slice(0, endRequired) : sectionText).trim()
+      niceSection = niceIdx >= 0 ? sectionText.slice(niceIdx).trim() : null
+    }
+    // 内　容：コロン形式
+    const colonDescM = body.match(/^内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s　].{1,15}[：:]|\n[【＜<]|$)/m)
+    const colonDesc = colonDescM && colonDescM[1].trim().length >= 10 ? colonDescM[1].trim() : null
+    const prefix = desc
+    if ('budgetMax'        in exp) assert(`${prefix} | budgetMax`,       budgetMax,       exp.budgetMax)
+    if ('hasRequiredSkillSection' in exp) assert(`${prefix} | requiredSection`, requiredSection !== null, exp.hasRequiredSkillSection)
+    if ('hasNiceSection'   in exp) assert(`${prefix} | niceSection`,     niceSection !== null, exp.hasNiceSection)
+    if ('hasColonDesc'     in exp) assert(`${prefix} | colonDesc`,       colonDesc !== null, exp.hasColonDesc)
   }
 
   // ── ⑧ 名前汚染修正パターン（今回の修正が効いていること）─────────────────
@@ -639,6 +681,29 @@ if (args.includes('--test')) {
   runSplitCase('technication形式（ーーー区切り）', TECHNICATION_BODY, 2)
   runSplitCase('ical形式（--- + 【 氏 名 】スペース区切り）', ICAL_BODY, 2)
 
+  // ── ⑪ 案件フォーマット: <スキル・条件> / 金　額 / 内　容：コロン形式 ─────
+  console.log('\n【⑪ 案件フォーマット（<スキル・条件>形式）】')
+  const HELPDESK_BODY = [
+    '国際系勘定システムのヘルプデスクおよび関連業務',
+    '勤務地：大手町',
+    '金　額：～65万円（固定精算）',
+    '内　容：大手銀行の豪州・アジア地区の海外店勘定系システムにつき以下の業務を担う',
+    '　　　　海外店ユーザーからの紹介への対応、エラー対応、UAT検証など',
+    'スキル：<スキル・条件>',
+    '　　　　・英検二級程度の英語力',
+    '　　　　・所属会社で1～2年以上の勤務経験',
+    '　　　　<人物面>',
+    '　　　　・ビジネスマナー',
+    '　　　　<尚可>',
+    '　　　　・システム開発・保守の経験',
+    '　　　　・財務会計/簿記の知識がある',
+    '備　考：8:40～17:10の勤務',
+  ].join('\n')
+  runProjectCase('金　額：～65万円',           HELPDESK_BODY, { budgetMax: 65 })
+  runProjectCase('<スキル・条件>セクション検出', HELPDESK_BODY, { hasRequiredSkillSection: true })
+  runProjectCase('<尚可>セクション検出',        HELPDESK_BODY, { hasNiceSection: true })
+  runProjectCase('内　容：コロン形式のdesc取得', HELPDESK_BODY, { hasColonDesc: true })
+
   // ── 出力 ──
   console.log('\n' + '='.repeat(60))
   const failedList = results.filter(r => !r.ok)
@@ -740,7 +805,7 @@ function printProjectFields(bodyText, attachText) {
     bodyText, attachText, v => v.length >= 2, 30,
   )
   const budget = extractFieldTwoPhase(
-    ['単価','単　価','単金','月額','予算','報酬'],
+    ['単価','単　価','単金','月額','予算','報酬','金額','金　額'],
     bodyText, attachText, v => /\d/.test(v), 30,
   )
   const period = extractFieldTwoPhase(
@@ -760,7 +825,7 @@ function printProjectFields(bodyText, attachText) {
   console.log(`  時期        : ${ok(period)}`)
   console.log(`  募集        : ${ok(headcount)}`)
   console.log(`  面談        : ${ok(interview)}`)
-  // スキルセクション検出
+  // スキルセクション検出（【スキル】形式 or <スキル・条件> 形式）
   const skillStart = bodyText.search(/【スキル[^】]*】/)
   if (skillStart >= 0) {
     const afterSkill = bodyText.slice(skillStart)
@@ -770,5 +835,23 @@ function printProjectFields(bodyText, attachText) {
     const niceText = niceIdx >= 0 ? rest.slice(niceIdx, niceIdx + 300) : ''
     console.log(`  必須スキル欄: ${dim('(DB照合でのみ確定)')} 先頭: ${requiredText.slice(0, 80).replace(/\n/g, ' ').trim()}`)
     if (niceText) console.log(`  尚可スキル欄: 先頭: ${niceText.slice(0, 60).replace(/\n/g, ' ').trim()}`)
+  } else {
+    const angleM = bodyText.match(/(?:スキル[ \t\u3000]*[：:]\s*)?[＜<]スキル[・．]?条件[＞>]([\s\S]*)/)
+    if (angleM) {
+      const sectionText = angleM[1]
+      const humanIdx = sectionText.search(/[＜<]人物面[＞>]/)
+      const niceIdx = sectionText.search(/[＜<]尚可[＞>]|尚可[：:]/)
+      const endRequired = Math.min(humanIdx >= 0 ? humanIdx : Infinity, niceIdx >= 0 ? niceIdx : Infinity)
+      const requiredText = endRequired < Infinity ? sectionText.slice(0, endRequired) : sectionText
+      const niceText = niceIdx >= 0 ? sectionText.slice(niceIdx) : ''
+      console.log(`  必須スキル欄: ${dim('(DB照合でのみ確定)')} 先頭: ${requiredText.slice(0, 80).replace(/\n/g, ' ').trim()}`)
+      if (humanIdx >= 0) console.log(`  人物面欄    : ${dim('スキル判定除外')}`)
+      if (niceText) console.log(`  尚可スキル欄: 先頭: ${niceText.slice(0, 60).replace(/\n/g, ' ').trim()}`)
+    }
+  }
+  // description: 内　容：コロン形式
+  const colonDescM = bodyText.match(/^内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s　].{1,15}[：:]|\n[【＜<]|$)/m)
+  if (colonDescM && colonDescM[1].trim().length >= 10) {
+    console.log(`  内容(colon) : ✅ ${colonDescM[1].trim().slice(0, 100).replace(/\n/g, ' ')}`)
   }
 }
