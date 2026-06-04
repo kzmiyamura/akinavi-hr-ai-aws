@@ -230,7 +230,7 @@ export function ProjectProfileFields({
                 const years = requiredSkillYears[s]
                 const minYear = years?.length ? Math.min(...years) : null
                 return (
-                  <span key={s} className="text-xs bg-purple-50 text-purple-700 rounded px-1.5 py-0.5">
+                  <span key={s} className="text-xs bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium">
                     {s}{minYear != null && <span className="opacity-60 ml-0.5">({minYear}年↑)</span>}
                   </span>
                 )
@@ -244,7 +244,7 @@ export function ProjectProfileFields({
             <div className="flex flex-wrap gap-1 items-center">
               <span className="text-xs text-gray-400 w-12 shrink-0">尚可</span>
               {(showAll ? nice : nice.slice(0, 10)).map((s) => (
-                <span key={s} className="text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{s}</span>
+                <span key={s} className="text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5">{s}</span>
               ))}
               {!showAll && nice.length > 10 && (
                 <span className="text-xs text-gray-400">+{nice.length - 10}</span>
