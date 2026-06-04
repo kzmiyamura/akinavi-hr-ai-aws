@@ -1062,6 +1062,7 @@ function extractCandidateFieldsRegex(
   availableFrom: string | null
   desiredProject: string | null
   fromCompany: string | null
+  nameSkillYears: Record<string, number> | null
 } {
   // ── 氏名 ──────────────────────────────────────────────────────
   // Phase3 は日本語の姓名（2文字〜）も有効なので phase3MinLen=2
@@ -1122,6 +1123,31 @@ function extractCandidateFieldsRegex(
       if (bareAgeMatch) {
         age = parseInt(bareAgeMatch[1], 10)
         nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[\)）]/, '').trim()
+      }
+    }
+  }
+
+  // ── 名前後ろのスキル経験年数 (#79) ──────────────────────────────
+  // 「K.T（Java 5年 / Python 3年）」のように名前の後ろ括弧にスキル年数が含まれるケース
+  // 括弧内に「スキル名 X年」が1つ以上あれば nameSkillYears に抽出して括弧を除去
+  let nameSkillYears: Record<string, number> | null = null
+  {
+    // スキル名: アルファベット・カタカナ・記号（.#+等）含む1〜20文字 + 年数
+    const SKILL_YEAR_ENTRY = /([A-Za-z\u30A0-\u30FF\u4E00-\u9FFF][A-Za-z0-9\u30A0-\u30FF\u4E00-\u9FFF .#+\-_/]{0,19})[ 　]+(\d+(?:\.\d+)?)\s*年/g
+    const skillYearBracket = nameStripped.match(/[\(（][^)）]{3,80}[\)）]$/)
+    if (skillYearBracket) {
+      const bracketContent = skillYearBracket[0]
+      const entries: Record<string, number> = {}
+      let m: RegExpExecArray | null
+      SKILL_YEAR_ENTRY.lastIndex = 0
+      while ((m = SKILL_YEAR_ENTRY.exec(bracketContent)) !== null) {
+        const skillName = m[1].trim()
+        const yrs = parseFloat(m[2])
+        if (skillName && yrs > 0 && yrs <= 50) entries[skillName] = Math.round(yrs * 12)
+      }
+      if (Object.keys(entries).length > 0) {
+        nameSkillYears = entries
+        nameStripped = nameStripped.replace(/[\s　]?[\(（][^)）]{3,80}[\)）]$/, '').trim()
       }
     }
   }
@@ -1527,7 +1553,7 @@ function extractCandidateFieldsRegex(
     if (mPost) fromCompany = sanitizeFromCompany(`${mPost[1]}${mPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
   }
 
-  return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany }
+  return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
 }
 
 /**
@@ -3503,6 +3529,8 @@ Deno.serve(async (req: Request) => {
                 selfPR: extractSelfPR(block, blockAttachText) ?? null,
                 agentComment: extractAgentComment(block, blockAttachText) ?? null,
                 multiCandidateBlock: true,
+                // 名前後ろ括弧のスキル年数（#79）: 「K.T（Java 5年 / Python 3年）」形式
+                skillYears: blockRegexFields.nameSkillYears ?? undefined,
               },
               duplicate_flag: false,
               created_by: 'make-inbound',
@@ -3850,8 +3878,11 @@ Deno.serve(async (req: Request) => {
             const displayExcel = Object.fromEntries(
               Object.entries(excelSkillYears).filter(([k]) => k !== '_totalProjectMonths')
             )
-            if (Object.keys(displayExcel).length > 0) return displayExcel
-            if (Object.keys(wordSkillYearsForDisplay).length > 0) return wordSkillYearsForDisplay
+            // 名前後ろ括弧のスキル年数（#79）: 「K.T（Java 5年 / Python 3年）」形式
+            const nameYears = regexFields.nameSkillYears ?? {}
+            if (Object.keys(displayExcel).length > 0) return { ...nameYears, ...displayExcel }
+            if (Object.keys(wordSkillYearsForDisplay).length > 0) return { ...nameYears, ...wordSkillYearsForDisplay }
+            if (Object.keys(nameYears).length > 0) return nameYears
             return undefined
           })(),
         },
