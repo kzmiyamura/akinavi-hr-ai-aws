@@ -162,6 +162,11 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
         } else {
           hits += 1
         }
+      } else if (isEnglish && candidate.englishLevel != null) {
+        // スキルに「英語」がなくてもメール本文で英語力が確認できれば加点
+        // ビジネスレベル=1.0点 / 日常会話=0.5点
+        if (candidate.englishLevel === 'business') hits += 1.0
+        else hits += 0.5
       } else if ([...cSet].some(s => s.includes(rt) || rt.includes(s))) {
         hits += 0.5
       }
