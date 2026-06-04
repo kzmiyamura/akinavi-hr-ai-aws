@@ -323,10 +323,15 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
   const projectHasRemote = isFullRemote || /リモート|remote|在宅/i.test(project.remotePolicy ?? '')
   let remoteScore = 0
   let remoteDetail: string
+  const isHakenProjectForRemote = project.contractType === '派遣'
   if (candidate.wantsFullRemote && !projectHasRemote) {
     // フルリモート希望なのに常駐・リモートなし案件 → 減点
     remoteScore = -wRemote
     remoteDetail = `リモート-${wRemote}/${wRemote}(フルリモート希望・常駐案件)`
+  } else if (isHakenProjectForRemote && candidate.hakenOk === true) {
+    // 派遣（常駐）案件で常駐可 → リモート枠を常駐適応力として満点付与
+    remoteScore = wRemote
+    remoteDetail = `リモート${wRemote}/${wRemote}(常駐可・派遣案件)`
   } else if (!isFullRemote && candidate.remoteAvailable && /リモート|remote|在宅/i.test(project.remotePolicy ?? '')) {
     // リモート可 × 週リモート案件 → 加点
     remoteScore = wRemote
@@ -347,7 +352,7 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
     total = Math.min(total, 35)
   }
   // 派遣案件の加減点
-  const isHakenProject = project.contractType === '派遣'
+  const isHakenProject = isHakenProjectForRemote
   let hakenNote = ''
   if (isHakenProject && candidate.hakenOk === false) {
     total = Math.min(total, 20)
