@@ -189,6 +189,24 @@ export async function updateProject(input: UpdateProjectInput): Promise<Project>
   return data as Project
 }
 
+/** 案件のマッチングウェイトのみ更新する（raw_data をマージ） */
+export async function saveProjectMatchWeights(
+  id: string,
+  dataEnv: DataEnv,
+  weights: Record<string, number>,
+  currentRawData: Record<string, unknown>,
+): Promise<void> {
+  const { error } = await supabase
+    .from('projects')
+    .update({
+      raw_data: { ...currentRawData, matchWeights: weights },
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id)
+    .eq('data_env', dataEnv)
+  if (error) throw new Error(`ウェイトの保存に失敗しました: ${error.message}`)
+}
+
 /** 案件を削除する */
 export async function deleteProject(id: string, dataEnv: DataEnv): Promise<void> {
   const { error } = await supabase

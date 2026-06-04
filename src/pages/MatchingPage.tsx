@@ -12,6 +12,7 @@ import {
   projectToMatchRequirements,
   projectsQueryKeys,
   fetchProjectsByIds,
+  saveProjectMatchWeights,
 } from '../lib/db/projects'
 import {
   upsertSubmission,
@@ -885,6 +886,7 @@ export function MatchingPage({
   const [mode, setMode] = useState<MatchMode>('project')
   const [scoringWeights, setScoringWeights] = useState<ScoringWeights>({ ...DEFAULT_SCORING_WEIGHTS })
   const [showWeightsPanel, setShowWeightsPanel] = useState(false)
+  const [savingWeights, setSavingWeights] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -1347,6 +1349,24 @@ const { data: projects = [] } = useQuery({
   const selectedProject = projectList.find((p) => p.id === selectedProjectId) ?? null
   const selectedCandidate = candidateList.find((c) => c.id === selectedCandidateId) ?? null
 
+  // 案件選択時にその案件のカスタムウェイトを自動読み込み
+  useEffect(() => {
+    if (!selectedProject) return
+    const saved = (selectedProject.raw_data as Record<string, unknown>)?.matchWeights as Partial<ScoringWeights> | undefined
+    if (saved && typeof saved === 'object') {
+      setScoringWeights(w => ({
+        ...w,
+        ...(saved.skill != null && { skill: saved.skill }),
+        ...(saved.exp != null && { exp: saved.exp }),
+        ...(saved.rate != null && { rate: saved.rate }),
+        ...(saved.location != null && { location: saved.location }),
+        ...(saved.remote != null && { remote: saved.remote }),
+      }))
+    } else {
+      setScoringWeights({ ...DEFAULT_SCORING_WEIGHTS })
+    }
+  }, [selectedProjectId]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const selectedProjectRanked = selectedProject
     ? toRankedForProject(sortedSelectedProjectSubs, candidateList)
     : []
@@ -1528,6 +1548,33 @@ const { data: projects = [] } = useQuery({
                 🔧 スキル重視
               </button>
             </div>
+            {mode === 'project' && selectedProject && (
+              <button
+                type="button"
+                disabled={savingWeights}
+                onClick={async () => {
+                  setSavingWeights(true)
+                  try {
+                    await saveProjectMatchWeights(
+                      selectedProject.id,
+                      dataEnv,
+                      scoringWeights,
+                      (selectedProject.raw_data ?? {}) as Record<string, unknown>,
+                    )
+                    queryClient.invalidateQueries({ queryKey: projectsQueryKeys.open(dataEnv) })
+                    setMessage({ type: 'success', text: 'この案件にウェイトを保存しました' })
+                  } catch (e) {
+                    setMessage({ type: 'error', text: String(e) })
+                  } finally {
+                    setSavingWeights(false)
+                  }
+                }}
+                className="w-full mt-1 inline-flex items-center justify-center gap-1.5 text-xs bg-green-600 text-white rounded px-3 py-1.5 hover:bg-green-700 disabled:opacity-50 transition-colors"
+              >
+                {savingWeights ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle size={11} />}
+                この案件に保存
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -1664,7 +1711,12 @@ const { data: projects = [] } = useQuery({
                       }`}
                     >
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-gray-800 truncate">{p.title}</div>
+                        <div className="text-sm font-medium text-gray-800 truncate flex items-center gap-1">
+                          {p.title}
+                          {(p.raw_data as Record<string, unknown>)?.matchWeights && (
+                            <span className="text-[10px] bg-green-100 text-green-700 rounded px-1 shrink-0">⚖ カスタム</span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-2 text-xs mt-0.5 flex-wrap">
                           {p.client && <span className="text-gray-400 truncate">{p.client}</span>}
                           {isBusy ? (
