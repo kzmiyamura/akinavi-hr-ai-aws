@@ -4294,28 +4294,54 @@ Deno.serve(async (req: Request) => {
         const end = rest.search(NEXT_HEADER_RE)
         return { text: end >= 0 ? rest.slice(0, end) : rest }
       })()
+      // スキル名 → エイリアスのマップ（aliases チェック用。"Visual Basic .NET" → VB.NET 対応）
+      const skillAliasMap = new Map(masterSkills.map(s => [s.name, s.aliases]))
+      // スペースなし比較 + エイリアス比較も追加（"Spring Boot" vs "Springboot" / "VB.NET" vs "Visual Basic .NET" 等の表記ゆれ対応）
+      const matchesText = (s: string, text: string) => {
+        const sl = s.toLowerCase()
+        const tl = text.toLowerCase()
+        if (tl.includes(sl) || tl.includes(sl.replace(/\s+/g, ''))) return true
+        const aliases = skillAliasMap.get(s) ?? []
+        return aliases.some(a => a && (tl.includes(a.toLowerCase()) || tl.includes(a.toLowerCase().replace(/\s+/g, ''))))
+      }
+      const skillFiltered = dbSkillNames.filter(s => !PROJECT_PROCESS_NOISE.has(s))
+
       if (skillSectionM2) {
         const skillText = skillSectionM2.text
         const niceIdx = skillText.search(/[＜<]尚可[＞>]|尚可[：:]/)
         const requiredText = niceIdx >= 0 ? skillText.slice(0, niceIdx) : skillText
         const niceText = niceIdx >= 0 ? skillText.slice(niceIdx) : ''
-        const skillFiltered = dbSkillNames.filter(s => !PROJECT_PROCESS_NOISE.has(s))
-        // スキル名 → エイリアスのマップ（aliases チェック用。"Visual Basic .NET" → VB.NET 対応）
-        const skillAliasMap = new Map(masterSkills.map(s => [s.name, s.aliases]))
-        // スペースなし比較 + エイリアス比較も追加（"Spring Boot" vs "Springboot" / "VB.NET" vs "Visual Basic .NET" 等の表記ゆれ対応）
-        const matchesText = (s: string, text: string) => {
-          const sl = s.toLowerCase()
-          const tl = text.toLowerCase()
-          if (tl.includes(sl) || tl.includes(sl.replace(/\s+/g, ''))) return true
-          const aliases = skillAliasMap.get(s) ?? []
-          return aliases.some(a => a && (tl.includes(a.toLowerCase()) || tl.includes(a.toLowerCase().replace(/\s+/g, ''))))
-        }
         const inRequired = skillFiltered.filter(s => matchesText(s, requiredText))
         projectRequiredSkills = inRequired.length > 0 ? inRequired : skillFiltered
         if (niceText) {
           projectNiceToHaveSkills = skillFiltered
             .filter(s => matchesText(s, niceText))
             .filter(s => !projectRequiredSkills.includes(s))
+        }
+      } else {
+        // フォールバック: 「スキル：<スキル・条件>」形式（角括弧デリミタ）
+        // 例: スキル：<スキル・条件> ～ <人物面> ～ <尚可> 形式のメール
+        const angleSkillM = allProjectText.match(
+          /(?:スキル[ \t\u3000]*[：:]\s*)?[＜<]スキル[・．]?条件[＞>]([\s\S]*)/
+        )
+        if (angleSkillM) {
+          const sectionText = angleSkillM[1]
+          // <人物面> は人物像・マナー記述なのでスキル判定から除外
+          const humanIdx = sectionText.search(/[＜<]人物面[＞>]/)
+          const niceIdx = sectionText.search(/[＜<]尚可[＞>]|尚可[：:]/)
+          const endRequired = Math.min(
+            humanIdx >= 0 ? humanIdx : Infinity,
+            niceIdx >= 0 ? niceIdx : Infinity,
+          )
+          const requiredText = endRequired < Infinity ? sectionText.slice(0, endRequired) : sectionText
+          const niceText = niceIdx >= 0 ? sectionText.slice(niceIdx) : ''
+          const inRequired = skillFiltered.filter(s => matchesText(s, requiredText))
+          projectRequiredSkills = inRequired.length > 0 ? inRequired : skillFiltered
+          if (niceText) {
+            projectNiceToHaveSkills = skillFiltered
+              .filter(s => matchesText(s, niceText))
+              .filter(s => !projectRequiredSkills.includes(s))
+          }
         }
       }
 
