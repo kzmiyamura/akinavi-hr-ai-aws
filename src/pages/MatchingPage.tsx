@@ -595,21 +595,22 @@ function ProjectModeRankCard({
               </p>
             )
           })()}
-          <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0">
-            {s.ai_summary ? (
+          <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0 space-y-2">
+            {s.ai_summary && (
               <>
                 <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
-                <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words leading-relaxed">{s.ai_summary}</p>
+                <p className="text-xs text-gray-700 whitespace-pre-wrap break-words leading-relaxed">{s.ai_summary}</p>
               </>
-            ) : (s.ai_raw as Record<string, unknown>)?.breakdown ? (
+            )}
+            {(s.ai_raw as Record<string, unknown>)?.breakdown ? (
               <>
                 <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">スコア内訳（ルールベース）</p>
-                <p className="text-xs text-gray-600 mt-1 break-words leading-relaxed font-mono">{String((s.ai_raw as Record<string, unknown>).breakdown)}</p>
+                <p className="text-xs text-gray-600 break-words leading-relaxed font-mono">{String((s.ai_raw as Record<string, unknown>).breakdown)}</p>
               </>
-            ) : (
+            ) : !s.ai_summary && (
               <>
                 <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
-                <p className="text-xs text-gray-400 mt-1">（理由テキストなし）</p>
+                <p className="text-xs text-gray-400">（理由テキストなし）</p>
               </>
             )}
           </div>
@@ -786,21 +787,22 @@ function CandidateModeRankCard({
           {p?.work_location && (
             <p className="text-xs text-gray-400 mt-0.5 break-words">{p.work_location}</p>
           )}
-          <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0">
-            {s.ai_summary ? (
+          <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0 space-y-2">
+            {s.ai_summary && (
               <>
                 <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
-                <p className="text-xs text-gray-700 mt-1 whitespace-pre-wrap break-words leading-relaxed">{s.ai_summary}</p>
+                <p className="text-xs text-gray-700 whitespace-pre-wrap break-words leading-relaxed">{s.ai_summary}</p>
               </>
-            ) : (s.ai_raw as Record<string, unknown>)?.breakdown ? (
+            )}
+            {(s.ai_raw as Record<string, unknown>)?.breakdown ? (
               <>
                 <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">スコア内訳（ルールベース）</p>
-                <p className="text-xs text-gray-600 mt-1 break-words leading-relaxed font-mono">{String((s.ai_raw as Record<string, unknown>).breakdown)}</p>
+                <p className="text-xs text-gray-600 break-words leading-relaxed font-mono">{String((s.ai_raw as Record<string, unknown>).breakdown)}</p>
               </>
-            ) : (
+            ) : !s.ai_summary && (
               <>
                 <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
-                <p className="text-xs text-gray-400 mt-1">（理由テキストなし）</p>
+                <p className="text-xs text-gray-400">（理由テキストなし）</p>
               </>
             )}
           </div>
