@@ -564,11 +564,18 @@ if (args.includes('--test')) {
     // 内　容：コロン形式
     const colonDescM = body.match(/(?:^|\n)内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s\u3000].{1,15}[：:]|\n[【＜<]|$)/)
     const colonDesc = colonDescM && colonDescM[1].trim().length >= 10 ? colonDescM[1].trim() : null
+    // contractType 判定（index.ts と同じロジック）
+    let contractType = null
+    if (/業務委託/.test(body)) contractType = '業務委託'
+    else if (/準委任/.test(body)) contractType = '準委任'
+    else if (/派遣/.test(body)) contractType = '派遣'
+    else if (/請負/.test(body)) contractType = '請負'
     const prefix = desc
     if ('budgetMax'        in exp) assert(`${prefix} | budgetMax`,       budgetMax,       exp.budgetMax)
     if ('hasRequiredSkillSection' in exp) assert(`${prefix} | requiredSection`, requiredSection !== null, exp.hasRequiredSkillSection)
     if ('hasNiceSection'   in exp) assert(`${prefix} | niceSection`,     niceSection !== null, exp.hasNiceSection)
     if ('hasColonDesc'     in exp) assert(`${prefix} | colonDesc`,       colonDesc !== null, exp.hasColonDesc)
+    if ('contractType'     in exp) assert(`${prefix} | contractType`,    contractType,    exp.contractType)
   }
 
   // ── ⑧ 名前汚染修正パターン（今回の修正が効いていること）─────────────────
@@ -697,12 +704,13 @@ if (args.includes('--test')) {
     '　　　　<尚可>',
     '　　　　・システム開発・保守の経験',
     '　　　　・財務会計/簿記の知識がある',
-    '備　考：8:40～17:10の勤務',
+    '備　考：8:40～17:10の勤務。派遣での採用が必要です。',
   ].join('\n')
   runProjectCase('金　額：～65万円',           HELPDESK_BODY, { budgetMax: 65 })
   runProjectCase('<スキル・条件>セクション検出', HELPDESK_BODY, { hasRequiredSkillSection: true })
   runProjectCase('<尚可>セクション検出',        HELPDESK_BODY, { hasNiceSection: true })
   runProjectCase('内　容：コロン形式のdesc取得', HELPDESK_BODY, { hasColonDesc: true })
+  runProjectCase('備考：派遣contractType検出',  HELPDESK_BODY, { contractType: '派遣' })
   // 複数行の内容が取れているか（UAT検証などが含まれるはず）
   const colonDescCheck = HELPDESK_BODY.match(/(?:^|\n)内[ \t\u3000]?容[ \t\u3000]?[：:]([\s\S]*?)(?=\n[^\s\u3000].{1,15}[：:]|\n[【＜<]|$)/)
   const colonDescContent = colonDescCheck ? colonDescCheck[1].trim() : ''
