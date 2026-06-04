@@ -372,13 +372,16 @@ const SKILL_HEAD = 12
 const accordionSummaryCls =
   'flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden'
 
-function SkillTagsWithAccordion({ skills, highlightSkills = [] }: { skills: string[], highlightSkills?: string[] }) {
+function SkillTagsWithAccordion({ skills, highlightSkills = [], niceHighlightSkills = [] }: { skills: string[], highlightSkills?: string[], niceHighlightSkills?: string[] }) {
   if (skills.length === 0) return null
   const hlSet = new Set(highlightSkills.map(s => s.toLowerCase()))
-  const tagCls = (sk: string) =>
-    hlSet.size > 0 && hlSet.has(sk.toLowerCase())
-      ? 'text-xs bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium'
-      : 'text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5'
+  const niceSet = new Set(niceHighlightSkills.map(s => s.toLowerCase()))
+  const tagCls = (sk: string) => {
+    const skl = sk.toLowerCase()
+    if (hlSet.size > 0 && hlSet.has(skl)) return 'text-xs bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium'
+    if (niceSet.size > 0 && niceSet.has(skl)) return 'text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5 font-medium'
+    return 'text-xs bg-blue-50 text-blue-700 rounded px-1.5 py-0.5'
+  }
   if (skills.length <= SKILL_HEAD) {
     return (
       <div className="flex flex-wrap gap-1 mt-1">
@@ -471,6 +474,7 @@ function ProjectModeRankCard({
   onDecide,
   duplicates,
   requiredSkills = [],
+  niceToHaveSkills = [],
 }: {
   s: RankedSubmission
   rankIndex: number
@@ -479,6 +483,7 @@ function ProjectModeRankCard({
   onDecide?: (submission: Submission) => void
   duplicates?: DuplicateCandidate[]
   requiredSkills?: string[]
+  niceToHaveSkills?: string[]
 }) {
   const [showEmail, setShowEmail] = useState(false)
   const rawText = (s.candidate.raw_profile as Record<string, unknown>)?.text as string | undefined
@@ -553,10 +558,45 @@ function ProjectModeRankCard({
           })()}
           {(() => {
             const allSkills = (s.candidate.skills as string[]) ?? []
-            const reqLower = requiredSkills.map(r => r.toLowerCase())
-            const matched = allSkills.filter(sk => reqLower.some(r => sk.toLowerCase().includes(r) || r.includes(sk.toLowerCase())))
-            const unmatched = allSkills.filter(sk => !reqLower.some(r => sk.toLowerCase().includes(r) || r.includes(sk.toLowerCase())))
-            return <SkillTagsWithAccordion skills={[...matched, ...unmatched]} highlightSkills={matched} />
+            const skillMatch = (sk: string, list: string[]) => list.some(r => sk.toLowerCase().includes(r.toLowerCase()) || r.toLowerCase().includes(sk.toLowerCase()))
+            const reqMatched = allSkills.filter(sk => skillMatch(sk, requiredSkills))
+            const niceMatched = allSkills.filter(sk => !skillMatch(sk, requiredSkills) && skillMatch(sk, niceToHaveSkills))
+            const unmatched = allSkills.filter(sk => !skillMatch(sk, requiredSkills) && !skillMatch(sk, niceToHaveSkills))
+            return <SkillTagsWithAccordion skills={[...reqMatched, ...niceMatched, ...unmatched]} highlightSkills={reqMatched} niceHighlightSkills={niceMatched} />
+          })()}
+          {(requiredSkills.length > 0 || niceToHaveSkills.length > 0) && (() => {
+            const allSkills = (s.candidate.skills as string[]) ?? []
+            const skillMatch = (req: string) => allSkills.some(sk => sk.toLowerCase().includes(req.toLowerCase()) || req.toLowerCase().includes(sk.toLowerCase()))
+            return (
+              <div className="mt-1.5 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 space-y-1.5">
+                {requiredSkills.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">必須スキル</p>
+                    <div className="flex flex-wrap gap-1">
+                      {requiredSkills.map(req => (
+                        <span key={req} className={skillMatch(req)
+                          ? 'text-xs bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium'
+                          : 'text-xs bg-gray-100 text-gray-400 rounded px-1.5 py-0.5 line-through'
+                        }>{req}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {niceToHaveSkills.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">尚可スキル</p>
+                    <div className="flex flex-wrap gap-1">
+                      {niceToHaveSkills.map(nice => (
+                        <span key={nice} className={skillMatch(nice)
+                          ? 'text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5 font-medium'
+                          : 'text-xs bg-gray-100 text-gray-400 rounded px-1.5 py-0.5'
+                        }>{nice}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
           })()}
           {(s.candidate.drive_url || s.candidate.resume_url) && (
             <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -1747,6 +1787,7 @@ const { data: projects = [] } = useQuery({
                               onDecide={(sub) => decideMutation.mutate(sub)}
                               duplicates={duplicatesMap[s.candidate.id]}
                               requiredSkills={selectedProject.required_skills as string[]}
+                              niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
                             />
                           ))}
                           <RankingRestAccordion count={selectedProjectRanked.length - RANK_HEAD} unitLabel="名">
@@ -1759,6 +1800,7 @@ const { data: projects = [] } = useQuery({
                                 scoreColor={scoreColor}
                                 onDecide={(sub) => decideMutation.mutate(sub)}
                                 requiredSkills={selectedProject.required_skills as string[]}
+                                niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
                               />
                             ))}
                           </RankingRestAccordion>
