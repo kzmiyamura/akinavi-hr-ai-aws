@@ -191,7 +191,7 @@ function AppInner() {
               <SettingsPage demoUiEnabled={demoUiEnabled} onToggleDemoUi={setDemoUiEnabled} />
             )}
             {tabPage === 'heatmap' && (
-              <HeatmapPage dataEnv={dataEnv} />
+              <HeatmapPage dataEnv={dataEnv} onSelectCandidate={openCandidateDetail} />
             )}
           </Suspense>
         </TabErrorBoundary>

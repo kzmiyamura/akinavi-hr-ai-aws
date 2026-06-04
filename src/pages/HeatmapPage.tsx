@@ -9,6 +9,7 @@ import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
   dataEnv: DataEnv
+  onSelectCandidate?: (id: string) => void
 }
 
 interface GeoFeature {
@@ -47,7 +48,7 @@ function formatDate(iso: string): string {
 const MAP_W = 700
 const MAP_H = 500
 
-export function HeatmapPage({ dataEnv }: Props) {
+export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   const [skillFilter, setSkillFilter] = useState<string>('')
   const [inputValue, setInputValue] = useState<string>('')
   const [period, setPeriod] = useState<'7d' | 'all'>('7d')
@@ -393,24 +394,31 @@ export function HeatmapPage({ dataEnv }: Props) {
             </div>
           ) : (
             <ul className="divide-y divide-gray-50">
-              {prefCandidates.map((c) => (
-                <li key={c.id} className="px-4 py-2.5 flex items-start gap-3">
-                  <div className="shrink-0 text-xs text-gray-400 mt-0.5 whitespace-nowrap">
-                    {formatDate(c.created_at)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <span className="text-xs font-medium text-gray-700">{c.name}</span>
-                      {c.is_archived && (
-                        <span className="text-xs bg-gray-100 text-gray-400 px-1 rounded">アーカイブ</span>
-                      )}
+              {prefCandidates.map((c) => {
+                const canOpen = !c.is_archived && !!onSelectCandidate
+                return (
+                  <li
+                    key={c.id}
+                    className={`px-4 py-2.5 flex items-start gap-3 transition-colors ${canOpen ? 'cursor-pointer hover:bg-amber-50' : ''}`}
+                    onClick={canOpen ? () => onSelectCandidate(c.id) : undefined}
+                  >
+                    <div className="shrink-0 text-xs text-gray-400 mt-0.5 whitespace-nowrap">
+                      {formatDate(c.created_at)}
                     </div>
-                    <div className="text-xs text-gray-500 truncate" title={c.subject ?? ''}>
-                      {c.subject ?? '（件名なし）'}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className={`text-xs font-medium ${canOpen ? 'text-blue-700 underline' : 'text-gray-700'}`}>{c.name}</span>
+                        {c.is_archived && (
+                          <span className="text-xs bg-gray-100 text-gray-400 px-1 rounded">アーカイブ</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 truncate" title={c.subject ?? ''}>
+                        {c.subject ?? '（件名なし）'}
+                      </div>
                     </div>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                )
+              })}
             </ul>
           )}
         </div>
