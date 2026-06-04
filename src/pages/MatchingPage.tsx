@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail, SlidersHorizontal, RotateCcw, Reply, ExternalLink } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { CandidateProfileFields } from './CandidatePage'
-import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates, DEFAULT_SCORING_WEIGHTS } from '../lib/db/candidates'
+import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates, DEFAULT_SCORING_WEIGHTS, calcProjectWeights } from '../lib/db/candidates'
 import type { ScoringWeights } from '../lib/db/candidates'
 import { logError } from '../lib/errorLog'
 import {
@@ -1349,23 +1349,16 @@ const { data: projects = [] } = useQuery({
   const selectedProject = projectList.find((p) => p.id === selectedProjectId) ?? null
   const selectedCandidate = candidateList.find((c) => c.id === selectedCandidateId) ?? null
 
-  // 案件選択時にその案件のカスタムウェイトを自動読み込み
+  // 案件選択時: 保存済みウェイト → なければ案件内容から自動計算
   useEffect(() => {
     if (!selectedProject) return
     const saved = (selectedProject.raw_data as Record<string, unknown>)?.matchWeights as Partial<ScoringWeights> | undefined
-    if (saved && typeof saved === 'object') {
-      setScoringWeights(w => ({
-        ...w,
-        ...(saved.skill != null && { skill: saved.skill }),
-        ...(saved.exp != null && { exp: saved.exp }),
-        ...(saved.rate != null && { rate: saved.rate }),
-        ...(saved.location != null && { location: saved.location }),
-        ...(saved.remote != null && { remote: saved.remote }),
-      }))
+    if (saved && typeof saved === 'object' && saved.skill != null) {
+      setScoringWeights({ skill: saved.skill, exp: saved.exp ?? 15, rate: saved.rate ?? 15, location: saved.location ?? 20, remote: saved.remote ?? 10 })
     } else {
-      setScoringWeights({ ...DEFAULT_SCORING_WEIGHTS })
+      setScoringWeights(calcProjectWeights(selectedProject))
     }
-  }, [selectedProjectId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedProject?.id]) // selectedProject?.id: プロジェクトが非同期ロードされた後も再発火させるため
 
   const selectedProjectRanked = selectedProject
     ? toRankedForProject(sortedSelectedProjectSubs, candidateList)

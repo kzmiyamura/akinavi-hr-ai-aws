@@ -337,6 +337,35 @@ function dedupeTrimmedSkills(skills: unknown): string[] {
   )
 }
 
+/** 案件内容からマッチングウェイトを自動計算（フロントの calcProjectWeights と同ロジック） */
+function calcProjectWeightsForEdge(project: {
+  title?: string | null
+  description?: string | null
+  role_summary?: string | null
+  required_skills?: string[]
+  remote_policy?: string | null
+}): { skill: number; exp: number; rate: number; location: number; remote: number } {
+  const req = project.required_skills ?? []
+  const fullText = [project.title, project.description, project.role_summary].filter(Boolean).join(' ')
+  let skill = 40
+  const hasLanguageSkill = req.some((s) => /英語|中国語|韓国語|語学|通訳|翻訳|TOEIC|英検/.test(s))
+  if (hasLanguageSkill) skill += 15
+  else if (req.length >= 5) skill += 10
+  else if (req.length <= 2) skill -= 5
+  let exp = 15
+  if (/経験年数不問|未経験可|第二新卒|経験問わ/.test(fullText)) exp = 5
+  else if (/\d+年以上|\d+年超|ベテラン|シニア/.test(fullText)) exp = 20
+  let remote = 10
+  const isFullRemote = /フルリモート|完全リモート|100[%％]リモート/.test(project.remote_policy ?? '')
+  const hasRemote = /リモート|在宅/.test(project.remote_policy ?? '')
+  if (isFullRemote) remote = 20
+  else if (!hasRemote) remote = 5
+  let location = 20
+  if (isFullRemote) location = 10
+  const rate = Math.max(5, 100 - skill - exp - location - remote)
+  return { skill, exp, rate, location, remote }
+}
+
 /** Gemini の案件JSONが「空」とみなせるか（配列は全要素が空なら空） */
 function isProjectAIResultEmpty(result: unknown): boolean {
   if (Array.isArray(result)) {
@@ -4484,6 +4513,13 @@ Deno.serve(async (req: Request) => {
         const requiredSkills = dedupeTrimmedSkills(raw.requiredSkills)
         const niceToHaveSkills = dedupeTrimmedSkills(raw.niceToHaveSkills)
         const description = typeof raw.description === 'string' ? raw.description : ''
+        const matchWeights = calcProjectWeightsForEdge({
+          title: typeof raw.title === 'string' ? raw.title : null,
+          description,
+          role_summary: strOrNull(raw.roleSummary),
+          required_skills: requiredSkills,
+          remote_policy: strOrNull(raw.remotePolicy),
+        })
         const headcount = parseOptionalInt(raw.headcount, 1, 500)
         const settlementMin = parseOptionalInt(raw.settlementMin, 0, 744)
         const settlementMax = parseOptionalInt(raw.settlementMax, 0, 744)
@@ -4514,6 +4550,7 @@ Deno.serve(async (req: Request) => {
             ...sharedRawMeta,
             batchIndex,
             niceToHaveSkills,
+            matchWeights,
             requiredSkillYears: (raw as { requiredSkillYears?: Record<string, number[]> }).requiredSkillYears ?? {},
             aiAnalysis: {
               ...raw,
