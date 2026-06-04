@@ -4306,18 +4306,27 @@ Deno.serve(async (req: Request) => {
       }
       const skillFiltered = dbSkillNames.filter(s => !PROJECT_PROCESS_NOISE.has(s))
 
+      /**
+       * 共通ヘルパー: niceText から nice-to-have を決定し、
+       * required = 本文全体スキル - (nice-to-have で本文required部に出てこないもの)
+       * → タイトル・description にあるスキルも required に残る
+       */
+      const applySkillSections = (niceText: string) => {
+        const niceSkills = niceText
+          ? skillFiltered.filter(s => matchesText(s, niceText))
+          : []
+        // niceText にしか出てこないスキルだけ nice-to-have に移動
+        // （本文の他の場所にも出てくるなら required に残す）
+        const bodyExclNice = niceText ? allProjectText.replace(niceText, '') : allProjectText
+        projectNiceToHaveSkills = niceSkills.filter(s => !matchesText(s, bodyExclNice))
+        projectRequiredSkills = skillFiltered.filter(s => !projectNiceToHaveSkills.includes(s))
+      }
+
       if (skillSectionM2) {
         const skillText = skillSectionM2.text
         const niceIdx = skillText.search(/[＜<]尚可[＞>]|尚可[：:]/)
-        const requiredText = niceIdx >= 0 ? skillText.slice(0, niceIdx) : skillText
         const niceText = niceIdx >= 0 ? skillText.slice(niceIdx) : ''
-        const inRequired = skillFiltered.filter(s => matchesText(s, requiredText))
-        projectRequiredSkills = inRequired.length > 0 ? inRequired : skillFiltered
-        if (niceText) {
-          projectNiceToHaveSkills = skillFiltered
-            .filter(s => matchesText(s, niceText))
-            .filter(s => !projectRequiredSkills.includes(s))
-        }
+        applySkillSections(niceText)
       } else {
         // フォールバック: 「スキル：<スキル・条件>」形式（角括弧デリミタ）
         // 例: スキル：<スキル・条件> ～ <人物面> ～ <尚可> 形式のメール
@@ -4326,22 +4335,9 @@ Deno.serve(async (req: Request) => {
         )
         if (angleSkillM) {
           const sectionText = angleSkillM[1]
-          // <人物面> は人物像・マナー記述なのでスキル判定から除外
-          const humanIdx = sectionText.search(/[＜<]人物面[＞>]/)
           const niceIdx = sectionText.search(/[＜<]尚可[＞>]|尚可[：:]/)
-          const endRequired = Math.min(
-            humanIdx >= 0 ? humanIdx : Infinity,
-            niceIdx >= 0 ? niceIdx : Infinity,
-          )
-          const requiredText = endRequired < Infinity ? sectionText.slice(0, endRequired) : sectionText
           const niceText = niceIdx >= 0 ? sectionText.slice(niceIdx) : ''
-          const inRequired = skillFiltered.filter(s => matchesText(s, requiredText))
-          projectRequiredSkills = inRequired.length > 0 ? inRequired : skillFiltered
-          if (niceText) {
-            projectNiceToHaveSkills = skillFiltered
-              .filter(s => matchesText(s, niceText))
-              .filter(s => !projectRequiredSkills.includes(s))
-          }
+          applySkillSections(niceText)
         }
       }
 
