@@ -209,9 +209,12 @@ export function ProjectProfileFields({
       </div>
 
       {p.description && (
-        <p className="text-xs text-gray-500 leading-relaxed whitespace-pre-wrap">
-          {showAll ? p.description : (p.description.length > 240 ? `${p.description.slice(0, 240)}…` : p.description)}
-        </p>
+        <div className="space-y-0.5">
+          <span className="text-xs text-gray-400 font-medium">案件内容</span>
+          <p className="text-xs text-gray-500 leading-relaxed whitespace-pre-wrap">
+            {showAll ? p.description : (p.description.length > 240 ? `${p.description.slice(0, 240)}…` : p.description)}
+          </p>
+        </div>
       )}
 
       {(required.length > 0 || nice.length > 0) && (
