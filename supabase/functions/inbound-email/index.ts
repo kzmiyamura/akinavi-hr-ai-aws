@@ -2261,7 +2261,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
     }
     if (expYrCol >= 0 && skillCol3 >= 0 && skillCol3 !== expYrCol) {
       const SM3: Record<string, number> = {}
-      const BLOCKLIST3 = /^(自己PR|PR|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|担当|役割|評価|合計|スコア|レベル|プロジェクト名|企業名|規模|人数|期間|開始|終了)$/
+      const BLOCKLIST3 = /^(自己PR|PR|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|担当|役割|評価|合計|スコア|レベル|プロジェクト名|企業名|規模|人数|期間|開始|終了|弊社社員|自社社員|社員|派遣|契約|フリー)$/
       for (let i = hdrRow3 + 1; i < data.length; i++) {
         const row = data[i]
         const expRaw = String(row[expYrCol] ?? '').trim()
@@ -2279,7 +2279,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
 
   // ── Method 2: スキル一覧型 ──
   // セクション見出し語（スキル名として誤採用しないもの）
-  const SKILL_LABEL_BLOCKLIST = /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|勤務先|担当|役割|役職|所属|評価|合計|スコア|レベル|備考欄|担当工程|プロジェクト名|案件名|企業名|会社名|規模|人数|期間|開始|終了|備考・コメント)$/
+  const SKILL_LABEL_BLOCKLIST = /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|勤務先|担当|役割|役職|所属|評価|合計|スコア|レベル|備考欄|担当工程|プロジェクト名|案件名|企業名|会社名|規模|人数|期間|開始|終了|備考・コメント|弊社社員|自社社員|社員|派遣|契約|フリー)$/
   const skillMonths2: Record<string, number> = {}
   for (const row of data) {
     if (!row || row.length < 2) continue
@@ -2476,7 +2476,8 @@ function extractSkillYearsFromSheetJson(rows: Array<Record<string, string>>): Re
     // スキル抽出
     for (const col of skillCols) {
       const val = row[col] ?? ''
-      const skills = val.split(/[\n\r、，,\/・]+/).map(s => s.trim()).filter(s => s && s !== '-' && s !== '－' && s.length >= 2 && !/^\d+$/.test(s))
+      const JSON_SKILL_BLOCKLIST = /^(自己PR|PR|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|担当|役割|評価|合計|スコア|レベル|プロジェクト名|企業名|規模|人数|期間|開始|終了|弊社社員|自社社員|社員|派遣|契約|フリー|なし|特になし|未経験|なし$)$/
+      const skills = val.split(/[\n\r、，,\/・]+/).map(s => s.trim()).filter(s => s && s !== '-' && s !== '－' && s.length >= 2 && !/^\d+$/.test(s) && !JSON_SKILL_BLOCKLIST.test(s))
       for (const skill of skills) {
         skillMonths[skill] = (skillMonths[skill] ?? 0) + months
       }
