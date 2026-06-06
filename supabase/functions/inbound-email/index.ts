@@ -1584,13 +1584,30 @@ function extractCandidateFieldsRegex(
   let fromCompany: string | null = null
   const allBodyText = bodyText + '\n' + attachText
   const sigArea = allBodyText.slice(-1200)
-  // 「株式会社 XXX」先頭パターン（半角・全角スペース対応）
-  const mPre = sigArea.match(/(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^（(（\s　\n、。！【】「」]{2,20})/)
-  if (mPre) fromCompany = sanitizeFromCompany(`${mPre[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${mPre[1]}`)
+
+  // 宛先行チェック: マッチ位置の直後に「様」「御中」「ご担当」が続く場合は宛先として除外
+  function isSalutation(text: string, matchIndex: number, matchLen: number): boolean {
+    const after = text.slice(matchIndex + matchLen, matchIndex + matchLen + 40)
+    return /^[\r\n　 ]*(?:様|御中|ご担当|担当者様|採用担当|ご関係者)/.test(after)
+  }
+
+  // 全マッチを収集して宛先以外の最後のマッチを採用（送信者署名は末尾に近いため）
+  const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^（(（\s　\n、。！【】「」]{2,20})/g
+  let bestPre: RegExpExecArray | null = null
+  let m: RegExpExecArray | null
+  while ((m = PRE_RE.exec(sigArea)) !== null) {
+    if (!isSalutation(sigArea, m.index, m[0].length)) bestPre = m
+  }
+  if (bestPre) fromCompany = sanitizeFromCompany(`${bestPre[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${bestPre[1]}`)
+
   // 「XXX株式会社」末尾パターン（前述で取れなかった場合・半角・全角スペース対応）
   if (!fromCompany) {
-    const mPost = sigArea.match(/([^（(（\s　\n、。！【】「」]{2,20})[　 ]?(?:株式会社|有限会社|合同会社)/)
-    if (mPost) fromCompany = sanitizeFromCompany(`${mPost[1]}${mPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
+    const POST_RE = /([^（(（\s　\n、。！【】「」]{2,20})[　 ]?(?:株式会社|有限会社|合同会社)/g
+    let bestPost: RegExpExecArray | null = null
+    while ((m = POST_RE.exec(sigArea)) !== null) {
+      if (!isSalutation(sigArea, m.index, m[0].length)) bestPost = m
+    }
+    if (bestPost) fromCompany = sanitizeFromCompany(`${bestPost[1]}${bestPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
   }
 
   return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }

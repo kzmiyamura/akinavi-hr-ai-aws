@@ -40,10 +40,14 @@ Deno.serve(async (req) => {
   cutoff.setDate(cutoff.getDate() - retentionDays)
   const cutoffISO = cutoff.toISOString()
 
-  const BUCKETS = ['resumes']
+  // バケット名 → フォルダプレフィックスのマッピング
+  // attachments バケットの resumes/ フォルダが対象（2026-05-23以降 Storage書き込みは廃止済み）
+  const TARGETS: { bucket: string; folder: string }[] = [
+    { bucket: 'attachments', folder: 'resumes' },
+  ]
   const summary: Record<string, { deleted: number; errors: number; freedBytes: number }> = {}
 
-  for (const bucket of BUCKETS) {
+  for (const { bucket, folder } of TARGETS) {
     let deleted = 0
     let errors = 0
     let freedBytes = 0
@@ -54,39 +58,40 @@ Deno.serve(async (req) => {
     while (true) {
       const { data: files, error: listError } = await supabase.storage
         .from(bucket)
-        .list('', { limit: PAGE_SIZE, offset, sortBy: { column: 'created_at', order: 'asc' } })
+        .list(folder, { limit: PAGE_SIZE, offset, sortBy: { column: 'created_at', order: 'asc' } })
 
       if (listError) {
-        console.error(`[cleanup-storage] list error bucket=${bucket} offset=${offset}:`, listError.message)
+        console.error(`[cleanup-storage] list error bucket=${bucket}/${folder} offset=${offset}:`, listError.message)
         break
       }
       if (!files || files.length === 0) break
 
-      // cutoff より古いファイルだけ対象
+      // cutoff より古いファイルだけ対象（created_at がない場合も削除対象にする）
       const oldFiles = files.filter(f => {
         const created = f.created_at ?? (f.metadata as Record<string, string> | null)?.lastModified
-        return created && created < cutoffISO
+        return !created || created < cutoffISO
       })
 
       if (oldFiles.length > 0) {
-        const paths = oldFiles.map(f => f.name)
+        // Storage のパスはフォルダ名を含める必要がある
+        const paths = oldFiles.map(f => `${folder}/${f.name}`)
         const { error: removeError } = await supabase.storage.from(bucket).remove(paths)
         if (removeError) {
-          console.error(`[cleanup-storage] remove error bucket=${bucket}:`, removeError.message)
+          console.error(`[cleanup-storage] remove error bucket=${bucket}/${folder}:`, removeError.message)
           errors += paths.length
         } else {
           deleted += paths.length
           freedBytes += oldFiles.reduce((sum, f) => sum + ((f.metadata as Record<string, number> | null)?.size ?? 0), 0)
-          console.log(`[cleanup-storage] deleted ${paths.length} files from ${bucket}: ${paths.slice(0, 5).join(', ')}${paths.length > 5 ? '...' : ''}`)
+          console.log(`[cleanup-storage] deleted ${paths.length} files from ${bucket}/${folder}: ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? '...' : ''}`)
         }
       }
 
-      // 全件が古い場合は次ページへ、古くないファイルが混在したら終了（昇順ソートなので以降は新しい）
+      // 全件が削除対象なら次ページへ
       if (oldFiles.length < files.length) break
       offset += PAGE_SIZE
     }
 
-    summary[bucket] = { deleted, errors, freedBytes }
+    summary[`${bucket}/${folder}`] = { deleted, errors, freedBytes }
   }
 
   const totalDeleted = Object.values(summary).reduce((s, v) => s + v.deleted, 0)
