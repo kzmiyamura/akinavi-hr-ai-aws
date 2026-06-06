@@ -47,30 +47,25 @@ async function main() {
   console.log(`対象: ${rows.length} 件\n`)
 
   let ok = 0, ng = 0, skip = 0
+  const CONCURRENCY = 5
 
-  for (const row of rows) {
-    const rp  = row.raw_profile ?? {}
+  async function processOne(row) {
+    const rp = row.raw_profile ?? {}
     const text = rp.text ?? ''
-    const station = rp.nearestStation ?? '(不明)'
-
     if (!text) {
       console.log(`  SKIP ${row.name} — raw_profile.text なし`)
       skip++
-      continue
+      return
     }
-
-    console.log(`  ${row.name} / 最寄駅: ${station}`)
-
-    if (DRY_RUN) { ok++; continue }
-
-    // inbound-email を force=true で再投入
+    if (DRY_RUN) {
+      console.log(`  [DRY] ${row.name} / 最寄駅: ${rp.nearestStation}`)
+      ok++
+      return
+    }
     try {
       const resp = await fetch(`${EDGE_URL}/inbound-email`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${ANON_KEY}`,
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ANON_KEY}` },
         body: JSON.stringify({
           force: true,
           data_env: 'prod',
@@ -79,23 +74,24 @@ async function main() {
           body:    text,
         }),
       })
-
       const json = await resp.json().catch(() => null)
       if (!resp.ok || json?.ok === false) {
-        console.log(`    NG (${resp.status}) ${json?.error ?? ''}`)
+        console.log(`  NG  ${row.name} (${resp.status}) ${json?.error ?? ''}`)
         ng++
       } else {
-        const pref = json?.candidates?.[0]?.prefecture ?? json?.prefecture ?? '?'
-        console.log(`    OK → prefecture: ${pref}`)
         ok++
       }
     } catch (e) {
-      console.error(`    ERROR: ${e.message}`)
+      console.error(`  ERR ${row.name}: ${e.message}`)
       ng++
     }
+  }
 
-    // レート制限対策
-    await new Promise(r => setTimeout(r, 300))
+  // 5並列で処理・進捗表示
+  for (let i = 0; i < rows.length; i += CONCURRENCY) {
+    const chunk = rows.slice(i, i + CONCURRENCY)
+    await Promise.all(chunk.map(r => processOne(r)))
+    console.log(`進捗: ${Math.min(i + CONCURRENCY, rows.length)} / ${rows.length}`)
   }
 
   console.log(`\n完了: OK=${ok} / NG=${ng} / SKIP=${skip}`)
