@@ -83,6 +83,8 @@ function sanitizeFromCompany(value) {
   const postM = trimmed.match(/^([^\sの　\n、。！（）【】「」]{2,20}(?:株式会社|有限会社|合同会社))/)
   if (postM) trimmed = postM[1]
   trimmed = trimmed.replace(/の[^\s　]{1,15}(?:でございます|です|と申します|でした).*$/, '')
+  // 法人格のみ（識別名なし）は無効
+  if (/^(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)$/.test(trimmed)) return null
   return trimmed || null
 }
 

@@ -333,6 +333,8 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
   if (postM) { trimmed = postM[1]; }
   // 「の〇〇でございます」「の〇〇です」等が残っていれば除去
   trimmed = trimmed.replace(/の[^\s　]{1,15}(?:でございます|です|と申します|でした).*$/, '')
+  // 法人格のみ（識別名なし）は無効 — 例: 「株式会社の小川です」→「株式会社」→ null
+  if (/^(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)$/.test(trimmed)) return null
   return trimmed || null
 }
 
