@@ -491,10 +491,12 @@ function ProjectModeRankCard({
 }) {
   const [showEmail, setShowEmail] = useState(false)
   const rawText = (s.candidate.raw_profile as Record<string, unknown>)?.text as string | undefined
-  // 派遣免許バッジ
+  // 雇用形態・派遣免許バッジ
   const fromEmail = (s.candidate.raw_profile as Record<string, unknown>)?.from as string | undefined
   const emailDomain = fromEmail?.split('@')[1]?.toLowerCase()
   const licenseStatus = emailDomain && agentDomainMap ? agentDomainMap.get(emailDomain)?.license_status ?? null : null
+  const employmentType = (s.candidate.raw_profile as Record<string, unknown>)?.employmentType as string | null
+  const isHaken = employmentType === '派遣社員'
   return (
     <div className="border border-gray-100 rounded-lg overflow-hidden bg-white min-w-0">
     <div className="p-3 sm:p-4 flex flex-col gap-3 sm:flex-row sm:items-start">
@@ -525,13 +527,24 @@ function ProjectModeRankCard({
                 <AlertTriangle size={11} />重複の疑い
               </span>
             )}
-            {licenseStatus === 'haken' || licenseStatus === 'both' ? (
-              <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">派遣可</span>
-            ) : licenseStatus === 'shokai' ? (
-              <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5">紹介可</span>
-            ) : licenseStatus === 'none' ? (
-              <span className="text-[10px] bg-red-100 text-red-600 rounded px-1.5 py-0.5">免許なし</span>
-            ) : null}
+            {employmentType && (
+              <span className="text-[10px] bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">{employmentType}</span>
+            )}
+            {isHaken && (
+              licenseStatus === 'haken' || licenseStatus === 'both' ? (
+                <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">派遣免許あり</span>
+              ) : licenseStatus === 'none' ? (
+                <span className="flex items-center gap-0.5 text-[10px] bg-red-100 text-red-600 rounded px-1.5 py-0.5 font-medium">
+                  <AlertTriangle size={10} />派遣免許なし
+                </span>
+              ) : licenseStatus === 'shokai' ? (
+                <span className="flex items-center gap-0.5 text-[10px] bg-orange-100 text-orange-600 rounded px-1.5 py-0.5 font-medium">
+                  <AlertTriangle size={10} />派遣免許なし（紹介のみ）
+                </span>
+              ) : (
+                <span className="text-[10px] bg-yellow-100 text-yellow-700 rounded px-1.5 py-0.5">派遣免許未確認</span>
+              )
+            )}
           </div>
           {(() => {
             const rp2 = s.candidate.raw_profile as Record<string, unknown>
