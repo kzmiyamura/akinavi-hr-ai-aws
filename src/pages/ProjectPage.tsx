@@ -62,10 +62,13 @@ interface EditForm {
   roleSummary: string
   industry: string
   status: Project['status']
+  requiresEnglish: 'none' | 'business' | 'native'
+  allowedEmploymentTypes: string[]
 }
 
 function toEditForm(p: Project): EditForm {
   const rawNice = (p.raw_data as { niceToHaveSkills?: unknown })?.niceToHaveSkills
+  const rawData = (p.raw_data ?? {}) as Record<string, unknown>
   return {
     title: p.title ?? '',
     client: p.client ?? '',
@@ -86,6 +89,8 @@ function toEditForm(p: Project): EditForm {
     roleSummary: p.role_summary ?? '',
     industry: p.industry ?? '',
     status: p.status,
+    requiresEnglish: (rawData.requiresEnglish as 'none' | 'business' | 'native' | undefined) ?? 'none',
+    allowedEmploymentTypes: Array.isArray(rawData.allowedEmploymentTypes) ? rawData.allowedEmploymentTypes as string[] : [],
   }
 }
 
@@ -313,6 +318,8 @@ export function ProjectEditModal({ project, nickname, dataEnv, onClose, onSaved 
           ...(project.raw_data ?? {}),
           niceToHaveSkills,
           matchWeights,
+          requiresEnglish: form.requiresEnglish,
+          allowedEmploymentTypes: form.allowedEmploymentTypes.length > 0 ? form.allowedEmploymentTypes : null,
         },
         updated_by: nickname,
       })
@@ -436,6 +443,39 @@ export function ProjectEditModal({ project, nickname, dataEnv, onClose, onSaved 
               <div className="space-y-1">
                 <label className={labelCls}>精算上限（h）</label>
                 <input className={inputCls} type="number" min={0} value={form.settlementMax} onChange={e => setField('settlementMax', e.target.value)} />
+              </div>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">マッチング条件</h3>
+            <div className="space-y-1">
+              <label className={labelCls}>英語要件</label>
+              <select className={inputCls} value={form.requiresEnglish} onChange={e => setField('requiresEnglish', e.target.value as EditForm['requiresEnglish'])}>
+                <option value="none">不要</option>
+                <option value="business">ビジネスレベル以上</option>
+                <option value="native">ネイティブレベル</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className={labelCls}>受け入れ雇用形態（空欄 = 制限なし）</label>
+              <div className="flex flex-wrap gap-3 mt-1">
+                {['フリーランス', '正社員', '派遣社員', '業務委託', 'SES', '契約社員'].map(et => (
+                  <label key={et} className="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.allowedEmploymentTypes.includes(et)}
+                      onChange={e => {
+                        const next = e.target.checked
+                          ? [...form.allowedEmploymentTypes, et]
+                          : form.allowedEmploymentTypes.filter(x => x !== et)
+                        setField('allowedEmploymentTypes', next)
+                      }}
+                      className="rounded"
+                    />
+                    {et}
+                  </label>
+                ))}
               </div>
             </div>
           </section>

@@ -76,8 +76,20 @@ type CandidateBatchInput = {
   englishLevel?: 'business' | 'daily' | null
 }
 
-function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
+function toCandidateBatchInput(
+  c: Candidate,
+  agentMap?: Map<string, { license_status: string }>,
+): CandidateBatchInput {
   const rp = c.raw_profile as Record<string, unknown>
+  const employmentType = (rp?.employmentType as string | null) ?? null
+  // 派遣社員の場合のみ、エージェントの派遣免許を確認
+  let hakenLicenseVerified: boolean | null = null
+  if (employmentType === '派遣社員' && agentMap) {
+    const fromEmail = (rp?.from as string | undefined)
+    const emailDomain = fromEmail?.split('@')[1]?.toLowerCase()
+    const ls = emailDomain ? agentMap.get(emailDomain)?.license_status ?? null : null
+    hakenLicenseVerified = ls === 'haken' || ls === 'both' ? true : ls === 'none' || ls === 'shokai' ? false : null
+  }
   return {
     id: c.id,
     name: c.name,
@@ -97,6 +109,8 @@ function toCandidateBatchInput(c: Candidate): CandidateBatchInput {
     desiredProject: (rp?.desiredProject as string | null) ?? null,
     hakenOk: (rp?.hakenOk as boolean | null) ?? null,
     englishLevel: (rp?.englishLevel as 'business' | 'daily' | null) ?? null,
+    employmentType,
+    hakenLicenseVerified,
   }
 }
 
@@ -105,6 +119,7 @@ async function matchBatchProjectToCandidates(
   targets: Candidate[],
   onProgress: (done: number, total: number) => void,
   weights?: ScoringWeights,
+  agentMap?: Map<string, { license_status: string }>,
 ): Promise<Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>> {
   const resultMap = new Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }>()
 
@@ -115,7 +130,7 @@ async function matchBatchProjectToCandidates(
   onProgress(0, targets.length)
   const { results } = await callMatchBatch('project_to_candidates', {
     projectRequirements: projectReq,
-    candidates: aiTargets.map(toCandidateBatchInput),
+    candidates: aiTargets.map(c => toCandidateBatchInput(c, agentMap)),
     weights,
   }, BATCH_TOP_N)
   onProgress(targets.length, targets.length)
@@ -139,7 +154,7 @@ async function matchBatchProjectToCandidates(
     try {
       const { ruleOnly } = await callMatchBatch('project_to_candidates', {
         projectRequirements: projectReq,
-        candidates: chunk.map(toCandidateBatchInput),
+        candidates: chunk.map(c => toCandidateBatchInput(c, agentMap)),
         weights,
       }, 0)
       const ruleMap = new Map(ruleOnly.map(r => [r.candidateId, r]))
@@ -1096,6 +1111,7 @@ const { data: projects = [] } = useQuery({
           targets,
           (done, t) => setMatchRunProgressNow({ overall: { done, total: t }, inner: { current: done, total: t, unit: '候補者' } }),
           scoringWeights,
+          agentDomainMap,
         )
 
         for (const candidate of targets) {
@@ -1144,7 +1160,7 @@ const { data: projects = [] } = useQuery({
       try {
         setMatchRunProgressNow({ overall: { done: 0, total }, inner: { current: 0, total, unit: '案件' } })
 
-        const candidateInput = toCandidateBatchInput(candidate)
+        const candidateInput = toCandidateBatchInput(candidate, agentDomainMap)
         const resultMap = await matchBatchCandidateToProjects(
           candidateInput,
           targetProjects,
@@ -1232,6 +1248,7 @@ const { data: projects = [] } = useQuery({
                 })
               },
               scoringWeights,
+              agentDomainMap,
             )
           } catch (err) {
             console.warn(`[bulk-match] ${project.title} バッチ失敗: ${err}`)
@@ -1306,7 +1323,7 @@ const { data: projects = [] } = useQuery({
             inner: projTotal > 0 ? { current: 0, total: projTotal, unit: '案件' } : undefined,
           })
 
-          const candidateInput = toCandidateBatchInput(candidate)
+          const candidateInput = toCandidateBatchInput(candidate, agentDomainMap)
           let resultMap: Map<string, { score: number; summary: string; breakdown: string; ruleScore: number }> = new Map()
           try {
             resultMap = await matchBatchCandidateToProjects(

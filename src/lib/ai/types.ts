@@ -132,6 +132,10 @@ export interface AnalyzeProjectResponse {
   roleSummary?: string | null
   /** 業界・ドメイン */
   industry?: string | null
+  /** 英語要件: 'none' = 不要 / 'business' = ビジネスレベル以上 / 'native' = ネイティブレベル */
+  requiresEnglish?: 'none' | 'business' | 'native'
+  /** 受け入れ雇用形態（null/空配列 = 制限なし） 例: ['正社員', '派遣社員'] */
+  allowedEmploymentTypes?: string[] | null
 }
 
 /** マッチングスコアリングのリクエスト */

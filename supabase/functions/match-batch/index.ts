@@ -65,6 +65,8 @@ interface CandidateInput {
   desiredProject?: string | null              // 希望案件・希望分野（raw_profile.desiredProject）
   hakenOk?: boolean | null                    // 派遣・常駐OK/NG（raw_profile.hakenOk）
   englishLevel?: 'business' | 'daily' | null // 英語レベル: business=業務レベル / daily=日常会話
+  employmentType?: string | null             // 雇用形態: 派遣社員/正社員/フリーランス/業務委託/SES等
+  hakenLicenseVerified?: boolean | null      // エージェントの派遣免許確認済み（agent_companiesより）
 }
 
 interface ProjectReq {
@@ -79,6 +81,8 @@ interface ProjectReq {
   contractType?: string | null               // 契約形態（'派遣'/'業務委託'/'準委任'/'請負'）
   description?: string | null
   roleSummary?: string | null
+  requiresEnglish?: 'none' | 'business' | 'native' // 英語要件
+  allowedEmploymentTypes?: string[] | null         // 受け入れ雇用形態（null = 制限なし）
 }
 
 interface BatchResult {
@@ -361,8 +365,49 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
     total = Math.min(100, total + 5)
     hakenNote = ' [派遣OK+5pt]'
   }
+  // ── 雇用形態制限 ──
+  let employmentTypeNote = ''
+  if (project.allowedEmploymentTypes && project.allowedEmploymentTypes.length > 0) {
+    const allowed = project.allowedEmploymentTypes
+    if (candidate.employmentType) {
+      if (!allowed.includes(candidate.employmentType)) {
+        total = Math.min(total, 20)
+        employmentTypeNote = ` [雇用形態NG(${candidate.employmentType})・20pt上限]`
+      }
+    } else {
+      // 雇用形態不明 → 上限70pt
+      total = Math.min(total, 70)
+      employmentTypeNote = ' [雇用形態不明・70pt上限]'
+    }
+  }
+
+  // ── 英語要件ボーナス ──
+  let englishBonus = 0
+  let englishNote = ''
+  if (project.requiresEnglish && project.requiresEnglish !== 'none') {
+    if (candidate.englishLevel === 'business') {
+      englishBonus = project.requiresEnglish === 'native' ? 5 : 8
+      englishNote = ` [英語要件+${englishBonus}pt(ビジネス)]`
+    } else if (candidate.englishLevel === 'daily' && project.requiresEnglish === 'business') {
+      englishBonus = 2
+      englishNote = ' [英語要件+2pt(日常会話)]'
+    }
+    total = Math.min(110, total + englishBonus)
+  }
+
+  // ── 派遣免許確認済みボーナス ──
+  let hakenLicenseNote = ''
+  if (candidate.employmentType === '派遣社員') {
+    if (candidate.hakenLicenseVerified === true) {
+      total = Math.min(110, total + 5)
+      hakenLicenseNote = ' [派遣免許確認済+5pt]'
+    } else if (candidate.hakenLicenseVerified === false) {
+      hakenLicenseNote = ' [派遣免許未確認]'
+    }
+  }
+
   const fullRemoteNote = (candidate.wantsFullRemote && !projectHasRemote) ? ' [フルリモート希望・常駐案件]' : ''
-  const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt${fullRemoteNote}${hakenNote}`
+  const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt${fullRemoteNote}${hakenNote}${employmentTypeNote}${englishNote}${hakenLicenseNote}`
 
   return { total, breakdown }
 }

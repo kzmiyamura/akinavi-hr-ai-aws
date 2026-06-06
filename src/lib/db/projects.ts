@@ -36,6 +36,8 @@ export function projectToMatchRequirements(project: Project): AnalyzeProjectResp
     roleSummary: project.role_summary,
     industry: project.industry,
     niceToHaveSkills: (project.raw_data?.niceToHaveSkills as string[] | undefined) ?? [],
+    requiresEnglish: (project.raw_data?.requiresEnglish as 'none' | 'business' | 'native' | undefined) ?? 'none',
+    allowedEmploymentTypes: (project.raw_data?.allowedEmploymentTypes as string[] | null | undefined) ?? null,
   }
 }
 
