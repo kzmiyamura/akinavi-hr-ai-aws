@@ -192,6 +192,7 @@ export function CandidateProfileFields({
     currentWorkLocation, remoteAvailable,
     from: mailFrom, subject: mailSubject, emailReceivedAt,
     age, gender, agentComment, selfPR, skillYears } = raw
+  const employmentType = (raw as Record<string, unknown>).employmentType as string | null | undefined
 
   function getSkillMonths(skill: string): number | null {
     if (!skillYears) return null
@@ -241,6 +242,27 @@ export function CandidateProfileFields({
       <p className="text-xs text-gray-400 mt-0.5">
         {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年{age != null ? ` ／ ${age}歳` : ''}{gender ? `（${gender}）` : ''}
       </p>
+      {(c.from_company || employmentType) && (
+        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+          {c.from_company && (
+            <span className="flex items-center gap-1 text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">
+              🏢 {c.from_company}
+            </span>
+          )}
+          {employmentType && (() => {
+            const styles: Record<string, string> = {
+              '正社員': 'bg-blue-50 text-blue-700',
+              '契約社員': 'bg-purple-50 text-purple-700',
+              '派遣社員': 'bg-orange-50 text-orange-700',
+              'フリーランス': 'bg-green-50 text-green-700',
+              '業務委託': 'bg-teal-50 text-teal-700',
+              'SES': 'bg-indigo-50 text-indigo-700',
+            }
+            const cls = styles[employmentType] ?? 'bg-gray-50 text-gray-600'
+            return <span className={`text-xs rounded px-1.5 py-0.5 ${cls}`}>{employmentType}</span>
+          })()}
+        </div>
+      )}
 
       {hasLocation && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5">
@@ -1202,9 +1224,23 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       <div className="flex flex-wrap gap-2 mt-1">
                         {(selectedCandidate as unknown as { from_company?: string }).from_company && (
                           <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">
-                            {(selectedCandidate as unknown as { from_company?: string }).from_company}
+                            🏢 {(selectedCandidate as unknown as { from_company?: string }).from_company}
                           </span>
                         )}
+                        {(() => {
+                          const et = (getRaw(selectedCandidate) as Record<string, unknown>).employmentType as string | null | undefined
+                          if (!et) return null
+                          const styles: Record<string, string> = {
+                            '正社員': 'bg-blue-50 text-blue-700',
+                            '契約社員': 'bg-purple-50 text-purple-700',
+                            '派遣社員': 'bg-orange-50 text-orange-700',
+                            'フリーランス': 'bg-green-50 text-green-700',
+                            '業務委託': 'bg-teal-50 text-teal-700',
+                            'SES': 'bg-indigo-50 text-indigo-700',
+                          }
+                          const cls = styles[et] ?? 'bg-gray-50 text-gray-600'
+                          return <span className={`text-xs rounded px-2 py-0.5 ${cls}`}>{et}</span>
+                        })()}
                         {(selectedCandidate as unknown as { desired_rate?: string }).desired_rate && (
                           <span className="text-xs text-green-700 bg-green-50 rounded px-2 py-0.5 font-medium">
                             {(selectedCandidate as unknown as { desired_rate?: string }).desired_rate}

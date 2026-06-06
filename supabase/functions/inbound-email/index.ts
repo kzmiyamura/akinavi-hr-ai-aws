@@ -3845,6 +3845,31 @@ Deno.serve(async (req: Request) => {
         return null
       })()
 
+      // 雇用形態・立場（正社員/フリーランス/契約社員/派遣社員/業務委託/SES）
+      const employmentTypeRaw = (() => {
+        const t = bodyText + ' ' + attachText
+        // ラベルあり: 雇用形態・就業形態・立場・属性等
+        const labelM = t.match(/(?:雇用形態|就業形態|立場|エンジニアの立場|現在の立場|契約形態|ご状況|属性)[　 ]*[：:][　 ]*([^\n]{1,30})/)
+        if (labelM) {
+          const val = labelM[1].trim()
+          if (/フリーランス|フリー|個人事業/.test(val)) return 'フリーランス'
+          if (/正社員/.test(val)) return '正社員'
+          if (/契約社員/.test(val)) return '契約社員'
+          if (/派遣社員|派遣/.test(val)) return '派遣社員'
+          if (/業務委託/.test(val)) return '業務委託'
+          if (/SES/.test(val)) return 'SES'
+        }
+        // ラベルなし（文脈パターン）
+        if (/弊社[　 ]*(正社員|社員)/.test(t)) return '正社員'
+        if (/[（(]正社員[）)]|正社員として登録|正社員エンジニア/.test(t)) return '正社員'
+        if (/フリーランス(エンジニア|技術者|の方|候補|案件)?|個人事業主/.test(t)) return 'フリーランス'
+        if (/業務委託(契約|のみ|希望|での)?/.test(t)) return '業務委託'
+        if (/弊社SES|SES(エンジニア|技術者|正社員|社員)?/.test(t)) return 'SES'
+        if (/契約社員/.test(t)) return '契約社員'
+        if (/派遣社員/.test(t)) return '派遣社員'
+        return null
+      })()
+
       // ── AI必要性チェック用: フィールドごとの情報源を記録 ──────────────────
       // 'ai'=AI提供, 'regex'=正規表現補完, 'prose'=文章スキャン補完, 'none'=取得不可
       const _fieldSources: Record<string, string> = {
@@ -3899,6 +3924,7 @@ Deno.serve(async (req: Request) => {
           wantsFullRemote: resolvedWantsFullRemote || null,
           hakenOk: hakenOkRaw,
           englishLevel: englishLevelRaw,
+          employmentType: employmentTypeRaw,
           from, subject,
           emailReceivedAt,
           attachmentCount: allAttachments.length,
