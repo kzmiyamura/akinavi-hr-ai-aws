@@ -316,13 +316,24 @@ const OWN_COMPANY_NAMES = ['株式会社ボイス', 'i-voice', 'アキナビ', '
 
 function sanitizeFromCompany(value: string | null | undefined): string | null {
   if (!value) return null
-  const trimmed = value.trim()
+  let trimmed = value.trim()
   // 自社名・空文字は null に落とす
   if (!trimmed) return null
   for (const own of OWN_COMPANY_NAMES) {
     if (trimmed.toLowerCase().includes(own.toLowerCase())) return null
   }
-  return trimmed
+  // 法人格の後ろに続く部署名・担当者名を除去
+  // 例: 「株式会社GFDの本田でございます。」→「株式会社GFD」
+  //     「株式会社GFDビジネス推進本部の佐藤です。」→「株式会社GFD」
+  // 前株パターン: 法人格 + 会社名 + (の|　| |部|本部|室 ... 以降はゴミ)
+  const preM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[^\sの　\n、。！（）【】「」]{2,20})/)
+  if (preM) { trimmed = preM[1]; }
+  // 後株パターン: 会社名 + 法人格 (以降を除去)
+  const postM = trimmed.match(/^([^\sの　\n、。！（）【】「」]{2,20}(?:株式会社|有限会社|合同会社))/)
+  if (postM) { trimmed = postM[1]; }
+  // 「の〇〇でございます」「の〇〇です」等が残っていれば除去
+  trimmed = trimmed.replace(/の[^\s　]{1,15}(?:でございます|です|と申します|でした).*$/, '')
+  return trimmed || null
 }
 
 function dedupeTrimmedSkills(skills: unknown): string[] {
