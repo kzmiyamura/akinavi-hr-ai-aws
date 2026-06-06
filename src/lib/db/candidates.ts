@@ -157,6 +157,46 @@ export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
   remote: 10,
 }
 
+/** 案件内容からスコアウェイトを自動計算する（合計100pt） */
+export function calcProjectWeights(project: {
+  title?: string | null
+  description?: string | null
+  role_summary?: string | null
+  required_skills?: unknown
+  remote_policy?: string | null
+}): ScoringWeights {
+  const req = (project.required_skills as string[] | null) ?? []
+  const fullText = [project.title, project.description, project.role_summary].filter(Boolean).join(' ')
+
+  // ── スキルウェイト ──
+  let skill = 40
+  const hasLanguageSkill = req.some(s => /英語|中国語|韓国語|語学|通訳|翻訳|TOEIC|英検/.test(s))
+  if (hasLanguageSkill) skill += 15        // 語学スキル必須 → スキル重視
+  else if (req.length >= 5) skill += 10    // 必須スキル5件以上
+  else if (req.length <= 2) skill -= 5     // 必須スキルが少ない
+
+  // ── 経験年数ウェイト ──
+  let exp = 15
+  if (/経験年数不問|未経験可|第二新卒|経験問わ/.test(fullText)) exp = 5
+  else if (/\d+年以上|\d+年超|ベテラン|シニア/.test(fullText)) exp = 20
+
+  // ── リモートウェイト ──
+  let remote = 10
+  const isFullRemote = /フルリモート|完全リモート|100[%％]リモート/.test(project.remote_policy ?? '')
+  const hasRemote = /リモート|在宅/.test(project.remote_policy ?? '')
+  if (isFullRemote) remote = 20
+  else if (!hasRemote) remote = 5
+
+  // ── 勤務地ウェイト ──
+  let location = 20
+  if (isFullRemote) location = 10
+
+  // ── 単価ウェイト（残り調整） ──
+  const rate = Math.max(5, 100 - skill - exp - location - remote)
+
+  return { skill, exp, rate, location, remote }
+}
+
 export interface ProjectScoreParams {
   requiredSkills?: string[]
   budgetMin?: number | null
@@ -174,6 +214,7 @@ export async function fetchCandidatesForProject(
   params: ProjectScoreParams,
   dataEnv: DataEnv,
   limit = 500,
+  requireHaken = false,
 ): Promise<Candidate[]> {
   const w = params.weights ?? DEFAULT_SCORING_WEIGHTS
   const { data, error } = await supabase
@@ -190,6 +231,7 @@ export async function fetchCandidatesForProject(
       p_weight_rate:     w.rate,
       p_weight_location: w.location,
       p_weight_remote:   w.remote,
+      p_require_haken:   requireHaken,
     })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as (Candidate & { rule_score: number })[]

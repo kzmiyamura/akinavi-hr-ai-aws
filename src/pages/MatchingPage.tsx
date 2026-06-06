@@ -22,6 +22,7 @@ import {
 } from '../lib/db/submissions'
 import { supabase } from '../lib/supabase'
 import { getMatchingSettings, MATCHING_DEFAULTS } from '../lib/db/matchingSettings'
+import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
@@ -476,6 +477,7 @@ function ProjectModeRankCard({
   duplicates,
   requiredSkills = [],
   niceToHaveSkills = [],
+  agentDomainMap,
 }: {
   s: RankedSubmission
   rankIndex: number
@@ -485,9 +487,14 @@ function ProjectModeRankCard({
   duplicates?: DuplicateCandidate[]
   requiredSkills?: string[]
   niceToHaveSkills?: string[]
+  agentDomainMap?: Map<string, { license_status: string }>
 }) {
   const [showEmail, setShowEmail] = useState(false)
   const rawText = (s.candidate.raw_profile as Record<string, unknown>)?.text as string | undefined
+  // 派遣免許バッジ
+  const fromEmail = (s.candidate.raw_profile as Record<string, unknown>)?.from as string | undefined
+  const emailDomain = fromEmail?.split('@')[1]?.toLowerCase()
+  const licenseStatus = emailDomain && agentDomainMap ? agentDomainMap.get(emailDomain)?.license_status ?? null : null
   return (
     <div className="border border-gray-100 rounded-lg overflow-hidden bg-white min-w-0">
     <div className="p-3 sm:p-4 flex flex-col gap-3 sm:flex-row sm:items-start">
@@ -518,6 +525,13 @@ function ProjectModeRankCard({
                 <AlertTriangle size={11} />重複の疑い
               </span>
             )}
+            {licenseStatus === 'haken' || licenseStatus === 'both' ? (
+              <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">派遣可</span>
+            ) : licenseStatus === 'shokai' ? (
+              <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5">紹介可</span>
+            ) : licenseStatus === 'none' ? (
+              <span className="text-[10px] bg-red-100 text-red-600 rounded px-1.5 py-0.5">免許なし</span>
+            ) : null}
           </div>
           {(() => {
             const rp2 = s.candidate.raw_profile as Record<string, unknown>
@@ -887,6 +901,12 @@ export function MatchingPage({
   const [scoringWeights, setScoringWeights] = useState<ScoringWeights>({ ...DEFAULT_SCORING_WEIGHTS })
   const [showWeightsPanel, setShowWeightsPanel] = useState(false)
   const [savingWeights, setSavingWeights] = useState(false)
+  const [requireHaken, setRequireHaken] = useState(false)
+  const { data: agentDomainMap } = useQuery({
+    queryKey: ['agentDomainMap'],
+    queryFn: fetchAgentDomainMap,
+    staleTime: 5 * 60_000,
+  })
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -1050,6 +1070,7 @@ const { data: projects = [] } = useQuery({
         { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy, weights: scoringWeights },
         dataEnv,
         sqlLimit,
+        requireHaken,
       )
       const total = targets.length
       if (total === 0) return
@@ -1175,6 +1196,7 @@ const { data: projects = [] } = useQuery({
             { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, remotePolicy: project.remote_policy, weights: scoringWeights },
             dataEnv,
             sqlLimit2,
+            project.contract_type === '派遣' ? requireHaken : false,
           )
           const candTotal = targets.length
 
@@ -1349,7 +1371,7 @@ const { data: projects = [] } = useQuery({
   const selectedProject = projectList.find((p) => p.id === selectedProjectId) ?? null
   const selectedCandidate = candidateList.find((c) => c.id === selectedCandidateId) ?? null
 
-  // 案件選択時: 保存済みウェイト → なければ案件内容から自動計算
+  // 案件選択時: 保存済みウェイト → なければ案件内容から自動計算。派遣案件なら派遣フィルターを自動ON
   useEffect(() => {
     if (!selectedProject) return
     const saved = (selectedProject.raw_data as Record<string, unknown>)?.matchWeights as Partial<ScoringWeights> | undefined
@@ -1358,6 +1380,8 @@ const { data: projects = [] } = useQuery({
     } else {
       setScoringWeights(calcProjectWeights(selectedProject))
     }
+    // 契約形態が「派遣」なら派遣免許フィルターを自動ON
+    setRequireHaken(selectedProject.contract_type === '派遣')
   }, [selectedProject?.id]) // selectedProject?.id: プロジェクトが非同期ロードされた後も再発火させるため
 
   const selectedProjectRanked = selectedProject
@@ -1476,6 +1500,28 @@ const { data: projects = [] } = useQuery({
           人材から見る
         </button>
       </div>
+
+      {/* 派遣免許フィルター */}
+      {mode === 'project' && selectedProject && (
+        <div className={`rounded-xl border px-4 py-3 flex items-center justify-between gap-3 ${requireHaken ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'}`}>
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-semibold text-gray-800 shrink-0">派遣免許確認済みのみ</span>
+            {selectedProject.contract_type === '派遣' && !requireHaken && (
+              <span className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded px-1.5 py-0.5">この案件は派遣契約です</span>
+            )}
+            {requireHaken && (
+              <span className="text-xs text-blue-600">派遣許可番号が確認済みの会社の人材のみ対象</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setRequireHaken(v => !v)}
+            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${requireHaken ? 'bg-blue-600' : 'bg-gray-200'}`}
+          >
+            <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform duration-200 ${requireHaken ? 'translate-x-4' : 'translate-x-0'}`} />
+          </button>
+        </div>
+      )}
 
       {/* スコアウェイト調整パネル */}
       <div className="bg-white rounded-xl border border-gray-200 min-w-0">
@@ -1841,6 +1887,7 @@ const { data: projects = [] } = useQuery({
                               duplicates={duplicatesMap[s.candidate.id]}
                               requiredSkills={selectedProject.required_skills as string[]}
                               niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
+                              agentDomainMap={agentDomainMap}
                             />
                           ))}
                           <RankingRestAccordion count={selectedProjectRanked.length - RANK_HEAD} unitLabel="名">
@@ -1854,6 +1901,7 @@ const { data: projects = [] } = useQuery({
                                 onDecide={(sub) => decideMutation.mutate(sub)}
                                 requiredSkills={selectedProject.required_skills as string[]}
                                 niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
+                                agentDomainMap={agentDomainMap}
                               />
                             ))}
                           </RankingRestAccordion>
