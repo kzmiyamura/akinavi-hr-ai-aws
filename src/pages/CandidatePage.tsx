@@ -7,6 +7,8 @@ import type { SearchScope } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
+import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
+import type { AgentCompany } from '../lib/db/agentCompanies'
 import type { DataEnv } from '../lib/dataEnv'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
 import { DemoMatchingTestPanel } from '../components/DemoMatchingTestPanel'
@@ -179,12 +181,14 @@ export function CandidateProfileFields({
   isExpanded,
   onToggleExpand,
   detailMode = false,
+  agentDomainMap,
 }: {
   c: Candidate
   isExpanded: boolean
   onToggleExpand?: () => void
   /** true のとき常に全表示（詳細画面） */
   detailMode?: boolean
+  agentDomainMap?: Map<string, AgentCompany>
 }) {
   const raw = getRaw(c)
   const { skillsByCategory: sbc, roles, industries,
@@ -193,6 +197,8 @@ export function CandidateProfileFields({
     from: mailFrom, subject: mailSubject, emailReceivedAt,
     age, gender, agentComment, selfPR, skillYears } = raw
   const employmentType = (raw as Record<string, unknown>).employmentType as string | null | undefined
+  const emailDomain = mailFrom ? mailFrom.split('@')[1]?.toLowerCase().trim() : null
+  const agentInfo = emailDomain && agentDomainMap ? agentDomainMap.get(emailDomain) : null
 
   function getSkillMonths(skill: string): number | null {
     if (!skillYears) return null
@@ -248,6 +254,14 @@ export function CandidateProfileFields({
             <span className="flex items-center gap-1 text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">
               🏢 {c.from_company}
             </span>
+          )}
+          {agentInfo?.haken_number && (
+            <span className="text-xs bg-green-50 text-green-700 rounded px-1.5 py-0.5" title="派遣許可番号">
+              {agentInfo.haken_number}
+            </span>
+          )}
+          {agentInfo?.license_status === 'none' && c.from_company && (
+            <span className="text-xs bg-red-50 text-red-500 rounded px-1.5 py-0.5">許可未確認</span>
           )}
           {employmentType && (() => {
             const styles: Record<string, string> = {
@@ -777,6 +791,12 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     queryKey: ['importActive'],
     queryFn: getIsImportActive,
     refetchInterval: 30_000,
+  })
+
+  const { data: agentDomainMap } = useQuery({
+    queryKey: ['agentDomainMap'],
+    queryFn: fetchAgentDomainMap,
+    staleTime: 5 * 60_000,
   })
 
   // 400ms デバウンスしたキーワードトークン
@@ -1351,7 +1371,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       {replayMsg.text}
                     </p>
                   )}
-                  <CandidateProfileFields c={selectedCandidate} isExpanded detailMode />
+                  <CandidateProfileFields c={selectedCandidate} isExpanded detailMode agentDomainMap={agentDomainMap} />
                   {/* 重複候補者 */}
                   {selectedCandidate.duplicate_flag && dupCandidates && dupCandidates.length > 0 && (
                     <details className="mt-4 border border-yellow-200 rounded-lg bg-yellow-50">
