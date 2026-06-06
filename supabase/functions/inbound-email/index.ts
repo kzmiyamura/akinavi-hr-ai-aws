@@ -4097,6 +4097,23 @@ Deno.serve(async (req: Request) => {
         await appendToBoxSpreadsheet(boxUrls)
       }
 
+      // agent_companies に会社名・ドメインを upsert（fire and forget）
+      {
+        const emailDomain = from ? from.split('@')[1]?.toLowerCase().trim() : null
+        const companyName = sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany)
+        const ownDomain = 'i-voice.co.jp'
+        if (emailDomain && emailDomain !== ownDomain && !emailDomain.includes('gmail') && !emailDomain.includes('yahoo') && !emailDomain.includes('outlook') && !emailDomain.includes('demo.invalid')) {
+          supabase.from('agent_companies').upsert(
+            {
+              domain: emailDomain,
+              company_name: companyName ?? undefined,
+              source: 'email',
+            },
+            { onConflict: 'domain', ignoreDuplicates: false },
+          ).then(() => {}).catch(() => {})
+        }
+      }
+
       console.log(`[inbound] 人材登録完了: ${resolvedName} id=${savedCandidateId}`)
       await markEmailProcessed(supabase, dedupConfigKey)
       return new Response(
