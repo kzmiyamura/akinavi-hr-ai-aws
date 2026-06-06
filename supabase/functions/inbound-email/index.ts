@@ -2227,6 +2227,17 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       if (projectPeriods.length > 0) {
         const totalProjectMonths = projectPeriods.reduce((s, p) => s + p.months, 0)
         skillMonths['_totalProjectMonths'] = totalProjectMonths
+        // max日付 − min日付 スパン（空白期間込みのキャリア全体幅）
+        const parseYM = (s: string) => {
+          const m = s.match(/(\d{4})[\/\-年](\d{1,2})/)
+          return m ? parseInt(m[1]) * 12 + parseInt(m[2]) : null
+        }
+        const starts = projectPeriods.map(p => parseYM(p.start)).filter((v): v is number => v !== null)
+        const ends   = projectPeriods.map(p => parseYM(p.end)).filter((v): v is number => v !== null)
+        if (starts.length > 0 && ends.length > 0) {
+          const spanMonths = Math.max(...ends) - Math.min(...starts) + 1
+          if (spanMonths > 0) skillMonths['_dateSpanMonths'] = spanMonths
+        }
       }
       return skillMonths
     }
@@ -3541,14 +3552,16 @@ Deno.serve(async (req: Request) => {
               experience_years: (() => {
                 let expYears = blockRegexFields.experienceYears
                 // Excel skillYears フォールバック（本文に経験年数がない場合）
+                // 優先順位: max-min日付スパン → _totalProjectMonths合計 → スキル最大月数
                 if (expYears == null && matchedTextContent?.skillYears) {
                   const sy = matchedTextContent.skillYears
-                  const totalMonths = sy['_totalProjectMonths']
+                  const dateSpanMonths = sy['_dateSpanMonths'] ?? null
+                  const totalMonths = sy['_totalProjectMonths'] ?? null
                   const maxSkillMonths = Object.entries(sy)
-                    .filter(([k]) => k !== '_totalProjectMonths')
+                    .filter(([k]) => k !== '_totalProjectMonths' && k !== '_dateSpanMonths')
                     .map(([, v]) => v)
                     .reduce((a, b) => Math.max(a, b), 0)
-                  const estimatedMonths = totalMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
+                  const estimatedMonths = dateSpanMonths ?? totalMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
                   if (estimatedMonths && estimatedMonths > 0) {
                     expYears = estimatedMonths / 12
                   }
@@ -3822,15 +3835,15 @@ Deno.serve(async (req: Request) => {
       const resolvedPrefecture = analyzed.prefecture || regexFields.prefecture
       let resolvedExperienceYears = analyzed.experienceYears ?? regexFields.experienceYears
       // skillYearsフォールバック: メール本文に経験年数が書かれていない場合、Excelから推定
+      // 優先順位: max-min日付スパン → _totalProjectMonths合計 → スキル最大月数
       if (resolvedExperienceYears == null && Object.keys(excelSkillYears).length > 0) {
-        // 優先1: プロジェクト合計月数（_totalProjectMonths 特殊キー）
-        const totalProjectMonths = excelSkillYears['_totalProjectMonths']
-        // 優先2: スキル別月数の最大値（最も経験の長いスキルをITキャリアの代理指標に）
+        const dateSpanMonths = excelSkillYears['_dateSpanMonths'] ?? null
+        const totalProjectMonths = excelSkillYears['_totalProjectMonths'] ?? null
         const skillValues = Object.entries(excelSkillYears)
-          .filter(([k]) => k !== '_totalProjectMonths')
+          .filter(([k]) => k !== '_totalProjectMonths' && k !== '_dateSpanMonths')
           .map(([, v]) => v)
         const maxSkillMonths = skillValues.length > 0 ? Math.max(...skillValues) : 0
-        const estimatedMonths = totalProjectMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
+        const estimatedMonths = dateSpanMonths ?? totalProjectMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
         if (estimatedMonths && estimatedMonths > 0) {
           resolvedExperienceYears = estimatedMonths / 12
         }
@@ -3975,9 +3988,9 @@ Deno.serve(async (req: Request) => {
           agentComment: extractAgentComment(body, attachText) ?? null,
           geminiParseFallback: parseFallback,
           skillYears: (() => {
-            // _totalProjectMonths は経験年数推定用の内部キーなので表示用 skillYears からは除外
+            // _totalProjectMonths / _dateSpanMonths は経験年数推定用の内部キーなので表示用 skillYears からは除外
             const displayExcel = Object.fromEntries(
-              Object.entries(excelSkillYears).filter(([k]) => k !== '_totalProjectMonths')
+              Object.entries(excelSkillYears).filter(([k]) => k !== '_totalProjectMonths' && k !== '_dateSpanMonths')
             )
             // 名前後ろ括弧のスキル年数（#79）: 「K.T（Java 5年 / Python 3年）」形式
             const nameYears = regexFields.nameSkillYears ?? {}
