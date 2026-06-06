@@ -162,13 +162,156 @@ function ask(rl, question) {
   return new Promise(resolve => rl.question(question, resolve))
 }
 
+// --- メール署名から派遣許可番号を抽出 ---
+function extractHakenFromBody(bodyText) {
+  const FAKE = new Set(['派01-000001', '派13-307608'])
+  const sigArea = (bodyText || '').slice(-1200)
+  const matches = [...sigArea.matchAll(/派\d{2}-\d{6}/g)]
+    .map(m => m[0])
+    .filter(s => !FAKE.has(s))
+  return [...new Set(matches)]
+}
+
+// --- agent_companies モード ---
+async function runAgentMode(searchTerm, dryRun) {
+  const rl = createReadline()
+
+  // 検索ワードが未指定なら入力を促す
+  let term = searchTerm
+  if (!term) {
+    term = (await ask(rl, 'エージェント会社名（部分一致）> ')).trim()
+    if (!term) { rl.close(); return }
+  }
+
+  // agent_companies を検索
+  const companies = await supabaseQuery(
+    `agent_companies?select=domain,company_name,haken_number,shokai_number,license_status,verified_at&company_name=ilike.*${encodeURIComponent(term)}*&order=domain`,
+    { headers: { Prefer: 'return=representation' } }
+  )
+
+  if (!companies || companies.length === 0) {
+    console.log(`\n「${term}」に一致するエージェントが見つかりませんでした。`)
+    rl.close(); return
+  }
+
+  console.log(`\n${companies.length}件ヒット:\n`)
+  for (const ac of companies) {
+    console.log(`${'='.repeat(70)}`)
+    console.log(`ドメイン    : ${ac.domain}`)
+    console.log(`会社名（現在）: ${ac.company_name ?? '(null)'}`)
+    console.log(`派遣許可（現在）: ${ac.haken_number ?? '(null)'}`)
+    console.log(`確認日      : ${ac.verified_at?.slice(0, 10) ?? '未確認'}`)
+    console.log()
+
+    // そのドメインの候補者メールを1件取得
+    const rows = await supabaseQuery(
+      `candidates?select=raw_profile,name,created_at&data_env=eq.prod&raw_profile->>from=ilike.*${encodeURIComponent('@' + ac.domain)}*&order=created_at.desc&limit=1`,
+      { headers: { Prefer: 'return=representation' } }
+    )
+
+    const sample = rows?.[0]
+    if (!sample) {
+      console.log('（候補者メールなし）')
+    } else {
+      const bodyText = sample.raw_profile?.text || ''
+      console.log(`サンプル    : ${sample.name ?? '不明'} (${sample.created_at?.slice(0, 10)})`)
+      console.log()
+      console.log('--- メール本文（末尾600字）---')
+      console.log(bodyText.slice(-600))
+      console.log()
+
+      // 抽出
+      const extractedCompany = extractFromCompany(bodyText)
+      const extractedHaken   = extractHakenFromBody(bodyText)
+
+      console.log(`会社名（抽出）: ${extractedCompany ?? '(抽出不可)'}`)
+      console.log(`派遣許可（署名）: ${extractedHaken.length ? extractedHaken.join(', ') : '(本文中に記載なし)'}`)
+      console.log()
+    }
+
+    // 操作説明
+    console.log('操作:')
+    console.log('  Enter       → 変更なし（スキップ）')
+    console.log('  会社名を入力 → company_name を更新')
+    console.log('  派遣番号を入力（派XX-XXXXXX）→ haken_number を更新')
+    console.log('  両方入力する場合は会社名を先に、次に派遣番号')
+    console.log()
+
+    // 会社名入力
+    const companyInput = (await ask(rl, `会社名 [${ac.company_name ?? 'null'}] > `)).trim()
+    const hakenInput   = (await ask(rl, `派遣許可番号 [${ac.haken_number ?? 'null'}] > `)).trim()
+
+    const newCompany = companyInput === '' ? ac.company_name
+                     : companyInput === '-' ? null
+                     : companyInput
+    const newHaken   = hakenInput === '' ? ac.haken_number
+                     : hakenInput === '-' ? null
+                     : hakenInput
+
+    const companyChanged = newCompany !== ac.company_name
+    const hakenChanged   = newHaken   !== ac.haken_number
+
+    if (!companyChanged && !hakenChanged) {
+      console.log('→ 変更なし\n')
+      continue
+    }
+
+    console.log(`→ 確定: 会社名="${newCompany ?? 'null'}"  派遣許可="${newHaken ?? 'null'}"`)
+
+    if (!dryRun) {
+      const patch = {}
+      if (companyChanged) patch.company_name = newCompany
+      if (hakenChanged) {
+        patch.haken_number = newHaken
+        patch.verified_at  = new Date().toISOString()
+        patch.verified_by  = 'manual'
+        if (newHaken) patch.license_status = 'haken'
+        else if (!newHaken && !ac.shokai_number) patch.license_status = 'none'
+      }
+      await supabaseQuery(`agent_companies?domain=eq.${encodeURIComponent(ac.domain)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      })
+
+      // candidates.from_company も同期
+      if (companyChanged && newCompany) {
+        await supabaseQuery(
+          `candidates?data_env=eq.prod&raw_profile->>from=ilike.*${encodeURIComponent('@' + ac.domain)}*`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({ from_company: newCompany }),
+          }
+        )
+        console.log(`  → candidates.from_company も "${newCompany}" に更新`)
+      }
+      console.log()
+    } else {
+      console.log('  （ドライランのため DB 更新なし）\n')
+    }
+  }
+
+  rl.close()
+  console.log('完了')
+}
+
 // --- メイン ---
 const args = process.argv.slice(2)
-const AUTO_MODE = args.includes('--auto')
-const NULL_ONLY = args.includes('--null')
-const DRY_RUN  = args.includes('--dry')
-const daysArg  = args.indexOf('--days')
-const DAYS     = daysArg !== -1 ? parseInt(args[daysArg + 1]) || 7 : 7
+const AUTO_MODE  = args.includes('--auto')
+const NULL_ONLY  = args.includes('--null')
+const DRY_RUN    = args.includes('--dry')
+const AGENT_MODE = args.includes('--agent')
+const daysArg    = args.indexOf('--days')
+const DAYS       = daysArg !== -1 ? parseInt(args[daysArg + 1]) || 7 : 7
+// --agent の次の引数を検索ワードとして使う（省略可）
+const agentArgIdx = args.indexOf('--agent')
+const agentSearchTerm = agentArgIdx !== -1 && args[agentArgIdx + 1] && !args[agentArgIdx + 1].startsWith('--')
+  ? args[agentArgIdx + 1] : null
+
+// --agent モードは別処理
+if (AGENT_MODE) {
+  await runAgentMode(agentSearchTerm, DRY_RUN)
+  process.exit(0)
+}
 
 console.log(`\n=== review_candidates.mjs ===`)
 console.log(`モード: ${AUTO_MODE ? '自動' : 'インタラクティブ'}${DRY_RUN ? ' (ドライラン)' : ''}`)

@@ -27,7 +27,8 @@
     "review:auto": "node scripts/review_candidates.mjs --auto",
     "review:null": "node scripts/review_candidates.mjs --null",
     "review:auto:null": "node scripts/review_candidates.mjs --auto --null",
-    "review:dry": "node scripts/review_candidates.mjs --dry"
+    "review:dry": "node scripts/review_candidates.mjs --dry",
+    "review:agent": "node scripts/review_candidates.mjs --agent"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
