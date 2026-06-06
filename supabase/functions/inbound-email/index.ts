@@ -1584,12 +1584,12 @@ function extractCandidateFieldsRegex(
   let fromCompany: string | null = null
   const allBodyText = bodyText + '\n' + attachText
   const sigArea = allBodyText.slice(-1200)
-  // 「株式会社XXX」先頭パターン
-  const mPre = sigArea.match(/(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)([\S]{2,20})/)
+  // 「株式会社 XXX」先頭パターン（半角・全角スペース対応）
+  const mPre = sigArea.match(/(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^（(（\s　\n、。！【】「」]{2,20})/)
   if (mPre) fromCompany = sanitizeFromCompany(`${mPre[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${mPre[1]}`)
-  // 「XXX株式会社」末尾パターン（前述で取れなかった場合）
+  // 「XXX株式会社」末尾パターン（前述で取れなかった場合・半角・全角スペース対応）
   if (!fromCompany) {
-    const mPost = sigArea.match(/([\S]{2,20})(?:株式会社|有限会社|合同会社)/)
+    const mPost = sigArea.match(/([^（(（\s　\n、。！【】「」]{2,20})[　 ]?(?:株式会社|有限会社|合同会社)/)
     if (mPost) fromCompany = sanitizeFromCompany(`${mPost[1]}${mPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
   }
 
