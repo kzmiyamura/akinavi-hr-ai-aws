@@ -101,14 +101,18 @@ async function searchMHLW(companyName: string): Promise<{ haken: string[]; shoka
   }
 
   // HTML から許可番号を抽出（例: 派13-303936）
-  // lbKyokatodokedeNo span から抽出（フォームの例示テキスト「例：派01-000001」を除外）
+  // 既知の不正値（フォーム例示・検索ノイズ）を除外するセット
+  const HAKEN_FAKE = new Set(['派01-000001', '派13-307608'])
+  const isValidHaken = (s: string) => /^派\d{2}-\d{6}$/.test(s) && !HAKEN_FAKE.has(s)
+
+  // lbKyokatodokedeNo span から抽出
   const spanMatches = [...html.matchAll(/lbKyokatodokedeNo[^>]*>([^<]+)</g)].map(m => m[1].trim())
-  const hakenFromSpan = spanMatches.filter(s => /^派\d{2}-\d{6}$/.test(s))
+  const hakenFromSpan = spanMatches.filter(isValidHaken)
   const shokaiFromSpan = spanMatches.filter(s => /^\d{2}-ユ\d{6}$/.test(s))
 
-  // spanで取れない場合はHTML全体から抽出（ただし派01-000001は除外）
+  // spanで取れない場合はHTML全体から抽出
   const hakenFallback = hakenFromSpan.length > 0 ? hakenFromSpan :
-    [...html.matchAll(HAKEN_RE)].map(m => m[0]).filter(s => s !== '派01-000001')
+    [...html.matchAll(HAKEN_RE)].map(m => m[0]).filter(isValidHaken)
   const shokaiAll = shokaiFromSpan.length > 0 ? shokaiFromSpan :
     [...html.matchAll(SHOKAI_RE)].map(m => m[0])
 
