@@ -9,7 +9,7 @@
  *   - 手動呼び出し: POST { domain?: string, batch_size?: number } で即時実行
  *
  * 厚労省エンドポイント（検索フォームの POST 先）:
- *   https://www.hellowork.mhlw.go.jp/kensaku/GICB102010.do
+ *   https://jinzai.hellowork.mhlw.go.jp/JinzaiWeb/GICB102010.do
  *   パラメータ例: { screenId: 'GICB102010', action: 'search', jigyosyoName: '<会社名>', searchFlg: '1' }
  */
 
@@ -18,12 +18,13 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-// 厚労省 検索エンドポイント
-const MHLW_SEARCH_URL = 'https://www.hellowork.mhlw.go.jp/kensaku/GICB102010.do'
+// 厚労省「人材サービス総合サイト」派遣元事業者検索エンドポイント
+// 正式URL確認済み (2026-06-06): https://jinzai.hellowork.mhlw.go.jp/JinzaiWeb/GICB102010.do
+const MHLW_SEARCH_URL = 'https://jinzai.hellowork.mhlw.go.jp/JinzaiWeb/GICB102010.do'
 
-// 派遣許可番号パターン: 派XX-XXXXXX
+// 派遣許可番号パターン: 派13-303936 形式（HTML内 lbKyokatodokedeNo spanから抽出）
 const HAKEN_RE = /派\d{2}-\d{6}/g
-// 有料職業紹介許可番号パターン: XX-ユXXXXXX
+// 有料職業紹介許可番号パターン: 13-ユ303936 形式
 const SHOKAI_RE = /\d{2}-ユ\d{6}/g
 
 interface AgentCompany {
@@ -33,39 +34,87 @@ interface AgentCompany {
   verified_at: string | null
 }
 
-async function searchMHLW(companyName: string): Promise<{ haken: string[]; shokai: string[] }> {
-  const params = new URLSearchParams({
-    screenId: 'GICB102010',
-    action: 'search',
-    jigyosyoName: companyName,
-    searchFlg: '1',
-    dispNum: '50',
-  })
+const MHLW_INIT_URL = 'https://jinzai.hellowork.mhlw.go.jp/JinzaiWeb/GICB102010.do'
 
-  const res = await fetch(MHLW_SEARCH_URL, {
+/** 厚労省サイトでセッション確立 → 会社名検索 → 許可番号抽出 */
+async function searchMHLW(companyName: string): Promise<{ haken: string[]; shokai: string[] }> {
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+
+  // Step1: initDisp でセッション確立
+  const initRes = await fetch(MHLW_INIT_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'Mozilla/5.0 (compatible; AkinaviBot/1.0)',
+      'User-Agent': UA,
     },
-    body: params.toString(),
+    body: 'screenId=GICB102010&action=initDisp',
+    signal: AbortSignal.timeout(15000),
+    redirect: 'follow',
+  })
+  if (!initRes.ok) throw new Error(`MHLW init HTTP ${initRes.status}`)
+
+  // Cookieを取得
+  const setCookie = initRes.headers.get('set-cookie') ?? ''
+  const jsessionMatch = setCookie.match(/JSESSIONID=([^;]+)/)
+  const jsessionId = jsessionMatch ? jsessionMatch[1] : ''
+
+  // Step2: 全国・会社名で検索
+  const searchParams = new URLSearchParams({
+    screenId: 'GICB102010',
+    action: 'search',
+    cbZenkoku: '1',           // 全国チェック（必須: 都道府県指定）
+    txtJigyonushiName: companyName,
+    cbJigyonushiName: '1',    // 部分一致
+    txtJigyoshoName: '',
+    cbJigyoshoName: '1',
+    'nm_btnSearch.x': '1',
+    'nm_btnSearch.y': '1',
+    hfScrollTop: '0',
+    maba_vrbs: '',
+    codeAssistType: '',
+    codeAssistKind: '',
+    codeAssistCode: '',
+    codeAssistItemCode: '',
+    codeAssistItemName: '',
+    codeAssistDivide: '',
+  })
+
+  const searchRes = await fetch(MHLW_SEARCH_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': UA,
+      'Referer': MHLW_INIT_URL,
+      ...(jsessionId ? { 'Cookie': `JSESSIONID=${jsessionId}` } : {}),
+    },
+    body: searchParams.toString(),
     signal: AbortSignal.timeout(15000),
   })
 
-  if (!res.ok) {
-    throw new Error(`MHLW HTTP ${res.status}`)
+  if (!searchRes.ok) throw new Error(`MHLW search HTTP ${searchRes.status}`)
+
+  const html = await searchRes.text()
+
+  // 検索結果0件判定（「検索結果に表示されない場合」のメッセージが出ていたら 0 件）
+  if (html.includes('検索結果に表示されない場合') && !html.includes('lbKyokatodokedeNo')) {
+    return { haken: [], shokai: [] }
   }
 
-  const html = await res.text()
+  // HTML から許可番号を抽出（例: 派13-303936）
+  // lbKyokatodokedeNo span から抽出（フォームの例示テキスト「例：派01-000001」を除外）
+  const spanMatches = [...html.matchAll(/lbKyokatodokedeNo[^>]*>([^<]+)</g)].map(m => m[1].trim())
+  const hakenFromSpan = spanMatches.filter(s => /^派\d{2}-\d{6}$/.test(s))
+  const shokaiFromSpan = spanMatches.filter(s => /^\d{2}-ユ\d{6}$/.test(s))
 
-  // HTML から許可番号を抽出
-  const haken = [...html.matchAll(HAKEN_RE)].map((m) => m[0])
-  const shokai = [...html.matchAll(SHOKAI_RE)].map((m) => m[0])
+  // spanで取れない場合はHTML全体から抽出（ただし派01-000001は除外）
+  const hakenFallback = hakenFromSpan.length > 0 ? hakenFromSpan :
+    [...html.matchAll(HAKEN_RE)].map(m => m[0]).filter(s => s !== '派01-000001')
+  const shokaiAll = shokaiFromSpan.length > 0 ? shokaiFromSpan :
+    [...html.matchAll(SHOKAI_RE)].map(m => m[0])
 
-  // 重複排除
   return {
-    haken: [...new Set(haken)],
-    shokai: [...new Set(shokai)],
+    haken: [...new Set(hakenFallback)],
+    shokai: [...new Set(shokaiAll)],
   }
 }
 
