@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import type { InfiniteData } from '@tanstack/react-query'
-import { Loader2, Briefcase, RefreshCw, Search, ChevronDown, ChevronUp, Pencil, Trash2, X, MapPin, Wifi, Mail, Paperclip, ChevronRight } from 'lucide-react'
+import { Loader2, Briefcase, RefreshCw, Search, ChevronDown, ChevronUp, Pencil, Trash2, X, MapPin, Wifi, Mail, Paperclip, ChevronRight, AlertCircle } from 'lucide-react'
 import {
   fetchProjectsPage,
   fetchProjectCount,
@@ -261,6 +261,17 @@ export function ProjectProfileFields({
       )}
     </div>
   )
+}
+
+/** 登録後に補完が必要な重要フィールドを返す */
+function missingKeyFields(p: Project): string[] {
+  const missing: string[] = []
+  const skills = (p.required_skills as string[]) ?? []
+  if (skills.length === 0) missing.push('必須スキル')
+  if (p.budget_max == null && p.budget_min == null) missing.push('単価')
+  if (!p.work_location) missing.push('勤務地')
+  if (!p.remote_policy) missing.push('リモート')
+  return missing
 }
 
 interface EditModalProps {
@@ -679,7 +690,13 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
     setText('')
     setUploadedFileNames([])
     setShowRegisterModal(false)
-    setMessage({ type: 'success', text: `登録完了: ${project.title}` })
+    const missing = missingKeyFields(project)
+    if (missing.length > 0) {
+      setMessage({ type: 'success', text: `登録完了: ${project.title}（${missing.join('・')}を入力してください）` })
+      setEditingProject(project)
+    } else {
+      setMessage({ type: 'success', text: `登録完了: ${project.title}` })
+    }
     setSelectedId(project.id)
   }
 
@@ -919,6 +936,7 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                   closed: 'bg-red-100 text-red-500',
                 }
                 const isSelected = selectedId === p.id
+                const missing = missingKeyFields(p)
                 return (
                   <div
                     key={p.id}
@@ -931,7 +949,7 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                         setSelectedId(isSelected ? null : p.id)
                       }
                     }}
-                    className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer border-b border-gray-50 last:border-0 transition-colors ${
+                    className={`group flex items-center gap-2 px-3 py-2.5 cursor-pointer border-b border-gray-50 last:border-0 transition-colors ${
                       isSelected
                         ? 'bg-blue-50 border-l-2 border-l-blue-500'
                         : 'hover:bg-gray-50'
@@ -946,8 +964,29 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                         {p.client && (
                           <span className="text-xs text-gray-400 truncate">{p.client}</span>
                         )}
+                        {missing.length > 0 && (
+                          <span
+                            className="flex items-center gap-0.5 text-[10px] text-amber-500"
+                            title={`未入力: ${missing.join('・')}`}
+                          >
+                            <AlertCircle size={10} />
+                            {missing.join('・')}
+                          </span>
+                        )}
                       </div>
                     </div>
+                    {/* ホバー時に表示される編集ボタン */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setEditingProject(p)
+                      }}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-1 rounded hover:bg-blue-100 text-gray-400 hover:text-blue-600"
+                      title="編集"
+                    >
+                      <Pencil size={13} />
+                    </button>
                     {isSelected && <ChevronRight size={14} className="text-blue-400 shrink-0" />}
                   </div>
                 )
