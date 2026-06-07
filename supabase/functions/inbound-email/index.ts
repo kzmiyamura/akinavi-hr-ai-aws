@@ -3234,6 +3234,8 @@ Deno.serve(async (req: Request) => {
     const type: string = normalizeInboundType(raw.type)
     /** 手動登録など、app_config フラグをバイパスして強制処理する場合は true */
     const forceProcess: boolean = raw.force === true || raw.force === 'true'
+    /** 再解析時に指定された既存候補者 ID。このブロックに対応するブロックを強制 UPDATE するために使う */
+    const targetCandidateId: string | null = raw.target_candidate_id ?? null
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
 
@@ -3863,8 +3865,13 @@ Deno.serve(async (req: Request) => {
 
             // INSERT前に重複チェック（同一人物なら UPDATE してスキップ）
             let blockExistingId: string | null = null
+            // ★ 再解析時: 最初のブロック（blockIdx===0）に target_candidate_id を強制適用
+            if (targetCandidateId && blockIdx === 0) {
+              blockExistingId = targetCandidateId
+              console.log(`[reanalyze] block[0] target_candidate_id 強制 UPDATE: ${targetCandidateId}`)
+            }
             // ① 同一メール内の既処理ブロックと名前が一致 → そのIDに UPDATE（DB未コミット分も補足）
-            if (blockResolvedName && blockResolvedName !== '不明' && batchNameToId.has(blockResolvedName)) {
+            if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明' && batchNameToId.has(blockResolvedName)) {
               blockExistingId = batchNameToId.get(blockResolvedName)!
             }
             // ② 同エージェント（同一 from）から同名が既に登録済み → UPDATE 判定
@@ -4260,7 +4267,12 @@ Deno.serve(async (req: Request) => {
       // 従来: INSERT後にフラグを立てる → 古いレコードが7日でアーカイブされると誰も残らない問題
       // 新方式: INSERT前にチェック → 同一人物なら既存レコードを最新情報で更新 + created_at をリセット
       let existingCandidateId: string | null = null
-      if (resolvedName && resolvedName !== '不明') {
+      // 再解析時: target_candidate_id が指定されていれば、そのIDに強制 UPDATE（デdup スコアに依存しない）
+      if (targetCandidateId) {
+        existingCandidateId = targetCandidateId
+        console.log(`[reanalyze] target_candidate_id 強制 UPDATE: ${targetCandidateId}`)
+      }
+      if (!existingCandidateId && resolvedName && resolvedName !== '不明') {
         // ステップ①: 同エージェント（同一 from）優先チェック
         // 　件名一致 → 同一メール確定。件名違い → 駅・都道府県・年齢・経験年数の2つ以上一致で同一人物
         const { data: sameAgentSingle } = await supabase

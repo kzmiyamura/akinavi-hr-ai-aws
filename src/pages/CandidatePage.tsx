@@ -775,10 +775,11 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           attachments: [],
           mode: dataEnv,
           type: 'candidate',
+          target_candidate_id: c.id,  // 再解析対象のIDを渡して確実に上書き
         },
       })
       if (error) throw error
-      setReplayMsg({ id: c.id, text: '再解析完了。新規候補として登録されました。', ok: true })
+      setReplayMsg({ id: c.id, text: '再解析完了。既存候補を上書き更新しました。', ok: true })
       queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
       queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
     } catch (e) {
