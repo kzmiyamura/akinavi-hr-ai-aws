@@ -1,0 +1,35 @@
+name: Sync hf-spaces to HF Spaces
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "hf-spaces/**"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Push hf-spaces/ to HF Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # HF Spaces のリポジトリ URL（例: kzmiyamura/akinavi-quality-check）
+          # GitHub Secrets の HF_SPACE_REPO に設定してください
+          HF_SPACE_REPO: ${{ secrets.HF_SPACE_REPO }}
+        run: |
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+
+          # hf-spaces/ サブディレクトリを一時リポジトリとして push
+          cd hf-spaces
+          git init -b main
+          git add .
+          git commit -m "sync from GitHub $(date +'%Y-%m-%d %H:%M:%S')"
+          git push --force \
+            "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_REPO}" \
+            main
