@@ -217,6 +217,11 @@ def detect_missing_skills(
 
 
 # ── エンドポイント ────────────────────────────────────────────────────────────
+@app.get("/")
+def root():
+    return {"ok": True, "service": "akinavi-quality-check"}
+
+
 @app.get("/health")
 def health():
     return {
