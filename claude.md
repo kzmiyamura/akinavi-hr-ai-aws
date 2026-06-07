@@ -20,6 +20,7 @@
 - **Edge Function デプロイ事前検査**: `scripts/check-and-deploy-edge.sh`（`a8422fb`）。`deno check` で TS2304 系（未定義変数）を検知し、見つかれば deploy 中止
 - **Testing**: Vitest, React Testing Library, MSW (Mock Service Worker)。`scripts/verify_email_extraction.mjs` でメール抽出ロジックのリグレッション検証
 - **Deployment**: Vercel (Frontend), Supabase (Backend)
+- **HF Spaces（品質チェック・計画中）**: Supabase pg_cron から呼び出す非同期品質チェック基盤。**絶対の掟: CPU のみ・無料枠のみ・GPU 使用禁止・有料プラン禁止**。UI からは参照しない（HF Spaces のみが参照）。Word/Excel のパース済み JSON を `candidates.raw_profile` に保存しておき、HF Spaces が定期的に取得して検証する。PDF 対応も HF Spaces 側で `pymupdf` を使って実装予定（現時点では PDF 受信実績ゼロのため後回し）
 
 ---
 

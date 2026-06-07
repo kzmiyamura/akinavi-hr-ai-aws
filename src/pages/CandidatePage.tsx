@@ -8,6 +8,7 @@ import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
 import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
+import { AgentCompaniesModal } from '../components/AgentCompaniesModal'
 import type { AgentCompany } from '../lib/db/agentCompanies'
 import type { DataEnv } from '../lib/dataEnv'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
@@ -1087,6 +1088,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
               人材マップ
             </button>
           )}
+          <AgentCompaniesModal />
           <div className="relative flex-1 min-w-48">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             <input
