@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "hf-spaces/**"
+  workflow_dispatch:  # GitHub UI から手動実行も可能
 
 jobs:
   sync:
