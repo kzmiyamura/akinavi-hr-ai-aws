@@ -821,6 +821,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     getNextPageParam: (lastPage: Candidate[], _: Candidate[][], lastPageParam: number) =>
       lastPage.length < 100 ? undefined : lastPageParam + 100,
     refetchInterval: isImportActive ? 30_000 : false,
+    staleTime: 60_000,   // 1分間はキャッシュを使いタブ切替で再フェッチしない
+    gcTime: 5 * 60_000,  // 5分間キャッシュを保持
     enabled: !isSearching,
   })
 
