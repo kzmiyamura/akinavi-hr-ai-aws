@@ -7,6 +7,7 @@ import { Layout } from './components/Layout'
 import type { Page } from './components/Layout'
 import { MatchingPage } from './pages/MatchingPage'
 import { AuthCallbackPage } from './pages/AuthCallbackPage'
+import { fetchCandidatesPage } from './lib/db/candidates'
 
 const CandidatePage = lazy(() => import('./pages/CandidatePage').then(m => ({ default: m.CandidatePage })))
 const ProjectPage = lazy(() => import('./pages/ProjectPage').then(m => ({ default: m.ProjectPage })))
@@ -151,6 +152,20 @@ function AppInner() {
       queryClient.invalidateQueries({ queryKey: projectsQueryKeys.open(dataEnv) })
     }
   }, [tabPage, dataEnv])
+
+  // 人材タブへ切り替える前に候補者データをバックグラウンド prefetch
+  // （マッチングタブ表示中に先読みしておくことで、タブ切替時に即時表示できる）
+  useEffect(() => {
+    queryClient.prefetchInfiniteQuery({
+      queryKey: ['candidates-paged', dataEnv],
+      queryFn: ({ pageParam }) => fetchCandidatesPage(dataEnv, pageParam as number),
+      initialPageParam: 0,
+      getNextPageParam: (lastPage) =>
+        lastPage.candidates.length < 100 ? undefined : lastPage.candidates.length,
+      staleTime: 60_000,
+      pages: 1,
+    })
+  }, [dataEnv])
 
   function openCandidateDetail(id: string) {
     setDetail({ kind: 'candidate', id })
