@@ -835,7 +835,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     enabled: isSearching,
   })
 
-  const { fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } =
+  const { fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError, error } =
     isSearching ? searchInfiniteQuery : browseInfiniteQuery
 
   const candidates = useMemo(
@@ -1151,6 +1151,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
         {isLoading || (isSearching && searchInfiniteQuery.isLoading) ? (
           <p className="text-sm text-gray-400 p-4">読み込み中...</p>
+        ) : isError ? (
+          <p className="text-sm text-red-500 p-4">読み込みエラー: {(error as Error)?.message ?? '不明なエラー'}</p>
         ) : candidates.length === 0 && !isSearching ? (
           <p className="text-sm text-gray-400 p-4">まだ登録されていません</p>
         ) : candidates.length === 0 && isSearching ? (
