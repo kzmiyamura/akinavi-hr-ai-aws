@@ -83,7 +83,7 @@ function extractFieldTwoPhase(labels, bodyText, attachText, validate, maxLen = 3
     return t
   }
   const rSameLine = (sep) =>
-    new RegExp(`(?:${esc})(?:（[^）]{1,20}）)?[　 ]?${sep}[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
+    new RegExp(`(?:${esc})(?:（[^）]{1,20}）)?[　 ]?${sep}[　 ]?[：:]?[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
   const bodyBlocks = normalBody.split(/\n{2,}/)
   if (bodyBlocks.length > 1) {
     const labelPresent = new RegExp(`(?:${esc})`, 'i')
@@ -343,7 +343,7 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   }
   if (!nationality) {
     const natInline = (bodyText + '\n' + attachText).match(/(?:^|[\s　/／・,、|｜（(])((?:[ァ-ヶー]{2,8}|[一-龠]{2,6})籍)/m)
-    const EXCLUDE_NAT = /^(在籍|本籍|戸籍|書籍|移籍|国籍|原籍|入籍|除籍|学籍|党籍|軍籍|転籍|復籍|船籍)$/
+    const EXCLUDE_NAT = /^(在籍|本籍|戸籍|書籍|移籍|国籍|原籍|入籍|除籍|学籍|党籍|軍籍|転籍|復籍|船籍)$|在籍$/
     if (natInline && !EXCLUDE_NAT.test(natInline[1])) nationality = natInline[1].trim()
   }
   let nearestStation = extractFieldTwoPhase(
@@ -459,7 +459,7 @@ function splitMultiCandidateBody(body) {
   // ■氏名：形式（■●▪▶ 等のビュレット付き）も認識
   const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]|[■●▪▶][ 　]*(?:最寄(?:り?駅?)|希望単価|スキル|業務経験|稼働開始|稼働時期|アピール)/
   // 【 氏 名 】（半角スペース区切り形式）・■氏名：形式にも対応
-  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳/m
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳/m
   const lines = body.split(/\r?\n/)
 
   function trySplit(delimRe) {

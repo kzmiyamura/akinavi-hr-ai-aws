@@ -989,7 +989,7 @@ function extractFieldTwoPhase(
   }
 
   const rSameLine = (sep: string) =>
-    new RegExp(`(?:${esc})(?:（[^）]{1,20}）)?[　 ]?${sep}[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
+    new RegExp(`(?:${esc})(?:（[^）]{1,20}）)?[　 ]?${sep}[　 ]?[：:]?[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
 
   // ── Phase0: 本文ブロック絞り込み ──────────────────────────────
   // 空行2行以上でブロック分割し、ラベルを含む最初のブロック内で同行検索
@@ -3127,7 +3127,7 @@ function splitMultiCandidateBody(body: string): string[] | null {
   // ■氏名：形式（■●▪▶ 等のビュレット付き）も認識
   const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]|[■●▪▶][ 　]*(?:最寄(?:り?駅?)|希望単価|スキル|業務経験|稼働開始|稼働時期|アピール)/
   // 【 氏 名 】（半角スペース区切り形式）・■氏名：形式・■SI（28歳／男性）形式にも対応
-  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳/m
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳/m
   const lines = body.split(/\r?\n/)
 
   function trySplit(delimRe: RegExp): string[] | null {
@@ -3754,7 +3754,9 @@ Deno.serve(async (req: Request) => {
 
             // ── Step3: ブロック固有のスキル照合 ──────────────────────────────────
             // プリアンブル（区切り線前の共通スキルリスト等）もスキル照合に含める
-            const blockBodyText = [subject, multiPreamble, block].filter(Boolean).join('\n')
+            // 件名（subject）は複数人材メールでは全員共通のため per-block スキル照合から除外する
+            // （件名に「/SQL,ShellScript,Linux」等が含まれると他ブロックの人材にも誤付与される）
+            const blockBodyText = [multiPreamble, block].filter(Boolean).join('\n')
             const { matched: blockBodyMatched } = extractAndRemoveSkills(blockBodyText, masterSkills, { looseCert: false })
             const blockBodyMatchedNames = new Set(blockBodyMatched.map(s => s.name))
             const blockAttachRaw = blockAttachText.trim()
