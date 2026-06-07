@@ -257,12 +257,15 @@ export async function fetchCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
   })
 }
 
-/** 人材を100件ずつページ取得 */
+/** 人材を100件ずつページ取得
+ *  raw_profile は除外（TOAST 読み取り回避で 250ms → 38ms）。
+ *  一覧カードはスキル数表示に top-level skills 列を使う。
+ *  詳細表示時は fetchCandidateRawProfile RPC で別途取得。
+ */
 export async function fetchCandidatesPage(dataEnv: DataEnv, offset: number, limit = 100): Promise<Candidate[]> {
-  // candidates_lite ビュー: raw_profile から text・parsedGrid を除外して転送量を削減
   const { data, error } = await supabase
-    .from('candidates_lite')
-    .select('*')
+    .from('candidates')
+    .select('id, name, email, phone, skills, experience_years, desired_rate, from_company, resume_url, drive_url, box_url, box_status, created_at, updated_at, duplicate_flag, merged_into, data_env, created_by')
     .eq('data_env', dataEnv)
     .is('merged_into', null)
     .order('created_at', { ascending: false })

@@ -905,8 +905,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   const selectedCandidateBase = candidates.find((c: Candidate) => c.id === selectedId) ?? null
 
-  // 詳細表示用: raw_profile の text・parsedGrid を含む full 版を追加フェッチ
-  // （candidates_lite ビューではこれらを除外しているため）
+  // 詳細表示用: 選択時に fetch_candidate_raw_profile RPC で full raw_profile を取得
+  // （一覧クエリは raw_profile を除外しているため）
   const { data: fullRawProfile } = useQuery({
     queryKey: ['candidate-raw-profile', selectedId],
     queryFn: () => fetchCandidateRawProfile(selectedId!),
@@ -916,7 +916,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const selectedCandidate = useMemo(() => {
     if (!selectedCandidateBase) return null
     if (!fullRawProfile) return selectedCandidateBase
-    return { ...selectedCandidateBase, raw_profile: { ...(selectedCandidateBase.raw_profile as object), ...fullRawProfile } }
+    return { ...selectedCandidateBase, raw_profile: { ...(selectedCandidateBase.raw_profile as Record<string, unknown> ?? {}), ...fullRawProfile } }
   }, [selectedCandidateBase, fullRawProfile])
 
   // 重複疑い候補者クエリ（duplicate_flag=true の場合のみ同名・直近90日・別IDを取得）
