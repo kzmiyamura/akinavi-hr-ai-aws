@@ -3631,15 +3631,8 @@ Deno.serve(async (req: Request) => {
         resumeUrl = picked
       }
 
-      // 添付ファイルを Supabase Storage にアップロード（PDF含む全添付）
-      // アップロードのみ。PDF は AI 解析しない。
-      for (const att of attachments) {
-        if (!att.data) continue
-        const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-        const filename = att.name ? `${ts}_${att.name}` : `${ts}_resume.${att.mimeType.split('/')[1] ?? 'bin'}`
-        const url = await uploadToStorage(filename, att.mimeType, att.data)
-        if (url && !resumeUrl) resumeUrl = url
-      }
+      // Storage アップロードは廃止（容量超過のため）
+      // resume_url は Google Drive リンクのみ使用
     }
 
     // Drive取得テキスト + Officeテキストを統合（スキルマスター照合に使用）
