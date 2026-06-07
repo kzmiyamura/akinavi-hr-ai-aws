@@ -325,9 +325,9 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
   // 法人格の後ろに続く部署名・担当者名を除去
   // 例: 「株式会社GFDの本田でございます。」→「株式会社GFD」
   //     「株式会社GFDビジネス推進本部の佐藤です。」→「株式会社GFD」
-  // 前株パターン: 法人格 + 会社名 + (の|　| |部|本部|室 ... 以降はゴミ)
-  const preM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[^\sの　\n、。！（）【】「」]{2,20})/)
-  if (preM) { trimmed = preM[1]; }
+  // 前株パターン: 法人格 + 会社名（英語2単語名「Knowledge Technologies」にも対応）
+  const preM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[^\sの　\n、。！（）【】「」]{2,30}(?:[ \t]+[A-Za-z][A-Za-z \t&.]{0,20})?)/)
+  if (preM) { trimmed = preM[1].trim(); }
   // 後株パターン: 会社名 + 法人格 (以降を除去)
   const postM = trimmed.match(/^([^\sの　\n、。！（）【】「」]{2,20}(?:株式会社|有限会社|合同会社))/)
   if (postM) { trimmed = postM[1]; }
@@ -1594,7 +1594,7 @@ function extractCandidateFieldsRegex(
   }
 
   // 全マッチを収集して宛先以外の最後のマッチを採用（送信者署名は末尾に近いため）
-  const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^（(（\s　\n、。！【】「」]{2,20})/g
+  const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　\n（(、。！【】「」]{2,30}(?:[ \t]+[A-Za-z][A-Za-z \t&.]{0,20})?)/g
   let bestPre: RegExpExecArray | null = null
   let m: RegExpExecArray | null
   while ((m = PRE_RE.exec(sigArea)) !== null) {
