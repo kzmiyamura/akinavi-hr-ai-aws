@@ -232,6 +232,37 @@ def health():
     }
 
 
+@app.get("/debug")
+async def debug(x_api_secret: Optional[str] = Header(None, alias="x-api-secret")):
+    """候補者取得状況を診断する"""
+    verify_secret(x_api_secret)
+    import datetime
+    since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).isoformat()
+    res = (
+        supabase.from_("candidates")
+        .select("id, name, raw_profile->hfQualityCheckedAt, raw_profile->parsedGrid, raw_profile->text")
+        .eq("data_env", "prod")
+        .eq("duplicate_flag", False)
+        .is_("merged_into", None)
+        .gte("created_at", since)
+        .limit(5)
+        .execute()
+    )
+    rows = res.data or []
+    summary = []
+    for r in rows:
+        rp_text = r.get("text") or ""
+        summary.append({
+            "id": r["id"],
+            "name": r.get("name"),
+            "has_parsed_grid": r.get("parsedGrid") is not None,
+            "has_text": bool(rp_text),
+            "text_len": len(rp_text) if rp_text else 0,
+            "already_checked": r.get("hfQualityCheckedAt") is not None,
+        })
+    return {"total_fetched": len(rows), "since": since, "samples": summary}
+
+
 @app.post("/run_quality_check")
 async def run_quality_check(
     x_api_secret: Optional[str] = Header(None, alias="x-api-secret"),
@@ -262,9 +293,7 @@ async def run_quality_check(
         for candidate in candidates:
             try:
                 raw_profile: dict = candidate.get("raw_profile") or {}
-                parsed_grid = raw_profile.get("parsedGrid")
-                if not parsed_grid:
-                    continue
+                parsed_grid = raw_profile.get("parsedGrid")  # None でも続行（text フォールバックあり）
 
                 # 既に品質チェック済みならスキップ（24時間以内）
                 last_check = raw_profile.get("hfQualityCheckedAt", "")
