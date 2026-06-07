@@ -3144,10 +3144,13 @@ function splitMultiCandidateBody(body: string): string[] | null {
       else current.push(lines[i])
     }
     if (current.length > 0) allParts.push(current.join('\n'))
+    // フッター・法的免責文・「以上になります」ブロックを候補者として処理しない
+    const FOOTER_BLOCK_RE = /^(?:以上になります|以上です|よろしくお願いいたします|本メールに記載された|【重要[：:])/
     const blocks: string[] = []
     for (let i = 1; i < allParts.length; i++) {
       const content = allParts[i].trim()
       if (!content || content.length < 50) continue
+      if (FOOTER_BLOCK_RE.test(content.slice(0, 100))) continue
       if (!CANDIDATE_FIELD_RE.test(content)) continue
       const prevPart = allParts[i - 1] ?? ''
       const prevLines = prevPart.split(/\r?\n/).map((l: string) => l.trim()).filter(Boolean)
