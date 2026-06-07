@@ -178,20 +178,54 @@ def get_skill_master() -> list[dict]:
     return _skill_master_cache
 
 
+# ── 自動追加しないスキルのブロックリスト ──────────────────────────────────────
+# プロトコル・汎用語・誤検知しやすい用語を除外
+AUTO_ADD_BLOCKLIST = {
+    "http", "https", "ftp", "smtp", "tcp", "udp", "ssl", "tls", "dns", "ssh",
+    "ada", "xml", "json", "yaml", "csv", "pdf", "api",
+    "windows", "unix",  # 汎用すぎる（特定バージョンは許可）
+}
+
+
+def count_occurrences(text: str, keyword: str) -> int:
+    """テキスト中でキーワードが何回出現するかカウント（スペースなし比較）"""
+    kw = keyword.lower().replace(" ", "")
+    t = text.lower().replace(" ", "")
+    if len(kw) < 3:
+        return 0
+    count = 0
+    pos = 0
+    while True:
+        idx = t.find(kw, pos)
+        if idx == -1:
+            break
+        count += 1
+        pos = idx + 1
+    return count
+
+
 # ── スキル漏れ検出 ────────────────────────────────────────────────────────────
 def detect_missing_skills(
     rows: list[list[str]],
     existing_skills: list[str],
-) -> list[str]:
-    """parsedGrid に出現するが candidates.skills に登録されていないスキルを検出する"""
+    full_text: str = "",
+) -> list[dict]:
+    """
+    parsedGrid / full_text に出現するが candidates.skills に未登録のスキルを検出する。
+    戻り値: [{"name": スキル名, "count": 出現回数}, ...]
+    """
     skill_master = get_skill_master()
     if not skill_master:
         return []
 
-    # グリッド全テキスト
+    # グリッド全テキスト（rows がある場合）
     grid_text = " ".join(
         cell for row in rows for cell in row if cell and cell.strip()
-    ).lower()
+    )
+    # full_text も合わせて検索対象にする
+    search_text = (grid_text + " " + full_text).strip()
+    if not search_text:
+        return []
 
     existing_lower = {s.lower() for s in (existing_skills or [])}
     missing = []
@@ -205,15 +239,26 @@ def detect_missing_skills(
         if any(c.lower() in existing_lower for c in candidates_to_check):
             continue
 
-        # グリッドテキストに出現するか確認（スペースなし比較も）
-        for cand in candidates_to_check:
-            cand_lower = cand.lower().replace(" ", "")
-            grid_nospace = grid_text.replace(" ", "")
-            if cand_lower in grid_nospace and len(cand_lower) >= 3:
-                missing.append(name)
-                break
+        # ブロックリストのスキルは自動追加しない
+        if name.lower() in AUTO_ADD_BLOCKLIST:
+            continue
 
-    return missing[:20]  # 最大20件
+        # 出現回数を確認（最も多い候補の回数を採用）
+        max_count = 0
+        for cand in candidates_to_check:
+            if len(cand.replace(" ", "")) < 3:
+                continue
+            c = count_occurrences(search_text, cand)
+            if c > max_count:
+                max_count = c
+
+        # 2回以上出現したスキルのみ対象
+        if max_count >= 2:
+            missing.append({"name": name, "count": max_count})
+
+    # 出現回数降順でソート、最大20件
+    missing.sort(key=lambda x: x["count"], reverse=True)
+    return missing[:20]
 
 
 # ── エンドポイント ────────────────────────────────────────────────────────────
@@ -344,14 +389,24 @@ async def run_quality_check(
                             f"skillYears+{len(new_sy)}: {list(new_sy.keys())[:5]}"
                         )
 
-                # ── スキル漏れ検出（parsedGrid または full_text を使用）─────
+                # ── スキル漏れ検出 → candidates.skills に自動マージ ──────
                 existing_skills: list = candidate.get("skills") or []
                 detect_rows = rows if rows else [[line] for line in (attach_text or full_text).splitlines() if line.strip()]
-                missing = detect_missing_skills(detect_rows, existing_skills)
-                if missing:
-                    updates["hfDetectedMissingSkills"] = missing
-                    stats["missing_skills_found"] += len(missing)
-                    logger.info(f"[quality] id={candidate['id']} 漏れスキル候補: {missing}")
+                missing_entries = detect_missing_skills(detect_rows, existing_skills, full_text=full_text)
+                if missing_entries:
+                    missing_names = [e["name"] for e in missing_entries]
+                    updates["hfDetectedMissingSkills"] = missing_entries  # 出現回数付きで保存
+                    stats["missing_skills_found"] += len(missing_names)
+                    logger.info(f"[quality] id={candidate['id']} 漏れスキル候補: {missing_names}")
+
+                    # candidates.skills に自動マージ（重複除去）
+                    existing_lower = {s.lower() for s in existing_skills}
+                    to_add = [n for n in missing_names if n.lower() not in existing_lower]
+                    if to_add:
+                        merged_skills = existing_skills + to_add
+                        supabase.from_("candidates").update({"skills": merged_skills}).eq("id", candidate["id"]).execute()
+                        stats["skills_auto_added"] = stats.get("skills_auto_added", 0) + len(to_add)
+                        logger.info(f"[quality] id={candidate['id']} skills に自動追加: {to_add}")
 
                 # ── DB に書き戻し ──────────────────────────────────────────
                 import datetime
