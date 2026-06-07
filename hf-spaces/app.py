@@ -247,7 +247,7 @@ async def run_quality_check(
         # parsedGrid があり、まだ品質チェック未実施 or 7日以内の候補者を対象
         res = (
             supabase.from_("candidates")
-            .select("id, raw_profile, skills")
+            .select("id, raw_profile, skills, name")
             .eq("data_env", "prod")
             .eq("duplicate_flag", False)
             .is_("merged_into", None)
@@ -273,9 +273,16 @@ async def run_quality_check(
                     if age.total_seconds() < 86400:
                         continue
 
-                rows: list[list[str]] = parsed_grid.get("rows", [])
-                source: str = parsed_grid.get("source", "unknown")
-                if not rows:
+                rows: list[list[str]] = parsed_grid.get("rows", []) if parsed_grid else []
+                source: str = parsed_grid.get("source", "unknown") if parsed_grid else "text"
+
+                # raw_profile.text から添付テキスト部分を取り出す（本文+添付を結合済み）
+                full_text: str = raw_profile.get("text", "") or ""
+                attach_text: str = ""
+                if "\n\n--- 添付 ---\n" in full_text:
+                    attach_text = full_text.split("\n\n--- 添付 ---\n", 1)[1]
+
+                if not rows and not full_text:
                     continue
 
                 stats["processed"] += 1
@@ -286,11 +293,16 @@ async def run_quality_check(
                 existing_count = len([k for k in existing_sy if not k.startswith("_")])
 
                 if existing_count < 3:
-                    # LLM で抽出
-                    new_sy = extract_skill_years_llm(rows)
-                    if not new_sy:
-                        # フォールバック: ルールベース
-                        new_sy = extract_skill_years_rules(rows)
+                    new_sy: dict = {}
+                    if rows:
+                        # parsedGrid がある場合: LLM で抽出
+                        new_sy = extract_skill_years_llm(rows)
+                        if not new_sy:
+                            new_sy = extract_skill_years_rules(rows)
+                    if not new_sy and full_text:
+                        # parsedGrid がない場合: raw_profile.text からルールベース抽出
+                        text_rows = [[line] for line in full_text.splitlines() if line.strip()]
+                        new_sy = extract_skill_years_rules(text_rows)
 
                     if new_sy:
                         merged_sy = {**existing_sy, **new_sy}
@@ -301,9 +313,10 @@ async def run_quality_check(
                             f"skillYears+{len(new_sy)}: {list(new_sy.keys())[:5]}"
                         )
 
-                # ── スキル漏れ検出 ─────────────────────────────────────────
+                # ── スキル漏れ検出（parsedGrid または full_text を使用）─────
                 existing_skills: list = candidate.get("skills") or []
-                missing = detect_missing_skills(rows, existing_skills)
+                detect_rows = rows if rows else [[line] for line in (attach_text or full_text).splitlines() if line.strip()]
+                missing = detect_missing_skills(detect_rows, existing_skills)
                 if missing:
                     updates["hfDetectedMissingSkills"] = missing
                     stats["missing_skills_found"] += len(missing)

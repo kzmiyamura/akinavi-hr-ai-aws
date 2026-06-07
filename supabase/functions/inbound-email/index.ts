@@ -3807,7 +3807,7 @@ Deno.serve(async (req: Request) => {
                 return toExperienceYears(expYears)
               })(),
               raw_profile: {
-                text: effectiveBody,
+                text: effectiveBody + (blockAttachText?.trim() ? '\n\n--- 添付 ---\n' + blockAttachText : ''),
                 summary: '',
                 skillsByCategory: blockDbMatchedSkills.reduce((acc, s) => {
                   if (!acc[s.category]) acc[s.category] = []
@@ -4190,7 +4190,7 @@ Deno.serve(async (req: Request) => {
         skills,
         experience_years: toExperienceYears(resolvedExperienceYears),
         raw_profile: {
-          text: effectiveBody,
+          text: effectiveBody + (attachText.trim() ? '\n\n--- 添付 ---\n' + attachText : ''),
           summary: analyzed.summary ?? '',
           skillsByCategory: dbMatchedSkills.reduce((acc, s) => {
             if (!acc[s.category]) acc[s.category] = []
