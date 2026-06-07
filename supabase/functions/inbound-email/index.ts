@@ -1996,7 +1996,7 @@ async function extractWordText(base64: string): Promise<{ text: string; totalPro
           // Word・Excel 統合方式で skillYears 抽出（列名・配列・テキストパターンを全試行）
           const wordGrid = wordJson.tables.flat(1)
           const skillYears = extractSkillYearsUnified(wordGrid, wordJson.paragraphs)
-          return { text, totalProjectMonths, skillYears: Object.keys(skillYears).length > 0 ? skillYears : undefined, grid: wordGrid.slice(0, 300) }
+          return { text, totalProjectMonths, skillYears: Object.keys(skillYears).length > 0 ? skillYears : undefined, grid: wordGrid }
         }
       } catch (e) {
         console.warn('[Word] convertToHtml 失敗、extractRawText へフォールバック', e)
@@ -2627,11 +2627,11 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
         if (Object.keys(sy).filter(k => !k.startsWith('_')).length > 0) {
           skillYears = sy
           // HF Spaces 品質チェック用: skillYears が取れたシートのグリッドを保存（最大300行）
-          parsedGrid = grid.slice(0, 300)
+          parsedGrid = grid
         } else {
           console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
           // skillYears が取れなかった場合でも最初のシートのグリッドを保存
-          if (!parsedGrid && grid.length > 0) parsedGrid = grid.slice(0, 300)
+          if (!parsedGrid && grid.length > 0) parsedGrid = grid
         }
       }
     }
@@ -3807,7 +3807,7 @@ Deno.serve(async (req: Request) => {
                 return toExperienceYears(expYears)
               })(),
               raw_profile: {
-                text: effectiveBody.slice(0, 10000),
+                text: effectiveBody,
                 summary: '',
                 skillsByCategory: blockDbMatchedSkills.reduce((acc, s) => {
                   if (!acc[s.category]) acc[s.category] = []
@@ -4190,7 +4190,7 @@ Deno.serve(async (req: Request) => {
         skills,
         experience_years: toExperienceYears(resolvedExperienceYears),
         raw_profile: {
-          text: effectiveBody.slice(0, 10000),
+          text: effectiveBody,
           summary: analyzed.summary ?? '',
           skillsByCategory: dbMatchedSkills.reduce((acc, s) => {
             if (!acc[s.category]) acc[s.category] = []
