@@ -1993,7 +1993,9 @@ async function extractWordText(base64: string): Promise<{ text: string; totalPro
           const wordJson = await htmlToWordJson(html)
           const text = wordJsonToText(wordJson)
           const totalProjectMonths = calcWordProjectMonths(wordJson) ?? undefined
-          const skillYears = extractWordSkillYears(wordJson)
+          // Word・Excel 統合方式で skillYears 抽出（列名・配列・テキストパターンを全試行）
+          const wordGrid = wordJson.tables.flat(1)
+          const skillYears = extractSkillYearsUnified(wordGrid, wordJson.paragraphs)
           return { text, totalProjectMonths, skillYears: Object.keys(skillYears).length > 0 ? skillYears : undefined }
         }
       } catch (e) {
@@ -2522,6 +2524,57 @@ function extractSkillYearsFromSheetJson(rows: Array<Record<string, string>>): Re
   return skillMonths
 }
 
+/**
+ * グリッド（2D 配列）からスキル別経験月数を統合抽出する。
+ * Word・Excel 両形式に対応。3方式を試して最も取れた方を採用。
+ *   方式1: 列名ベース（Excel スキル一覧型: 「経験年数」「使用言語」列を探す）
+ *   方式2: 2D配列ベース（列名が読み取れない場合のフォールバック）
+ *   方式3: テキストパターンベース（Word 型: 「スキル名 X年」パターン）
+ *
+ * @param grid  parseHtmlTableToGrid の出力
+ * @param extraTexts Word の段落テキスト等、グリッド外のテキスト（省略可）
+ */
+function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): Record<string, number> {
+  // 方式1: 列名ベース
+  const jsonRows = gridToJsonRows(grid)
+  const sy1 = extractSkillYearsFromSheetJson(jsonRows)
+  const count1 = Object.keys(sy1).filter(k => !k.startsWith('_')).length
+
+  // 方式2: 2D配列ベース
+  const sy2 = extractSkillYearsFromSheetData(grid)
+  const count2 = Object.keys(sy2).filter(k => !k.startsWith('_')).length
+
+  // 方式3: テキストパターンベース（「スキル名 X年」）
+  const sy3: Record<string, number> = {}
+  for (const text of [...grid.flat(), ...extraTexts]) {
+    for (const seg of text.split(/[,、，\n]/)) {
+      const m = seg.trim().match(/^(.+?)\s+(\d+(?:\.\d+)?)年(?:[^\d]|$)/)
+      if (!m) continue
+      let skill = m[1].trim()
+      const colonIdx = Math.max(skill.lastIndexOf(':'), skill.lastIndexOf('：'))
+      if (colonIdx >= 0) skill = skill.slice(colonIdx + 1).trim()
+      const years = parseFloat(m[2])
+      if (skill && years > 0 && years <= 50 && !/^\d/.test(skill)) {
+        sy3[skill] = Math.round(years * 12)
+      }
+    }
+  }
+  const count3 = Object.keys(sy3).length
+
+  // 最も多く取れた方式を採用
+  let best: Record<string, number> = {}
+  let bestMethod = 'none'
+  if (count1 >= count2 && count1 >= count3 && count1 > 0) { best = sy1; bestMethod = 'column' }
+  else if (count2 >= count3 && count2 > 0)                 { best = sy2; bestMethod = 'array' }
+  else if (count3 > 0)                                      { best = sy3; bestMethod = 'text' }
+
+  if (bestMethod !== 'none') {
+    const count = Object.keys(best).filter(k => !k.startsWith('_')).length
+    console.log(`[skillYears-unified] method=${bestMethod} count=${count}`)
+  }
+  return best
+}
+
 /** スキル別経験月数を Excel ファイル（base64）から抽出 */
 async function extractSkillYearsFromExcel(base64: string): Promise<Record<string, number>> {
   const { skillYears } = await extractExcelAll(base64)
@@ -2539,7 +2592,6 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
       utils: {
         sheet_to_html: (sheet: unknown) => string
-        sheet_to_json: (sheet: unknown, opts: object) => unknown[][]
       }
     }
     const bytes = base64ToUint8Array(base64)
@@ -2563,28 +2615,18 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       const gridText = gridToText(grid)
       if (gridText.trim()) texts.push(`--- シート: ${sheetName} ---\n${gridText}`)
 
-      // skillYears 抽出（最初に見つかったシートで確定）
+      // skillYears 抽出（最初に見つかったシートで確定・Word/Excel 統合方式）
       if (Object.keys(skillYears).length === 0) {
-        const jsonRows = gridToJsonRows(grid)
-
         // [Excel-json] ログ: 先頭10行を Supabase Logs に出力（デバッグ用）
+        const jsonRows = gridToJsonRows(grid)
         const logRows = jsonRows.slice(0, 10)
         console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} cols=${Object.keys(jsonRows[0] ?? {}).length} rows=${JSON.stringify(logRows)}`)
 
-        // JSON ベース抽出（優先）
-        const syJson = extractSkillYearsFromSheetJson(jsonRows)
-        if (Object.keys(syJson).filter(k => !k.startsWith('_')).length > 0) {
-          skillYears = syJson
+        const sy = extractSkillYearsUnified(grid)
+        if (Object.keys(sy).filter(k => !k.startsWith('_')).length > 0) {
+          skillYears = sy
         } else {
-          // フォールバック: 2D 配列ベース抽出
-          const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as string[][]
-          const syData = extractSkillYearsFromSheetData(data)
-          if (Object.keys(syData).filter(k => !k.startsWith('_')).length > 0) {
-            skillYears = syData
-          } else {
-            const headRows = data.slice(0, 3).map(r => r.slice(0, 8))
-            console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${data.length} cols=${data[0]?.length ?? 0} head=${JSON.stringify(headRows)}`)
-          }
+          console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
         }
       }
     }
