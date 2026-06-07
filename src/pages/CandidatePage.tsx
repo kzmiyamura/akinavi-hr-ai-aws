@@ -818,8 +818,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     queryKey: ['candidates-paged', dataEnv],
     queryFn: ({ pageParam }: { pageParam: number }) => fetchCandidatesPage(dataEnv, pageParam),
     initialPageParam: 0,
-    getNextPageParam: (lastPage: Candidate[], _: Candidate[][], lastPageParam: number) =>
-      lastPage.length < 100 ? undefined : lastPageParam + 100,
+    getNextPageParam: (lastPage, _allPages, lastPageParam) =>
+      lastPage.candidates.length < 100 ? undefined : lastPageParam + 100,
     refetchInterval: isImportActive ? 30_000 : false,
     staleTime: 60_000,   // 1分間はキャッシュを使いタブ切替で再フェッチしない
     gcTime: 5 * 60_000,  // 5分間キャッシュを保持
@@ -841,15 +841,21 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     isSearching ? searchInfiniteQuery : browseInfiniteQuery
 
   const candidates = useMemo(
-    () => (isSearching ? searchInfiniteQuery.data : browseInfiniteQuery.data)?.pages.flat() ?? [],
+    () => isSearching
+      ? (searchInfiniteQuery.data?.pages.flat() ?? [])
+      : (browseInfiniteQuery.data?.pages.flatMap(p => p.candidates) ?? []),
     [isSearching, searchInfiniteQuery.data, browseInfiniteQuery.data],
   )
 
-  // 全件数（常時）
-  const { data: totalCount = 0 } = useQuery({
+  // 全件数: offset=0 の初回ページ取得と同時に返ってくる totalCount を優先利用（HTTPラウンドトリップ削減）
+  const countFromPages = browseInfiniteQuery.data?.pages[0]?.totalCount ?? null
+  const { data: fetchedCount = 0 } = useQuery({
     queryKey: ['candidates-count', dataEnv],
     queryFn: () => fetchCandidateCount(dataEnv),
+    enabled: countFromPages === null && !isSearching,  // ページデータに count が含まれれば不要
+    staleTime: 60_000,
   })
+  const totalCount = countFromPages ?? fetchedCount
 
   // 検索結果件数（検索中のみ）
   const { data: searchCount = 0 } = useQuery({

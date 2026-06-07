@@ -259,20 +259,29 @@ export async function fetchCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
 
 /** 人材を100件ずつページ取得
  *  raw_profile は除外（TOAST 読み取り回避で 250ms → 38ms）。
+ *  offset=0 のときのみ count=exact を付けてトータル件数を同一リクエストで返す。
  *  一覧カードはスキル数表示に top-level skills 列を使う。
  *  詳細表示時は fetchCandidateRawProfile RPC で別途取得。
  */
-export async function fetchCandidatesPage(dataEnv: DataEnv, offset: number, limit = 100): Promise<Candidate[]> {
-  const { data, error } = await supabase
+export async function fetchCandidatesPage(
+  dataEnv: DataEnv,
+  offset: number,
+  limit = 100,
+): Promise<{ candidates: Candidate[]; totalCount: number | null }> {
+  const selectOpts = offset === 0 ? ({ count: 'exact' } as const) : {}
+  const { data, error, count } = await supabase
     .from('candidates')
-    .select('id, name, email, phone, skills, experience_years, desired_rate, from_company, resume_url, drive_url, box_url, box_status, created_at, updated_at, duplicate_flag, merged_into, data_env, created_by')
+    .select(
+      'id, name, email, phone, skills, experience_years, desired_rate, from_company, resume_url, drive_url, box_url, box_status, created_at, updated_at, duplicate_flag, merged_into, data_env, created_by',
+      selectOpts,
+    )
     .eq('data_env', dataEnv)
     .is('merged_into', null)
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
-  return (data ?? []) as Candidate[]
+  return { candidates: (data ?? []) as Candidate[], totalCount: offset === 0 ? (count ?? null) : null }
 }
 
 /** 詳細表示用: 特定候補の raw_profile 全体（text・parsedGrid を含む）を取得 */
@@ -282,11 +291,11 @@ export async function fetchCandidateRawProfile(id: string): Promise<Record<strin
   return data as Record<string, unknown> | null
 }
 
-/** 人材の総数を取得 */
+/** 人材の総数を取得（検索ページでの件数表示など fetchCandidatesPage 以外の用途向け） */
 export async function fetchCandidateCount(dataEnv: DataEnv): Promise<number> {
   const { count, error } = await supabase
     .from('candidates')
-    .select('*', { count: 'exact', head: true })
+    .select('id', { count: 'exact', head: true })
     .eq('data_env', dataEnv)
     .is('merged_into', null)
 
