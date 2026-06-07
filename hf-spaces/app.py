@@ -245,13 +245,15 @@ async def run_quality_check(
 
     try:
         # parsedGrid があり、まだ品質チェック未実施 or 7日以内の候補者を対象
+        import datetime
+        since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).isoformat()
         res = (
             supabase.from_("candidates")
             .select("id, raw_profile, skills, name")
             .eq("data_env", "prod")
             .eq("duplicate_flag", False)
             .is_("merged_into", None)
-            .gte("created_at", "now() - interval '7 days'")
+            .gte("created_at", since)
             .limit(30)
             .execute()
         )
