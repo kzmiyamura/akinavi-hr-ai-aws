@@ -1962,7 +1962,7 @@ function extractWordSkillYears(json: WordHtmlJson): Record<string, number> {
   return result
 }
 
-async function extractWordText(base64: string): Promise<{ text: string; totalProjectMonths?: number; skillYears?: Record<string, number> }> {
+async function extractWordText(base64: string): Promise<{ text: string; totalProjectMonths?: number; skillYears?: Record<string, number>; grid?: string[][] }> {
   try {
     const mammothMod = npmDefault(await import('npm:mammoth@1.8.0'))
     const mammoth = mammothMod as {
@@ -1996,7 +1996,7 @@ async function extractWordText(base64: string): Promise<{ text: string; totalPro
           // Word・Excel 統合方式で skillYears 抽出（列名・配列・テキストパターンを全試行）
           const wordGrid = wordJson.tables.flat(1)
           const skillYears = extractSkillYearsUnified(wordGrid, wordJson.paragraphs)
-          return { text, totalProjectMonths, skillYears: Object.keys(skillYears).length > 0 ? skillYears : undefined }
+          return { text, totalProjectMonths, skillYears: Object.keys(skillYears).length > 0 ? skillYears : undefined, grid: wordGrid.slice(0, 300) }
         }
       } catch (e) {
         console.warn('[Word] convertToHtml 失敗、extractRawText へフォールバック', e)
@@ -2586,7 +2586,7 @@ async function extractSkillYearsFromExcel(base64: string): Promise<Record<string
  * extractExcelText / extractSkillYearsFromExcel を別々に呼ぶと 2 回パースになるため
  * 添付ループではこちらを使う。
  */
-async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number> }> {
+async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number>; grid?: string[][] }> {
   try {
     const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
@@ -2604,6 +2604,7 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
     })
     const texts: string[] = []
     let skillYears: Record<string, number> = {}
+    let parsedGrid: string[][] | undefined
     for (const sheetName of sortedNames.slice(0, 3)) {
       const sheet = workbook.Sheets[sheetName]
 
@@ -2625,13 +2626,17 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
         const sy = extractSkillYearsUnified(grid)
         if (Object.keys(sy).filter(k => !k.startsWith('_')).length > 0) {
           skillYears = sy
+          // HF Spaces 品質チェック用: skillYears が取れたシートのグリッドを保存（最大300行）
+          parsedGrid = grid.slice(0, 300)
         } else {
           console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
+          // skillYears が取れなかった場合でも最初のシートのグリッドを保存
+          if (!parsedGrid && grid.length > 0) parsedGrid = grid.slice(0, 300)
         }
       }
     }
     const text = texts.join('\n\n')
-    return { text, skillYears }
+    return { text, skillYears, grid: parsedGrid }
   } catch (e) {
     console.warn('[Excel] 抽出失敗', e)
     return { text: '', skillYears: {} }
@@ -3328,6 +3333,8 @@ Deno.serve(async (req: Request) => {
     const officeTextContents: { label: string; content: string; skillYears?: Record<string, number> }[] = []
     let excelSkillYears: Record<string, number> = {}
     let wordSkillYearsForDisplay: Record<string, number> = {}  // 表示用のみ・経験年数推定には使わない
+    // HF Spaces 品質チェック用: 添付から抽出した生グリッド（Excel優先、なければWord）
+    let attachmentParsedGrid: { source: 'excel' | 'word'; rows: string[][] } | null = null
     for (const att of attachments) {
       const attNameLower = (att.name ?? '').toLowerCase()
       const isWordByMime = WORD_MIME.includes(att.mimeType)
@@ -3335,7 +3342,7 @@ Deno.serve(async (req: Request) => {
       const isWordByExt = /\.(docx?|doc)$/.test(attNameLower) && !isExcelByMime
       const isExcelByExt = /\.(xlsx?|xls|ods|csv)$/.test(attNameLower) && !isWordByMime
       if (isWordByMime || isWordByExt) {
-        const { text: rawText, totalProjectMonths: wordMonths, skillYears: wordSkillYears } = await extractWordText(att.data)
+        const { text: rawText, totalProjectMonths: wordMonths, skillYears: wordSkillYears, grid: wordGrid } = await extractWordText(att.data)
         if (rawText.trim()) {
           const text = cleanseWordText(rawText)
           officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
@@ -3348,9 +3355,13 @@ Deno.serve(async (req: Request) => {
         if (wordMonths && Object.keys(excelSkillYears).length === 0) {
           excelSkillYears['_totalProjectMonths'] = wordMonths
         }
+        // HF Spaces 用グリッド（Excel が未取得の場合のみ保存）
+        if (!attachmentParsedGrid && wordGrid && wordGrid.length > 0) {
+          attachmentParsedGrid = { source: 'word', rows: wordGrid }
+        }
       } else if (isExcelByMime || isExcelByExt) {
         // 1 回のパースで text と skillYears を同時取得（二重パース防止）
-        const { text, skillYears: years } = await extractExcelAll(att.data)
+        const { text, skillYears: years, grid: excelGrid } = await extractExcelAll(att.data)
         if (text.trim()) officeTextContents.push({
           label: `Excelファイル(${att.name ?? 'spreadsheet'})`,
           content: text,
@@ -3360,6 +3371,10 @@ Deno.serve(async (req: Request) => {
         // 単体候補者パス用: 最初の非空 Excel の skillYears を excelSkillYears に保存
         if (Object.keys(excelSkillYears).length === 0 && Object.keys(years).length > 0) {
           excelSkillYears = years
+        }
+        // HF Spaces 用グリッド（Excel を優先・上書き）
+        if (excelGrid && excelGrid.length > 0) {
+          attachmentParsedGrid = { source: 'excel', rows: excelGrid }
         }
       }
     }
@@ -3833,6 +3848,8 @@ Deno.serve(async (req: Request) => {
                 multiCandidateBlock: true,
                 // 名前後ろ括弧のスキル年数（#79）: 「K.T（Java 5年 / Python 3年）」形式
                 skillYears: blockRegexFields.nameSkillYears ?? undefined,
+                // HF Spaces 品質チェック用: 添付ファイルから抽出した生グリッド（UI からは参照しない・7日TTL）
+                parsedGrid: attachmentParsedGrid ?? undefined,
               },
               duplicate_flag: false,
               created_by: 'make-inbound',
@@ -4229,6 +4246,8 @@ Deno.serve(async (req: Request) => {
             if (Object.keys(nameYears).length > 0) return nameYears
             return undefined
           })(),
+          // HF Spaces 品質チェック用: 添付ファイルから抽出した生グリッド（UI からは参照しない・7日TTL）
+          parsedGrid: attachmentParsedGrid ?? undefined,
         },
         duplicate_flag: false,
         created_by: 'make-inbound',
