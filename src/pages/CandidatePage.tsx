@@ -2,7 +2,7 @@ import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate } from '../lib/db/candidates'
+import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate, fetchCandidateRawProfile } from '../lib/db/candidates'
 import type { SearchScope } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
@@ -901,7 +901,21 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     onError: (e) => { setMessage({ type: 'error', text: String(e) }) },
   })
 
-  const selectedCandidate = candidates.find((c: Candidate) => c.id === selectedId) ?? null
+  const selectedCandidateBase = candidates.find((c: Candidate) => c.id === selectedId) ?? null
+
+  // 詳細表示用: raw_profile の text・parsedGrid を含む full 版を追加フェッチ
+  // （candidates_lite ビューではこれらを除外しているため）
+  const { data: fullRawProfile } = useQuery({
+    queryKey: ['candidate-raw-profile', selectedId],
+    queryFn: () => fetchCandidateRawProfile(selectedId!),
+    enabled: !!selectedId,
+    staleTime: 60_000,
+  })
+  const selectedCandidate = useMemo(() => {
+    if (!selectedCandidateBase) return null
+    if (!fullRawProfile) return selectedCandidateBase
+    return { ...selectedCandidateBase, raw_profile: { ...(selectedCandidateBase.raw_profile as object), ...fullRawProfile } }
+  }, [selectedCandidateBase, fullRawProfile])
 
   // 重複疑い候補者クエリ（duplicate_flag=true の場合のみ同名・直近90日・別IDを取得）
   const { data: dupCandidates } = useQuery({

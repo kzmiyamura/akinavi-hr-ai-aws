@@ -259,8 +259,9 @@ export async function fetchCandidates(dataEnv: DataEnv): Promise<Candidate[]> {
 
 /** 人材を100件ずつページ取得 */
 export async function fetchCandidatesPage(dataEnv: DataEnv, offset: number, limit = 100): Promise<Candidate[]> {
+  // candidates_lite ビュー: raw_profile から text・parsedGrid を除外して転送量を削減
   const { data, error } = await supabase
-    .from('candidates')
+    .from('candidates_lite')
     .select('*')
     .eq('data_env', dataEnv)
     .is('merged_into', null)
@@ -269,6 +270,13 @@ export async function fetchCandidatesPage(dataEnv: DataEnv, offset: number, limi
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
+}
+
+/** 詳細表示用: 特定候補の raw_profile 全体（text・parsedGrid を含む）を取得 */
+export async function fetchCandidateRawProfile(id: string): Promise<Record<string, unknown> | null> {
+  const { data, error } = await supabase.rpc('fetch_candidate_raw_profile', { p_id: id })
+  if (error) return null
+  return data as Record<string, unknown> | null
 }
 
 /** 人材の総数を取得 */
