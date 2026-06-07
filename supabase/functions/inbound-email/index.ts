@@ -2353,6 +2353,31 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
 
 // ── HTML テーブル → JSON 変換ユーティリティ ────────────────────────────────
 
+/**
+ * parseHtmlTableToGrid の出力（2D グリッド）を読みやすいテキストに変換する。
+ * sheet_to_csv の代替。結合セルが正確に展開されているため構造が保たれる。
+ * - 空セル・装飾セルを除去
+ * - 連続する同値セル（colspan展開の重複）を排除
+ * - 2セル行は「ラベル：値」形式、それ以外はスペース区切り
+ */
+function gridToText(grid: string[][], maxChars = 6000): string {
+  const lines: string[] = []
+  for (const row of grid) {
+    const cells: string[] = []
+    let prev = ''
+    for (const c of row) {
+      const v = c?.trim() ?? ''
+      if (!v || DECORATION_RE.test(v)) continue
+      if (v !== prev) cells.push(v)
+      prev = v
+    }
+    if (cells.length === 0) continue
+    lines.push(cells.length === 2 ? `${cells[0]}：${cells[1]}` : cells.join(' '))
+  }
+  const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  return text.length > maxChars ? text.slice(0, maxChars) + '\n...(省略)' : text
+}
+
 /** SheetJS が出力する HTML テーブルを 2D グリッドに展開（rowspan/colspan 対応） */
 function parseHtmlTableToGrid(html: string): string[][] {
   const grid: string[][] = []
@@ -2513,7 +2538,6 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
     const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
       utils: {
-        sheet_to_csv:  (sheet: unknown) => string
         sheet_to_html: (sheet: unknown) => string
         sheet_to_json: (sheet: unknown, opts: object) => unknown[][]
       }
@@ -2530,15 +2554,17 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
     let skillYears: Record<string, number> = {}
     for (const sheetName of sortedNames.slice(0, 3)) {
       const sheet = workbook.Sheets[sheetName]
-      // テキスト抽出（CSV）
-      const csv = XLSX.utils.sheet_to_csv(sheet)
-      if (csv.trim()) texts.push(`--- シート: ${sheetName} ---\n${cleanseExcelCsv(csv)}`)
+
+      // HTML → グリッド（テキスト抽出・skillYears 両方に使う・セル結合を正確に展開）
+      const html = XLSX.utils.sheet_to_html(sheet)
+      const grid = parseHtmlTableToGrid(html)
+
+      // テキスト抽出（旧 CSV 方式を廃止・グリッドから直接生成）
+      const gridText = gridToText(grid)
+      if (gridText.trim()) texts.push(`--- シート: ${sheetName} ---\n${gridText}`)
 
       // skillYears 抽出（最初に見つかったシートで確定）
       if (Object.keys(skillYears).length === 0) {
-        // ── HTML → JSON 変換（結合セル対応・列名ベース） ──
-        const html = XLSX.utils.sheet_to_html(sheet)
-        const grid = parseHtmlTableToGrid(html)
         const jsonRows = gridToJsonRows(grid)
 
         // [Excel-json] ログ: 先頭10行を Supabase Logs に出力（デバッグ用）
@@ -2550,13 +2576,12 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
         if (Object.keys(syJson).filter(k => !k.startsWith('_')).length > 0) {
           skillYears = syJson
         } else {
-          // フォールバック: 従来の 2D 配列ベース抽出
+          // フォールバック: 2D 配列ベース抽出
           const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as string[][]
           const syData = extractSkillYearsFromSheetData(data)
           if (Object.keys(syData).filter(k => !k.startsWith('_')).length > 0) {
             skillYears = syData
           } else {
-            // 両方失敗：診断ログ
             const headRows = data.slice(0, 3).map(r => r.slice(0, 8))
             console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${data.length} cols=${data[0]?.length ?? 0} head=${JSON.stringify(headRows)}`)
           }
