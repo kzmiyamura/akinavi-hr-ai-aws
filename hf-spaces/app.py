@@ -1,0 +1,323 @@
+"""
+AkiNavi HR-AI — HF Spaces 品質チェックバッチ
+- CPU only / 無料枠のみ / GPU 禁止
+- Supabase pg_cron から夜間バッチとして呼び出す（UI からは参照しない）
+- /health : キープアライブ + モデル状態確認
+- /run_quality_check : parsedGrid から skillYears 再抽出 + スキル漏れ検出
+"""
+
+import json
+import logging
+import os
+import re
+import asyncio
+from contextlib import asynccontextmanager
+from difflib import SequenceMatcher
+from typing import Optional
+
+from fastapi import FastAPI, Header, HTTPException
+from supabase import create_client, Client
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+# ── 環境変数 ──────────────────────────────────────────────────────────────────
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+# pg_cron が X-Api-Secret ヘッダーで送るシークレット（任意・未設定なら認証スキップ）
+API_SECRET = os.environ.get("API_SECRET", "")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+# ── グローバルモデル状態 ───────────────────────────────────────────────────────
+llm = None          # llama-cpp-python の Llama インスタンス
+_models_loading = False
+_models_ready = False
+
+
+def load_models() -> None:
+    global llm, _models_ready
+    logger.info("[models] ロード開始")
+
+    # Qwen2.5-0.5B-Instruct Q4_K_M（CPU 推論・約400MB）
+    try:
+        from huggingface_hub import hf_hub_download
+        from llama_cpp import Llama
+
+        model_path = hf_hub_download(
+            repo_id="Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+            filename="qwen2.5-0.5b-instruct-q4_k_m.gguf",
+        )
+        llm = Llama(
+            model_path=model_path,
+            n_ctx=3072,
+            n_threads=2,   # CPU Basic は 2 vCPU
+            n_gpu_layers=0,  # CPU only
+            verbose=False,
+        )
+        logger.info("[models] Qwen2.5-0.5B ロード完了")
+    except Exception as e:
+        logger.warning(f"[models] LLM ロード失敗（ルールベースのみで続行）: {e}")
+
+    _models_ready = True
+    logger.info("[models] 準備完了")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _models_loading
+    _models_loading = True
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, load_models)
+    _models_loading = False
+    yield
+
+
+app = FastAPI(title="AkiNavi Quality Check", lifespan=lifespan)
+
+
+# ── 認証 ─────────────────────────────────────────────────────────────────────
+def verify_secret(x_api_secret: Optional[str]) -> None:
+    if API_SECRET and x_api_secret != API_SECRET:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# ── グリッド → テキスト変換 ───────────────────────────────────────────────────
+def grid_to_text(rows: list[list[str]], max_rows: int = 60) -> str:
+    lines = []
+    for row in rows[:max_rows]:
+        cells = [c.strip() for c in row if c and c.strip()]
+        # 装飾行スキップ（罫線・記号のみ）
+        if not cells or all(re.fullmatch(r"[\s★■□●◆◇▼▽△▲◎○※・－—─━═＝=\-─*#~_|/\\]+", c) for c in cells):
+            continue
+        # 連続重複セル除去（colspan 展開の重複）
+        deduped = [cells[0]]
+        for c in cells[1:]:
+            if c != deduped[-1]:
+                deduped.append(c)
+        lines.append(" | ".join(deduped))
+    return "\n".join(lines)
+
+
+# ── LLM による skillYears 抽出 ────────────────────────────────────────────────
+def extract_skill_years_llm(rows: list[list[str]]) -> dict[str, int]:
+    """parsedGrid から LLM を使って skillYears（月数）を抽出する"""
+    if not llm or not rows:
+        return {}
+
+    grid_text = grid_to_text(rows, max_rows=60)
+    if not grid_text or len(grid_text) < 10:
+        return {}
+
+    prompt = (
+        "<|im_start|>system\n"
+        "あなたはITスキルシートを解析するエキスパートです。\n"
+        "<|im_end|>\n"
+        "<|im_start|>user\n"
+        "以下のスキルシートのグリッドデータからスキル名と経験年数を抽出してください。\n"
+        "プロジェクト経歴がある場合は各スキルの期間を合算してください。\n"
+        "JSONのみ返してください（他の説明不要）。形式: {\"Java\": 36, \"Python\": 24} （値は月数）\n"
+        "\n"
+        f"グリッド:\n{grid_text}\n"
+        "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+
+    try:
+        output = llm(prompt, max_tokens=400, temperature=0.05, stop=["<|im_end|>", "\n\n"])
+        text = output["choices"][0]["text"].strip()
+        # JSON 部分を抽出
+        m = re.search(r"\{[^{}]+\}", text, re.DOTALL)
+        if not m:
+            return {}
+        data = json.loads(m.group())
+        result = {}
+        for k, v in data.items():
+            k = str(k).strip()
+            # スキル名として明らかに不正なものを除外
+            if not k or len(k) > 50 or re.fullmatch(r"[\d\s\-/]+", k):
+                continue
+            if isinstance(v, (int, float)) and 0 < v <= 600:
+                result[k] = int(v)
+        return result
+    except Exception as e:
+        logger.warning(f"[llm] skillYears 抽出失敗: {e}")
+        return {}
+
+
+# ── ルールベース skillYears 抽出（LLM フォールバック） ────────────────────────
+def extract_skill_years_rules(rows: list[list[str]]) -> dict[str, int]:
+    """テキストパターンで 'スキル名 X年' を抽出する（LLM なしフォールバック）"""
+    result: dict[str, int] = {}
+    for row in rows:
+        for cell in row:
+            for seg in re.split(r"[,、，\n]", cell or ""):
+                m = re.match(r"^(.+?)\s+(\d+(?:\.\d+)?)年(?:[^\d]|$)", seg.strip())
+                if not m:
+                    continue
+                skill = m.group(1).strip()
+                colon = max(skill.rfind(":"), skill.rfind("："))
+                if colon >= 0:
+                    skill = skill[colon + 1:].strip()
+                years = float(m.group(2))
+                if skill and not skill[0].isdigit() and len(skill) <= 50 and 0 < years <= 50:
+                    result[skill] = int(years * 12)
+    return result
+
+
+# ── skill_master をキャッシュ ─────────────────────────────────────────────────
+_skill_master_cache: list[dict] | None = None
+
+
+def get_skill_master() -> list[dict]:
+    global _skill_master_cache
+    if _skill_master_cache is None:
+        res = supabase.from_("skill_master").select("name, aliases, category").limit(2000).execute()
+        _skill_master_cache = res.data or []
+        logger.info(f"[skill_master] {len(_skill_master_cache)} 件ロード")
+    return _skill_master_cache
+
+
+# ── スキル漏れ検出 ────────────────────────────────────────────────────────────
+def detect_missing_skills(
+    rows: list[list[str]],
+    existing_skills: list[str],
+) -> list[str]:
+    """parsedGrid に出現するが candidates.skills に登録されていないスキルを検出する"""
+    skill_master = get_skill_master()
+    if not skill_master:
+        return []
+
+    # グリッド全テキスト
+    grid_text = " ".join(
+        cell for row in rows for cell in row if cell and cell.strip()
+    ).lower()
+
+    existing_lower = {s.lower() for s in (existing_skills or [])}
+    missing = []
+
+    for entry in skill_master:
+        name: str = entry.get("name", "")
+        aliases: list = entry.get("aliases") or []
+        candidates_to_check = [name] + aliases
+
+        # 既に登録済みならスキップ
+        if any(c.lower() in existing_lower for c in candidates_to_check):
+            continue
+
+        # グリッドテキストに出現するか確認（スペースなし比較も）
+        for cand in candidates_to_check:
+            cand_lower = cand.lower().replace(" ", "")
+            grid_nospace = grid_text.replace(" ", "")
+            if cand_lower in grid_nospace and len(cand_lower) >= 3:
+                missing.append(name)
+                break
+
+    return missing[:20]  # 最大20件
+
+
+# ── エンドポイント ────────────────────────────────────────────────────────────
+@app.get("/health")
+def health():
+    return {
+        "ok": True,
+        "models_ready": _models_ready,
+        "models_loading": _models_loading,
+        "llm": llm is not None,
+    }
+
+
+@app.post("/run_quality_check")
+async def run_quality_check(
+    x_api_secret: Optional[str] = Header(None, alias="x-api-secret"),
+):
+    verify_secret(x_api_secret)
+
+    if _models_loading:
+        return {"ok": False, "reason": "models_loading", "retry_after": 60}
+
+    stats = {"processed": 0, "skill_years_updated": 0, "missing_skills_found": 0, "errors": 0}
+
+    try:
+        # parsedGrid があり、まだ品質チェック未実施 or 7日以内の候補者を対象
+        res = (
+            supabase.from_("candidates")
+            .select("id, raw_profile, skills")
+            .eq("data_env", "prod")
+            .eq("duplicate_flag", False)
+            .is_("merged_into", None)
+            .gte("created_at", "now() - interval '7 days'")
+            .limit(30)
+            .execute()
+        )
+        candidates = res.data or []
+
+        for candidate in candidates:
+            try:
+                raw_profile: dict = candidate.get("raw_profile") or {}
+                parsed_grid = raw_profile.get("parsedGrid")
+                if not parsed_grid:
+                    continue
+
+                # 既に品質チェック済みならスキップ（24時間以内）
+                last_check = raw_profile.get("hfQualityCheckedAt", "")
+                if last_check:
+                    import datetime
+                    checked_at = datetime.datetime.fromisoformat(last_check.replace("Z", "+00:00"))
+                    age = datetime.datetime.now(datetime.timezone.utc) - checked_at
+                    if age.total_seconds() < 86400:
+                        continue
+
+                rows: list[list[str]] = parsed_grid.get("rows", [])
+                source: str = parsed_grid.get("source", "unknown")
+                if not rows:
+                    continue
+
+                stats["processed"] += 1
+                updates: dict = {}
+
+                # ── skillYears 再抽出 ──────────────────────────────────────
+                existing_sy: dict = raw_profile.get("skillYears") or {}
+                existing_count = len([k for k in existing_sy if not k.startswith("_")])
+
+                if existing_count < 3:
+                    # LLM で抽出
+                    new_sy = extract_skill_years_llm(rows)
+                    if not new_sy:
+                        # フォールバック: ルールベース
+                        new_sy = extract_skill_years_rules(rows)
+
+                    if new_sy:
+                        merged_sy = {**existing_sy, **new_sy}
+                        updates["skillYears"] = merged_sy
+                        stats["skill_years_updated"] += 1
+                        logger.info(
+                            f"[quality] id={candidate['id']} source={source} "
+                            f"skillYears+{len(new_sy)}: {list(new_sy.keys())[:5]}"
+                        )
+
+                # ── スキル漏れ検出 ─────────────────────────────────────────
+                existing_skills: list = candidate.get("skills") or []
+                missing = detect_missing_skills(rows, existing_skills)
+                if missing:
+                    updates["hfDetectedMissingSkills"] = missing
+                    stats["missing_skills_found"] += len(missing)
+                    logger.info(f"[quality] id={candidate['id']} 漏れスキル候補: {missing}")
+
+                # ── DB に書き戻し ──────────────────────────────────────────
+                import datetime
+                updates["hfQualityCheckedAt"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+                updated_profile = {**raw_profile, **updates}
+                supabase.from_("candidates").update({"raw_profile": updated_profile}).eq("id", candidate["id"]).execute()
+
+            except Exception as e:
+                logger.error(f"[quality] id={candidate.get('id')} エラー: {e}")
+                stats["errors"] += 1
+
+    except Exception as e:
+        logger.error(f"[quality] 全体エラー: {e}")
+        stats["fatal_error"] = str(e)
+
+    logger.info(f"[quality] 完了: {stats}")
+    return {"ok": True, **stats}
