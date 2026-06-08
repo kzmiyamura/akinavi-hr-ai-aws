@@ -232,6 +232,72 @@ def extract_skill_years_from_grid(rows: list, skill_master_entries: list) -> dic
     return result
 
 
+# ── グリッド → テキスト変換（LLM 入力用） ────────────────────────────────────
+def grid_to_text(rows: list) -> str:
+    """parsedGrid の rows をLLMへ渡すテキストに変換（最大100行・各行をTSV形式で）"""
+    lines = []
+    for row in rows[:100]:
+        cells = [_normalize_cell(c) for c in row]
+        line = "\t".join(cells).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+# ── LLM fallback（グリッド解析失敗時） ────────────────────────────────────────
+def extract_skill_years_llm(rows: list) -> dict[str, int]:
+    """
+    グリッド構造解析が失敗した場合に LLM（Qwen2.5-0.5B）を使って
+    スキル経験年数を抽出するフォールバック。
+    llm が未ロードの場合は空 dict を返す。
+    """
+    if llm is None:
+        logger.info("[llm] モデル未ロードのためスキップ")
+        return {}
+
+    text = grid_to_text(rows)
+    if not text.strip():
+        return {}
+
+    # テキストが長すぎる場合は先頭 3000 文字に切り詰める
+    if len(text) > 3000:
+        text = text[:3000]
+
+    prompt = (
+        "以下はIT技術者の経歴書データです。各スキルの経験年数を抽出してください。\n"
+        "出力形式: スキル名:年数（整数） を1行1エントリで。経験年数が不明なものは除外。\n"
+        "例:\nPython:5\nJava:3\nAWS:2\n\n"
+        f"データ:\n{text}\n\n"
+        "抽出結果:"
+    )
+
+    try:
+        output = llm(
+            prompt,
+            max_tokens=256,
+            temperature=0.0,
+            stop=["\n\n", "データ:", "---"],
+        )
+        response_text = output["choices"][0]["text"].strip()
+        logger.info(f"[llm] 応答: {response_text[:200]}")
+
+        result: dict[str, int] = {}
+        for line in response_text.splitlines():
+            m = re.match(r"^(.+?)[:\uff1a](\d+(?:\.\d+)?)$", line.strip())
+            if not m:
+                continue
+            skill = m.group(1).strip()
+            years = float(m.group(2))
+            if skill and not skill[0].isdigit() and len(skill) <= 50 and 0 < years <= 50:
+                result[skill] = int(years * 12)
+
+        logger.info(f"[llm] skillYears抽出: {len(result)}件")
+        return result
+    except Exception as e:
+        logger.warning(f"[llm] 抽出エラー: {e}")
+        return {}
+
+
 # ── テキストパターン fallback（「スキル名 X年」形式） ─────────────────────────
 def extract_skill_years_rules(rows: list[list[str]]) -> dict[str, int]:
     """テキストパターンで 'スキル名 X年' を抽出する（グリッド解析失敗時のフォールバック）"""
@@ -506,8 +572,10 @@ async def run_quality_check(
                 if existing_count < 3:
                     new_sy: dict = {}
                     if rows:
-                        # parsedGrid がある場合: グリッド構造解析（LLM不要）
+                        # parsedGrid がある場合: グリッド構造解析 → LLM → テキストルールの順でフォールバック
                         new_sy = extract_skill_years_from_grid(rows, get_skill_master())
+                        if not new_sy:
+                            new_sy = extract_skill_years_llm(rows)
                         if not new_sy:
                             new_sy = extract_skill_years_rules(rows)
                     if not new_sy and full_text:
