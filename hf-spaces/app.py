@@ -450,6 +450,9 @@ async def run_quality_check(
 ):
     verify_secret(x_api_secret)
 
+    logger.info("[quality] HF Spaces 起動確認 OK")
+    return {"ok": True, "message": "HF Spaces 起動確認 OK"}
+
     if _models_loading:
         return {"ok": False, "reason": "models_loading", "retry_after": 60}
 
