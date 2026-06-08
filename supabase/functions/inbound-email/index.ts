@@ -3263,8 +3263,11 @@ Deno.serve(async (req: Request) => {
       rawBody = pickedPlain.trim()
     }
     // HTMLタグが含まれている場合は除去してプレーンテキスト化
+    // <br> のみのメールや <ul><li> 形式も検出対象に含める
     let body: string = rawBody.includes('<html') || rawBody.includes('<div') || rawBody.includes('<p ')
       || rawBody.includes('<p>') || rawBody.includes('<table') || rawBody.includes('<span') || rawBody.includes('<td')
+      || rawBody.includes('<br') || rawBody.includes('<ul') || rawBody.includes('<ol') || rawBody.includes('<li')
+      || rawBody.includes('<h1') || rawBody.includes('<h2') || rawBody.includes('<h3')
       ? stripHtml(rawBody)
       : rawBody
     // stripHtml が過剰に空になるケース（構造だけの HTML 等）は解析不能になるため raw にフォールバック

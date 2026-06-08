@@ -151,6 +151,38 @@ const STATION_TO_PREFECTURE = {
   '那覇': '沖縄県',
 }
 
+function stripHtml(html) {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<\/t[dh]>/gi, '\t')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&thinsp;/g, ' ')
+    .replace(/&#8203;/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\r\n/g, '\n')
+    .replace(/\t{2,}/g, '\t')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function isHtmlBody(rawBody) {
+  return rawBody.includes('<html') || rawBody.includes('<div') || rawBody.includes('<p ')
+    || rawBody.includes('<p>') || rawBody.includes('<table') || rawBody.includes('<span') || rawBody.includes('<td')
+    || rawBody.includes('<br') || rawBody.includes('<ul') || rawBody.includes('<ol') || rawBody.includes('<li')
+    || rawBody.includes('<h1') || rawBody.includes('<h2') || rawBody.includes('<h3')
+}
+
 function inferPrefectureFromStation(station) {
   if (!station) return null
   const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim()
@@ -719,9 +751,51 @@ if (args.includes('--test')) {
   const colonDescContent = colonDescCheck ? colonDescCheck[1].trim() : ''
   assert('内　容：複数行取得（UAT検証含む）', colonDescContent.includes('UAT検証'), true)
 
-  // ── ⑫ 駅名→都道府県マッピング ──────────────────────────────────────────────
+  // ── ⑫ HTML本文のstripHtml検出 ──────────────────────────────────────────────
+  console.log('\n【⑫ HTML本文のstripHtml検出】')
+
+  // isHtmlBody: 各タグで正しくHTML判定されるか
+  assert('isHtmlBody: <html>タグ',      isHtmlBody('<html><body>氏名：田中</body></html>'), true)
+  assert('isHtmlBody: <div>のみ',       isHtmlBody('<div>氏名：田中</div>'),                true)
+  assert('isHtmlBody: <br>のみ',        isHtmlBody('氏名：田中<br>最寄駅：渋谷'),           true)
+  assert('isHtmlBody: <br />のみ',      isHtmlBody('氏名：田中<br />最寄駅：渋谷'),         true)
+  assert('isHtmlBody: <ul><li>形式',    isHtmlBody('<ul><li>スキル：Java</li></ul>'),        true)
+  assert('isHtmlBody: <h1>タグ',        isHtmlBody('<h1>人材情報</h1>氏名：田中'),           true)
+  assert('isHtmlBody: <h2>タグ',        isHtmlBody('<h2>経歴</h2>経験年数：5年'),            true)
+  assert('isHtmlBody: プレーンテキスト', isHtmlBody('氏名：田中\n最寄駅：渋谷'),             false)
+
+  // stripHtml: <br>のみのHTMLメールから正しく本文を取り出せるか
+  const brOnlyHtml = '氏名：山田太郎<br>最寄駅：渋谷<br>経験年数：8年<br>希望単価：65万'
+  const brStripped = stripHtml(brOnlyHtml)
+  assert('stripHtml: <br>→改行変換', brStripped.includes('氏名：山田太郎'), true)
+  assert('stripHtml: <br>→改行後に駅名あり', brStripped.includes('最寄駅：渋谷'), true)
+
+  // stripHtml後にextractCandidateFieldsRegexが正しくフィールドを取れるか
+  const brHtmlBody = '氏名：田中花子<br>最寄駅：新宿<br>経験年数：5年<br>希望単価：60万'
+  const brBodyForExtract = isHtmlBody(brHtmlBody) ? stripHtml(brHtmlBody) : brHtmlBody
+  const brFields = extractCandidateFieldsRegex(brBodyForExtract, '')
+  assert('stripHtml経由: <br>形式メール name',          brFields.name,           '田中花子')
+  assert('stripHtml経由: <br>形式メール nearestStation', brFields.nearestStation, '新宿')
+  assert('stripHtml経由: <br>形式メール experienceYears', brFields.experienceYears, 5)
+  assert('stripHtml経由: <br>形式メール desiredRate',    brFields.desiredRate,    '60万')
+
+  // <ul><li>形式のHTMLメール
+  const liHtml = '<ul><li>氏名：鈴木一郎</li><li>最寄駅：品川</li><li>経験年数：10年</li></ul>'
+  const liBodyForExtract = isHtmlBody(liHtml) ? stripHtml(liHtml) : liHtml
+  const liFields = extractCandidateFieldsRegex(liBodyForExtract, '')
+  assert('stripHtml経由: <li>形式メール name',           liFields.name,           '鈴木一郎')
+  assert('stripHtml経由: <li>形式メール nearestStation',  liFields.nearestStation, '品川')
+
+  // stripHtmlでエンティティが正しくデコードされるか
+  const entityHtml = '氏名：&lt;田中&gt;<br>経験：5&amp;年<br>最寄駅：&nbsp;渋谷'
+  const entityStripped = stripHtml(entityHtml)
+  assert('stripHtml: &lt;&gt;デコード',  entityStripped.includes('<田中>'), true)
+  assert('stripHtml: &amp;デコード',     entityStripped.includes('5&年'),  true)
+  assert('stripHtml: &nbsp;→スペース',   entityStripped.includes('渋谷'),  true)
+
+  // ── ⑬ 駅名→都道府県マッピング ──────────────────────────────────────────────
   // このテストが落ちたら STATION_TO_PREFECTURE に追加が必要（index.ts + test_extraction.mjs 両方）
-  console.log('\n【⑫ 駅名→都道府県マッピング】')
+  console.log('\n【⑭ 駅名→都道府県マッピング】')
   function assertStation(station, expectedPref) {
     const got = inferPrefectureFromStation(station)
     assert(`inferPrefectureFromStation(${station})`, got, expectedPref)
@@ -750,9 +824,9 @@ if (args.includes('--test')) {
   const stF3 = extractCandidateFieldsRegex('氏名：佐藤一郎\n最寄駅：存在しない駅\n経験年数：5年', '')
   assert('未知駅→prefecture=null', stF3.prefecture, null)
 
-  // ── ⑬ 複数人材メール：添付ファイル割り当て（assignAttachmentsToBlocks） ────
+  // ── ⑮ 複数人材メール：添付ファイル割り当て（assignAttachmentsToBlocks） ────
   // index.ts の assignAttachmentsToBlocks と同じロジックをここで再現してテスト
-  console.log('\n【⑬ 複数人材メール：添付ファイル割り当て】')
+  console.log('\n【⑮ 複数人材メール：添付ファイル割り当て】')
   function assignAttachmentsToBlocks(blocks, attachments) {
     const result = new Map()
     if (attachments.length === 0 || blocks.length === 0) return result
