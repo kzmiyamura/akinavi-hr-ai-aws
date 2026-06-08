@@ -619,9 +619,6 @@ const STATION_TO_PREFECTURE: Record<string, string> = {
   '山形': '山形県', '福島': '福島県', '郡山': '福島県',
 }
 
-/** station_master DB から取得したマップ（関数インスタンス内でキャッシュ） */
-let _stationDbMap: Record<string, string> | null = null
-
 /** own_email_domain キャッシュ（undefined = 未ロード、null = 未設定） */
 let _ownEmailDomain: string | null | undefined = undefined
 let _ownEmailDomainLoadedAt = 0
@@ -649,49 +646,41 @@ async function loadOwnEmailDomain(supabaseUrl: string, serviceKey: string): Prom
   return _ownEmailDomain
 }
 
-/** DB の station_master を取得してハードコードマップとマージ */
-async function loadStationMap(): Promise<Record<string, string>> {
-  if (_stationDbMap) return _stationDbMap
-  try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
-    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    if (supabaseUrl && serviceKey) {
-      const res = await fetch(`${supabaseUrl}/rest/v1/station_master?select=name,prefecture&limit=20000`, {
-        headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
-      })
-      if (res.ok) {
-        const rows = await res.json() as { name: string; prefecture: string }[]
-        const dbMap: Record<string, string> = {}
-        for (const r of rows) dbMap[r.name] = r.prefecture
-        _stationDbMap = { ...STATION_TO_PREFECTURE, ...dbMap }
-        return _stationDbMap
-      }
-    }
-  } catch (e) {
-    console.warn('[station] DB読み込み失敗、ハードコードマップで継続:', e)
-  }
-  _stationDbMap = { ...STATION_TO_PREFECTURE }
-  return _stationDbMap
-}
-
 /**
- * 駅名（"八街駅" "八街" 等）から都道府県を推定する。
- * 不一致時は null を返す。同期版（ハードコードマップのみ）。
- * 非同期版は inferPrefectureFromStationAsync を使うこと。
+ * 駅名（"八街駅" "八街" 等）からハードコードマップで都道府県を推定する。
+ * 不一致時は null を返す（同期）。
  */
 export function inferPrefectureFromStation(station: string | null | undefined): string | null {
   if (!station) return null
   const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim()
   if (!cleaned) return null
-  const map = _stationDbMap ?? STATION_TO_PREFECTURE
-  return map[cleaned] ?? null
+  return STATION_TO_PREFECTURE[cleaned] ?? null
 }
 
 /**
- * DB キャッシュを使った非同期版。リクエスト処理の開始時に一度呼ぶこと。
+ * station_master DB に 1 件だけ問い合わせて都道府県を返す。
+ * ハードコードマップにない駅のフォールバック用。
  */
-export async function preloadStationMap(): Promise<void> {
-  await loadStationMap()
+async function lookupStationPrefectureFromDb(station: string | null | undefined): Promise<string | null> {
+  if (!station) return null
+  const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim()
+  if (!cleaned) return null
+  try {
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    if (!supabaseUrl || !serviceKey) return null
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/station_master?select=prefecture&name=eq.${encodeURIComponent(cleaned)}&limit=1`,
+      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+    )
+    if (res.ok) {
+      const rows = await res.json() as { prefecture: string }[]
+      return rows[0]?.prefecture ?? null
+    }
+  } catch {
+    // DB障害時はnullで継続
+  }
+  return null
 }
 
 /**
@@ -3546,9 +3535,6 @@ Deno.serve(async (req: Request) => {
     pipe(traceRid, tracePhase)
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
-    // 駅マスターをDBから先行ロード（以降の inferPrefectureFromStation がDB値を使う）
-    await preloadStationMap()
-
     tracePhase = 'pre_supabase'
 
     // ③ 重複メール判定（同一メールが複数受信箱に転送された場合の二重処理防止）
@@ -3772,6 +3758,10 @@ Deno.serve(async (req: Request) => {
             // ── Step4: フィールド抽出（件名＋ブロック本文＋マッチ添付テキスト） ──
             const blockRegexBodyText = decodeHtmlEntities([subject, block, blockAttachLabel].join('\n'))
             const blockRegexFields = extractCandidateFieldsRegex(blockRegexBodyText, blockAttachText)
+            // ハードコードマップにない駅は DB を 1 件だけ問い合わせる
+            if (!blockRegexFields.prefecture && blockRegexFields.nearestStation) {
+              blockRegexFields.prefecture = await lookupStationPrefectureFromDb(blockRegexFields.nearestStation)
+            }
             const blockProseFields = extractFromProse(blockRegexBodyText, blockAttachText)
 
             const blockResolvedName = blockRegexFields.name
@@ -4084,7 +4074,9 @@ Deno.serve(async (req: Request) => {
 
       // AI空項目にregexフォールバックを適用
       const resolvedStation = analyzed.nearestStation || regexFields.nearestStation
+      // ハードコードマップにない駅は DB を 1 件だけ問い合わせる
       const resolvedPrefecture = analyzed.prefecture || regexFields.prefecture
+        || (resolvedStation ? await lookupStationPrefectureFromDb(resolvedStation) : null)
       let resolvedExperienceYears = analyzed.experienceYears ?? regexFields.experienceYears
       // skillYearsフォールバック: メール本文に経験年数が書かれていない場合、Excelから推定
       // 優先順位: max-min日付スパン → _totalProjectMonths合計 → スキル最大月数
@@ -4517,6 +4509,7 @@ Deno.serve(async (req: Request) => {
       let workLocation: string | null = workLocationRaw
       if (workLocationRaw && !PREFECTURES.some(p => workLocationRaw.includes(p))) {
         const pref = inferPrefectureFromStation(workLocationRaw)
+          ?? await lookupStationPrefectureFromDb(workLocationRaw)
         if (pref) workLocation = `${pref} ${workLocationRaw}`
         else console.log('[station_unmapped]', workLocationRaw)
       }
