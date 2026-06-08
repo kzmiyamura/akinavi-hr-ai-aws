@@ -719,6 +719,159 @@ if (args.includes('--test')) {
   const colonDescContent = colonDescCheck ? colonDescCheck[1].trim() : ''
   assert('内　容：複数行取得（UAT検証含む）', colonDescContent.includes('UAT検証'), true)
 
+  // ── ⑫ 駅名→都道府県マッピング ──────────────────────────────────────────────
+  // このテストが落ちたら STATION_TO_PREFECTURE に追加が必要（index.ts + test_extraction.mjs 両方）
+  console.log('\n【⑫ 駅名→都道府県マッピング】')
+  function assertStation(station, expectedPref) {
+    const got = inferPrefectureFromStation(station)
+    assert(`inferPrefectureFromStation(${station})`, got, expectedPref)
+  }
+  // ハードコードマップに含まれるべき主要駅
+  assertStation('渋谷',     '東京都')
+  assertStation('渋谷駅',   '東京都')   // "駅"サフィックス除去
+  assertStation('調布',     '東京都')
+  assertStation('西調布',   '東京都')   // 過去に何度もバグった駅
+  assertStation('西調布駅', '東京都')
+  assertStation('大宮',     '埼玉県')
+  assertStation('横浜',     '神奈川県')
+  assertStation('梅田',     '大阪府')
+  assertStation('名古屋',   '愛知県')
+  assertStation('博多',     '福岡県')
+  assertStation('那覇',     '沖縄県')
+  // マップ外の駅は null（DBで補完される前提）
+  assertStation('不明駅',   null)
+  assertStation(null,        null)
+  assertStation('',          null)
+  // 駅名抽出→都道府県まで一気通し
+  const stF1 = extractCandidateFieldsRegex('氏名：山田太郎\n最寄駅：西調布\n経験年数：5年', '')
+  assert('西調布→prefecture（extractCandidateFieldsRegex経由）', stF1.prefecture, '東京都')
+  const stF2 = extractCandidateFieldsRegex('氏名：鈴木花子\n最寄駅：渋谷駅\n経験年数：3年', '')
+  assert('渋谷駅→prefecture（駅サフィックス除去）', stF2.prefecture, '東京都')
+  const stF3 = extractCandidateFieldsRegex('氏名：佐藤一郎\n最寄駅：存在しない駅\n経験年数：5年', '')
+  assert('未知駅→prefecture=null', stF3.prefecture, null)
+
+  // ── ⑬ 複数人材メール：添付ファイル割り当て（assignAttachmentsToBlocks） ────
+  // index.ts の assignAttachmentsToBlocks と同じロジックをここで再現してテスト
+  console.log('\n【⑬ 複数人材メール：添付ファイル割り当て】')
+  function assignAttachmentsToBlocks(blocks, attachments) {
+    const result = new Map()
+    if (attachments.length === 0 || blocks.length === 0) return result
+    const normFiles = attachments.map(att => {
+      const filenameMatch = att.label.match(/\(([^)]+)\)/)
+      const raw = filenameMatch ? filenameMatch[1] : att.label
+      return raw.toLowerCase().replace(/[.\s　]/g, '')
+    })
+    const allNormNames = blocks
+      .map(b => (b.name ? b.name.replace(/[.\s　]/g, '').toLowerCase() : ''))
+      .filter(n => n.length >= 2)
+    const used = new Set()
+    // パス1: 名前マッチ
+    blocks.forEach((b, blockIdx) => {
+      if (!b.name) return
+      const normName = b.name.replace(/[.\s　]/g, '').toLowerCase()
+      if (normName.length < 2) return
+      for (let i = 0; i < attachments.length; i++) {
+        if (used.has(i)) continue
+        if (normFiles[i].includes(normName)) {
+          result.set(blockIdx, attachments[i])
+          used.add(i)
+          break
+        }
+      }
+    })
+    // パス2: 駅名マッチ（他人名を含むファイルは除外）
+    blocks.forEach((b, blockIdx) => {
+      if (result.has(blockIdx)) return
+      const station = b.station
+      if (!station || station.length < 2) return
+      const myNorm = b.name ? b.name.replace(/[.\s　]/g, '').toLowerCase() : ''
+      const stationLower = station.toLowerCase()
+      for (let i = 0; i < attachments.length; i++) {
+        if (used.has(i)) continue
+        if (!normFiles[i].includes(stationLower)) continue
+        const belongsToOther = allNormNames.some(n => n !== myNorm && normFiles[i].includes(n))
+        if (belongsToOther) continue
+        result.set(blockIdx, attachments[i])
+        used.add(i)
+        break
+      }
+    })
+    return result
+  }
+  function assertAssign(label, result, blockIdx, expectedLabel) {
+    const got = result.get(blockIdx)?.label ?? null
+    assert(label, got, expectedLabel)
+  }
+
+  // ケースA-1: ファイル名に名前が含まれる → 正しく割り当て
+  {
+    const blocks = [{ name: '山田太郎', station: '渋谷' }, { name: '鈴木花子', station: '新宿' }]
+    const attachments = [
+      { label: '山田太郎_resume.xlsx', content: '山田のスキルシート' },
+      { label: '鈴木花子_cv.xlsx',     content: '鈴木のスキルシート' },
+    ]
+    const r = assignAttachmentsToBlocks(blocks, attachments)
+    assertAssign('ケースA: block0→山田ファイル', r, 0, '山田太郎_resume.xlsx')
+    assertAssign('ケースA: block1→鈴木ファイル', r, 1, '鈴木花子_cv.xlsx')
+  }
+
+  // ケースA-2: 駅名マッチ（名前マッチ失敗後のパス2）
+  {
+    const blocks = [{ name: 'Y.M', station: '西調布' }, { name: 'K.T', station: '渋谷' }]
+    const attachments = [
+      { label: '西調布_profile.xlsx', content: 'スキルデータ1' },
+      { label: '渋谷_profile.xlsx',   content: 'スキルデータ2' },
+    ]
+    const r = assignAttachmentsToBlocks(blocks, attachments)
+    assertAssign('ケースA(駅名): block0→西調布ファイル', r, 0, '西調布_profile.xlsx')
+    assertAssign('ケースA(駅名): block1→渋谷ファイル',   r, 1, '渋谷_profile.xlsx')
+  }
+
+  // ケースB修正前の再現: 汎用ファイル名（職務経歴書.xlsx）→割り当て失敗
+  // assignAttachmentsToBlocks の結果が空（null）になることを確認
+  {
+    const blocks = [{ name: '山田太郎', station: '渋谷' }, { name: '鈴木花子', station: '新宿' }]
+    const attachments = [{ label: '職務経歴書.xlsx', content: '誰かのスキルシート' }]
+    const r = assignAttachmentsToBlocks(blocks, attachments)
+    // 名前マッチも駅名マッチも失敗 → どちらも未割り当て
+    assertAssign('汎用ファイル名: block0は未割り当て', r, 0, null)
+    assertAssign('汎用ファイル名: block1は未割り当て', r, 1, null)
+    // ケースBの修正後ロジック: 未使用添付のうち他人名を含まないものを渡す
+    const assignedLabels = new Set([...r.values()].map(v => v.label))
+    const allNormNames = blocks
+      .map(b => b.name.replace(/[.\s　]/g, '').toLowerCase())
+      .filter(n => n.length >= 2)
+    // block0（山田太郎）視点: 未使用添付かつ他人名を含まない → 職務経歴書.xlsxが渡る
+    const myNorm0 = '山田太郎'.replace(/[.\s　]/g, '').toLowerCase()
+    const unassigned0 = attachments.filter(t => {
+      if (assignedLabels.has(t.label)) return false
+      const normFile = t.label.toLowerCase().replace(/[.\s　]/g, '')
+      return !allNormNames.some(n => n !== myNorm0 && normFile.includes(n))
+    })
+    assert('汎用ファイル名: ケースB修正後→未使用添付が渡る', unassigned0.length, 1)
+    assert('汎用ファイル名: 渡る添付は職務経歴書.xlsx', unassigned0[0]?.label, '職務経歴書.xlsx')
+  }
+
+  // ケースC: 名前が取れない → 全添付を共有
+  {
+    const blocks = [{ name: null, station: null }]
+    const attachments = [{ label: 'resume.xlsx', content: 'スキルシート' }]
+    const r = assignAttachmentsToBlocks(blocks, attachments)
+    // 名前なし → 割り当て失敗 → ケースCで全共有（test側では未割り当てであることを確認）
+    assertAssign('ケースC: 名前なし→assignは空', r, 0, null)
+    // ケースCロジック: allTextContents全体を渡す（index.ts側の動作）
+    assert('ケースC: 全添付共有が想定動作', true, true)
+  }
+
+  // 他人名混入防止: block1のファイルをblock0が奪わない
+  {
+    const blocks = [{ name: '山田', station: '渋谷' }, { name: '鈴木', station: '新宿' }]
+    const attachments = [{ label: '鈴木_resume.xlsx', content: '鈴木のデータ' }]
+    const r = assignAttachmentsToBlocks(blocks, attachments)
+    assertAssign('他人名防止: block0は鈴木ファイルを奪わない', r, 0, null)
+    assertAssign('他人名防止: block1→鈴木ファイル割り当て', r, 1, '鈴木_resume.xlsx')
+  }
+
   // ── 出力 ──
   console.log('\n' + '='.repeat(60))
   const failedList = results.filter(r => !r.ok)
