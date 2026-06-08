@@ -137,6 +137,17 @@ Deno.serve(async (req: Request) => {
       (acceptedRows ?? []).map(r => String((r as { candidate_id: string }).candidate_id))
     )
 
+    // 全候補者を1回だけ取得（ループ外）
+    // skills カラムが jsonb 型のため .overlaps() が使えないためJS側でフィルタリング
+    const { data: allCandidates, error: candErr } = await supabase
+      .from('candidates')
+      .select('id, name, email, phone, skills, experience_years, raw_profile')
+      .eq('data_env', 'prod')
+      .is('merged_into', null)
+      .limit(500)
+
+    if (candErr) throw new Error(`候補者取得エラー: ${candErr.message}`)
+
     let totalMatched = 0
     let totalSkipped = 0
     const errors: string[] = []
@@ -147,17 +158,6 @@ Deno.serve(async (req: Request) => {
         const requiredSkills: string[] = Array.isArray(project.required_skills)
           ? project.required_skills.map(String).filter(Boolean)
           : []
-
-        // 全候補者を取得してJS側でスキル重複フィルター
-        // （skills カラムが jsonb 型のため .overlaps() が使えないため JS でフィルタリング）
-        const { data: allCandidates, error: candErr } = await supabase
-          .from('candidates')
-          .select('id, name, email, phone, skills, experience_years, raw_profile')
-          .eq('data_env', 'prod')
-          .is('merged_into', null)
-          .limit(500)
-
-        if (candErr) throw new Error(`候補者取得エラー: ${candErr.message}`)
 
         // スキル重複フィルター（大文字小文字を無視した部分一致）
         const skillFiltered = requiredSkills.length > 0
