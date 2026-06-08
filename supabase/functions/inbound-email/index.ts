@@ -3724,18 +3724,36 @@ Deno.serve(async (req: Request) => {
 
             // ── Step2: 事前計算した添付割当を参照（複数人材限定・2 パス済み） ────────
             // ケースA: 名前または駅名で割り当てられた添付がある → その人の経歴書
-            // ケースB: 名前はあるが添付が割当てられない → 添付なし（共有経歴書 or 同駅衝突）
-            // ケースC: そもそも本ブロックの名前が取れていない → フォールバックで全添付共有（従来動作）
+            // ケースB: 名前はあるが添付が割当てられない
+            //   → 未使用添付のうち他人の名前を含まないものを渡す（職務経歴書.xlsx等の汎用名対策）
+            //   → 未使用添付が 0 件なら空文字（全部他人に割当済み）
+            // ケースC: 本ブロックの名前が取れていない → フォールバックで全添付共有（従来動作）
             const matchedTextContent = blockAttachAssignment.get(blockIdx) ?? null
             let blockAttachText: string
             let blockAttachLabel: string
             if (matchedTextContent) {
+              // ケースA
               blockAttachText = matchedTextContent.content ?? ''
               blockAttachLabel = matchedTextContent.label
             } else if (blockNameForMatch && allTextContents.length > 0) {
-              blockAttachText = ''
-              blockAttachLabel = ''
+              // ケースB: 割り当て済み添付インデックスを除外し、他人名を含まない未使用添付を渡す
+              const assignedAttachments = new Set(
+                [...blockAttachAssignment.values()].map(v => v.label)
+              )
+              const allNormBlockNames = blockMetas
+                .map(b => (b.name ? b.name.replace(/[.\s　]/g, '').toLowerCase() : ''))
+                .filter(n => n.length >= 2)
+              const myNormName = blockNameForMatch.replace(/[.\s　]/g, '').toLowerCase()
+              const unassigned = allTextContents.filter(t => {
+                if (assignedAttachments.has(t.label)) return false
+                const normFile = t.label.toLowerCase().replace(/[.\s　]/g, '')
+                // 他人の名前がファイル名に含まれるものは除外
+                return !allNormBlockNames.some(n => n !== myNormName && normFile.includes(n))
+              })
+              blockAttachText = unassigned.map(t => t.content ?? '').join('\n')
+              blockAttachLabel = unassigned.map(t => t.label).join('\n')
             } else {
+              // ケースC
               blockAttachText = attachText
               blockAttachLabel = attachmentNames
             }
