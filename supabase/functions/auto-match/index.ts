@@ -139,11 +139,15 @@ Deno.serve(async (req: Request) => {
 
     // 全候補者を1回だけ取得（ループ外）
     // skills カラムが jsonb 型のため .overlaps() が使えないためJS側でフィルタリング
+    // 新着・経験年数降順で取得し、slice(0, MAX_CANDIDATES_PER_PROJECT) で上位が最新・高経験者になるよう保証
     const { data: allCandidates, error: candErr } = await supabase
       .from('candidates')
       .select('id, name, email, phone, skills, experience_years, raw_profile')
       .eq('data_env', 'prod')
       .is('merged_into', null)
+      .eq('duplicate_flag', false)
+      .order('created_at', { ascending: false })
+      .order('experience_years', { ascending: false, nullsFirst: false })
       .limit(500)
 
     if (candErr) throw new Error(`候補者取得エラー: ${candErr.message}`)
