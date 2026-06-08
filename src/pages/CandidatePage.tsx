@@ -913,7 +913,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   // 詳細表示用: 選択時に fetch_candidate_raw_profile RPC で full raw_profile を取得
   // （一覧クエリは raw_profile を除外しているため）
-  const { data: fullRawProfile } = useQuery({
+  const { data: fullRawProfile, isLoading: isLoadingFullProfile } = useQuery({
     queryKey: ['candidate-raw-profile', selectedId],
     queryFn: () => fetchCandidateRawProfile(selectedId!),
     enabled: !!selectedId,
@@ -1373,8 +1373,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       <button
                         type="button"
                         onClick={() => setEditingCandidate(selectedCandidate)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
-                        title="編集"
+                        disabled={isLoadingFullProfile}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors disabled:opacity-40"
+                        title={isLoadingFullProfile ? '読み込み中...' : '編集'}
                       >
                         <Pencil size={14} />
                         編集

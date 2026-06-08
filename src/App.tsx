@@ -137,15 +137,6 @@ function AppInner() {
     writeStoredDataEnv(dataEnv)
   }, [dataEnv])
 
-  if (!nickname) {
-    return <NicknameModal onSave={saveNickname} />
-  }
-
-  function handleNavigate(page: Page) {
-    setTabPage(page)
-    setDetail(null)
-  }
-
   // マッチングタブへ切り替え時にプロジェクト一覧を強制更新（案件追加後の未反映対策）
   useEffect(() => {
     if (tabPage === 'matching') {
@@ -166,6 +157,15 @@ function AppInner() {
       pages: 1,
     })
   }, [dataEnv])
+
+  if (!nickname) {
+    return <NicknameModal onSave={saveNickname} />
+  }
+
+  function handleNavigate(page: Page) {
+    setTabPage(page)
+    setDetail(null)
+  }
 
   function openCandidateDetail(id: string) {
     setDetail({ kind: 'candidate', id })
