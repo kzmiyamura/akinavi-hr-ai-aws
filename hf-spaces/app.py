@@ -87,76 +87,158 @@ def verify_secret(x_api_secret: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-# ── グリッド → テキスト変換 ───────────────────────────────────────────────────
-def grid_to_text(rows: list[list[str]], max_rows: int = 60) -> str:
-    lines = []
-    for row in rows[:max_rows]:
-        cells = [c.strip() for c in row if c and c.strip()]
-        # 装飾行スキップ（罫線・記号のみ）
-        if not cells or all(re.fullmatch(r"[\s★■□●◆◇▼▽△▲◎○※・－—─━═＝=\-─*#~_|/\\]+", c) for c in cells):
+# ── グリッド構造解析ユーティリティ ──────────────────────────────────────────────
+
+def _normalize_cell(cell) -> str:
+    """セル値を文字列に正規化（HTMLエンティティ除去・空白整理）"""
+    s = str(cell or '')
+    s = re.sub(r'&#x[0-9a-fA-F]+;', '\n', s)
+    s = re.sub(r'&[a-z]+;', ' ', s)
+    return s.strip()
+
+
+def _parse_date_to_months(cell: str) -> int | None:
+    """日付セルを 年*12+月 の整数に変換"""
+    s = _normalize_cell(cell)
+    # 現在進行中
+    if re.search(r'現在|現職|在職|継続|present', s, re.IGNORECASE):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        return now.year * 12 + now.month
+    # YYYY年MM月 / YYYY/MM / YYYY-MM
+    m = re.match(r'(\d{4})[年/\-](\d{1,2})', s)
+    if m:
+        return int(m.group(1)) * 12 + int(m.group(2))
+    # YY.MM (e.g. "86.10", "16.04") — 50以上は1900年代、未満は2000年代
+    m = re.match(r'^(\d{2})\.(\d{2})$', s)
+    if m:
+        yy, mm = int(m.group(1)), int(m.group(2))
+        year = 1900 + yy if yy >= 50 else 2000 + yy
+        if 1 <= mm <= 12:
+            return year * 12 + mm
+    return None
+
+
+def _split_skills_in_cell(cell: str) -> list[str]:
+    """セル内のスキル文字列を分割して候補リストを返す"""
+    s = _normalize_cell(cell)
+    parts = re.split(r'[\n\r・\u30fb,，、/・]+', s)
+    return [p.strip() for p in parts if p.strip() and len(p.strip()) >= 2]
+
+
+def _find_header_row(rows: list) -> tuple[int, list] | tuple[None, None]:
+    """プロジェクト経歴ヘッダー行（期間+スキル列を持つ）を特定"""
+    for i, row in enumerate(rows):
+        flat = ' '.join(_normalize_cell(c) for c in row)
+        has_period = re.search(r'期[\s　]*間|開始|期間', flat)
+        has_skill  = re.search(r'言語|ＤＢ|DB|OS|スキル|ツール|ミドル|技術|環境', flat)
+        if has_period and has_skill:
+            return i, row
+    return None, None
+
+
+def _find_date_columns(header: list) -> tuple[int | None, int | None]:
+    """ヘッダー行から開始・終了日付列のインデックスを推定"""
+    start_col = end_col = None
+    for i, cell in enumerate(header):
+        s = _normalize_cell(cell)
+        if re.search(r'開始|期[\s　]*間', s) and start_col is None:
+            start_col = i
+        elif re.search(r'終了', s) and end_col is None:
+            end_col = i
+    # 終了列未検出なら開始+2（"開始 ～ 終了" の3列構成が典型）
+    if start_col is not None and end_col is None:
+        end_col = start_col + 2
+    return start_col, end_col
+
+
+def _find_skill_columns(header: list) -> list[int]:
+    """ヘッダー行からスキル関連列のインデックスを取得"""
+    cols = []
+    for i, cell in enumerate(header):
+        if re.search(r'言語|ＤＢ|DB|OS|スキル|ツール|ミドル|技術|環境', _normalize_cell(cell)):
+            cols.append(i)
+    return cols
+
+
+# ── グリッド構造ベース skillYears 抽出（メイン・LLM不要） ─────────────────────
+def extract_skill_years_from_grid(rows: list, skill_master_entries: list) -> dict[str, int]:
+    """
+    parsedGrid の rows からプロジェクト期間 × スキル列を解析して skillYears を抽出。
+    LLM 不要・完全ルールベース。skill_master と照合して既知スキルのみ返す。
+    """
+    if not rows:
+        return {}
+
+    header_idx, header = _find_header_row(rows)
+    if header_idx is None:
+        return {}
+
+    start_col, end_col = _find_date_columns(header)
+    skill_cols = _find_skill_columns(header)
+
+    if start_col is None or not skill_cols:
+        return {}
+
+    # skill_master のルックアップセットを構築
+    skill_lookup: dict[str, str] = {}  # normalized → original name
+    for e in skill_master_entries:
+        name = e.get('name', '')
+        if name:
+            skill_lookup[name.lower().replace(' ', '')] = name
+        for alias in (e.get('aliases') or []):
+            if alias:
+                skill_lookup[alias.lower().replace(' ', '')] = name
+
+    result: dict[str, int] = {}
+
+    for row in rows[header_idx + 1:]:
+        if not any(row):
             continue
-        # 連続重複セル除去（colspan 展開の重複）
-        deduped = [cells[0]]
-        for c in cells[1:]:
-            if c != deduped[-1]:
-                deduped.append(c)
-        lines.append(" | ".join(deduped))
-    return "\n".join(lines)
 
-
-# ── LLM による skillYears 抽出 ────────────────────────────────────────────────
-def extract_skill_years_llm(rows: list[list[str]]) -> dict[str, int]:
-    """parsedGrid から LLM を使って skillYears（月数）を抽出する"""
-    if not llm or not rows:
-        return {}
-
-    grid_text = grid_to_text(rows, max_rows=60)
-    if not grid_text or len(grid_text) < 10:
-        return {}
-
-    prompt = (
-        "<|im_start|>system\n"
-        "あなたはITスキルシートを解析するエキスパートです。\n"
-        "<|im_end|>\n"
-        "<|im_start|>user\n"
-        "以下のスキルシートのグリッドデータからスキル名と経験年数を抽出してください。\n"
-        "プロジェクト経歴がある場合は各スキルの期間を合算してください。\n"
-        "JSONのみ返してください（他の説明不要）。形式: {\"Java\": 36, \"Python\": 24} （値は月数）\n"
-        "\n"
-        f"グリッド:\n{grid_text}\n"
-        "<|im_end|>\n"
-        "<|im_start|>assistant\n"
-    )
-
-    try:
-        output = llm(prompt, max_tokens=400, temperature=0.05, stop=["<|im_end|>", "\n\n"])
-        text = output["choices"][0]["text"].strip()
-        # JSON 部分を抽出
-        m = re.search(r"\{[^{}]+\}", text, re.DOTALL)
-        if not m:
-            return {}
-        data = json.loads(m.group())
-        result = {}
-        for k, v in data.items():
-            k = str(k).strip()
-            # スキル名として明らかに不正なものを除外
-            if not k or len(k) > 50 or re.fullmatch(r"[\d\s\-/]+", k):
+        # (Nヶ月間) パターンを優先
+        flat = ' '.join(_normalize_cell(c) for c in row)
+        m_mo = re.search(r'[\(（](\d+)[ヶか]月間?[\)）]', flat)
+        if m_mo:
+            months = int(m_mo.group(1))
+        else:
+            s_val = _parse_date_to_months(_normalize_cell(row[start_col]) if start_col < len(row) else '')
+            e_val = _parse_date_to_months(_normalize_cell(row[end_col]) if end_col is not None and end_col < len(row) else '')
+            if s_val and e_val and e_val > s_val:
+                months = e_val - s_val
+            else:
                 continue
-            if isinstance(v, (int, float)) and 0 < v <= 600:
-                result[k] = int(v)
-        return result
-    except Exception as e:
-        logger.warning(f"[llm] skillYears 抽出失敗: {e}")
-        return {}
+
+        if months <= 0 or months > 600:
+            continue
+
+        for col in skill_cols:
+            if col >= len(row):
+                continue
+            for part in _split_skills_in_cell(_normalize_cell(row[col])):
+                part_norm = part.lower().replace(' ', '')
+                if len(part_norm) < 2:
+                    continue
+                # 完全一致 → 前方一致 → 部分一致の順で照合
+                matched = skill_lookup.get(part_norm)
+                if not matched:
+                    for key, name in skill_lookup.items():
+                        if len(key) >= 3 and (part_norm.startswith(key) or key in part_norm):
+                            matched = name
+                            break
+                if matched and matched.lower() not in AUTO_ADD_BLOCKLIST:
+                    result[matched] = result.get(matched, 0) + months
+
+    logger.info(f"[grid] skillYears抽出: {len(result)}件 ({list(result.keys())[:5]}...)")
+    return result
 
 
-# ── ルールベース skillYears 抽出（LLM フォールバック） ────────────────────────
+# ── テキストパターン fallback（「スキル名 X年」形式） ─────────────────────────
 def extract_skill_years_rules(rows: list[list[str]]) -> dict[str, int]:
-    """テキストパターンで 'スキル名 X年' を抽出する（LLM なしフォールバック）"""
+    """テキストパターンで 'スキル名 X年' を抽出する（グリッド解析失敗時のフォールバック）"""
     result: dict[str, int] = {}
     for row in rows:
         for cell in row:
-            for seg in re.split(r"[,、，\n]", cell or ""):
+            for seg in re.split(r"[,、，\n]", _normalize_cell(cell)):
                 m = re.match(r"^(.+?)\s+(\d+(?:\.\d+)?)年(?:[^\d]|$)", seg.strip())
                 if not m:
                     continue
@@ -424,8 +506,8 @@ async def run_quality_check(
                 if existing_count < 3:
                     new_sy: dict = {}
                     if rows:
-                        # parsedGrid がある場合: LLM で抽出
-                        new_sy = extract_skill_years_llm(rows)
+                        # parsedGrid がある場合: グリッド構造解析（LLM不要）
+                        new_sy = extract_skill_years_from_grid(rows, get_skill_master())
                         if not new_sy:
                             new_sy = extract_skill_years_rules(rows)
                     if not new_sy and full_text:
