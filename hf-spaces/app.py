@@ -11,10 +11,12 @@ import logging
 import os
 import re
 import asyncio
+import datetime
 from contextlib import asynccontextmanager
 from difflib import SequenceMatcher
 from typing import Optional
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException
 from supabase import create_client, Client
 
@@ -26,6 +28,9 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 # pg_cron が X-Api-Secret ヘッダーで送るシークレット（任意・未設定なら認証スキップ）
 API_SECRET = os.environ.get("API_SECRET", "")
+# GitHub Issue 作成用（任意・未設定ならIssue作成スキップ）
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO = "kzmiyamura/akinavi-hr-ai-aws"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
@@ -50,7 +55,7 @@ def load_models() -> None:
         )
         llm = Llama(
             model_path=model_path,
-            n_ctx=3072,
+            n_ctx=8192,
             n_threads=2,   # CPU Basic は 2 vCPU
             n_gpu_layers=0,  # CPU only
             verbose=False,
@@ -261,6 +266,56 @@ def detect_missing_skills(
     return missing[:20]
 
 
+# ── GitHub Issue 日次サマリー作成 ─────────────────────────────────────────────
+async def create_summary_issue(stats: dict, problems: list[dict]) -> None:
+    """品質チェック結果を GitHub Issue としてサマリー登録する"""
+    if not GITHUB_TOKEN:
+        logger.info("[issue] GITHUB_TOKEN 未設定のため Issue 作成スキップ")
+        return
+
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    title = f"[HF品質チェック] {today}"
+
+    lines = [
+        f"## HF Spaces 品質チェック結果 {today}",
+        "",
+        "| 項目 | 件数 |",
+        "|---|---|",
+        f"| 処理候補者数 | {stats.get('processed', 0)} |",
+        f"| skillYears 補完 | {stats.get('skill_years_updated', 0)} |",
+        f"| スキル自動追加（候補） | {stats.get('skills_auto_added', 0)} |",
+        f"| 漏れスキル検出数 | {stats.get('missing_skills_found', 0)} |",
+        f"| エラー | {stats.get('errors', 0)} |",
+    ]
+
+    if problems:
+        lines += ["", "### 取得できなかった項目がある候補者", ""]
+        for p in problems[:15]:
+            tags = ", ".join(p["missing"])
+            lines.append(f"- **{p['name']}**（id: `{p['id']}`）: {tags} が空")
+
+    body = "\n".join(lines)
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(
+                f"https://api.github.com/repos/{GITHUB_REPO}/issues",
+                headers={
+                    "Authorization": f"Bearer {GITHUB_TOKEN}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                json={"title": title, "body": body, "labels": ["quality-check"]},
+            )
+        if res.status_code == 201:
+            data = res.json()
+            logger.info(f"[issue] 作成完了: #{data['number']} {data['html_url']}")
+        else:
+            logger.warning(f"[issue] 作成失敗 HTTP {res.status_code}: {res.text[:200]}")
+    except Exception as e:
+        logger.error(f"[issue] 作成エラー: {e}")
+
+
 # ── エンドポイント ────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
@@ -281,7 +336,6 @@ def health():
 async def debug(x_api_secret: Optional[str] = Header(None, alias="x-api-secret")):
     """候補者取得状況を診断する"""
     verify_secret(x_api_secret)
-    import datetime
     since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).isoformat()
     res = (
         supabase.from_("candidates")
@@ -308,7 +362,7 @@ async def debug(x_api_secret: Optional[str] = Header(None, alias="x-api-secret")
     return {"total_fetched": len(rows), "since": since, "samples": summary}
 
 
-@app.post("/run_quality_check")
+@app.api_route("/run_quality_check", methods=["GET", "POST"])
 async def run_quality_check(
     x_api_secret: Optional[str] = Header(None, alias="x-api-secret"),
 ):
@@ -318,10 +372,10 @@ async def run_quality_check(
         return {"ok": False, "reason": "models_loading", "retry_after": 60}
 
     stats = {"processed": 0, "skill_years_updated": 0, "missing_skills_found": 0, "errors": 0}
+    problem_candidates: list[dict] = []  # 取得できなかった項目がある候補者
 
     try:
         # parsedGrid があり、まだ品質チェック未実施 or 7日以内の候補者を対象
-        import datetime
         since = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).isoformat()
         res = (
             supabase.from_("candidates")
@@ -343,7 +397,6 @@ async def run_quality_check(
                 # 既に品質チェック済みならスキップ（24時間以内）
                 last_check = raw_profile.get("hfQualityCheckedAt", "")
                 if last_check:
-                    import datetime
                     checked_at = datetime.datetime.fromisoformat(last_check.replace("Z", "+00:00"))
                     age = datetime.datetime.now(datetime.timezone.utc) - checked_at
                     if age.total_seconds() < 86400:
@@ -404,16 +457,35 @@ async def run_quality_check(
                     to_add = [n for n in missing_names if n.lower() not in existing_lower]
                     if to_add:
                         merged_skills = existing_skills + to_add
-                        supabase.from_("candidates").update({"skills": merged_skills}).eq("id", candidate["id"]).execute()
+                        updates["_merged_skills"] = merged_skills  # DB 更新時に一括反映
                         stats["skills_auto_added"] = stats.get("skills_auto_added", 0) + len(to_add)
                         logger.info(f"[quality] id={candidate['id']} skills に自動追加: {to_add}")
 
-                # ── DB に書き戻し ──────────────────────────────────────────
-                import datetime
+                # ── 取得できなかった項目を記録（Issue サマリー用） ──────
+                missing_fields: list[str] = []
+                if not raw_profile.get("prefecture"):
+                    missing_fields.append("prefecture")
+                if not candidate.get("skills"):
+                    missing_fields.append("skills")
+                existing_sy_after = {**existing_sy, **(updates.get("skillYears") or {})}
+                if len([k for k in existing_sy_after if not k.startswith("_")]) == 0:
+                    missing_fields.append("skillYears")
+                if missing_fields:
+                    problem_candidates.append({
+                        "id": candidate["id"],
+                        "name": candidate.get("name") or "名前不明",
+                        "missing": missing_fields,
+                    })
+
+                # ── DB に書き戻し（1回の update にまとめてアトミックに） ──
                 updates["hfQualityCheckedAt"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+                merged_skills_final = updates.pop("_merged_skills", None)
                 updated_profile = {**raw_profile, **updates}
-                supabase.from_("candidates").update({"raw_profile": updated_profile}).eq("id", candidate["id"]).execute()
+                db_update: dict = {"raw_profile": updated_profile}
+                if merged_skills_final is not None:
+                    db_update["skills"] = merged_skills_final
+                supabase.from_("candidates").update(db_update).eq("id", candidate["id"]).execute()
 
             except Exception as e:
                 logger.error(f"[quality] id={candidate.get('id')} エラー: {e}")
@@ -424,4 +496,8 @@ async def run_quality_check(
         stats["fatal_error"] = str(e)
 
     logger.info(f"[quality] 完了: {stats}")
+
+    # 処理結果を GitHub Issue にサマリー登録
+    await create_summary_issue(stats, problem_candidates)
+
     return {"ok": True, **stats}
