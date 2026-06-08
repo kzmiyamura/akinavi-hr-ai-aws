@@ -656,7 +656,7 @@ async function loadStationMap(): Promise<Record<string, string>> {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     if (supabaseUrl && serviceKey) {
-      const res = await fetch(`${supabaseUrl}/rest/v1/station_master?select=name,prefecture&limit=5000`, {
+      const res = await fetch(`${supabaseUrl}/rest/v1/station_master?select=name,prefecture&limit=20000`, {
         headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
       })
       if (res.ok) {
