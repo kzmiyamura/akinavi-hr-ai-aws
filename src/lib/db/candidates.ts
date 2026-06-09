@@ -344,6 +344,49 @@ export async function searchCandidateCount(
   return (data as number) ?? 0
 }
 
+export interface CandidateFilter {
+  name?: string
+  skills?: string[]
+  prefecture?: string
+  expMin?: number
+}
+
+/** 個別フィールドでフィルタリング（filter_candidates RPC） */
+export async function filterCandidates(
+  dataEnv: DataEnv,
+  filter: CandidateFilter,
+  offset: number,
+  limit = 100,
+): Promise<Candidate[]> {
+  const { data, error } = await supabase.rpc('filter_candidates', {
+    p_data_env:   dataEnv,
+    p_name:       filter.name       ?? null,
+    p_skills:     filter.skills?.length ? filter.skills : null,
+    p_prefecture: filter.prefecture ?? null,
+    p_exp_min:    filter.expMin     ?? null,
+    p_limit:      limit,
+    p_offset:     offset,
+  })
+  if (error) throw new Error(`人材のフィルタリングに失敗しました: ${error.message}`)
+  return (data ?? []) as Candidate[]
+}
+
+/** フィルタリング件数取得 */
+export async function filterCandidateCount(
+  dataEnv: DataEnv,
+  filter: CandidateFilter,
+): Promise<number> {
+  const { data, error } = await supabase.rpc('count_filter_candidates', {
+    p_data_env:   dataEnv,
+    p_name:       filter.name       ?? null,
+    p_skills:     filter.skills?.length ? filter.skills : null,
+    p_prefecture: filter.prefecture ?? null,
+    p_exp_min:    filter.expMin     ?? null,
+  })
+  if (error) throw new Error(`候補者数の取得に失敗しました: ${error.message}`)
+  return (data as number) ?? 0
+}
+
 export interface UpdateCandidateInput {
   id: string
   dataEnv: DataEnv

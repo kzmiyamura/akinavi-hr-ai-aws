@@ -1,10 +1,9 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate, fetchCandidateRawProfile } from '../lib/db/candidates'
-import type { SearchField } from '../lib/db/candidates'
-import { DEFAULT_SEARCH_FIELDS } from '../lib/db/candidates'
+import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile } from '../lib/db/candidates'
+import type { CandidateFilter } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -84,6 +83,27 @@ const CATEGORY_KEYS = Object.keys(CATEGORY_STYLE) as (keyof SkillsByCategory)[]
 
 // カテゴリごとの折りたたみ閾値
 const COLLAPSED_PER_CATEGORY = 5
+
+// 47都道府県リスト（フィルターポップアップのドロップダウンに使用）
+const PREFECTURES = [
+  '北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県',
+  '茨城県', '栃木県', '群馬県', '埼玉県', '千葉県', '東京都', '神奈川県',
+  '新潟県', '富山県', '石川県', '福井県', '山梨県', '長野県', '岐阜県',
+  '静岡県', '愛知県', '三重県', '滋賀県', '京都府', '大阪府', '兵庫県',
+  '奈良県', '和歌山県', '鳥取県', '島根県', '岡山県', '広島県', '山口県',
+  '徳島県', '香川県', '愛媛県', '高知県', '福岡県', '佐賀県', '長崎県',
+  '熊本県', '大分県', '宮崎県', '鹿児島県', '沖縄県',
+]
+
+interface FilterDraft {
+  name: string
+  skillInput: string
+  skills: string[]
+  prefecture: string
+  expMin: string
+}
+
+const EMPTY_DRAFT: FilterDraft = { name: '', skillInput: '', skills: [], prefecture: '', expMin: '' }
 
 /**
  * スキル重要度スコアを計算する（raw_profile.text をもとに）
@@ -685,9 +705,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const [replayingId, setReplayingId] = useState<string | null>(null)
   const [replayMsg, setReplayMsg] = useState<{ id: string; text: string; ok: boolean } | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
-  const [searchFields, setSearchFields] = useState<Set<SearchField>>(new Set(DEFAULT_SEARCH_FIELDS))
+  const [showFilterPopup, setShowFilterPopup] = useState(false)
+  const [filterDraft, setFilterDraft] = useState<FilterDraft>(EMPTY_DRAFT)
+  const [appliedFilter, setAppliedFilter] = useState<CandidateFilter>({})
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null)
   const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([])
   const [fileLoading, setFileLoading] = useState(false)
@@ -808,17 +828,12 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     staleTime: 5 * 60_000,
   })
 
-  // 400ms デバウンスしたキーワードトークン
-  const [debouncedQuery, setDebouncedQuery] = useState('')
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedQuery(searchQuery), 400)
-    return () => clearTimeout(t)
-  }, [searchQuery])
-  const searchTokens = useMemo(
-    () => debouncedQuery.trim() ? debouncedQuery.trim().toLowerCase().split(/[\s\u3000]+/).filter(Boolean) : [],
-    [debouncedQuery],
+  const isFiltered = !!(
+    appliedFilter.name ||
+    appliedFilter.skills?.length ||
+    appliedFilter.prefecture ||
+    appliedFilter.expMin != null
   )
-  const isSearching = searchTokens.length > 0
 
   // 通常ブラウズ（検索なし）
   const browseInfiniteQuery = useInfiniteQuery({
@@ -830,28 +845,28 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     refetchInterval: isImportActive ? 30_000 : false,
     staleTime: 60_000,   // 1分間はキャッシュを使いタブ切替で再フェッチしない
     gcTime: 5 * 60_000,  // 5分間キャッシュを保持
-    enabled: !isSearching,
+    enabled: !isFiltered,
   })
 
-  // サーバーサイド全件検索
-  const searchInfiniteQuery = useInfiniteQuery({
-    queryKey: ['candidates-search', dataEnv, searchTokens, searchMode, [...searchFields].sort()],
+  // フィルター検索（ポップアップで絞り込み条件を指定した場合）
+  const filterInfiniteQuery = useInfiniteQuery({
+    queryKey: ['candidates-filter', dataEnv, appliedFilter],
     queryFn: ({ pageParam }: { pageParam: number }) =>
-      searchCandidates(dataEnv, searchTokens, searchMode, pageParam, 100, [...searchFields] as SearchField[]),
+      filterCandidates(dataEnv, appliedFilter, pageParam, 100),
     initialPageParam: 0,
     getNextPageParam: (lastPage: Candidate[], _: Candidate[][], lastPageParam: number) =>
       lastPage.length < 100 ? undefined : lastPageParam + 100,
-    enabled: isSearching,
+    enabled: isFiltered,
   })
 
   const { fetchNextPage, hasNextPage, isFetchingNextPage, isLoading, isError, error } =
-    isSearching ? searchInfiniteQuery : browseInfiniteQuery
+    isFiltered ? filterInfiniteQuery : browseInfiniteQuery
 
   const candidates = useMemo(
-    () => isSearching
-      ? (searchInfiniteQuery.data?.pages.flat() ?? [])
+    () => isFiltered
+      ? (filterInfiniteQuery.data?.pages.flat() ?? [])
       : (browseInfiniteQuery.data?.pages.flatMap(p => p.candidates) ?? []),
-    [isSearching, searchInfiniteQuery.data, browseInfiniteQuery.data],
+    [isFiltered, filterInfiniteQuery.data, browseInfiniteQuery.data],
   )
 
   // 全件数: offset=0 の初回ページ取得と同時に返ってくる totalCount を優先利用（HTTPラウンドトリップ削減）
@@ -859,16 +874,16 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const { data: fetchedCount = 0 } = useQuery({
     queryKey: ['candidates-count', dataEnv],
     queryFn: () => fetchCandidateCount(dataEnv),
-    enabled: countFromPages === null && !isSearching,  // ページデータに count が含まれれば不要
+    enabled: countFromPages === null && !isFiltered,
     staleTime: 60_000,
   })
   const totalCount = countFromPages ?? fetchedCount
 
-  // 検索結果件数（検索中のみ）
-  const { data: searchCount = 0 } = useQuery({
-    queryKey: ['candidates-search-count', dataEnv, searchTokens, searchMode, [...searchFields].sort()],
-    queryFn: () => searchCandidateCount(dataEnv, searchTokens, searchMode, [...searchFields] as SearchField[]),
-    enabled: isSearching,
+  // フィルター件数（フィルター適用時のみ）
+  const { data: filteredCount = 0 } = useQuery({
+    queryKey: ['candidates-filter-count', dataEnv, appliedFilter],
+    queryFn: () => filterCandidateCount(dataEnv, appliedFilter),
+    enabled: isFiltered,
   })
 
   // サーバー側で絞り込み済みなのでそのまま使う
@@ -999,6 +1014,154 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         />
       )}
 
+      {/* 絞り込みポップアップ */}
+      {showFilterPopup && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
+                <SlidersHorizontal size={18} className="text-blue-600" />
+                人材を絞り込む
+              </h2>
+              <button onClick={() => setShowFilterPopup(false)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              {/* 氏名 */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">氏名</label>
+                <input
+                  type="text"
+                  value={filterDraft.name}
+                  onChange={e => setFilterDraft(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="例: 田中"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
+              </div>
+
+              {/* スキル */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">スキル（Enter または , で追加）</label>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {filterDraft.skills.map(s => (
+                    <span key={s} className="flex items-center gap-1 bg-green-50 text-green-700 text-xs rounded-full px-2.5 py-1">
+                      {s}
+                      <button
+                        type="button"
+                        onClick={() => setFilterDraft(prev => ({ ...prev, skills: prev.skills.filter(x => x !== s) }))}
+                        className="hover:text-red-500"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={filterDraft.skillInput}
+                  onChange={e => {
+                    const val = e.target.value
+                    if (val.endsWith(',')) {
+                      const skill = val.slice(0, -1).trim()
+                      if (skill && !filterDraft.skills.includes(skill)) {
+                        setFilterDraft(prev => ({ ...prev, skills: [...prev.skills, skill], skillInput: '' }))
+                      } else {
+                        setFilterDraft(prev => ({ ...prev, skillInput: '' }))
+                      }
+                    } else {
+                      setFilterDraft(prev => ({ ...prev, skillInput: val }))
+                    }
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      const skill = filterDraft.skillInput.trim()
+                      if (skill && !filterDraft.skills.includes(skill)) {
+                        setFilterDraft(prev => ({ ...prev, skills: [...prev.skills, skill], skillInput: '' }))
+                      }
+                    }
+                  }}
+                  placeholder="例: Java"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {/* 都道府県 */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">都道府県</label>
+                <select
+                  value={filterDraft.prefecture}
+                  onChange={e => setFilterDraft(prev => ({ ...prev, prefecture: e.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                  <option value="">すべて</option>
+                  {PREFECTURES.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+
+              {/* 経験年数 */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">経験年数（以上）</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    max={40}
+                    value={filterDraft.expMin}
+                    onChange={e => setFilterDraft(prev => ({ ...prev, expMin: e.target.value }))}
+                    placeholder="0"
+                    className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-600">年以上</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200">
+              <button
+                type="button"
+                onClick={() => { setFilterDraft(EMPTY_DRAFT); setAppliedFilter({}); setShowFilterPopup(false) }}
+                className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                クリア
+              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowFilterPopup(false)}
+                  className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // 入力中のスキルを確定
+                    const skills = [...filterDraft.skills]
+                    if (filterDraft.skillInput.trim() && !skills.includes(filterDraft.skillInput.trim())) {
+                      skills.push(filterDraft.skillInput.trim())
+                    }
+                    const filter: CandidateFilter = {}
+                    if (filterDraft.name.trim()) filter.name = filterDraft.name.trim()
+                    if (skills.length > 0) filter.skills = skills
+                    if (filterDraft.prefecture) filter.prefecture = filterDraft.prefecture
+                    if (filterDraft.expMin.trim() !== '') filter.expMin = parseInt(filterDraft.expMin, 10)
+                    setFilterDraft(prev => ({ ...prev, skills, skillInput: '' }))
+                    setAppliedFilter(filter)
+                    setShowFilterPopup(false)
+                  }}
+                  className="flex items-center gap-2 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-blue-700 transition-colors"
+                >
+                  <SlidersHorizontal size={14} />
+                  検索する
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 登録モーダル */}
       {showRegisterModal && (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4">
@@ -1086,7 +1249,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 flex-wrap">
           <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
             <RefreshCw size={18} className="text-gray-500" />
-            登録済み人材（{isSearching ? `検索結果${searchCount}件 / ` : ''}全{totalCount}件）
+            登録済み人材（{isFiltered ? `絞り込み${filteredCount}件 / ` : ''}全{totalCount}件）
           </h2>
           <button
             type="button"
@@ -1119,67 +1282,56 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
             </button>
           )}
           <AgentCompaniesModal />
-          <div className="relative flex-1 min-w-48">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="名前・スキル・業界・勤務地などで検索..."
-              className="w-full border border-gray-300 rounded-lg pl-8 pr-16 py-1.5 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            {searchQuery && (
+          {/* 絞り込みボタン */}
+          <button
+            type="button"
+            onClick={() => setShowFilterPopup(true)}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors shrink-0 ${
+              isFiltered
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                : 'border border-gray-300 text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <SlidersHorizontal size={14} />
+            絞り込み
+          </button>
+
+          {/* アクティブフィルターバッジ */}
+          {isFiltered && (
+            <div className="flex flex-wrap gap-1 items-center">
+              {appliedFilter.name && (
+                <span className="flex items-center gap-1 bg-blue-50 text-blue-700 text-xs rounded-full px-2.5 py-1">
+                  氏名: {appliedFilter.name}
+                  <button onClick={() => setAppliedFilter(prev => ({ ...prev, name: undefined }))} className="hover:text-red-500"><X size={10} /></button>
+                </span>
+              )}
+              {appliedFilter.skills?.map(s => (
+                <span key={s} className="flex items-center gap-1 bg-green-50 text-green-700 text-xs rounded-full px-2.5 py-1">
+                  {s}
+                  <button onClick={() => setAppliedFilter(prev => ({ ...prev, skills: prev.skills?.filter(x => x !== s) }))} className="hover:text-red-500"><X size={10} /></button>
+                </span>
+              ))}
+              {appliedFilter.prefecture && (
+                <span className="flex items-center gap-1 bg-purple-50 text-purple-700 text-xs rounded-full px-2.5 py-1">
+                  {appliedFilter.prefecture}
+                  <button onClick={() => setAppliedFilter(prev => ({ ...prev, prefecture: undefined }))} className="hover:text-red-500"><X size={10} /></button>
+                </span>
+              )}
+              {appliedFilter.expMin != null && (
+                <span className="flex items-center gap-1 bg-orange-50 text-orange-700 text-xs rounded-full px-2.5 py-1">
+                  経験{appliedFilter.expMin}年+
+                  <button onClick={() => setAppliedFilter(prev => ({ ...prev, expMin: undefined }))} className="hover:text-red-500"><X size={10} /></button>
+                </span>
+              )}
               <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-          <div className="flex rounded-lg border border-gray-300 overflow-hidden shrink-0">
-            {(['AND', 'OR'] as const).map((m) => (
-              <button
-                key={m}
                 type="button"
-                onClick={() => setSearchMode(m)}
-                className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                  searchMode === m ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
+                onClick={() => { setAppliedFilter({}); setFilterDraft(EMPTY_DRAFT) }}
+                className="text-xs text-gray-400 hover:text-gray-600 underline"
               >
-                {m}
+                クリア
               </button>
-            ))}
-          </div>
-          <div className="flex gap-1 shrink-0" title="検索対象フィールドを選択">
-            {([
-              { value: 'name' as SearchField,       label: '氏名',     title: '氏名で検索' },
-              { value: 'skills' as SearchField,     label: 'スキル',   title: 'スキルで検索' },
-              { value: 'prefecture' as SearchField, label: '都道府県', title: '都道府県で検索' },
-              { value: 'body' as SearchField,       label: '本文',     title: 'メール本文で検索（低速）' },
-            ]).map(({ value, label, title }) => {
-              const active = searchFields.has(value)
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  title={title}
-                  onClick={() => {
-                    setSearchFields(prev => {
-                      const next = new Set(prev)
-                      if (next.has(value)) { next.delete(value) } else { next.add(value) }
-                      return next.size === 0 ? new Set(DEFAULT_SEARCH_FIELDS) : next
-                    })
-                  }}
-                  className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
-                    active ? 'bg-slate-600 text-white border-slate-600' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  {label}
-                </button>
-              )
-            })}
-          </div>
+            </div>
+          )}
         </div>
 
         {message && (
@@ -1188,14 +1340,14 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           </div>
         )}
 
-        {isLoading || (isSearching && searchInfiniteQuery.isLoading) ? (
+        {isLoading || (isFiltered && filterInfiniteQuery.isLoading) ? (
           <p className="text-sm text-gray-400 p-4">読み込み中...</p>
         ) : isError ? (
           <p className="text-sm text-red-500 p-4">読み込みエラー: {(error as Error)?.message ?? '不明なエラー'}</p>
-        ) : candidates.length === 0 && !isSearching ? (
+        ) : candidates.length === 0 && !isFiltered ? (
           <p className="text-sm text-gray-400 p-4">まだ登録されていません</p>
-        ) : candidates.length === 0 && isSearching ? (
-          <p className="text-sm text-gray-400 p-4">「{searchQuery}」に一致する人材が見つかりません</p>
+        ) : candidates.length === 0 && isFiltered ? (
+          <p className="text-sm text-gray-400 p-4">絞り込み条件に一致する人材が見つかりません</p>
         ) : (
           <div className="flex flex-col md:flex-row">
             {/* Left: candidate list（モバイルで詳細表示中は非表示） */}
