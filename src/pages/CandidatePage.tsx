@@ -3,7 +3,8 @@ import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tansta
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, Search, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, searchCandidates, searchCandidateCount, deleteCandidate, fetchCandidateRawProfile } from '../lib/db/candidates'
-import type { SearchScope } from '../lib/db/candidates'
+import type { SearchField } from '../lib/db/candidates'
+import { DEFAULT_SEARCH_FIELDS } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -680,7 +681,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchMode, setSearchMode] = useState<'AND' | 'OR'>('AND')
-  const [searchScope, setSearchScope] = useState<SearchScope>('tags')
+  const [searchFields, setSearchFields] = useState<Set<SearchField>>(new Set(DEFAULT_SEARCH_FIELDS))
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null)
   const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([])
   const [fileLoading, setFileLoading] = useState(false)
@@ -828,9 +829,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   // サーバーサイド全件検索
   const searchInfiniteQuery = useInfiniteQuery({
-    queryKey: ['candidates-search', dataEnv, searchTokens, searchMode, searchScope],
+    queryKey: ['candidates-search', dataEnv, searchTokens, searchMode, [...searchFields].sort()],
     queryFn: ({ pageParam }: { pageParam: number }) =>
-      searchCandidates(dataEnv, searchTokens, searchMode, pageParam, 100, searchScope),
+      searchCandidates(dataEnv, searchTokens, searchMode, pageParam, 100, [...searchFields] as SearchField[]),
     initialPageParam: 0,
     getNextPageParam: (lastPage: Candidate[], _: Candidate[][], lastPageParam: number) =>
       lastPage.length < 100 ? undefined : lastPageParam + 100,
@@ -859,8 +860,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   // 検索結果件数（検索中のみ）
   const { data: searchCount = 0 } = useQuery({
-    queryKey: ['candidates-search-count', dataEnv, searchTokens, searchMode, searchScope],
-    queryFn: () => searchCandidateCount(dataEnv, searchTokens, searchMode, searchScope),
+    queryKey: ['candidates-search-count', dataEnv, searchTokens, searchMode, [...searchFields].sort()],
+    queryFn: () => searchCandidateCount(dataEnv, searchTokens, searchMode, [...searchFields] as SearchField[]),
     enabled: isSearching,
   })
 
@@ -1144,24 +1145,34 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
               </button>
             ))}
           </div>
-          <div className="flex rounded-lg border border-gray-300 overflow-hidden shrink-0" title="検索対象を選択">
+          <div className="flex gap-1 shrink-0" title="検索対象フィールドを選択">
             {([
-              { value: 'tags', label: 'タグ', title: '名前・スキル・都道府県・役割・業界・コメント等の構造化フィールドのみ' },
-              { value: 'body', label: '本文', title: 'メール本文（raw_profile.text）のみ' },
-              { value: 'all',  label: '全て', title: 'タグ＋メール本文すべて（従来動作）' },
-            ] as const).map(({ value, label, title }) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setSearchScope(value)}
-                title={title}
-                className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                  searchScope === value ? 'bg-slate-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+              { value: 'name' as SearchField,       label: '氏名',     title: '氏名で検索' },
+              { value: 'skills' as SearchField,     label: 'スキル',   title: 'スキルで検索' },
+              { value: 'prefecture' as SearchField, label: '都道府県', title: '都道府県で検索' },
+              { value: 'body' as SearchField,       label: '本文',     title: 'メール本文で検索（低速）' },
+            ]).map(({ value, label, title }) => {
+              const active = searchFields.has(value)
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  title={title}
+                  onClick={() => {
+                    setSearchFields(prev => {
+                      const next = new Set(prev)
+                      if (next.has(value)) { next.delete(value) } else { next.add(value) }
+                      return next.size === 0 ? new Set(DEFAULT_SEARCH_FIELDS) : next
+                    })
+                  }}
+                  className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                    active ? 'bg-slate-600 text-white border-slate-600' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
           </div>
         </div>
 
