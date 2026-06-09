@@ -196,7 +196,7 @@ export function CandidateProfileFields({
     prefecture, nearestStation, availableRegions,
     currentWorkLocation, remoteAvailable,
     from: mailFrom, subject: mailSubject, emailReceivedAt,
-    age, gender, agentComment, selfPR, skillYears } = raw
+    age, gender, agentComment, selfPR, skillYears, nationality } = raw as typeof raw & { nationality?: string | null }
   const employmentType = (raw as Record<string, unknown>).employmentType as string | null | undefined
   const emailDomain = mailFrom ? mailFrom.split('@')[1]?.toLowerCase().trim() : null
   const agentInfo = emailDomain && agentDomainMap ? agentDomainMap.get(emailDomain) : null
@@ -247,7 +247,7 @@ export function CandidateProfileFields({
         )}
       </div>
       <p className="text-xs text-gray-400 mt-0.5">
-        {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年{age != null ? ` ／ ${age}歳` : ''}{gender ? `（${gender}）` : ''}
+        {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年{age != null ? ` ／ ${age}歳` : ''}{gender ? `（${gender}）` : ''}{nationality ? ` ／ ${nationality}` : ''}
       </p>
       {(c.from_company || employmentType) && (
         <div className="flex flex-wrap items-center gap-1.5 mt-1">
