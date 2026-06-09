@@ -1417,7 +1417,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   disabled={isFetchingNextPage}
                   className="w-full py-2.5 text-xs text-blue-600 hover:bg-blue-50 border-t border-gray-100 transition-colors disabled:opacity-50"
                 >
-                  {isFetchingNextPage ? '読み込み中...' : `もっと見る（${isSearching ? searchCount : totalCount}件中${candidates.length}件表示）`}
+                  {isFetchingNextPage ? '読み込み中...' : `もっと見る（${isFiltered ? filteredCount : totalCount}件中${candidates.length}件表示）`}
                 </button>
               )}
             </div>
