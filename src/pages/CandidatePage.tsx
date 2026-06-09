@@ -258,9 +258,15 @@ export function CandidateProfileFields({
             </span>
           )}
           {agentInfo?.haken_number && (
-            <span className="text-xs bg-green-50 text-green-700 rounded px-1.5 py-0.5" title="派遣許可番号">
+            <a
+              href={`https://jinzai.hellowork.mhlw.go.jp/JinzaiWeb/GICB102010.do?screenId=GICB102010&action=detail&detkey_Detail=${encodeURIComponent(agentInfo.haken_number + ',1     ')}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs bg-green-50 text-green-700 rounded px-1.5 py-0.5 hover:bg-green-100 transition-colors"
+              title="ハローワーク許可番号照会"
+            >
               {agentInfo.haken_number}
-            </span>
+            </a>
           )}
           {agentInfo?.license_status === 'none' && c.from_company && (
             <span className="text-xs bg-red-50 text-red-500 rounded px-1.5 py-0.5">許可未確認</span>
