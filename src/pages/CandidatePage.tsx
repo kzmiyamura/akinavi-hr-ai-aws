@@ -1604,8 +1604,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                                       📍{(dup as any).raw_profile?.nearestStation ?? (dup as any).raw_profile?.prefecture}
                                     </span>
                                   )}
-                                  {(dup as any).raw_profile?.aiAnalysis?.availableFrom && (
-                                    <span>🕐{(dup as any).raw_profile.aiAnalysis.availableFrom}</span>
+                                  {((dup as any).raw_profile?.availableFrom ?? (dup as any).raw_profile?.aiAnalysis?.availableFrom) && (
+                                    <span>🕐{(dup as any).raw_profile.availableFrom ?? (dup as any).raw_profile.aiAnalysis?.availableFrom}</span>
                                   )}
                                 </p>
                                 {/* スキル */}

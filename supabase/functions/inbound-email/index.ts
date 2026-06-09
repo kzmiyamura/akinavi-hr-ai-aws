@@ -3822,7 +3822,7 @@ Deno.serve(async (req: Request) => {
                 return toExperienceYears(expYears)
               })(),
               raw_profile: {
-                text: effectiveBody + (blockAttachText?.trim() ? '\n\n--- 添付 ---\n' + blockAttachText : ''),
+                text: effectiveBody,
                 summary: '',
                 skillsByCategory: blockDbMatchedSkills.reduce((acc, s) => {
                   if (!acc[s.category]) acc[s.category] = []
@@ -3846,7 +3846,7 @@ Deno.serve(async (req: Request) => {
                     ? []
                     : [...allAttachments.map(a => a.name ?? a.mimeType), ...officeTextContents.map(t => t.label)],
                 driveLinks: driveTexts.map(t => t.label),
-                aiAnalysis: { availableFrom: blockRegexFields.availableFrom },
+                availableFrom: blockRegexFields.availableFrom,
                 desiredProject: blockRegexFields.desiredProject,
                 age: blockRegexFields.age,
                 gender: blockRegexFields.gender,
@@ -3856,8 +3856,6 @@ Deno.serve(async (req: Request) => {
                 multiCandidateBlock: true,
                 // 名前後ろ括弧のスキル年数（#79）: 「K.T（Java 5年 / Python 3年）」形式
                 skillYears: blockRegexFields.nameSkillYears ?? undefined,
-                // HF Spaces 品質チェック用: 添付ファイルから抽出した生グリッド（UI からは参照しない・7日TTL）
-                parsedGrid: attachmentParsedGrid ?? undefined,
               },
               duplicate_flag: false,
               created_by: 'make-inbound',
@@ -4212,7 +4210,7 @@ Deno.serve(async (req: Request) => {
         skills,
         experience_years: toExperienceYears(resolvedExperienceYears),
         raw_profile: {
-          text: effectiveBody + (attachText.trim() ? '\n\n--- 添付 ---\n' + attachText : ''),
+          text: effectiveBody,
           summary: analyzed.summary ?? '',
           skillsByCategory: dbMatchedSkills.reduce((acc, s) => {
             if (!acc[s.category]) acc[s.category] = []
@@ -4238,10 +4236,7 @@ Deno.serve(async (req: Request) => {
             ...officeTextContents.map(t => t.label),
           ],
           driveLinks: driveTexts.map(t => t.label),
-          aiAnalysis: {
-            ...analyzed,
-            availableFrom: resolvedAvailableFrom,
-          },
+          availableFrom: resolvedAvailableFrom,
           desiredProject: regexFields.desiredProject,
           age: regexFields.age,
           gender: regexFields.gender,
@@ -4261,8 +4256,6 @@ Deno.serve(async (req: Request) => {
             if (Object.keys(nameYears).length > 0) return nameYears
             return undefined
           })(),
-          // HF Spaces 品質チェック用: 添付ファイルから抽出した生グリッド（UI からは参照しない・7日TTL）
-          parsedGrid: attachmentParsedGrid ?? undefined,
         },
         duplicate_flag: false,
         created_by: 'make-inbound',
