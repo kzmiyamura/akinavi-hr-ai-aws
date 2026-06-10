@@ -2383,46 +2383,12 @@ function gridToText(grid: string[][], maxChars = 6000): string {
 }
 
 /**
- * フィールド抽出用テキスト変換（gridToText の改良版）
- * - 3列以上の多列テーブルは JSON 化して「ヘッダ：値」形式に展開
- *   → ヘッダ行（氏名 年齢 性別...）がそのまま名前抽出に誤ヒットする問題を解消
- * - 2列以下は従来通り gridToText にフォールバック
+ * フィールド抽出用テキスト変換
+ * parseHtmlTableToGrid で結合セルが展開済みのグリッドには gridToText が最適。
+ * gridToJsonRows はタイトル行が全列スパンの場合にヘッダが 1 列に潰れるため使用しない。
  */
 function gridToFieldText(grid: string[][], maxChars = 6000): string {
-  // 3列以上の有効セルを含む行があるか確認（多列テーブル判定）
-  const hasMultiCol = grid.some(row => {
-    const cells: string[] = []
-    let prev = ''
-    for (const c of row) {
-      const v = c?.trim() ?? ''
-      if (!v || DECORATION_RE.test(v)) continue
-      if (v !== prev) { cells.push(v); prev = v }
-    }
-    return cells.length >= 3
-  })
-
-  if (!hasMultiCol) {
-    // 2列以下: 従来の gridToText で十分
-    return gridToText(grid, maxChars)
-  }
-
-  // 多列テーブル: JSON 行配列に変換して「ヘッダ：値」展開
-  const rows = gridToJsonRows(grid)
-  if (rows.length === 0) {
-    return gridToText(grid, maxChars)
-  }
-
-  const lines: string[] = []
-  for (const row of rows) {
-    const entries = Object.entries(row).filter(([, v]) => v?.trim() && !DECORATION_RE.test(v.trim()))
-    if (entries.length === 0) continue
-    for (const [k, v] of entries) {
-      if (k.trim() && v.trim()) lines.push(`${k.trim()}：${v.trim()}`)
-    }
-    lines.push('')
-  }
-  const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
-  return text.length > maxChars ? text.slice(0, maxChars) + '\n...(省略)' : text
+  return gridToText(grid, maxChars)
 }
 
 /** SheetJS が出力する HTML テーブルを 2D グリッドに展開（rowspan/colspan 対応） */
