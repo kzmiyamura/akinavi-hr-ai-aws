@@ -900,7 +900,7 @@ function extractNameFallback(text: string): string | null {
   )
   if (labelMatch) {
     const v = labelMatch[1].trim()
-    if (v && v.length >= 1) return v
+    if (v && v.length >= 2) return v
   }
 
   // ② イニシャル: 大文字2文字の間にスペース・・.のいずれか（例: T・Y / T Y / K.M）
@@ -1100,7 +1100,7 @@ function extractCandidateFieldsRegex(
   const rawName = extractFieldTwoPhase(
     ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
     bodyText, attachText,
-    v => v.length >= 1 && !/^\d+$/.test(v),
+    v => v.length >= 2 && !/^\d+$/.test(v),
     40,
     2,
   )
