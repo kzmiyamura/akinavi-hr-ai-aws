@@ -2627,35 +2627,17 @@ async function extractSkillYearsFromExcel(base64: string): Promise<Record<string
 }
 
 /**
- * JSON 行配列（sheet_to_json の出力）をフィールド抽出用テキストに変換する。
- * 各行の全フィールドを「ヘッダ：値」形式で展開するため、
- * 多列ヘッダ行がそのままテキストに混入する問題が発生しない。
- */
-function jsonRowsToFieldText(rows: Array<Record<string, string>>, maxChars = 6000): string {
-  if (rows.length === 0) return ''
-  const lines: string[] = []
-  for (const row of rows) {
-    const entries = Object.entries(row).filter(([, v]) => v?.trim() && !DECORATION_RE.test(v.trim()))
-    if (entries.length === 0) continue
-    for (const [k, v] of entries) {
-      if (k.trim() && v.trim()) lines.push(`${k.trim()}：${v.trim()}`)
-    }
-    lines.push('')
-  }
-  const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
-  return text.length > maxChars ? text.slice(0, maxChars) + '\n...(省略)' : text
-}
-
-/**
  * Excel を 1 回だけパースし、テキストと skillYears を同時に返す。
- * sheet_to_json で直接 JSON 化する（sheet_to_html + HTML→グリッド変換を廃止）。
+ * sheet_to_html → parseHtmlTableToGrid で結合セル（rowspan/colspan）を正確に展開し、
+ * gridToText でフィールド抽出用テキスト、gridToJsonRows で skillYears を取得する。
+ * sheet_to_json では結合セルが __EMPTY_N になり構造が破壊されるため使用しない。
  */
 async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number>; jsonRows?: Array<Record<string, string>> }> {
   try {
     const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
       utils: {
-        sheet_to_json: (sheet: unknown, opts?: { defval?: string; raw?: boolean }) => Array<Record<string, string>>
+        sheet_to_html: (sheet: unknown) => string
       }
     }
     const bytes = base64ToUint8Array(base64)
@@ -2672,22 +2654,24 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
     for (const sheetName of sortedNames.slice(0, 3)) {
       const sheet = workbook.Sheets[sheetName]
 
-      // sheet_to_json で直接 JSON 化（defval='' で空セルを空文字に、raw=false で書式付き文字列を取得）
-      const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false })
-      console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} cols=${Object.keys(jsonRows[0] ?? {}).length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
+      // sheet_to_html → parseHtmlTableToGrid で結合セルを正確に展開
+      const html = XLSX.utils.sheet_to_html(sheet)
+      const grid = parseHtmlTableToGrid(html)
 
-      // フィールド抽出用テキスト（全行を「ヘッダ：値」形式に展開）
-      const fieldText = jsonRowsToFieldText(jsonRows)
-      if (fieldText.trim()) texts.push(`--- シート: ${sheetName} ---\n${fieldText}`)
+      // フィールド抽出用テキスト（gridToFieldText: 多列は JSON 化して「ヘッダ：値」展開）
+      const gridText = gridToFieldText(grid)
+      if (gridText.trim()) texts.push(`--- シート: ${sheetName} ---\n${gridText}`)
 
-      // skillYears 抽出（最初に見つかったシートで確定）
+      // skillYears 抽出（gridToJsonRows で結合展開済みグリッドを JSON 化）
       if (Object.keys(skillYears).length === 0) {
-        const sy = extractSkillYearsFromSheetJson(jsonRows)
+        const jsonRows = gridToJsonRows(grid)
+        console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} cols=${Object.keys(jsonRows[0] ?? {}).length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
+        const sy = extractSkillYearsUnified(grid)
         if (Object.keys(sy).filter(k => !k.startsWith('_')).length > 0) {
           skillYears = sy
           firstJsonRows = jsonRows
         } else {
-          console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${jsonRows.length}`)
+          console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
           if (!firstJsonRows) firstJsonRows = jsonRows
         }
       }

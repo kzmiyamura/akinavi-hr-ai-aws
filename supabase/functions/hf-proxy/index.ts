@@ -16,19 +16,27 @@ Deno.serve(async (req: Request) => {
   const action = new URL(req.url).searchParams.get('action')
   const path = action === 'health' ? '/health' : '/run_quality_check'
 
-  // HF Spaces はスリープ明け起動中（最大60秒）に HTML 404 を返す → リトライで対応
+  // HF Spaces はコールドスタート時（LLMロード含む）に時間がかかる
+  // 各フェッチに 25s タイムアウトをつけ、4回リトライ（合計最大 ~120s < 150s Supabase制限）
   const MAX_RETRIES = 4
-  const RETRY_WAIT_MS = 20000
+  const FETCH_TIMEOUT_MS = 25000
+  const RETRY_WAIT_MS = 5000
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
     try {
       const res = await fetch(`${HF_SPACE_URL}${path}`, {
         method: 'GET',
+        signal: controller.signal,
         headers: {
           'x-api-secret': HF_API_SECRET,
-          'Accept': 'application/json',
+          'Accept': 'application/json, text/plain, */*',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+          'Referer': 'https://huggingface.co/',
         },
       })
+      clearTimeout(timer)
       const contentType = res.headers.get('Content-Type') ?? ''
       const body = await res.text()
 
@@ -49,6 +57,7 @@ Deno.serve(async (req: Request) => {
         headers: { 'Content-Type': contentType || 'application/json' },
       })
     } catch (e) {
+      clearTimeout(timer)
       if (attempt < MAX_RETRIES) {
         await new Promise(r => setTimeout(r, RETRY_WAIT_MS))
         continue
