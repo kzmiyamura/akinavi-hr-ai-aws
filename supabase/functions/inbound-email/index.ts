@@ -2359,6 +2359,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
  * - 空セル・装飾セルを除去
  * - 連続する同値セル（colspan展開の重複）を排除
  * - 2セル行は「ラベル：値」形式、それ以外はスペース区切り
+ * ※ フィールド抽出には gridToFieldText を使うこと（3列以上行のスペース結合問題を回避）
  */
 function gridToText(grid: string[][], maxChars = 6000): string {
   const lines: string[] = []
@@ -2373,6 +2374,49 @@ function gridToText(grid: string[][], maxChars = 6000): string {
     }
     if (cells.length === 0) continue
     lines.push(cells.length === 2 ? `${cells[0]}：${cells[1]}` : cells.join(' '))
+  }
+  const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  return text.length > maxChars ? text.slice(0, maxChars) + '\n...(省略)' : text
+}
+
+/**
+ * フィールド抽出用テキスト変換（gridToText の改良版）
+ * - 3列以上の多列テーブルは JSON 化して「ヘッダ：値」形式に展開
+ *   → ヘッダ行（氏名 年齢 性別...）がそのまま名前抽出に誤ヒットする問題を解消
+ * - 2列以下は従来通り gridToText にフォールバック
+ */
+function gridToFieldText(grid: string[][], maxChars = 6000): string {
+  // 3列以上の有効セルを含む行があるか確認（多列テーブル判定）
+  const hasMultiCol = grid.some(row => {
+    const cells: string[] = []
+    let prev = ''
+    for (const c of row) {
+      const v = c?.trim() ?? ''
+      if (!v || DECORATION_RE.test(v)) continue
+      if (v !== prev) { cells.push(v); prev = v }
+    }
+    return cells.length >= 3
+  })
+
+  if (!hasMultiCol) {
+    // 2列以下: 従来の gridToText で十分
+    return gridToText(grid, maxChars)
+  }
+
+  // 多列テーブル: JSON 行配列に変換して「ヘッダ：値」展開
+  const rows = gridToJsonRows(grid)
+  if (rows.length === 0) {
+    return gridToText(grid, maxChars)
+  }
+
+  const lines: string[] = []
+  for (const row of rows) {
+    const entries = Object.entries(row).filter(([, v]) => v?.trim() && !DECORATION_RE.test(v.trim()))
+    if (entries.length === 0) continue
+    for (const [k, v] of entries) {
+      if (k.trim() && v.trim()) lines.push(`${k.trim()}：${v.trim()}`)
+    }
+    lines.push('')
   }
   const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
   return text.length > maxChars ? text.slice(0, maxChars) + '\n...(省略)' : text
@@ -2610,8 +2654,8 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       const html = XLSX.utils.sheet_to_html(sheet)
       const grid = parseHtmlTableToGrid(html)
 
-      // テキスト抽出（旧 CSV 方式を廃止・グリッドから直接生成）
-      const gridText = gridToText(grid)
+      // テキスト抽出（フィールド抽出用: 多列テーブルは JSON 化して「ヘッダ：値」展開）
+      const gridText = gridToFieldText(grid)
       if (gridText.trim()) texts.push(`--- シート: ${sheetName} ---\n${gridText}`)
 
       // skillYears 抽出（最初に見つかったシートで確定・Word/Excel 統合方式）
