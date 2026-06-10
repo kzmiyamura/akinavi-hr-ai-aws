@@ -2383,12 +2383,49 @@ function gridToText(grid: string[][], maxChars = 6000): string {
 }
 
 /**
- * フィールド抽出用テキスト変換
- * parseHtmlTableToGrid で結合セルが展開済みのグリッドには gridToText が最適。
- * gridToJsonRows はタイトル行が全列スパンの場合にヘッダが 1 列に潰れるため使用しない。
+ * フィールド抽出用テキスト変換（HTML展開済みグリッド向け）
+ * - 1セル行: そのまま出力
+ * - 2セル行: 「ラベル：値」形式
+ * - 3+セル行: 既知フィールドラベルを検出して隣の値とペア化し「ラベル：値」を複数行生成
+ *   例: ["氏名","D.U","年齢","34","保有資格"] → "氏名：D.U\n年齢：34\n保有資格"
  */
 function gridToFieldText(grid: string[][], maxChars = 6000): string {
-  return gridToText(grid, maxChars)
+  const FIELD_LABELS = new Set([
+    'フリガナ','ふりがな','氏名','名前','お名前','年齢','性別','最寄駅','最寄り駅',
+    '最終学歴','学歴','現住所','住所','居住地','経験年数','経験','希望単価','希望月額',
+    '単価','希望稼働','稼働希望','参画時期','稼働時期','開始時期','自己PR','保有資格',
+    '資格','国籍','備考','メモ','その他','スキルサマリ','サマリ','得意分野',
+  ])
+  const lines: string[] = []
+  for (const row of grid) {
+    const cells: string[] = []
+    let prev = ''
+    for (const c of row) {
+      const v = c?.trim() ?? ''
+      if (!v || DECORATION_RE.test(v)) continue
+      if (v !== prev) { cells.push(v); prev = v }
+    }
+    if (cells.length === 0) continue
+    if (cells.length === 1) {
+      lines.push(cells[0])
+    } else if (cells.length === 2) {
+      lines.push(`${cells[0]}：${cells[1]}`)
+    } else {
+      // 3+セル: 既知ラベルを起点にペア化（次のセルも既知ラベルなら値と見なさずスキップ）
+      let i = 0
+      while (i < cells.length) {
+        if (FIELD_LABELS.has(cells[i]) && i + 1 < cells.length && !FIELD_LABELS.has(cells[i + 1])) {
+          lines.push(`${cells[i]}：${cells[i + 1]}`)
+          i += 2
+        } else {
+          lines.push(cells[i])
+          i++
+        }
+      }
+    }
+  }
+  const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  return text.length > maxChars ? text.slice(0, maxChars) + '\n...(省略)' : text
 }
 
 /** SheetJS が出力する HTML テーブルを 2D グリッドに展開（rowspan/colspan 対応） */
