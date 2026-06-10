@@ -1688,8 +1688,11 @@ function extractFromProse(bodyText: string, attachText: string): {
   // 文章判定: 20文字超 or 読点・句点を含む行のみ抽出してスキャン
   // ただしスキルシートのフェーズ表ヘッダー行（"調査分析 要件定義 基本設計 ..." 等）は
   // 役割の false positive を引き起こすため除外する。
+  // また Excel JSON 化で生成される「担当工程：xxx」等の工程キー行も除外する
+  // （工程フェーズの値 "運用保守" 等が役割として誤抽出されるのを防ぐ）。
+  const PROCESS_KEY_RE = /^(担当工程|担当フェーズ|参画工程|フェーズ|工程|作業工程|担当フェーズ|プロセス|process)[：:]/i
   const proseLines = allText.split(/\r?\n/).filter(
-    l => (l.length > 20 || /[、。]/.test(l)) && !isPhaseTableHeader(l),
+    l => (l.length > 20 || /[、。]/.test(l)) && !isPhaseTableHeader(l) && !PROCESS_KEY_RE.test(l),
   )
   const prose = proseLines.join('\n')
 
