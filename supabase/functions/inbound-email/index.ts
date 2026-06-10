@@ -2467,7 +2467,11 @@ function parseHtmlTableToGrid(html: string): string[][] {
 
 /** 2D グリッド → ヘッダー付き JSON 行配列 */
 function gridToJsonRows(grid: string[][]): Array<Record<string, string>> {
-  const headerIdx = grid.findIndex(row => row.some(v => v?.trim()))
+  // タイトル行（全非空セルが同値）をスキップし、複数の異なる値を持つ行をヘッダーとする
+  const headerIdx = grid.findIndex(row => {
+    const nonEmpty = row.map(v => v?.trim()).filter(v => v)
+    return nonEmpty.length >= 2 && new Set(nonEmpty).size >= 2
+  })
   if (headerIdx < 0) return []
   const headers = grid[headerIdx]
   const result: Array<Record<string, string>> = []
