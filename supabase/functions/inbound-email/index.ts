@@ -2624,16 +2624,35 @@ async function extractSkillYearsFromExcel(base64: string): Promise<Record<string
 }
 
 /**
- * Excel を 1 回だけパースし、テキストと skillYears を同時に返す。
- * extractExcelText / extractSkillYearsFromExcel を別々に呼ぶと 2 回パースになるため
- * 添付ループではこちらを使う。
+ * JSON 行配列（sheet_to_json の出力）をフィールド抽出用テキストに変換する。
+ * 各行の全フィールドを「ヘッダ：値」形式で展開するため、
+ * 多列ヘッダ行がそのままテキストに混入する問題が発生しない。
  */
-async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number>; grid?: string[][] }> {
+function jsonRowsToFieldText(rows: Array<Record<string, string>>, maxChars = 6000): string {
+  if (rows.length === 0) return ''
+  const lines: string[] = []
+  for (const row of rows) {
+    const entries = Object.entries(row).filter(([, v]) => v?.trim() && !DECORATION_RE.test(v.trim()))
+    if (entries.length === 0) continue
+    for (const [k, v] of entries) {
+      if (k.trim() && v.trim()) lines.push(`${k.trim()}：${v.trim()}`)
+    }
+    lines.push('')
+  }
+  const text = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  return text.length > maxChars ? text.slice(0, maxChars) + '\n...(省略)' : text
+}
+
+/**
+ * Excel を 1 回だけパースし、テキストと skillYears を同時に返す。
+ * sheet_to_json で直接 JSON 化する（sheet_to_html + HTML→グリッド変換を廃止）。
+ */
+async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number>; jsonRows?: Array<Record<string, string>> }> {
   try {
     const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
       utils: {
-        sheet_to_html: (sheet: unknown) => string
+        sheet_to_json: (sheet: unknown, opts?: { defval?: string; raw?: boolean }) => Array<Record<string, string>>
       }
     }
     const bytes = base64ToUint8Array(base64)
@@ -2646,39 +2665,32 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
     })
     const texts: string[] = []
     let skillYears: Record<string, number> = {}
-    let parsedGrid: string[][] | undefined
+    let firstJsonRows: Array<Record<string, string>> | undefined
     for (const sheetName of sortedNames.slice(0, 3)) {
       const sheet = workbook.Sheets[sheetName]
 
-      // HTML → グリッド（テキスト抽出・skillYears 両方に使う・セル結合を正確に展開）
-      const html = XLSX.utils.sheet_to_html(sheet)
-      const grid = parseHtmlTableToGrid(html)
+      // sheet_to_json で直接 JSON 化（defval='' で空セルを空文字に、raw=false で書式付き文字列を取得）
+      const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false })
+      console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} cols=${Object.keys(jsonRows[0] ?? {}).length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
 
-      // テキスト抽出（フィールド抽出用: 多列テーブルは JSON 化して「ヘッダ：値」展開）
-      const gridText = gridToFieldText(grid)
-      if (gridText.trim()) texts.push(`--- シート: ${sheetName} ---\n${gridText}`)
+      // フィールド抽出用テキスト（全行を「ヘッダ：値」形式に展開）
+      const fieldText = jsonRowsToFieldText(jsonRows)
+      if (fieldText.trim()) texts.push(`--- シート: ${sheetName} ---\n${fieldText}`)
 
-      // skillYears 抽出（最初に見つかったシートで確定・Word/Excel 統合方式）
+      // skillYears 抽出（最初に見つかったシートで確定）
       if (Object.keys(skillYears).length === 0) {
-        // [Excel-json] ログ: 先頭10行を Supabase Logs に出力（デバッグ用）
-        const jsonRows = gridToJsonRows(grid)
-        const logRows = jsonRows.slice(0, 10)
-        console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} cols=${Object.keys(jsonRows[0] ?? {}).length} rows=${JSON.stringify(logRows)}`)
-
-        const sy = extractSkillYearsUnified(grid)
+        const sy = extractSkillYearsFromSheetJson(jsonRows)
         if (Object.keys(sy).filter(k => !k.startsWith('_')).length > 0) {
           skillYears = sy
-          // HF Spaces 品質チェック用: skillYears が取れたシートのグリッドを保存（最大300行）
-          parsedGrid = grid
+          firstJsonRows = jsonRows
         } else {
-          console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
-          // skillYears が取れなかった場合でも最初のシートのグリッドを保存
-          if (!parsedGrid && grid.length > 0) parsedGrid = grid
+          console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${jsonRows.length}`)
+          if (!firstJsonRows) firstJsonRows = jsonRows
         }
       }
     }
     const text = texts.join('\n\n')
-    return { text, skillYears, grid: parsedGrid }
+    return { text, skillYears, jsonRows: firstJsonRows }
   } catch (e) {
     console.warn('[Excel] 抽出失敗', e)
     return { text: '', skillYears: {} }
@@ -3384,7 +3396,7 @@ Deno.serve(async (req: Request) => {
     let excelSkillYears: Record<string, number> = {}
     let wordSkillYearsForDisplay: Record<string, number> = {}  // 表示用のみ・経験年数推定には使わない
     // HF Spaces 品質チェック用: 添付から抽出した生グリッド（Excel優先、なければWord）
-    let attachmentParsedGrid: { source: 'excel' | 'word'; rows: string[][] } | null = null
+    let attachmentParsedGrid: { source: 'excel'; rows: Array<Record<string, string>> } | { source: 'word'; rows: string[][] } | null = null
     for (const att of attachments) {
       const attNameLower = (att.name ?? '').toLowerCase()
       const isWordByMime = WORD_MIME.includes(att.mimeType)
@@ -3411,7 +3423,7 @@ Deno.serve(async (req: Request) => {
         }
       } else if (isExcelByMime || isExcelByExt) {
         // 1 回のパースで text と skillYears を同時取得（二重パース防止）
-        const { text, skillYears: years, grid: excelGrid } = await extractExcelAll(att.data)
+        const { text, skillYears: years, jsonRows: excelJsonRows } = await extractExcelAll(att.data)
         if (text.trim()) officeTextContents.push({
           label: `Excelファイル(${att.name ?? 'spreadsheet'})`,
           content: text,
@@ -3422,9 +3434,9 @@ Deno.serve(async (req: Request) => {
         if (Object.keys(excelSkillYears).length === 0 && Object.keys(years).length > 0) {
           excelSkillYears = years
         }
-        // HF Spaces 用グリッド（Excel を優先・上書き）
-        if (excelGrid && excelGrid.length > 0) {
-          attachmentParsedGrid = { source: 'excel', rows: excelGrid }
+        // HF Spaces 用 JSON 行（Excel を優先・上書き）
+        if (excelJsonRows && excelJsonRows.length > 0) {
+          attachmentParsedGrid = { source: 'excel', rows: excelJsonRows }
         }
       }
     }
