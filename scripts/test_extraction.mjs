@@ -197,10 +197,11 @@ function sanitizeFromCompany(s) {
 }
 
 function extractCandidateFieldsRegex(bodyText, attachText) {
+  const NAME_FIELD_LABELS = /^(年齢|性別|住所|スキル|経験|希望|単価|国籍|備考|資格|学歴|連絡先|電話|メール|生年|誕生|担当|会社|企業|所属|役職|部署|稼働|稼動|勤務|現住所|最寄|最寄り|駅名|沿線|フリガナ|ふりがな|読み|備考欄|コメント|評価|合計|レベル|スコア|期間|開始|終了|工程|規模|人数|契約|派遣|フリー|正社員|アルバイト|パート)$/
   let rawName = extractFieldTwoPhase(
     ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
     bodyText, attachText,
-    v => v.length >= 2 && !/^\d+$/.test(v), 40, 2,
+    v => v.length >= 2 && !/^\d+$/.test(v) && !NAME_FIELD_LABELS.test(v), 40, 2,
   )
   // カンマ区切りイニシャル補完: 「名前：M,T（23）」→ rawName=null になる場合に復元
   if (!rawName) {
