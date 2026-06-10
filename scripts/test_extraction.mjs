@@ -197,11 +197,18 @@ function sanitizeFromCompany(s) {
 }
 
 function extractCandidateFieldsRegex(bodyText, attachText) {
-  const rawName = extractFieldTwoPhase(
+  let rawName = extractFieldTwoPhase(
     ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
     bodyText, attachText,
-    v => v.length >= 1 && !/^\d+$/.test(v), 40, 2,
+    v => v.length >= 2 && !/^\d+$/.test(v), 40, 2,
   )
+  // カンマ区切りイニシャル補完: 「名前：M,T（23）」→ rawName=null になる場合に復元
+  if (!rawName) {
+    const commaInitialM = (bodyText + '\n' + attachText).match(
+      /(?:氏名等|氏名|名前|候補者名?|お名前|フルネーム|ご氏名|氏[　 ]*名)[　 ]*[：:][　 ]*([A-Z]),([A-Z])/
+    )
+    if (commaInitialM) rawName = `${commaInitialM[1]}.${commaInitialM[2]}`
+  }
   const cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
   let age = null, gender = null, nameStripped = cleanedName || ''
   const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][ 　]*[/／：:・．][ 　]*(男性|女性|男|女)(?:[/／]([^)）]*))?[\)）]/)
@@ -341,12 +348,12 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   if (name) name = name.replace(/[（(【,、\/／・\s　]+$/, '').trim() || null
   if (!name) {
     const allTextForInitials = bodyText + '\n' + attachText
-    const initialsPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])[ 　]?[（(](\d{2})[才歳][^)）]*[）)]/m
-    const initialsOnlyPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])(?:[ 　]|$)/m
+    const initialsPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・,][A-Z])[ 　]?[（(](\d{2})[才歳][^)）]*[）)]/m
+    const initialsOnlyPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・,][A-Z])(?:[ 　]|$)/m
     const imatch = allTextForInitials.match(initialsPat)
     const imatchOnly = !imatch ? allTextForInitials.match(initialsOnlyPat) : null
-    if (imatch) { name = imatch[1].trim(); if (age === null) age = parseInt(imatch[2], 10) }
-    else if (imatchOnly) name = imatchOnly[1].trim()
+    if (imatch) { name = imatch[1].trim().replace(',', '.'); if (age === null) age = parseInt(imatch[2], 10) }
+    else if (imatchOnly) name = imatchOnly[1].trim().replace(',', '.')
   }
   if (age === null) {
     const allText = bodyText + '\n' + attachText

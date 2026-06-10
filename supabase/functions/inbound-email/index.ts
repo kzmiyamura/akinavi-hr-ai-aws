@@ -1097,13 +1097,21 @@ function extractCandidateFieldsRegex(
 } {
   // ── 氏名 ──────────────────────────────────────────────────────
   // Phase3 は日本語の姓名（2文字〜）も有効なので phase3MinLen=2
-  const rawName = extractFieldTwoPhase(
+  let rawName = extractFieldTwoPhase(
     ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
     bodyText, attachText,
     v => v.length >= 2 && !/^\d+$/.test(v),
     40,
     2,
   )
+  // カンマ区切りイニシャル補完: extractFieldTwoPhase は , を終端文字として扱うため
+  // 「名前：M,T（23）」→ rawName=null になる。元テキストで「X,Y」を探してドット形式に補完。
+  if (!rawName) {
+    const commaInitialM = (bodyText + '\n' + attachText).match(
+      /(?:氏名等|氏名|名前|候補者名?|お名前|フルネーム|ご氏名|氏[　 ]*名)[　 ]*[：:][　 ]*([A-Z]),([A-Z])/
+    )
+    if (commaInitialM) rawName = `${commaInitialM[1]}.${commaInitialM[2]}`
+  }
   // 先頭の区切り文字（：: 等）を除去（「：T.B（27）」→「T.B（27）」）
   const cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
   // 名前から年齢・性別を抽出して除去
@@ -1329,20 +1337,21 @@ function extractCandidateFieldsRegex(
 
   // ── イニシャルのみパターン フォールバック ─────────────────────
   // 「A.M」「K・S」「K.S（45歳/男性）」のようにラベルなしでイニシャルが記載されている場合
+  // カンマ区切り「M,T」も拾い、ドット区切り「M.T」に正規化する
   // 既に名前が取れている場合はスキップ
   if (!name) {
     const allTextForInitials = bodyText + '\n' + attachText
-    // パターン1: イニシャル + 年齢/性別 (例: K.S（45歳/男性）)
-    const initialsPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])[ 　]?[（(](\d{2})[才歳][^)）]*[）)]/m
+    // パターン1: イニシャル + 年齢/性別 (例: K.S（45歳/男性）/ M,T（23）男性)
+    const initialsPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・,][A-Z])[ 　]?[（(](\d{2})[才歳][^)）]*[）)]/m
     // パターン2: イニシャルのみ（行頭 + 任意デコレータ。例: G.S / ■G.S）
-    const initialsOnlyPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・][A-Z])(?:[ 　]|$)/m
+    const initialsOnlyPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・,][A-Z])(?:[ 　]|$)/m
     const imatch = allTextForInitials.match(initialsPat)
     const imatchOnly = !imatch ? allTextForInitials.match(initialsOnlyPat) : null
     if (imatch) {
-      name = imatch[1].trim()
+      name = imatch[1].trim().replace(',', '.')
       if (age === null) age = parseInt(imatch[2], 10)
     } else if (imatchOnly) {
-      name = imatchOnly[1].trim()
+      name = imatchOnly[1].trim().replace(',', '.')
     }
   }
 
