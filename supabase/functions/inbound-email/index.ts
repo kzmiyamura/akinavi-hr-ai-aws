@@ -2624,8 +2624,13 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       const html = XLSX.utils.sheet_to_html(sheet)
       const grid = parseHtmlTableToGrid(html)
 
-      // フィールド抽出用テキスト（gridToFieldText: 多列は JSON 化して「ヘッダ：値」展開）
+      // フィールド抽出用テキスト（gridToText 経由）
       const gridText = gridToFieldText(grid)
+      // 全テキストを1000字ずつ分割してログ出力
+      const chunkSize = 1000
+      for (let ci = 0; ci < gridText.length; ci += chunkSize) {
+        console.log(`[Excel-text] sheet="${sheetName}" chunk=${Math.floor(ci/chunkSize)} text=${JSON.stringify(gridText.slice(ci, ci + chunkSize))}`)
+      }
       if (gridText.trim()) texts.push(`--- シート: ${sheetName} ---\n${gridText}`)
 
       // skillYears 抽出（gridToJsonRows で結合展開済みグリッドを JSON 化）
