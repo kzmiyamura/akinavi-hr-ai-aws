@@ -2428,46 +2428,30 @@ function gridToFieldText(grid: string[][], maxChars = 6000): string {
   return text.length > maxChars ? text.slice(0, maxChars) + '\n...(省略)' : text
 }
 
-/** SheetJS が出力する HTML テーブルを 2D グリッドに展開（rowspan/colspan 対応） */
+/** SheetJS が出力する HTML テーブルを 2D グリッドに変換（各 <td> を 1 セルとして取得） */
 function parseHtmlTableToGrid(html: string): string[][] {
   const grid: string[][] = []
-  const occupied = new Map<string, string>() // "r,c" → value
   const trRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi
-  let ri = 0
   let trM: RegExpExecArray | null
   while ((trM = trRe.exec(html)) !== null) {
-    let ci = 0
-    const cellRe = /<t[dh]([^>]*)>([\s\S]*?)<\/t[dh]>/gi
+    const row: string[] = []
+    const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi
     let cellM: RegExpExecArray | null
     while ((cellM = cellRe.exec(trM[1])) !== null) {
-      const attrs = cellM[1]
-      const rawVal = cellM[2]
+      const rawVal = cellM[1]
         .replace(/<[^>]+>/g, '')
         .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
         .replace(/&#\d+;/g, c => { const n = parseInt(c.slice(2)); return isNaN(n) ? c : String.fromCharCode(n) })
         .trim()
-      const colspan = parseInt(attrs.match(/colspan="(\d+)"/)?.[1] ?? '1')
-      const rowspan = parseInt(attrs.match(/rowspan="(\d+)"/)?.[1] ?? '1')
-      // 占有済みセルをスキップ
-      while (occupied.has(`${ri},${ci}`)) ci++
-      // rowspan/colspan 分を占有
-      for (let dr = 0; dr < rowspan; dr++) {
-        for (let dc = 0; dc < colspan; dc++) {
-          while (grid.length <= ri + dr) grid.push([])
-          grid[ri + dr][ci + dc] = rawVal
-          occupied.set(`${ri + dr},${ci + dc}`, rawVal)
-        }
-      }
-      ci += colspan
+      row.push(rawVal)
     }
-    ri++
+    if (row.length > 0) grid.push(row)
   }
   return grid
 }
 
-/** 2D グリッド → ヘッダー付き JSON 行配列 */
+/** 2D グリッド → ヘッダー付き JSON 行配列（後方互換・extractSkillYearsUnified 内部から呼ばれる） */
 function gridToJsonRows(grid: string[][]): Array<Record<string, string>> {
-  // タイトル行（全非空セルが同値）をスキップし、複数の異なる値を持つ行をヘッダーとする
   const headerIdx = grid.findIndex(row => {
     const nonEmpty = row.map(v => v?.trim()).filter(v => v)
     return nonEmpty.length >= 2 && new Set(nonEmpty).size >= 2
@@ -2485,6 +2469,253 @@ function gridToJsonRows(grid: string[][]): Array<Record<string, string>> {
     }
     if (Object.keys(obj).length > 0) result.push(obj)
   }
+  return result
+}
+
+/** data-v 属性 + colspan/rowspan から列位置情報付きセルを抽出する */
+interface SpanCell { row: number; col: number; colEnd: number; rowEnd: number; value: string }
+
+function parseHtmlToCells(html: string): SpanCell[] {
+  const cells: SpanCell[] = []
+  const occupied = new Map<string, true>()
+  const trRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi
+  let ri = 0, trM: RegExpExecArray | null
+  while ((trM = trRe.exec(html)) !== null) {
+    let ci = 0
+    const cellRe = /<t[dh]([^>]*)>([\s\S]*?)<\/t[dh]>/gi
+    let cellM: RegExpExecArray | null
+    while ((cellM = cellRe.exec(trM[1])) !== null) {
+      while (occupied.has(`${ri},${ci}`)) ci++
+      const attrs = cellM[1]
+      const colspan = parseInt(attrs.match(/colspan="(\d+)"/)?.[1] ?? '1')
+      const rowspan = parseInt(attrs.match(/rowspan="(\d+)"/)?.[1] ?? '1')
+      const dvM = attrs.match(/data-v="([^"]*)"/)
+      if (dvM && dvM[1]) {
+        const val = dvM[1]
+          .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+          .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+          .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(parseInt(d)))
+          .replace(/\r\n?/g, '\n').trim()
+        if (val) cells.push({ row: ri, col: ci, colEnd: ci + colspan - 1, rowEnd: ri + rowspan - 1, value: val })
+      }
+      for (let dr = 0; dr < rowspan; dr++)
+        for (let dc = 0; dc < colspan; dc++)
+          occupied.set(`${ri + dr},${ci + dc}`, true)
+      ci += colspan
+    }
+    ri++
+  }
+  return cells
+}
+
+/** 隣接セルをラベル:値ペアとして解析する */
+function parseAdjacentPairs(row: SpanCell[]): Record<string, string> {
+  const obj: Record<string, string> = {}
+  let i = 0
+  while (i < row.length) {
+    const curr = row[i], next = row[i + 1]
+    if (next && next.col === curr.colEnd + 1) {
+      obj[curr.value] = next.value; i += 2
+    } else {
+      obj[curr.value] = ''; i++
+    }
+  }
+  return obj
+}
+
+/**
+ * SpanCell 配列を JSON に変換する。
+ * - スキル表: テーブル構造（col/colEnd）でヘッダーの親子・兄弟関係を決定
+ *   - 最大幅セル（例: スキル B10:AJ10）= コンテナ → 配下セルはその子
+ *   - 同行の他セル（計画立案 AK10:AL10 等）= 兄弟 → 同じ階層のキー
+ *   例: {"スキル": {"コンピュータ言語": {"業務経験":"PHP...","知識有り":"SQL"}}, "計画立案":"◎", ...}
+ * - キャリアテーブル: ヘッダー行検出 → 列オーバーラップでマッピング
+ * - フォーム行: 隣接ペアをラベル:値として取得
+ */
+// deno-lint-ignore no-explicit-any
+function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
+  if (cells.length === 0) return []
+
+  // 開始行でグループ化・ソート
+  const byRow = new Map<number, SpanCell[]>()
+  for (const c of cells) {
+    if (!byRow.has(c.row)) byRow.set(c.row, [])
+    byRow.get(c.row)!.push(c)
+  }
+  const allRows = [...byRow.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([rowNum, cs]) => ({ rowNum, cells: cs.sort((a, b) => a.col - b.col) }))
+
+  // キャリアテーブルのヘッダー行を検出
+  const CAREER_HEADER_RE = /^(期間|プロジェクト期間|PJ期間|参画期間|開始|終了|業務内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数)$/
+  let careerHeaderIdx = -1
+  let careerHeaders: SpanCell[] = []
+  for (let i = 0; i < allRows.length; i++) {
+    const matches = allRows[i].cells.filter(c => CAREER_HEADER_RE.test(c.value.trim()))
+    if (matches.length >= 2) { careerHeaderIdx = i; careerHeaders = allRows[i].cells; break }
+  }
+
+  // スキル表ヘッダー行を検出:
+  // 「計画立案/要件定義 等が2つ以上」かつ「最大幅の非フェーズセル（コンテナ）がある」行
+  const PHASE_HEADER_RE = /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守)$/
+  let skillHeaderIdx = -1
+  let containerHeader: SpanCell | null = null
+  let phaseHeaders: SpanCell[] = []
+
+  for (let i = 0; i < allRows.length; i++) {
+    if (careerHeaderIdx >= 0 && i >= careerHeaderIdx) break
+    const row = allRows[i]
+    const phases = row.cells.filter(c => PHASE_HEADER_RE.test(c.value.trim()))
+    if (phases.length < 2) continue
+    // コンテナ = フェーズ以外で最大幅のセル（例: スキル B10:AJ10）
+    const nonPhases = row.cells.filter(c => !PHASE_HEADER_RE.test(c.value.trim()) && c.value.trim())
+    const largest = nonPhases.reduce((best: SpanCell | null, c) =>
+      (!best || (c.colEnd - c.col) > (best.colEnd - best.col)) ? c : best, null)
+    if (largest) {
+      skillHeaderIdx = i
+      containerHeader = largest
+      phaseHeaders = phases
+      break
+    }
+  }
+
+  // コンテナ・フェーズヘッダーと同行にある残りの非フェーズセル（同行ロールヘッダー等）
+  let inRowSiblings: SpanCell[] = []
+  if (skillHeaderIdx >= 0 && containerHeader) {
+    inRowSiblings = allRows[skillHeaderIdx].cells.filter(c =>
+      c !== containerHeader && !PHASE_HEADER_RE.test(c.value.trim()) && c.value.trim()
+    )
+  }
+
+  // フェーズヘッダー行の直後の行にロールヘッダー（ITコンサル/PM/PMO/TL等）があるか検出
+  // （計画立案等がrowspan=2で次行を占有 → その右にロールヘッダーが置かれるパターン）
+  let roleHeaderIdx = -1
+  let roleHeaders: SpanCell[] = []
+  if (skillHeaderIdx >= 0 && containerHeader && skillHeaderIdx + 1 < allRows.length) {
+    const nextRowEntry = allRows[skillHeaderIdx + 1]
+    const outside = nextRowEntry.cells.filter(c => {
+      const inContainer = c.col >= containerHeader!.col && c.col <= containerHeader!.colEnd
+      const inPhase = phaseHeaders.some(h => c.col >= h.col && c.col <= h.colEnd)
+      const inInRowSibling = inRowSiblings.some(h => c.col >= h.col && c.col <= h.colEnd)
+      return !inContainer && !inPhase && !inInRowSibling && c.value.trim()
+    })
+    if (outside.length >= 1) {
+      roleHeaders = outside
+      roleHeaderIdx = skillHeaderIdx + 1
+    }
+  }
+
+  // 兄弟ヘッダー全体（フェーズ + 同行ロール + 次行ロール）
+  const allSiblingHeaders = [...phaseHeaders, ...inRowSiblings, ...roleHeaders]
+
+  // deno-lint-ignore no-explicit-any
+  const result: Array<Record<string, any>> = []
+
+  // === スキルセクション処理 ===
+  if (skillHeaderIdx >= 0 && containerHeader) {
+    // deno-lint-ignore no-explicit-any
+    const skillSectionObj: Record<string, any> = {}
+    // 兄弟ヘッダーの値（最初に現れた非空値を採用）
+    const siblingValues: Record<string, string> = {}
+    for (const h of allSiblingHeaders) siblingValues[h.value] = ''
+
+    // コンテナ配下のスキルカテゴリ（コンピュータ言語 等）を収集
+    const skillChildren: Record<string, Record<string, string>> = {}
+
+    const sectionEnd = careerHeaderIdx >= 0 ? careerHeaderIdx : allRows.length
+    let ri = skillHeaderIdx + 1
+
+    while (ri < sectionEnd) {
+      if (ri === roleHeaderIdx) { ri++; continue }
+      const { rowNum, cells: row } = allRows[ri]
+
+      // 兄弟ヘッダー列の値を収集（最初の非空値のみ）
+      for (const cell of row) {
+        if (!cell.value.trim()) continue
+        for (const h of allSiblingHeaders) {
+          if (!siblingValues[h.value] && cell.col >= h.col && cell.col <= h.colEnd) {
+            siblingValues[h.value] = cell.value.trim()
+          }
+        }
+      }
+
+      // コンテナ範囲内のセルを処理（スキルカテゴリ行）
+      const containerCells = row.filter(c =>
+        c.col >= containerHeader!.col && c.col <= containerHeader!.colEnd
+      )
+      // カテゴリセル = コンテナ範囲内で rowspan > 1 の最左セル
+      const categoryCell = containerCells.find(c => c.rowEnd > rowNum && c.value.trim())
+      if (categoryCell) {
+        const catName = categoryCell.value.trim()
+        const innerCells = containerCells.filter(c => c !== categoryCell)
+        const innerObj: Record<string, string> = { ...parseAdjacentPairs(innerCells) }
+        // rowspan範囲内の後続行を収集
+        let j = ri + 1
+        while (j < allRows.length && allRows[j].rowNum <= categoryCell.rowEnd) {
+          const subCells = allRows[j].cells.filter(c =>
+            c.col >= containerHeader!.col && c.col <= containerHeader!.colEnd
+          )
+          Object.assign(innerObj, parseAdjacentPairs(subCells))
+          j++
+        }
+        skillChildren[catName] = innerObj
+        ri = j
+        continue
+      }
+      ri++
+    }
+
+    // スキルセクションオブジェクトを構築
+    // コンテナ（スキル）とフェーズ/ロール（計画立案 等）を同階層に配置
+    if (Object.keys(skillChildren).length > 0) {
+      skillSectionObj[containerHeader.value] = skillChildren
+    }
+    for (const [key, val] of Object.entries(siblingValues)) {
+      skillSectionObj[key] = val
+    }
+    if (Object.keys(skillSectionObj).length > 0) result.push(skillSectionObj)
+  }
+
+  // === フォーム行処理（スキルセクション前）===
+  const formEndIdx = skillHeaderIdx >= 0 ? skillHeaderIdx : (careerHeaderIdx >= 0 ? careerHeaderIdx : allRows.length)
+  let rowIdx = 0
+  while (rowIdx < formEndIdx) {
+    const { rowNum, cells: row } = allRows[rowIdx]
+    if (row.length <= 1) { rowIdx++; continue }
+    const parentCell = row[0].rowEnd > rowNum ? row[0] : undefined
+    if (parentCell) {
+      const subRows: Array<Record<string, string>> = []
+      const firstSub = parseAdjacentPairs(row.filter(c => c !== parentCell))
+      if (Object.keys(firstSub).length > 0) subRows.push(firstSub)
+      let j = rowIdx + 1
+      while (j < allRows.length && allRows[j].rowNum <= parentCell.rowEnd) {
+        const sub = parseAdjacentPairs(allRows[j].cells.filter(c => c.col > parentCell.colEnd))
+        if (Object.keys(sub).length > 0) subRows.push(sub)
+        j++
+      }
+      if (subRows.length > 0) result.push({ [parentCell.value]: subRows })
+      rowIdx = j
+    } else {
+      const obj = parseAdjacentPairs(row)
+      if (Object.keys(obj).length > 0) result.push(obj)
+      rowIdx++
+    }
+  }
+
+  // === キャリアテーブル行処理 ===
+  if (careerHeaderIdx >= 0) {
+    for (let i = careerHeaderIdx + 1; i < allRows.length; i++) {
+      const { cells: row } = allRows[i]
+      if (row.length === 0) continue
+      const obj: Record<string, string> = {}
+      for (const cell of row) {
+        const hdr = careerHeaders.find(h => h.col <= cell.col && cell.col <= h.colEnd)
+        if (hdr) obj[hdr.value] = obj[hdr.value] ? obj[hdr.value] + '\n' + cell.value : cell.value
+      }
+      if (Object.keys(obj).length > 0) result.push(obj)
+    }
+  }
+
   return result
 }
 
@@ -2660,10 +2891,15 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
     let firstJsonRows: Array<Record<string, string>> | undefined
     for (const sheetName of sortedNames.slice(0, 3)) {
       const sheet = workbook.Sheets[sheetName]
+      if (!sheet || !(sheet as Record<string, unknown>)['!ref']) {
+        console.warn(`[Excel] シート "${sheetName}" は空のためスキップ`)
+        continue
+      }
 
-      // sheet_to_html → parseHtmlTableToGrid で結合セルを正確に展開
+      // sheet_to_html → parseHtmlTableToGrid（テキスト抽出用）+ parseHtmlToCells（JSON用）
       const html = XLSX.utils.sheet_to_html(sheet)
       const grid = parseHtmlTableToGrid(html)
+      const cells = parseHtmlToCells(html)
 
       // フィールド抽出用テキスト（gridToText 経由）
       const gridText = gridToFieldText(grid)
@@ -2674,10 +2910,10 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       }
       if (gridText.trim()) texts.push(`--- シート: ${sheetName} ---\n${gridText}`)
 
-      // skillYears 抽出（gridToJsonRows で結合展開済みグリッドを JSON 化）
+      // skillYears 抽出（spanCellsToJson で空間的に JSON 化）
       if (Object.keys(skillYears).length === 0) {
-        const jsonRows = gridToJsonRows(grid)
-        console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} cols=${Object.keys(jsonRows[0] ?? {}).length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
+        const jsonRows = spanCellsToJson(cells)
+        console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
         const sy = extractSkillYearsUnified(grid)
         if (Object.keys(sy).filter(k => !k.startsWith('_')).length > 0) {
           skillYears = sy
