@@ -2354,7 +2354,65 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   return {}
 }
 
-// ── HTML テーブル → JSON 変換ユーティリティ ────────────────────────────────
+// ── Excel（SheetJS）直接→ JSON/グリッド変換ユーティリティ ────────────────────
+
+/** セルアドレス (A1形式) を行・列インデックスから生成 */
+function encodeXlsxCell(r: number, c: number): string {
+  let col = ''
+  let n = c + 1
+  while (n > 0) {
+    col = String.fromCharCode(((n - 1) % 26) + 65) + col
+    n = Math.floor((n - 1) / 26)
+  }
+  return col + (r + 1)
+}
+
+/** "A1:CJ30" 形式の範囲文字列を { s, e } に変換 */
+function decodeXlsxRange(ref: string): { s: { r: number; c: number }; e: { r: number; c: number } } {
+  const decodeAddr = (addr: string) => {
+    const m = addr.match(/^([A-Z]+)(\d+)$/)
+    if (!m) return { r: 0, c: 0 }
+    const col = m[1].split('').reduce((acc, ch) => acc * 26 + (ch.charCodeAt(0) - 64), 0) - 1
+    return { r: parseInt(m[2]) - 1, c: col }
+  }
+  const parts = ref.split(':')
+  return { s: decodeAddr(parts[0]), e: decodeAddr(parts[1] || parts[0]) }
+}
+
+type XlsxMerge = { s: { r: number; c: number }; e: { r: number; c: number } }
+type XlsxCell = { v?: unknown; w?: string }
+
+/**
+ * SheetJS worksheet から直接 2D グリッド（string[][]）を生成する。
+ * sheet_to_html → parseHtmlTableToGrid の代替。HTML 経由をなくして中間変換ノイズを除去。
+ * 結合セルの左上セルのみ値を出力し、非左上セルはスキップ（jagged gridになる）。
+ */
+function worksheetToGrid(sheet: Record<string, unknown>): string[][] {
+  const ref = sheet['!ref'] as string | undefined
+  if (!ref) return []
+  const range = decodeXlsxRange(ref)
+  const merges = (sheet['!merges'] as XlsxMerge[]) || []
+  const skipCells = new Set<string>()
+  for (const merge of merges) {
+    for (let r = merge.s.r; r <= merge.e.r; r++) {
+      for (let c = merge.s.c; c <= merge.e.c; c++) {
+        if (r !== merge.s.r || c !== merge.s.c) skipCells.add(`${r},${c}`)
+      }
+    }
+  }
+  const grid: string[][] = []
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const row: string[] = []
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      if (skipCells.has(`${r},${c}`)) continue
+      const cell = sheet[encodeXlsxCell(r, c)] as XlsxCell | undefined
+      const val = String(cell?.w ?? (cell?.v !== undefined ? cell.v : '')).replace(/\r\n?/g, '\n').trim()
+      row.push(val)
+    }
+    if (row.some(v => v)) grid.push(row)
+  }
+  return grid
+}
 
 /**
  * parseHtmlTableToGrid の出力（2D グリッド）を読みやすいテキストに変換する。
@@ -2429,25 +2487,9 @@ function gridToFieldText(grid: string[][], maxChars = 6000): string {
 }
 
 /** SheetJS が出力する HTML テーブルを 2D グリッドに変換（各 <td> を 1 セルとして取得） */
-function parseHtmlTableToGrid(html: string): string[][] {
-  const grid: string[][] = []
-  const trRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi
-  let trM: RegExpExecArray | null
-  while ((trM = trRe.exec(html)) !== null) {
-    const row: string[] = []
-    const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi
-    let cellM: RegExpExecArray | null
-    while ((cellM = cellRe.exec(trM[1])) !== null) {
-      const rawVal = cellM[1]
-        .replace(/<[^>]+>/g, '')
-        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
-        .replace(/&#\d+;/g, c => { const n = parseInt(c.slice(2)); return isNaN(n) ? c : String.fromCharCode(n) })
-        .trim()
-      row.push(rawVal)
-    }
-    if (row.length > 0) grid.push(row)
-  }
-  return grid
+function parseHtmlTableToGrid(_html: string): string[][] {
+  // 廃止: worksheetToGrid を使用すること（sheet_to_html 経由を廃止）
+  return []
 }
 
 /** 2D グリッド → ヘッダー付き JSON 行配列（後方互換・extractSkillYearsUnified 内部から呼ばれる） */
@@ -2472,38 +2514,39 @@ function gridToJsonRows(grid: string[][]): Array<Record<string, string>> {
   return result
 }
 
-/** data-v 属性 + colspan/rowspan から列位置情報付きセルを抽出する */
 interface SpanCell { row: number; col: number; colEnd: number; rowEnd: number; value: string }
 
-function parseHtmlToCells(html: string): SpanCell[] {
+/**
+ * SheetJS worksheet から直接 SpanCell[] を生成する（sheet_to_html 経由なし）。
+ * !merges を参照して結合情報を正確に取得する。HTML 中間変換による情報欠落を回避。
+ */
+function worksheetToCells(sheet: Record<string, unknown>): SpanCell[] {
   const cells: SpanCell[] = []
-  const occupied = new Map<string, true>()
-  const trRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi
-  let ri = 0, trM: RegExpExecArray | null
-  while ((trM = trRe.exec(html)) !== null) {
-    let ci = 0
-    const cellRe = /<t[dh]([^>]*)>([\s\S]*?)<\/t[dh]>/gi
-    let cellM: RegExpExecArray | null
-    while ((cellM = cellRe.exec(trM[1])) !== null) {
-      while (occupied.has(`${ri},${ci}`)) ci++
-      const attrs = cellM[1]
-      const colspan = parseInt(attrs.match(/colspan="(\d+)"/)?.[1] ?? '1')
-      const rowspan = parseInt(attrs.match(/rowspan="(\d+)"/)?.[1] ?? '1')
-      const dvM = attrs.match(/data-v="([^"]*)"/)
-      if (dvM && dvM[1]) {
-        const val = dvM[1]
-          .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-          .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
-          .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(parseInt(d)))
-          .replace(/\r\n?/g, '\n').trim()
-        if (val) cells.push({ row: ri, col: ci, colEnd: ci + colspan - 1, rowEnd: ri + rowspan - 1, value: val })
+  const ref = sheet['!ref'] as string | undefined
+  if (!ref) return cells
+  const range = decodeXlsxRange(ref)
+  const merges = (sheet['!merges'] as XlsxMerge[]) || []
+  // merge の左上セル → rowEnd/colEnd
+  const mergeInfo = new Map<string, { rowEnd: number; colEnd: number }>()
+  const skipCells = new Set<string>()
+  for (const merge of merges) {
+    mergeInfo.set(`${merge.s.r},${merge.s.c}`, { rowEnd: merge.e.r, colEnd: merge.e.c })
+    for (let r = merge.s.r; r <= merge.e.r; r++) {
+      for (let c = merge.s.c; c <= merge.e.c; c++) {
+        if (r !== merge.s.r || c !== merge.s.c) skipCells.add(`${r},${c}`)
       }
-      for (let dr = 0; dr < rowspan; dr++)
-        for (let dc = 0; dc < colspan; dc++)
-          occupied.set(`${ri + dr},${ci + dc}`, true)
-      ci += colspan
     }
-    ri++
+  }
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      if (skipCells.has(`${r},${c}`)) continue
+      const cell = sheet[encodeXlsxCell(r, c)] as XlsxCell | undefined
+      const info = mergeInfo.get(`${r},${c}`)
+      const rowEnd = info?.rowEnd ?? r
+      const colEnd = info?.colEnd ?? c
+      const val = String(cell?.w ?? (cell?.v !== undefined ? cell.v : '')).replace(/\r\n?/g, '\n').trim()
+      if (val) cells.push({ row: r, col: c, colEnd, rowEnd, value: val })
+    }
   }
   return cells
 }
@@ -2866,17 +2909,14 @@ async function extractSkillYearsFromExcel(base64: string): Promise<Record<string
 
 /**
  * Excel を 1 回だけパースし、テキストと skillYears を同時に返す。
- * sheet_to_html → parseHtmlTableToGrid で結合セル（rowspan/colspan）を正確に展開し、
- * gridToText でフィールド抽出用テキスト、gridToJsonRows で skillYears を取得する。
+ * SheetJS の !merges を直接読み取り、HTML 経由なしで grids / SpanCell[] を生成する。
+ * sheet_to_html を廃止して中間変換ノイズ（空セル混入・文字列変換ズレ）を除去。
  * sheet_to_json では結合セルが __EMPTY_N になり構造が破壊されるため使用しない。
  */
 async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number>; jsonRows?: Array<Record<string, string>> }> {
   try {
     const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
-      utils: {
-        sheet_to_html: (sheet: unknown) => string
-      }
     }
     const bytes = base64ToUint8Array(base64)
     const workbook = XLSX.read(bytes, { type: 'array' })
@@ -2896,10 +2936,10 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
         continue
       }
 
-      // sheet_to_html → parseHtmlTableToGrid（テキスト抽出用）+ parseHtmlToCells（JSON用）
-      const html = XLSX.utils.sheet_to_html(sheet)
-      const grid = parseHtmlTableToGrid(html)
-      const cells = parseHtmlToCells(html)
+      // Excel（SheetJS）直接 → グリッド / SpanCell[]（HTML 経由廃止）
+      const sheetObj = sheet as Record<string, unknown>
+      const grid = worksheetToGrid(sheetObj)
+      const cells = worksheetToCells(sheetObj)
 
       // フィールド抽出用テキスト（gridToText 経由）
       const gridText = gridToFieldText(grid)
