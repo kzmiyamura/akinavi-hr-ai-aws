@@ -2675,8 +2675,19 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
 
       if (right) {
         // ── KEY_H: 右隣のセルを確認 ─────────────────────────────────────
+        // 判定順序: READ_COL_HEADERS → CONTAINER → KV_DONE → 子CONTAINER
+        // ※ READ_COL_HEADERSを先に評価しないと COL_HEADER_DICT が isContainer で
+        //   スコア2を単独で満たしてしまい、列ヘッダー行がコンテナに誤飲みされる
 
-        if (_isContainer(right, key)) {
+        if (_rs(right) < _rs(key) && COL_HEADER_DICT.test(right.value.trim())) {
+          // READ_COL_HEADERS: 縦に小さく辞書に一致 → 残りセルを列ヘッダーとしてキャッシュ → NEW_ROW
+          for (let k = i + 1; k < rowCells.length; k++) {
+            const hc = rowCells[k]
+            if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
+          }
+          newRow = true
+
+        } else if (_isContainer(right, key)) {
           // CONTAINER: 右セルをコンテナとして再帰スキャン → NEW_ROW
           const ch = _childCells(sorted, right)
           record[key.value.trim()] = _scanContainer(ch)
@@ -2689,20 +2700,11 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
           i += 2
 
         } else if (_rs(right) < _rs(key)) {
-          if (COL_HEADER_DICT.test(right.value.trim())) {
-            // READ_COL_HEADERS: 縦に小さく辞書に一致 → 残りセルを列ヘッダーとしてキャッシュ → NEW_ROW
-            for (let k = i + 1; k < rowCells.length; k++) {
-              const hc = rowCells[k]
-              if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
-            }
-            newRow = true
-          } else {
-            // CONTAINER: 縦に小さいが辞書に一致しない → 通常の子コンテナ → NEW_ROW
-            const ch = _childCells(sorted, right)
-            record[right.value.trim()] = _scanContainer(ch)
-            for (let r = right.row; r <= right.rowEnd; r++) usedRows.add(r)
-            i += 2; newRow = true
-          }
+          // CONTAINER: 縦に小さいが辞書に一致しない → 通常の子コンテナ → NEW_ROW
+          const ch = _childCells(sorted, right)
+          record[right.value.trim()] = _scanContainer(ch)
+          for (let r = right.row; r <= right.rowEnd; r++) usedRows.add(r)
+          i += 2; newRow = true
 
         } else {
           // _rs(right) > _rs(key): _isContainer でキャッチされるはず、念のため skip
