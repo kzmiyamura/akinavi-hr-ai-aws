@@ -2645,6 +2645,8 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
   let catData: Record<string, any> = {}          // 現在カテゴリの KV
   let sectionKeyCol = -1                         // セクションキーの col（e.g., 0）
   let sectionKeyColEnd = -1                      // セクションキーの colEnd（e.g., 35）。カテゴリ判定境界
+  // deno-lint-ignore no-explicit-any
+  let phaseSections: Record<string, Record<string, any>> = {}  // 兄弟フェーズ列 { 計画立案: { コンピュータ言語: "◎", ... } }
 
   for (const rowNum of rowNums) {
     if (usedRows.has(rowNum)) continue
@@ -2655,58 +2657,67 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     // ── READ_COL_HEADERS モード（マトリクスデータ行）────────────────────
     if (colHeaderMap.size > 0) {
       // deno-lint-ignore no-explicit-any
-      const matRec: Record<string, any> = {}
+      const matRec: Record<string, any> = {}     // 平坦マトリクスモード用
       let matched = false
       let newCatLabel: string | null = null
-
-      // セクションモード時: hdr でも category でもないセルを KV ペア用に収集
-      const kvCells: SpanCell[] = []
+      const kvCells: SpanCell[] = []             // sectionKeyCol 以外の非hdrセル（KVペア候補）
+      // セクションモード時のhdrセルを一時収集（catKey確定後に phaseSections へ振り分ける）
+      const hdrCells: Array<{ hdr: string; val: string }> = []
 
       for (const cell of rowCells) {
         const hdr = _findHdr(colHeaderMap, cell.col)
         if (hdr) {
-          matRec[hdr] = matRec[hdr] ? matRec[hdr] + '\n' + cell.value.trim() : cell.value.trim()
           matched = true
+          if (sectionKey !== null) {
+            hdrCells.push({ hdr, val: cell.value.trim() })
+          } else {
+            matRec[hdr] = matRec[hdr] ? matRec[hdr] + '\n' + cell.value.trim() : cell.value.trim()
+          }
         } else if (sectionKey !== null && cell.col === sectionKeyCol && cell.colEnd < sectionKeyColEnd) {
           // セクション内カテゴリラベル（col が sectionKey と同じ かつ colSpan が小さい）
           // 例: コンピュータ言語 (c0-6) はスキル (c0-35) より狭い → カテゴリ
           //     業務内容 (c0-53) はスキル (c0-35) より広い → セクション終端シグナル
           newCatLabel = cell.value.trim()
         } else if (sectionKey !== null) {
-          // sectionKeyCol と同一行の残セル（業務経験/PHP/Python 等）→ KV ペア候補
           kvCells.push(cell)
         }
       }
 
-      // kvCells を連続 KV ペアとして matRec に追加
-      // 例: [業務経験(c7), PHP/Python(c10)] → matRec["業務経験"] = "PHP/Python/..."
-      for (let j = 0; j + 1 < kvCells.length; j += 2) {
-        const kv = kvCells[j].value.trim()
-        const vv = kvCells[j + 1].value.trim()
-        if (kv && vv) { matRec[kv] = vv; matched = true }
-      }
+      // kvCells が KV ペアを形成できるかどうか（知識有り+ShellScript 等）
+      const hasKvPairs = kvCells.length >= 2
+        && !!kvCells[0].value.trim() && !!kvCells[1].value.trim()
 
-      if (!matched && newCatLabel === null) {
+      if (!matched && newCatLabel === null && !hasKvPairs) {
         // この行にマトリクス列なし → マトリクス終了・通常処理へ fall through
         if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
         if (sectionKey !== null && Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
+        for (const [ph, pv] of Object.entries(phaseSections)) {
+          if (Object.keys(pv).length > 0) results.push({ [ph]: pv })
+        }
         sectionKey = null; sectionData = {}; catKey = null; catData = {}
-        sectionKeyCol = -1; sectionKeyColEnd = -1
+        sectionKeyCol = -1; sectionKeyColEnd = -1; phaseSections = {}
         colHeaderMap = new Map()
       } else {
         if (sectionKey !== null) {
-          // セクションモード: カテゴリ別にデータを積み上げる
+          // 1. カテゴリ遷移（catKey 確定を先に行う）
           if (newCatLabel !== null && newCatLabel !== catKey) {
-            // 新しいカテゴリ → 前のカテゴリを確定
             if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
             catKey = newCatLabel
             catData = {}
           }
+          // 2. KV ペア → catData（業務経験: PHP/Python 等）
+          for (let j = 0; j + 1 < kvCells.length; j += 2) {
+            const kv = kvCells[j].value.trim()
+            const vv = kvCells[j + 1].value.trim()
+            if (kv && vv) { catData[kv] = vv; matched = true }
+          }
+          // 3. hdrCells → phaseSections（計画立案: {コンピュータ言語: ◎} 等・スキルの兄弟）
           if (catKey !== null) {
-            Object.assign(catData, matRec)
-          } else {
-            // カテゴリラベルなし → sectionData に直接追加
-            Object.assign(sectionData, matRec)
+            for (const { hdr, val } of hdrCells) {
+              if (!phaseSections[hdr]) phaseSections[hdr] = {}
+              const prev = phaseSections[hdr][catKey]
+              phaseSections[hdr][catKey] = prev ? prev + '\n' + val : val
+            }
           }
         } else {
           // 平坦マトリクスモード（セクションキーなし・旧動作）
@@ -2745,7 +2756,10 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
           if (sectionKey !== null) {
             if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
             if (Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
-            sectionData = {}; catKey = null; catData = {}
+            for (const [ph, pv] of Object.entries(phaseSections)) {
+              if (Object.keys(pv).length > 0) results.push({ [ph]: pv })
+            }
+            sectionData = {}; catKey = null; catData = {}; phaseSections = {}
           }
           if (colHeaderMap.size > 0) {
             sectionKey = key.value.trim()
@@ -2816,6 +2830,9 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
   // ループ終了後: 未確定のセクションを flush
   if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
   if (sectionKey !== null && Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
+  for (const [ph, pv] of Object.entries(phaseSections)) {
+    if (Object.keys(pv).length > 0) results.push({ [ph]: pv })
+  }
 
   console.log(`[spanCells:sm] rows=${results.length} hdrMap=${colHeaderMap.size} sample=${results.slice(0, 2).map(r => Object.keys(r).slice(0, 4).join(',')).join(' | ')}`)
   return results
