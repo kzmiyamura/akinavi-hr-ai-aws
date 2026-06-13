@@ -2915,7 +2915,7 @@ async function extractSkillYearsFromExcel(base64: string): Promise<Record<string
  * sheet_to_html を廃止して中間変換ノイズ（空セル混入・文字列変換ズレ）を除去。
  * sheet_to_json では結合セルが __EMPTY_N になり構造が破壊されるため使用しない。
  */
-async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number>; jsonRows?: Array<Record<string, string>> }> {
+async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number>; jsonRows?: Array<Record<string, string>>; skillSummary?: string }> {
   try {
     const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
@@ -2969,7 +2969,16 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       }
     }
     const text = texts.join('\n\n')
-    return { text, skillYears, jsonRows: firstJsonRows }
+    // スキルサマリをjsonRowsから抽出
+    const SKILL_SUMMARY_RE = /^スキルサマリ[ー]?$/
+    let skillSummary: string | undefined
+    if (firstJsonRows) {
+      for (const row of firstJsonRows) {
+        const key = Object.keys(row).find(k => SKILL_SUMMARY_RE.test(k.trim()))
+        if (key && row[key]) { skillSummary = row[key]; break }
+      }
+    }
+    return { text, skillYears, jsonRows: firstJsonRows, skillSummary }
   } catch (e) {
     console.warn('[Excel] 抽出失敗', e)
     return { text: '', skillYears: {} }
@@ -3674,6 +3683,7 @@ Deno.serve(async (req: Request) => {
     const officeTextContents: { label: string; content: string; skillYears?: Record<string, number> }[] = []
     let excelSkillYears: Record<string, number> = {}
     let wordSkillYearsForDisplay: Record<string, number> = {}  // 表示用のみ・経験年数推定には使わない
+    let excelSkillSummary: string | undefined  // Excel スキルシートの「スキルサマリ」セル
     // HF Spaces 品質チェック用: 添付から抽出した生グリッド（Excel優先、なければWord）
     let attachmentParsedGrid: { source: 'excel'; rows: Array<Record<string, string>> } | { source: 'word'; rows: string[][] } | null = null
     for (const att of attachments) {
@@ -3702,7 +3712,8 @@ Deno.serve(async (req: Request) => {
         }
       } else if (isExcelByMime || isExcelByExt) {
         // 1 回のパースで text と skillYears を同時取得（二重パース防止）
-        const { text, skillYears: years, jsonRows: excelJsonRows } = await extractExcelAll(att.data)
+        const { text, skillYears: years, jsonRows: excelJsonRows, skillSummary: excelSS } = await extractExcelAll(att.data)
+        if (excelSS && !excelSkillSummary) excelSkillSummary = excelSS
         if (text.trim()) officeTextContents.push({
           label: `Excelファイル(${att.name ?? 'spreadsheet'})`,
           content: text,
@@ -4203,6 +4214,8 @@ Deno.serve(async (req: Request) => {
                 multiCandidateBlock: true,
                 // 名前後ろ括弧のスキル年数（#79）: 「K.T（Java 5年 / Python 3年）」形式
                 skillYears: blockRegexFields.nameSkillYears ?? undefined,
+                // Excel スキルシートの「スキルサマリ」セル（selfPR・agentComment と並列の独自フィールド）
+                skillSummary: excelSkillSummary ?? undefined,
                 // Excel スキルシートの JSON 化データ（HF Spaces 品質チェック用）
                 jsonRows: attachmentParsedGrid?.source === 'excel' ? attachmentParsedGrid.rows : undefined,
               },
@@ -4593,6 +4606,8 @@ Deno.serve(async (req: Request) => {
           selfPR: extractSelfPR(body, attachText) ?? null,
           agentComment: extractAgentComment(body, attachText) ?? null,
           geminiParseFallback: parseFallback,
+          // Excel スキルシートの「スキルサマリ」セル（selfPR・agentComment と並列の独自フィールド）
+          skillSummary: excelSkillSummary ?? undefined,
           skillYears: (() => {
             // _totalProjectMonths / _dateSpanMonths は経験年数推定用の内部キーなので表示用 skillYears からは除外
             const displayExcel = Object.fromEntries(
