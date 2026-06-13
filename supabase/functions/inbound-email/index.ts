@@ -3963,8 +3963,18 @@ Deno.serve(async (req: Request) => {
         resumeUrl = picked
       }
 
-      // Storage アップロードは廃止（容量超過のため）
-      // resume_url は Google Drive リンクのみ使用
+      // Excel/Word 添付を Storage にアップロード（再解析用・7日アーカイブで容量管理済み）
+      if (!resumeUrl) {
+        for (const att of allAttachments) {
+          const isOffice = EXCEL_MIME.includes(att.mimeType) || WORD_MIME.includes(att.mimeType)
+            || /\.(xlsx?|xls|docx?|ods|csv)$/i.test(att.name ?? '')
+          if (!isOffice || !att.data) continue
+          const ext = att.name ? att.name.split('.').pop() ?? 'bin' : 'bin'
+          const safeName = `${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`
+          const url = await uploadToStorage(safeName, att.mimeType, att.data)
+          if (url) { resumeUrl = url; break }
+        }
+      }
     }
 
     // Drive取得テキスト + Officeテキストを統合（スキルマスター照合に使用）

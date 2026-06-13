@@ -794,20 +794,40 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     setReplayMsg(null)
     try {
       const originalFrom = (c.raw_profile as RawProfile)?.from ?? `replay+${c.id}@demo.invalid`
+
+      // resume_url が Storage URL（attachments バケット）ならファイルを fetch して添付として渡す
+      const attachments: { data: string; mimeType: string; name: string }[] = []
+      const resumeUrl = c.resume_url
+      if (resumeUrl && resumeUrl.includes('/storage/v1/object/public/attachments/')) {
+        try {
+          const res = await fetch(resumeUrl)
+          if (res.ok) {
+            const buf = await res.arrayBuffer()
+            const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)))
+            const mimeType = res.headers.get('content-type') ?? 'application/octet-stream'
+            const name = resumeUrl.split('/').pop() ?? 'attachment'
+            attachments.push({ data: b64, mimeType, name })
+          }
+        } catch (e) {
+          console.warn('添付ファイル取得失敗:', e)
+        }
+      }
+
       const { error } = await supabase.functions.invoke('inbound-email', {
         body: {
           subject: (c.raw_profile as RawProfile)?.subject ?? `【再解析】${c.name}`,
           body: rawText,
           from: originalFrom,
-          attachments: [],
+          attachments,
           mode: dataEnv,
           type: 'candidate',
           force: true,
-          target_candidate_id: c.id,  // 再解析対象のIDを渡して確実に上書き
+          target_candidate_id: c.id,
         },
       })
       if (error) throw error
-      setReplayMsg({ id: c.id, text: '再解析完了。既存候補を上書き更新しました。', ok: true })
+      const attachMsg = attachments.length > 0 ? `（添付${attachments.length}件含む）` : ''
+      setReplayMsg({ id: c.id, text: `再解析完了${attachMsg}。既存候補を上書き更新しました。`, ok: true })
       queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
       queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
     } catch (e) {
