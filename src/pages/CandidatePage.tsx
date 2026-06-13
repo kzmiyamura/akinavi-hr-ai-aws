@@ -802,6 +802,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           attachments: [],
           mode: dataEnv,
           type: 'candidate',
+          force: true,
           target_candidate_id: c.id,  // 再解析対象のIDを渡して確実に上書き
         },
       })
