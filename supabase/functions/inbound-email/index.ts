@@ -2679,8 +2679,10 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
         // ※ READ_COL_HEADERSを先に評価しないと COL_HEADER_DICT が isContainer で
         //   スコア2を単独で満たしてしまい、列ヘッダー行がコンテナに誤飲みされる
 
-        if (_rs(right) < _rs(key) && COL_HEADER_DICT.test(right.value.trim())) {
-          // READ_COL_HEADERS: 縦に小さく辞書に一致 → 残りセルを列ヘッダーとしてキャッシュ → NEW_ROW
+        if (COL_HEADER_DICT.test(right.value.trim()) && (_rs(right) < _rs(key) || _cs(key) >= 3 * _cs(right))) {
+          // READ_COL_HEADERS: 辞書一致 かつ (縦に小さい OR キーが3倍以上横広い平坦マトリクス) → NEW_ROW
+          // ※ 平坦マトリクス（スキル行 rs=1 / 列ヘッダー rs=1）の場合 _rs(right)<_rs(key) は成立しないが
+          //   キーが列ヘッダーより十分広い（cs比 ≥ 3）ことを代替条件として使う
           for (let k = i + 1; k < rowCells.length; k++) {
             const hc = rowCells[k]
             if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
