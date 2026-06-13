@@ -803,7 +803,12 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           const res = await fetch(resumeUrl)
           if (res.ok) {
             const buf = await res.arrayBuffer()
-            const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)))
+            const bytes = new Uint8Array(buf)
+            let binary = ''
+            for (let i = 0; i < bytes.length; i += 8192) {
+              binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
+            }
+            const b64 = btoa(binary)
             const mimeType = res.headers.get('content-type') ?? 'application/octet-stream'
             const name = resumeUrl.split('/').pop() ?? 'attachment'
             attachments.push({ data: b64, mimeType, name })
