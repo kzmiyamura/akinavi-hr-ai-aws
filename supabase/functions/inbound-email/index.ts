@@ -2595,6 +2595,105 @@ function _belowCell(sorted: SpanCell[], key: SpanCell): SpanCell | undefined {
 interface _ColHdr { text: string; colEnd: number }
 
 /** colHeaderMap から col が属する列ヘッダー文字列を返す */
+
+// ─── プロジェクト履歴パーサ ────────────────────────────────────────────────
+
+/** プロジェクト No. セルかどうかを判定（整数値・左端・rowSpan≥3） */
+function _isProjectNo(cell: SpanCell): boolean {
+  return cell.col <= 1
+    && cell.colEnd <= 1
+    && (cell.rowEnd - cell.row) >= 2
+    && /^\d+$/.test(cell.value.trim())
+}
+
+/** ラベル（narrow）＋値（wide）の連続ペアを out に追加 */
+// deno-lint-ignore no-explicit-any
+function _extractLVPairs(cells: SpanCell[], out: Record<string, any>): void {
+  for (let i = 0; i + 1 < cells.length; i += 2) {
+    const lv = cells[i].value.trim()
+    const vv = cells[i + 1].value.trim()
+    if (lv && vv && !/^[-ー－]+$/.test(lv) && !/^[-ー－]+$/.test(vv)) out[lv] = vv
+  }
+}
+
+/** No.セル配下の全行を解析してプロジェクト1件分のオブジェクトを返す */
+// deno-lint-ignore no-explicit-any
+function _parseOneProject(noCell: SpanCell, allCells: SpanCell[]): Record<string, any> {
+  // deno-lint-ignore no-explicit-any
+  const proj: Record<string, any> = {}
+
+  // No.セル範囲内・No.自身以外のセル（c36以降のフェーズ評価列は除外）
+  const cells = allCells.filter(c =>
+    c !== noCell &&
+    c.row >= noCell.row && c.row <= noCell.rowEnd &&
+    c.col <= 35 &&
+    c.value.trim()
+  )
+
+  // 行ごとにグループ化
+  const rowMap = new Map<number, SpanCell[]>()
+  for (const c of cells) {
+    if (!rowMap.has(c.row)) rowMap.set(c.row, [])
+    rowMap.get(c.row)!.push(c)
+  }
+
+  const DATE_RE = /^\d{4}[\/\-年]\d{1,2}/
+  const DUR_RE  = /^\d+年\d+ヶ月$|^\d+ヶ月$|^\d+年$/
+  const SKIP_LABEL = /^(備考|担当業務|案件名|内容|No\.|No)$/
+  let startDate = ''
+  let endDate   = ''
+
+  for (const [, rowCells] of [...rowMap.entries()].sort((a, b) => a[0] - b[0])) {
+    const sorted = rowCells.sort((a, b) => a.col - b.col)
+
+    // 【日付行】DATE_RE に一致するセルが2つ以上 → 開始日・終了日 + 案件名
+    const dateCells = sorted.filter(c => DATE_RE.test(c.value.trim()))
+    if (dateCells.length >= 2) {
+      startDate = dateCells[0].value.trim()
+      endDate   = dateCells[dateCells.length - 1].value.trim()
+      const rest = sorted.filter(c => !DATE_RE.test(c.value.trim()) && c.value.trim() !== '-')
+      // ラベル:値ペアとして処理（案件名 → 値）
+      const labels: SpanCell[] = []
+      const vals:   SpanCell[] = []
+      for (const c of rest) {
+        if (SKIP_LABEL.test(c.value.trim())) labels.push(c)
+        else                                  vals.push(c)
+      }
+      // ラベルと値を順番にペアリング
+      for (let i = 0; i < Math.min(labels.length, vals.length); i++) {
+        const lv = labels[i].value.trim()
+        const vv = vals[i].value.trim()
+        if (lv !== 'No.' && lv !== 'No') proj[lv] = vv
+      }
+      continue
+    }
+
+    // 【期間行】DUR_RE に一致するセルがある → 期間確定 + ポジション等
+    const durCell = sorted.find(c => DUR_RE.test(c.value.trim()))
+    if (durCell) {
+      const dur = durCell.value.trim()
+      proj['期間'] = startDate
+        ? (endDate ? `${startDate}〜${endDate}（${dur}）` : `${startDate}〜（${dur}）`)
+        : dur
+      const rest = sorted.filter(c => c !== durCell)
+      _extractLVPairs(rest, proj)
+      continue
+    }
+
+    // 【担当業務行】"担当業務" ラベルを含む行 → 長テキストを保存
+    if (sorted.some(c => c.value.trim() === '担当業務')) {
+      const text = sorted.find(c => c.value.trim() !== '担当業務' && c.value.trim() !== '備考' && c.value.length > 5)
+      if (text) proj['担当業務'] = text.value.trim().slice(0, 500)
+      continue
+    }
+
+    // 【その他】連続ラベル:値ペア
+    _extractLVPairs(sorted, proj)
+  }
+
+  return proj
+}
+
 function _findHdr(map: Map<number, _ColHdr>, col: number): string | undefined {
   for (const [c, h] of map) if (col >= c && col <= h.colEnd) return h.text
   return undefined
@@ -2653,6 +2752,14 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
 
     const rowCells = (byRow.get(rowNum) ?? []).filter(c => c.value.trim())
     if (rowCells.length === 0) continue
+
+    // ── プロジェクト履歴モード（No.セル検出）────────────────────────────
+    if (colHeaderMap.size === 0 && rowCells.length > 0 && _isProjectNo(rowCells[0])) {
+      const proj = _parseOneProject(rowCells[0], sorted)
+      if (Object.keys(proj).length > 0) results.push(proj)
+      for (let r = rowCells[0].row; r <= rowCells[0].rowEnd; r++) usedRows.add(r)
+      continue
+    }
 
     // ── READ_COL_HEADERS モード（マトリクスデータ行）────────────────────
     if (colHeaderMap.size > 0) {
