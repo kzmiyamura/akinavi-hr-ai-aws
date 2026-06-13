@@ -3966,8 +3966,9 @@ Deno.serve(async (req: Request) => {
       }
 
       // Excel/Word 添付を Storage にアップロード（再解析用・7日アーカイブで容量管理済み）
+      // ※ allAttachments は PDF/画像のみなので raw attachments から直接フィルタする
       if (!resumeUrl) {
-        for (const att of allAttachments) {
+        for (const att of attachments) {
           const isOffice = EXCEL_MIME.includes(att.mimeType) || WORD_MIME.includes(att.mimeType)
             || /\.(xlsx?|xls|docx?|ods|csv)$/i.test(att.name ?? '')
           if (!isOffice || !att.data) continue
