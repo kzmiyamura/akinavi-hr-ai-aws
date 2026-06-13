@@ -2651,6 +2651,8 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
   // 兄弟ヘッダー全体（フェーズ + 同行ロール + 次行ロール）
   const allSiblingHeaders = [...phaseHeaders, ...inRowSiblings, ...roleHeaders]
 
+  console.log(`[spanCells] container=${containerHeader?.value ?? 'none'}(row=${skillHeaderIdx}) phases=[${phaseHeaders.map(h => h.value).join(',')}] roles=[${[...inRowSiblings, ...roleHeaders].map(h => h.value).join(',')}] career=row${careerHeaderIdx}`)
+
   // deno-lint-ignore no-explicit-any
   const result: Array<Record<string, any>> = []
 
@@ -2938,8 +2940,10 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
 
       // Excel（SheetJS）直接 → グリッド / SpanCell[]（HTML 経由廃止）
       const sheetObj = sheet as Record<string, unknown>
+      const mergeCount = ((sheetObj['!merges'] as unknown[]) || []).length
       const grid = worksheetToGrid(sheetObj)
       const cells = worksheetToCells(sheetObj)
+      console.log(`[Excel-parse] sheet="${sheetName}" merges=${mergeCount} cells=${cells.length} gridRows=${grid.length}`)
 
       // フィールド抽出用テキスト（gridToText 経由）
       const gridText = gridToFieldText(grid)
