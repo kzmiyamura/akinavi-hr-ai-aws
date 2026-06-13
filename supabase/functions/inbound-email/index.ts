@@ -2636,6 +2636,16 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
   let colHeaderMap = new Map<number, _ColHdr>()  // READ_COL_HEADERS キャッシュ
   const usedRows = new Set<number>()             // CONTAINER で消費済みの行
 
+  // セクション追跡（スキル等の左端ワイドキーの下に続くマトリクス）
+  let sectionKey: string | null = null           // e.g., "スキル"
+  // deno-lint-ignore no-explicit-any
+  let sectionData: Record<string, any> = {}      // セクション内カテゴリ集積
+  let catKey: string | null = null               // e.g., "コンピュータ言語"
+  // deno-lint-ignore no-explicit-any
+  let catData: Record<string, any> = {}          // 現在カテゴリの KV
+  let sectionKeyCol = -1                         // セクションキーの col（e.g., 0）
+  let sectionKeyColEnd = -1                      // セクションキーの colEnd（e.g., 35）。カテゴリ判定境界
+
   for (const rowNum of rowNums) {
     if (usedRows.has(rowNum)) continue
 
@@ -2647,18 +2657,61 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
       // deno-lint-ignore no-explicit-any
       const matRec: Record<string, any> = {}
       let matched = false
+      let newCatLabel: string | null = null
+
+      // セクションモード時: hdr でも category でもないセルを KV ペア用に収集
+      const kvCells: SpanCell[] = []
+
       for (const cell of rowCells) {
         const hdr = _findHdr(colHeaderMap, cell.col)
         if (hdr) {
           matRec[hdr] = matRec[hdr] ? matRec[hdr] + '\n' + cell.value.trim() : cell.value.trim()
           matched = true
+        } else if (sectionKey !== null && cell.col === sectionKeyCol && cell.colEnd < sectionKeyColEnd) {
+          // セクション内カテゴリラベル（col が sectionKey と同じ かつ colSpan が小さい）
+          // 例: コンピュータ言語 (c0-6) はスキル (c0-35) より狭い → カテゴリ
+          //     業務内容 (c0-53) はスキル (c0-35) より広い → セクション終端シグナル
+          newCatLabel = cell.value.trim()
+        } else if (sectionKey !== null) {
+          // sectionKeyCol と同一行の残セル（業務経験/PHP/Python 等）→ KV ペア候補
+          kvCells.push(cell)
         }
       }
-      if (!matched) {
+
+      // kvCells を連続 KV ペアとして matRec に追加
+      // 例: [業務経験(c7), PHP/Python(c10)] → matRec["業務経験"] = "PHP/Python/..."
+      for (let j = 0; j + 1 < kvCells.length; j += 2) {
+        const kv = kvCells[j].value.trim()
+        const vv = kvCells[j + 1].value.trim()
+        if (kv && vv) { matRec[kv] = vv; matched = true }
+      }
+
+      if (!matched && newCatLabel === null) {
         // この行にマトリクス列なし → マトリクス終了・通常処理へ fall through
+        if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
+        if (sectionKey !== null && Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
+        sectionKey = null; sectionData = {}; catKey = null; catData = {}
+        sectionKeyCol = -1; sectionKeyColEnd = -1
         colHeaderMap = new Map()
       } else {
-        if (Object.keys(matRec).length > 0) results.push(matRec)
+        if (sectionKey !== null) {
+          // セクションモード: カテゴリ別にデータを積み上げる
+          if (newCatLabel !== null && newCatLabel !== catKey) {
+            // 新しいカテゴリ → 前のカテゴリを確定
+            if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
+            catKey = newCatLabel
+            catData = {}
+          }
+          if (catKey !== null) {
+            Object.assign(catData, matRec)
+          } else {
+            // カテゴリラベルなし → sectionData に直接追加
+            Object.assign(sectionData, matRec)
+          }
+        } else {
+          // 平坦マトリクスモード（セクションキーなし・旧動作）
+          if (Object.keys(matRec).length > 0) results.push(matRec)
+        }
         continue
       }
     }
@@ -2686,6 +2739,19 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
           for (let k = i + 1; k < rowCells.length; k++) {
             const hc = rowCells[k]
             if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
+          }
+          // セクション見出しとして記録（スキル等の左端ワイドキー下のマトリクス）
+          // 前のセクションが未確定なら先に flush
+          if (sectionKey !== null) {
+            if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
+            if (Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
+            sectionData = {}; catKey = null; catData = {}
+          }
+          if (colHeaderMap.size > 0) {
+            sectionKey = key.value.trim()
+            sectionKeyCol = key.col          // e.g., 0（スキルが始まる列）
+            sectionKeyColEnd = key.colEnd    // e.g., 35（スキルが終わる列）
+            // カテゴリ判定: col===sectionKeyCol かつ colEnd < sectionKeyColEnd のセル
           }
           newRow = true
 
@@ -2746,6 +2812,10 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
 
     if (Object.keys(record).length > 0) results.push(record)
   }
+
+  // ループ終了後: 未確定のセクションを flush
+  if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
+  if (sectionKey !== null && Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
 
   console.log(`[spanCells:sm] rows=${results.length} hdrMap=${colHeaderMap.size} sample=${results.slice(0, 2).map(r => Object.keys(r).slice(0, 4).join(',')).join(' | ')}`)
   return results
