@@ -2551,217 +2551,200 @@ function worksheetToCells(sheet: Record<string, unknown>): SpanCell[] {
   return cells
 }
 
-/** 隣接セルをラベル:値ペアとして解析する */
-function parseAdjacentPairs(row: SpanCell[]): Record<string, string> {
-  const obj: Record<string, string> = {}
-  let i = 0
-  while (i < row.length) {
-    const curr = row[i], next = row[i + 1]
-    if (next && next.col === curr.colEnd + 1) {
-      obj[curr.value] = next.value; i += 2
-    } else {
-      obj[curr.value] = ''; i++
-    }
-  }
-  return obj
+// ─── Excel ステートマシン ─────────────────────────────────────────────────
+// 設計書: docs/ExcelStateMachine.md
+// 状態: KEY_H / KEY_V / READ_COL_HEADERS / CONTAINER / KV_DONE / NEW_ROW / END
+
+/** 列ヘッダー語彙辞書（READ_COL_HEADERS 検出 + isContainer スコアリング） */
+const COL_HEADER_DICT =
+  /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー)$/
+
+const _cs = (c: SpanCell) => c.colEnd - c.col + 1   // colSpan
+const _rs = (c: SpanCell) => c.rowEnd - c.row + 1   // rowSpan
+
+/**
+ * ハイブリッドスコアによるコンテナ判定。
+ * 幾何（rowSpan/colSpan）+ 位置（左端付近）+ 辞書（列ヘッダー語彙）のスコアが 2 以上でコンテナとみなす。
+ * cell.value.length > 50 や MATCHES_KNOWN_CONTAINER_REGEX は使わない（っぽい判定を排除）。
+ */
+function _isContainer(cell: SpanCell, key: SpanCell): boolean {
+  let s = 0
+  if (_rs(cell) > _rs(key))                    s += 1  // 幾何: 縦に大きい
+  if (_cs(cell) > 2)                           s += 1  // 幾何: 横に広い
+  if (cell.col === 0 || cell.col === 1)        s += 1  // 位置: 左端付近
+  if (COL_HEADER_DICT.test(cell.value.trim())) s += 2  // 辞書: 列ヘッダー語彙
+  return s >= 2
+}
+
+/** container の座標内にある子セルを返す（container 自身は除く） */
+function _childCells(all: SpanCell[], cont: SpanCell): SpanCell[] {
+  return all.filter(c =>
+    c !== cont &&
+    c.row  >= cont.row  && c.rowEnd  <= cont.rowEnd &&
+    c.col  >= cont.col  && c.colEnd  <= cont.colEnd
+  )
+}
+
+/** key の直下（rowEnd+1 の行、col 範囲内）の最初のセルを返す */
+function _belowCell(sorted: SpanCell[], key: SpanCell): SpanCell | undefined {
+  return sorted.find(c =>
+    c.row === key.rowEnd + 1 && c.col >= key.col && c.col <= key.colEnd
+  )
+}
+
+interface _ColHdr { text: string; colEnd: number }
+
+/** colHeaderMap から col が属する列ヘッダー文字列を返す */
+function _findHdr(map: Map<number, _ColHdr>, col: number): string | undefined {
+  for (const [c, h] of map) if (col >= c && col <= h.colEnd) return h.text
+  return undefined
 }
 
 /**
- * SpanCell 配列を JSON に変換する。
- * - スキル表: テーブル構造（col/colEnd）でヘッダーの親子・兄弟関係を決定
- *   - 最大幅セル（例: スキル B10:AJ10）= コンテナ → 配下セルはその子
- *   - 同行の他セル（計画立案 AK10:AL10 等）= 兄弟 → 同じ階層のキー
- *   例: {"スキル": {"コンピュータ言語": {"業務経験":"PHP...","知識有り":"SQL"}}, "計画立案":"◎", ...}
- * - キャリアテーブル: ヘッダー行検出 → 列オーバーラップでマッピング
- * - フォーム行: 隣接ペアをラベル:値として取得
+ * CONTAINER ステート: 子セルをステートマシンで再帰スキャンし、1 つのオブジェクトに結合して返す。
+ * CONTAINER 完了後の遷移先は NEW_ROW（KV_DONE ではない）。
+ */
+// deno-lint-ignore no-explicit-any
+function _scanContainer(cells: SpanCell[]): Record<string, any> {
+  const rows = spanCellsToJson(cells)
+  // deno-lint-ignore no-explicit-any
+  const merged: Record<string, any> = {}
+  for (const r of rows) Object.assign(merged, r)
+  return merged
+}
+
+/**
+ * SpanCell 配列をステートマシンで走査し JSON 行配列に変換する。
+ * 詳細設計: docs/ExcelStateMachine.md
  */
 // deno-lint-ignore no-explicit-any
 function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
   if (cells.length === 0) return []
 
-  // 開始行でグループ化・ソート
+  const sorted = [...cells].sort((a, b) =>
+    a.row !== b.row ? a.row - b.row : a.col - b.col
+  )
   const byRow = new Map<number, SpanCell[]>()
-  for (const c of cells) {
+  for (const c of sorted) {
     if (!byRow.has(c.row)) byRow.set(c.row, [])
     byRow.get(c.row)!.push(c)
   }
-  const allRows = [...byRow.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([rowNum, cs]) => ({ rowNum, cells: cs.sort((a, b) => a.col - b.col) }))
-
-  // キャリアテーブルのヘッダー行を検出
-  const CAREER_HEADER_RE = /^(期間|プロジェクト期間|PJ期間|参画期間|開始|終了|業務内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数)$/
-  let careerHeaderIdx = -1
-  let careerHeaders: SpanCell[] = []
-  for (let i = 0; i < allRows.length; i++) {
-    const matches = allRows[i].cells.filter(c => CAREER_HEADER_RE.test(c.value.trim()))
-    if (matches.length >= 2) { careerHeaderIdx = i; careerHeaders = allRows[i].cells; break }
-  }
-
-  // スキル表ヘッダー行を検出:
-  // 「計画立案/要件定義 等が2つ以上」かつ「最大幅の非フェーズセル（コンテナ）がある」行
-  const PHASE_HEADER_RE = /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守)$/
-  let skillHeaderIdx = -1
-  let containerHeader: SpanCell | null = null
-  let phaseHeaders: SpanCell[] = []
-
-  for (let i = 0; i < allRows.length; i++) {
-    if (careerHeaderIdx >= 0 && i >= careerHeaderIdx) break
-    const row = allRows[i]
-    const phases = row.cells.filter(c => PHASE_HEADER_RE.test(c.value.trim()))
-    if (phases.length < 2) continue
-    // コンテナ = フェーズ以外で最大幅のセル（例: スキル B10:AJ10）
-    const nonPhases = row.cells.filter(c => !PHASE_HEADER_RE.test(c.value.trim()) && c.value.trim())
-    const largest = nonPhases.reduce((best: SpanCell | null, c) =>
-      (!best || (c.colEnd - c.col) > (best.colEnd - best.col)) ? c : best, null)
-    if (largest) {
-      skillHeaderIdx = i
-      containerHeader = largest
-      phaseHeaders = phases
-      break
-    }
-  }
-
-  // コンテナ・フェーズヘッダーと同行にある残りの非フェーズセル（同行ロールヘッダー等）
-  let inRowSiblings: SpanCell[] = []
-  if (skillHeaderIdx >= 0 && containerHeader) {
-    inRowSiblings = allRows[skillHeaderIdx].cells.filter(c =>
-      c !== containerHeader && !PHASE_HEADER_RE.test(c.value.trim()) && c.value.trim()
-    )
-  }
-
-  // フェーズヘッダー行の直後の行にロールヘッダー（ITコンサル/PM/PMO/TL等）があるか検出
-  // （計画立案等がrowspan=2で次行を占有 → その右にロールヘッダーが置かれるパターン）
-  let roleHeaderIdx = -1
-  let roleHeaders: SpanCell[] = []
-  if (skillHeaderIdx >= 0 && containerHeader && skillHeaderIdx + 1 < allRows.length) {
-    const nextRowEntry = allRows[skillHeaderIdx + 1]
-    const outside = nextRowEntry.cells.filter(c => {
-      const inContainer = c.col >= containerHeader!.col && c.col <= containerHeader!.colEnd
-      const inPhase = phaseHeaders.some(h => c.col >= h.col && c.col <= h.colEnd)
-      const inInRowSibling = inRowSiblings.some(h => c.col >= h.col && c.col <= h.colEnd)
-      return !inContainer && !inPhase && !inInRowSibling && c.value.trim()
-    })
-    if (outside.length >= 1) {
-      roleHeaders = outside
-      roleHeaderIdx = skillHeaderIdx + 1
-    }
-  }
-
-  // 兄弟ヘッダー全体（フェーズ + 同行ロール + 次行ロール）
-  const allSiblingHeaders = [...phaseHeaders, ...inRowSiblings, ...roleHeaders]
-
-  console.log(`[spanCells] container=${containerHeader?.value ?? 'none'}(row=${skillHeaderIdx}) phases=[${phaseHeaders.map(h => h.value).join(',')}] roles=[${[...inRowSiblings, ...roleHeaders].map(h => h.value).join(',')}] career=row${careerHeaderIdx}`)
+  const rowNums = [...byRow.keys()].sort((a, b) => a - b)
 
   // deno-lint-ignore no-explicit-any
-  const result: Array<Record<string, any>> = []
+  const results: Array<Record<string, any>> = []
+  let colHeaderMap = new Map<number, _ColHdr>()  // READ_COL_HEADERS キャッシュ
+  const usedRows = new Set<number>()             // CONTAINER で消費済みの行
 
-  // === スキルセクション処理 ===
-  if (skillHeaderIdx >= 0 && containerHeader) {
-    // deno-lint-ignore no-explicit-any
-    const skillSectionObj: Record<string, any> = {}
-    // 兄弟ヘッダーの値（最初に現れた非空値を採用）
-    const siblingValues: Record<string, string> = {}
-    for (const h of allSiblingHeaders) siblingValues[h.value] = ''
+  for (const rowNum of rowNums) {
+    if (usedRows.has(rowNum)) continue
 
-    // コンテナ配下のスキルカテゴリ（コンピュータ言語 等）を収集
-    const skillChildren: Record<string, Record<string, string>> = {}
+    const rowCells = (byRow.get(rowNum) ?? []).filter(c => c.value.trim())
+    if (rowCells.length === 0) continue
 
-    const sectionEnd = careerHeaderIdx >= 0 ? careerHeaderIdx : allRows.length
-    let ri = skillHeaderIdx + 1
-
-    while (ri < sectionEnd) {
-      if (ri === roleHeaderIdx) { ri++; continue }
-      const { rowNum, cells: row } = allRows[ri]
-
-      // 兄弟ヘッダー列の値を収集（最初の非空値のみ）
-      for (const cell of row) {
-        if (!cell.value.trim()) continue
-        for (const h of allSiblingHeaders) {
-          if (!siblingValues[h.value] && cell.col >= h.col && cell.col <= h.colEnd) {
-            siblingValues[h.value] = cell.value.trim()
-          }
+    // ── READ_COL_HEADERS モード（マトリクスデータ行）────────────────────
+    if (colHeaderMap.size > 0) {
+      // deno-lint-ignore no-explicit-any
+      const matRec: Record<string, any> = {}
+      let matched = false
+      for (const cell of rowCells) {
+        const hdr = _findHdr(colHeaderMap, cell.col)
+        if (hdr) {
+          matRec[hdr] = matRec[hdr] ? matRec[hdr] + '\n' + cell.value.trim() : cell.value.trim()
+          matched = true
         }
       }
-
-      // コンテナ範囲内のセルを処理（スキルカテゴリ行）
-      const containerCells = row.filter(c =>
-        c.col >= containerHeader!.col && c.col <= containerHeader!.colEnd
-      )
-      // カテゴリセル = コンテナ範囲内で rowspan > 1 の最左セル
-      const categoryCell = containerCells.find(c => c.rowEnd > rowNum && c.value.trim())
-      if (categoryCell) {
-        const catName = categoryCell.value.trim()
-        const innerCells = containerCells.filter(c => c !== categoryCell)
-        const innerObj: Record<string, string> = { ...parseAdjacentPairs(innerCells) }
-        // rowspan範囲内の後続行を収集
-        let j = ri + 1
-        while (j < allRows.length && allRows[j].rowNum <= categoryCell.rowEnd) {
-          const subCells = allRows[j].cells.filter(c =>
-            c.col >= containerHeader!.col && c.col <= containerHeader!.colEnd
-          )
-          Object.assign(innerObj, parseAdjacentPairs(subCells))
-          j++
-        }
-        skillChildren[catName] = innerObj
-        ri = j
+      if (!matched) {
+        // この行にマトリクス列なし → マトリクス終了・通常処理へ fall through
+        colHeaderMap = new Map()
+      } else {
+        if (Object.keys(matRec).length > 0) results.push(matRec)
         continue
       }
-      ri++
     }
 
-    // スキルセクションオブジェクトを構築
-    // コンテナ（スキル）とフェーズ/ロール（計画立案 等）を同階層に配置
-    if (Object.keys(skillChildren).length > 0) {
-      skillSectionObj[containerHeader.value] = skillChildren
-    }
-    for (const [key, val] of Object.entries(siblingValues)) {
-      skillSectionObj[key] = val
-    }
-    if (Object.keys(skillSectionObj).length > 0) result.push(skillSectionObj)
-  }
+    // ── 通常モード（KEY_H / KEY_V ステートマシン）──────────────────────
+    // deno-lint-ignore no-explicit-any
+    const record: Record<string, any> = {}
+    let i = 0
+    let newRow = false  // NEW_ROW フラグ: true になったらこの行のスキャンを終了
 
-  // === フォーム行処理（スキルセクション前）===
-  const formEndIdx = skillHeaderIdx >= 0 ? skillHeaderIdx : (careerHeaderIdx >= 0 ? careerHeaderIdx : allRows.length)
-  let rowIdx = 0
-  while (rowIdx < formEndIdx) {
-    const { rowNum, cells: row } = allRows[rowIdx]
-    if (row.length <= 1) { rowIdx++; continue }
-    const parentCell = row[0].rowEnd > rowNum ? row[0] : undefined
-    if (parentCell) {
-      const subRows: Array<Record<string, string>> = []
-      const firstSub = parseAdjacentPairs(row.filter(c => c !== parentCell))
-      if (Object.keys(firstSub).length > 0) subRows.push(firstSub)
-      let j = rowIdx + 1
-      while (j < allRows.length && allRows[j].rowNum <= parentCell.rowEnd) {
-        const sub = parseAdjacentPairs(allRows[j].cells.filter(c => c.col > parentCell.colEnd))
-        if (Object.keys(sub).length > 0) subRows.push(sub)
-        j++
+    while (i < rowCells.length && !newRow) {
+      const key = rowCells[i]
+      const right = rowCells[i + 1]
+
+      if (right) {
+        // ── KEY_H: 右隣のセルを確認 ─────────────────────────────────────
+
+        if (_isContainer(right, key)) {
+          // CONTAINER: 右セルをコンテナとして再帰スキャン → NEW_ROW
+          const ch = _childCells(sorted, right)
+          record[key.value.trim()] = _scanContainer(ch)
+          for (let r = right.row; r <= right.rowEnd; r++) usedRows.add(r)
+          i += 2; newRow = true
+
+        } else if (_rs(right) === _rs(key)) {
+          // KV_DONE: 縦幅が同じ → 右セルはバリュー
+          record[key.value.trim()] = right.value.trim()
+          i += 2
+
+        } else if (_rs(right) < _rs(key)) {
+          if (COL_HEADER_DICT.test(right.value.trim())) {
+            // READ_COL_HEADERS: 縦に小さく辞書に一致 → 残りセルを列ヘッダーとしてキャッシュ → NEW_ROW
+            for (let k = i + 1; k < rowCells.length; k++) {
+              const hc = rowCells[k]
+              if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
+            }
+            newRow = true
+          } else {
+            // CONTAINER: 縦に小さいが辞書に一致しない → 通常の子コンテナ → NEW_ROW
+            const ch = _childCells(sorted, right)
+            record[right.value.trim()] = _scanContainer(ch)
+            for (let r = right.row; r <= right.rowEnd; r++) usedRows.add(r)
+            i += 2; newRow = true
+          }
+
+        } else {
+          // _rs(right) > _rs(key): _isContainer でキャッチされるはず、念のため skip
+          i++
+        }
+
+      } else {
+        // ── KEY_V: 右にセルなし → 真下のセルを確認 ─────────────────────
+        const below = _belowCell(sorted, key)
+
+        if (!below) {
+          // 下にもセルなし → スタンドアロンラベル
+          i++
+
+        } else if (_cs(below) > _cs(key) && _isContainer(below, key)) {
+          // KEY_V CONTAINER: 下セルが横に広くコンテナ判定 → NEW_ROW
+          const ch = _childCells(sorted, below)
+          record[key.value.trim()] = _scanContainer(ch)
+          for (let r = below.row; r <= below.rowEnd; r++) usedRows.add(r)
+          i++; newRow = true
+
+        } else if (_cs(below) >= _cs(key)) {
+          // KEY_V KV_DONE: 同幅 or 広いが非コンテナ → 下セルはバリュー
+          record[key.value.trim()] = below.value.trim()
+          usedRows.add(below.row)
+          i++
+
+        } else {
+          // KEY_V CONTAINER: 下セルが横に小さい → 現在キー自体がコンテナ、下セル群は子 → NEW_ROW
+          const ch = _childCells(sorted, key)
+          record[key.value.trim()] = _scanContainer(ch)
+          for (let r = key.row + 1; r <= key.rowEnd; r++) usedRows.add(r)
+          i++; newRow = true
+        }
       }
-      if (subRows.length > 0) result.push({ [parentCell.value]: subRows })
-      rowIdx = j
-    } else {
-      const obj = parseAdjacentPairs(row)
-      if (Object.keys(obj).length > 0) result.push(obj)
-      rowIdx++
     }
+
+    if (Object.keys(record).length > 0) results.push(record)
   }
 
-  // === キャリアテーブル行処理 ===
-  if (careerHeaderIdx >= 0) {
-    for (let i = careerHeaderIdx + 1; i < allRows.length; i++) {
-      const { cells: row } = allRows[i]
-      if (row.length === 0) continue
-      const obj: Record<string, string> = {}
-      for (const cell of row) {
-        const hdr = careerHeaders.find(h => h.col <= cell.col && cell.col <= h.colEnd)
-        if (hdr) obj[hdr.value] = obj[hdr.value] ? obj[hdr.value] + '\n' + cell.value : cell.value
-      }
-      if (Object.keys(obj).length > 0) result.push(obj)
-    }
-  }
-
-  return result
+  console.log(`[spanCells:sm] rows=${results.length} hdrMap=${colHeaderMap.size} sample=${results.slice(0, 2).map(r => Object.keys(r).slice(0, 4).join(',')).join(' | ')}`)
+  return results
 }
 
 /** JSON 行配列（列名ベース）からスキル別経験月数を抽出 */
