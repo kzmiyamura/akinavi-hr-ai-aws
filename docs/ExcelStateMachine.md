@@ -4,22 +4,29 @@
 
 ---
 
-## 前提：ハイブリッドスコア関数
+## 前提：Span 比較による遷移判定
 
-全ての CONTAINER 判定はこの関数を経由する。純粋な Span 比較には依存しない。
+**KEY_H（横方向）: 右セルをこの順番で評価する**
 
-```typescript
-function isContainer(cell: SpanCell, currentKey: SpanCell): boolean {
-  let score = 0
-  if (cell.rowSpan > currentKey.rowSpan)   score += 1   // 幾何：縦に大きい
-  if (cell.colSpan > 2)                    score += 1   // 幾何：横に広い
-  if (cell.col === 0 || cell.col === 1)    score += 1   // 位置：左端付近
-  if (MATCHES_COL_HEADER_DICT(cell.value)) score += 2   // 辞書：列ヘッダー語彙
-  return score >= 2   // 閾値は実装時にテストで調整する
-}
-```
+| 評価順 | 条件 | 意味 | 遷移 |
+|---|---|---|---|
+| 1 | COL_HEADER_DICT に一致 | 列ヘッダー語彙 → rowSpan に関わらずキー（兄弟） | READ_COL_HEADERS |
+| 2 | 右セル.rowSpan > キー.rowSpan | 縦に長い → 現在キーは下へ | KEY_V |
+| 3 | 右セル.rowSpan == キー.rowSpan | 縦幅が同じ → バリュー | KV_DONE |
+| 4 | 右セル.rowSpan < キー.rowSpan | 縦に小さい → 子コンテナ | CONTAINER |
+
+**KEY_V（縦方向）: 下セルの colSpan とキーの colSpan を比較する**
+
+| 比較 | 意味 | 遷移 |
+|---|---|---|
+| 下セル.colSpan == キー.colSpan | 横幅が同じ → バリューとして確定 | KV_DONE |
+| 下セル.colSpan < キー.colSpan | 下セルが横に小さい → キーの子 | CONTAINER |
+| 下セル.colSpan > キー.colSpan | 下セルが横に大きい → バリューとして確定 | KV_DONE |
+
+`MATCHES_COL_HEADER_DICT` は CONTAINER 判定には使わない。READ_COL_HEADERS のトリガーとしてのみ使う。
 
 **使わないもの（却下済み）：**
+- スコアリング方式（点数の合計で判定）：却下。IF/ELSEIF/ELSE の決定論的遷移に統一する
 - `cell.value.length > 50`：っぽい判定のため却下
 - `MATCHES_KNOWN_CONTAINER_REGEX`：ラベル列挙に戻るため却下
 
@@ -74,11 +81,11 @@ type SpanCell = {
 
 | 条件 | 遷移先 | 意味 |
 |---|---|---|
-| 右セルが存在する かつ `isContainer(右セル, キー) === true` | **CONTAINER** | 右セルはコンテナ構造である |
-| 右セルが存在する かつ `isContainer === false` かつ 右セル.rowSpan **==** キー.rowSpan | **KV_DONE** | 縦幅が同じ。右セルはこのキーのバリューである |
-| 右セルが存在する かつ `isContainer === false` かつ 右セル.rowSpan **<** キー.rowSpan かつ `MATCHES_COL_HEADER_DICT(右セル.value) === true` | **READ_COL_HEADERS** | 縦に小さく、かつ辞書にある列ヘッダー語彙。マトリクス列ヘッダー行が始まる |
-| 右セルが存在する かつ `isContainer === false` かつ 右セル.rowSpan **<** キー.rowSpan かつ `MATCHES_COL_HEADER_DICT(右セル.value) === false` | **CONTAINER** | 縦に小さいが辞書にない。通常の子コンテナとして扱う |
-| 右にセルなし | **NEW_ROW** | この行のスキャンが終わった |
+| 右セルが存在する かつ `MATCHES_COL_HEADER_DICT(右セル.value) === true` | **READ_COL_HEADERS** | 辞書にある列ヘッダー語彙。rowSpan に関わらずキー（兄弟）として扱う |
+| 右セルが存在する かつ 右セル.rowSpan **>** キー.rowSpan | **KEY_V** | 右セルの方が縦に長い。現在キーは下へ。右セルは消費せず次のキーとして残す |
+| 右セルが存在する かつ 右セル.rowSpan **==** キー.rowSpan | **KV_DONE** | 縦幅が同じ。右セルはこのキーのバリューである |
+| 右セルが存在する かつ 右セル.rowSpan **<** キー.rowSpan | **CONTAINER** | 縦に小さい。通常の子コンテナとして扱う |
+| 右にセルなし | **KEY_V** | 右にセルなし。下を確認する |
 
 ---
 
@@ -90,9 +97,9 @@ type SpanCell = {
 
 | 条件 | 遷移先 | 意味 |
 |---|---|---|
-| 下セルが存在する かつ `isContainer(下セル, キー) === true` | **CONTAINER** | 下セルはネストされたコンテナ構造である |
-| 下セルが存在する かつ `isContainer === false` かつ 下セル.colSpan **==** キー.colSpan | **KV_DONE** | 横幅が同じ。下セルはこのキーのバリューである |
-| 下セルが存在する かつ `isContainer === false` かつ 下セル.colSpan **<** キー.colSpan | **CONTAINER** | 下セルが横に小さい。現在のキー自体がコンテナであり、下セル群は子である |
+| 下セルが存在する かつ 下セル.colSpan **==** キー.colSpan | **KV_DONE** | 横幅が同じ。下セルはこのキーのバリューである |
+| 下セルが存在する かつ 下セル.colSpan **<** キー.colSpan | **CONTAINER** | 下セルが横に小さい。現在のキー自体がコンテナであり、下セル群は子である |
+| 下セルが存在する かつ 下セル.colSpan **>** キー.colSpan | **KV_DONE** | 下セルが横に大きい。下セルはバリューとして確定 |
 | 下にセルなし | **END** | スキャン終了 |
 
 ---
@@ -120,6 +127,8 @@ type SpanCell = {
 1. 現在セルの座標 `{ row, col, rowEnd, colEnd }` の範囲内に含まれる全SpanCellを抽出する。
 2. 抽出した子SpanCellリストに対して、ステートマシンを最初から再帰実行する。
 3. 再帰の結果として得られた `{ key: value }` ペアの集合を、このコンテナキーのバリューとして格納する。
+   - **例外：子が単一セルのみの場合**（再帰結果が空、またはキーなしの単一値）は、その子セルの value をそのままコンテナのバリューとして返す。
+   - 例: `No.` セルの内部に `1` だけがある場合 → `{ "No.": "1" }`
 4. → **NEW_ROW** へ遷移する（コンテナ内部の処理が完了した。次の親レベルの要素を探す）
 
 ---
@@ -168,10 +177,12 @@ type SpanCell = {
 
 | シグナル | 種別 | 採否 | 理由 |
 |---|---|---|---|
-| `cell.rowSpan > currentKey.rowSpan` | 幾何 | **採用** | 座標比較 |
-| `cell.colSpan > 2` | 幾何 | **採用** | 座標比較 |
-| `cell.col === 0 または 1` | 位置 | **採用** | 幾何的位置情報 |
-| `MATCHES_COL_HEADER_DICT(cell.value)` | 辞書 | **採用（限定）** | READ_COL_HEADERS 判定とスコア加算のみ |
+| `右セル.rowSpan > キー.rowSpan` | 幾何 | **採用** | 右セルが縦に長い → KEY_V へ |
+| `右セル.rowSpan == キー.rowSpan` | 幾何 | **採用** | 縦幅同じ → KV_DONE（兄弟）|
+| `右セル.rowSpan < キー.rowSpan` | 幾何 | **採用** | 縦に小さい → CONTAINER または READ_COL_HEADERS |
+| `MATCHES_COL_HEADER_DICT(cell.value)` | 辞書 | **採用（限定）** | READ_COL_HEADERS トリガーのみ。CONTAINER 判定には使わない |
+| `cell.colSpan > 2` | 幾何 | **却下** | rowSpan 比較で十分なため不要 |
+| `cell.col === 0 または 1` | 位置 | **却下** | rowSpan 比較で十分なため不要 |
+| スコアリング方式 | スコア | **却下** | IF/ELSEIF/ELSE の決定論的遷移に統一 |
 | `cell.value.length > 50` | ヒューリスティック | **却下** | っぽい判定 |
 | `MATCHES_KNOWN_CONTAINER_REGEX` | ラベル列挙 | **却下** | ラベル全網羅問題に戻る |
-| スコアリングによる確率的判定 | スコア | **却下** | 決定論的遷移を維持するため |

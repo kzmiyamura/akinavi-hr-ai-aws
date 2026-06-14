@@ -40,9 +40,10 @@ const query = args[0]
 const keyFlagIdx = args.indexOf('--key')
 const targetKey = keyFlagIdx >= 0 ? args[keyFlagIdx + 1] : null
 const listKeys = args.includes('--keys')
+const dumpJson = args.includes('--json')
 
 if (!query) {
-  console.log('使い方: node scripts/inspect_candidate.mjs <ID or 名前> [--key <フィールド>] [--keys]')
+  console.log('使い方: node scripts/inspect_candidate.mjs <ID or 名前> [--key <フィールド>] [--keys] [--json]')
   process.exit(0)
 }
 
@@ -77,6 +78,11 @@ for (const c of rows) {
   console.log(`resume_url: ${c.resume_url ?? 'null'}`)
   console.log(`drive_url:  ${c.drive_url ?? 'null'}`)
   console.log(`作成日時:   ${c.created_at}`)
+
+  if (dumpJson) {
+    console.log(JSON.stringify(rp, null, 2))
+    continue
+  }
 
   if (listKeys) {
     console.log('\n--- raw_profile キー一覧 ---')
