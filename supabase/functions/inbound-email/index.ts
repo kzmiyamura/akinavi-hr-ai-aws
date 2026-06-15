@@ -2794,15 +2794,17 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     if (rowCells.length === 0) continue
 
     // ── プロジェクト表ヘッダー行スキップ（"No." ラベル行）────────────────
-    if (colHeaderMap.size === 0 && /^No\.?$/i.test(rowCells[0].value.trim())
+    // 繰り返しヘッダー行（各案件間に挟まる）も含めて常にスキップする
+    if (/^No\.?$/i.test(rowCells[0].value.trim())
         && rowCells.some(c => /期間/.test(c.value.trim()))) {
-      // 全列 → colHeaderMap（D.U形式の平坦テーブルを READ_COL_HEADERS モードで処理）
-      // COL_HEADER_DICT 列 → projectPhaseMap も設定（H.T形式の _parseOneProject 用）
-      for (const c of rowCells) {
-        if (c.value.trim()) {
-          colHeaderMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
-          if (COL_HEADER_DICT.test(c.value.trim())) {
-            projectPhaseMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
+      // 初回のみ colHeaderMap を設定（D.U形式の平坦テーブルを READ_COL_HEADERS モードで処理）
+      if (colHeaderMap.size === 0) {
+        for (const c of rowCells) {
+          if (c.value.trim()) {
+            colHeaderMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
+            if (COL_HEADER_DICT.test(c.value.trim())) {
+              projectPhaseMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
+            }
           }
         }
       }
@@ -2860,6 +2862,13 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
         }
         sectionKey = null; sectionData = {}; catKey = null; catData = {}
         sectionKeyCol = -1; sectionKeyColEnd = -1; phaseSections = {}
+        // colHeaderMap クリア前に COL_HEADER_DICT 列を projectPhaseMap に保存
+        // （プロジェクト表でスキルマトリクスと同じフェーズ列を使用するケース対応）
+        for (const [col, hdr] of colHeaderMap) {
+          if (COL_HEADER_DICT.test(hdr.text)) {
+            projectPhaseMap.set(col, hdr)
+          }
+        }
         colHeaderMap = new Map()
       } else {
         if (sectionKey !== null) {
