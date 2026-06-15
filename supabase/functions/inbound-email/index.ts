@@ -2578,11 +2578,25 @@ function _isContainer(cell: SpanCell, key: SpanCell): boolean {
 
 /** container の座標内にある子セルを返す（container 自身は除く） */
 function _childCells(all: SpanCell[], cont: SpanCell): SpanCell[] {
-  return all.filter(c =>
+  // 通常ケース: rowSpan > 1 → rowEnd で範囲を確定
+  if (cont.rowEnd > cont.row) {
+    return all.filter(c =>
+      c !== cont &&
+      c.row >= cont.row && c.rowEnd <= cont.rowEnd &&
+      c.col >= cont.col && c.colEnd <= cont.colEnd
+    )
+  }
+  // rowSpan=1 ケース: col 範囲内にセルが存在しない行（空行）が来るまで下方向にスキャン
+  const candidates = all.filter(c =>
     c !== cont &&
-    c.row  >= cont.row  && c.rowEnd  <= cont.rowEnd &&
-    c.col  >= cont.col  && c.colEnd  <= cont.colEnd
+    c.row > cont.row &&
+    c.col >= cont.col && c.colEnd <= cont.colEnd
   )
+  if (candidates.length === 0) return []
+  const rowsWithCells = new Set(candidates.map(c => c.row))
+  let limitRow = cont.row
+  for (let r = cont.row + 1; rowsWithCells.has(r); r++) limitRow = r
+  return candidates.filter(c => c.row <= limitRow)
 }
 
 /** key の直下（rowEnd+1 の行、col 範囲内）の最初のセルを返す */
@@ -2857,14 +2871,15 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
       const right = rowCells[i + 1]
 
       if (right) {
-        // ── KEY_H: 設計書通りの評価順 ────────────────────────────────────
-        // 1. COL_HEADER_DICT → READ_COL_HEADERS
+        // ── KEY_H: 評価順 ────────────────────────────────────────────────
+        // 1. COL_HEADER_DICT かつ right.rowSpan < key.rowSpan → READ_COL_HEADERS
         // 2. right.rowSpan > key.rowSpan → KEY_V
-        // 3. right.rowSpan == key.rowSpan → KV_DONE
-        // 4. right.rowSpan < key.rowSpan → CONTAINER
+        // 3. right.rowSpan == key.rowSpan かつ COL_HEADER_DICT → KEY_V（右セルは次のキー）
+        // 4. right.rowSpan == key.rowSpan → KV_DONE
+        // 5. right.rowSpan < key.rowSpan → CONTAINER
 
-        if (COL_HEADER_DICT.test(right.value.trim())) {
-          // READ_COL_HEADERS: 辞書一致 → rowSpan に関わらず列ヘッダー行 → NEW_ROW
+        if (COL_HEADER_DICT.test(right.value.trim()) && _rs(right) < _rs(key)) {
+          // READ_COL_HEADERS: 辞書一致 かつ 縦に小さい → 列ヘッダー行
           for (let k = i + 1; k < rowCells.length; k++) {
             const hc = rowCells[k]
             if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
@@ -2892,8 +2907,25 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
           } else if (_cs(below) < _cs(key)) {
             const ch = _childCells(sorted, key)
             record[key.value.trim()] = _scanContainer(ch)
-            for (let r = key.row + 1; r <= key.rowEnd; r++) usedRows.add(r)
+            for (const c of ch) { for (let r = c.row; r <= c.rowEnd; r++) usedRows.add(r) }
             i++; newRow = true
+          } else {
+            record[key.value.trim()] = below.value.trim()
+            usedRows.add(below.row)
+            i++
+          }
+
+        } else if (_rs(right) === _rs(key) && COL_HEADER_DICT.test(right.value.trim())) {
+          // 同じ rowSpan かつ COL_HEADER_DICT → 右セルは兄弟キー → 現在キーは KEY_V
+          // newRow=true は付けない：右セルを同じ行で次のキーとして拾うため
+          const below = _belowCell(sorted, key)
+          if (!below) {
+            i++
+          } else if (_cs(below) < _cs(key)) {
+            const ch = _childCells(sorted, key)
+            record[key.value.trim()] = _scanContainer(ch)
+            for (const c of ch) { for (let r = c.row; r <= c.rowEnd; r++) usedRows.add(r) }
+            i++
           } else {
             record[key.value.trim()] = below.value.trim()
             usedRows.add(below.row)
@@ -2922,11 +2954,19 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
           i++
 
         } else if (_cs(below) < _cs(key)) {
-          // CONTAINER: 下セルが横に小さい → 現在キーはコンテナ
-          const ch = _childCells(sorted, key)
-          record[key.value.trim()] = _scanContainer(ch)
-          for (let r = key.row + 1; r <= key.rowEnd; r++) usedRows.add(r)
-          i++; newRow = true
+          // 下行に COL_HEADER_DICT 兄弟がある → スキル行等の開始行 → 現在セルは凡例ラベル → スキップ
+          const belowHasCOLHDR = sorted.some(c =>
+            c.row === below.row && c !== below && COL_HEADER_DICT.test(c.value.trim())
+          )
+          if (belowHasCOLHDR) {
+            i++; newRow = true
+          } else {
+            // CONTAINER: 下セルが横に小さい → 現在キーはコンテナ
+            const ch = _childCells(sorted, key)
+            record[key.value.trim()] = _scanContainer(ch)
+            for (const c of ch) { for (let r = c.row; r <= c.rowEnd; r++) usedRows.add(r) }
+            i++; newRow = true
+          }
 
         } else {
           // KV_DONE: 下セルが同幅または広い → バリュー
