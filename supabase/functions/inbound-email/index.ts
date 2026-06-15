@@ -2632,7 +2632,7 @@ function _extractLVPairs(cells: SpanCell[], out: Record<string, any>): void {
 
 /** No.セル配下の全行を解析してプロジェクト1件分のオブジェクトを返す */
 // deno-lint-ignore no-explicit-any
-function _parseOneProject(noCell: SpanCell, allCells: SpanCell[]): Record<string, any> {
+function _parseOneProject(noCell: SpanCell, allCells: SpanCell[], phaseMap?: Map<number, _ColHdr>): Record<string, any> {
   // deno-lint-ignore no-explicit-any
   const proj: Record<string, any> = {}
 
@@ -2705,6 +2705,21 @@ function _parseOneProject(noCell: SpanCell, allCells: SpanCell[]): Record<string
     _extractLVPairs(sorted, proj)
   }
 
+  // フェーズ評価（計画立案・要件定義・基本設計等）を追加
+  if (phaseMap && phaseMap.size > 0) {
+    const phaseCells = allCells.filter(c =>
+      c !== noCell &&
+      c.row >= noCell.row && c.row <= noCell.rowEnd &&
+      c.col > 35 &&
+      c.value.trim() &&
+      !/^[-ー－]+$/.test(c.value.trim())
+    )
+    for (const pc of phaseCells) {
+      const phaseKey = _findHdr(phaseMap, pc.col)
+      if (phaseKey) proj[phaseKey] = pc.value.trim()
+    }
+  }
+
   return proj
 }
 
@@ -2755,6 +2770,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
   const results: Array<Record<string, any>> = []
   let colHeaderMap = new Map<number, _ColHdr>()  // READ_COL_HEADERS キャッシュ
   const usedRows = new Set<number>()             // CONTAINER で消費済みの行
+  const projectPhaseMap = new Map<number, _ColHdr>()  // プロジェクト表フェーズ列ヘッダー
 
   // セクション追跡（スキル等の左端ワイドキーの下に続くマトリクス）
   let sectionKey: string | null = null           // e.g., "スキル"
@@ -2776,11 +2792,17 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
 
     // ── プロジェクト表ヘッダー行スキップ（"No." ラベル行）────────────────
     if (colHeaderMap.size === 0 && /^No[．.。]?$/.test(rowCells[0].value.trim())
-        && rowCells.some(c => /^期間$|^案件名$/.test(c.value.trim()))) continue
+        && rowCells.some(c => /^期間$|^案件名$/.test(c.value.trim()))) {
+      // col>35 のフェーズ評価列ヘッダーをキャプチャ（計画立案・要件定義・基本設計等）
+      for (const c of rowCells) {
+        if (c.col > 35 && c.value.trim()) projectPhaseMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
+      }
+      continue
+    }
 
     // ── プロジェクト履歴モード（No.セル検出）────────────────────────────
     if (colHeaderMap.size === 0 && rowCells.length > 0 && _isProjectNo(rowCells[0])) {
-      const proj = _parseOneProject(rowCells[0], sorted)
+      const proj = _parseOneProject(rowCells[0], sorted, projectPhaseMap)
       if (Object.keys(proj).length > 0) results.push(proj)
       for (let r = rowCells[0].row; r <= rowCells[0].rowEnd; r++) usedRows.add(r)
       continue
