@@ -2636,11 +2636,14 @@ function _parseOneProject(noCell: SpanCell, allCells: SpanCell[], phaseMap?: Map
   // deno-lint-ignore no-explicit-any
   const proj: Record<string, any> = {}
 
-  // No.セル範囲内・No.自身以外のセル（c36以降のフェーズ評価列は除外）
+  // フェーズ評価列のcolセット（phaseMapがあれば除外対象）
+  const phaseCols = phaseMap ? new Set(phaseMap.keys()) : new Set<number>()
+
+  // No.セル範囲内・No.自身以外のセル（フェーズ評価列は除外）
   const cells = allCells.filter(c =>
     c !== noCell &&
     c.row >= noCell.row && c.row <= noCell.rowEnd &&
-    c.col <= 35 &&
+    !phaseCols.has(c.col) &&
     c.value.trim()
   )
 
@@ -2710,7 +2713,7 @@ function _parseOneProject(noCell: SpanCell, allCells: SpanCell[], phaseMap?: Map
     const phaseCells = allCells.filter(c =>
       c !== noCell &&
       c.row >= noCell.row && c.row <= noCell.rowEnd &&
-      c.col > 35 &&
+      phaseCols.has(c.col) &&
       c.value.trim() &&
       !/^[-ー－]+$/.test(c.value.trim())
     )
@@ -2791,11 +2794,13 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     if (rowCells.length === 0) continue
 
     // ── プロジェクト表ヘッダー行スキップ（"No." ラベル行）────────────────
-    if (colHeaderMap.size === 0 && /^No[．.。]?$/.test(rowCells[0].value.trim())
-        && rowCells.some(c => /^期間$|^案件名$/.test(c.value.trim()))) {
-      // col>35 のフェーズ評価列ヘッダーをキャプチャ（計画立案・要件定義・基本設計等）
+    if (colHeaderMap.size === 0 && /^No\.?$/i.test(rowCells[0].value.trim())
+        && rowCells.some(c => /期間/.test(c.value.trim()))) {
+      // COL_HEADER_DICT に一致するセルをフェーズ評価列ヘッダーとしてキャプチャ
       for (const c of rowCells) {
-        if (c.col > 35 && c.value.trim()) projectPhaseMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
+        if (COL_HEADER_DICT.test(c.value.trim())) {
+          projectPhaseMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
+        }
       }
       continue
     }
