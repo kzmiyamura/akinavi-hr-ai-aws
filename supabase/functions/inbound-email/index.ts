@@ -2659,6 +2659,7 @@ function _parseOneProject(noCell: SpanCell, allCells: SpanCell[], phaseMap?: Map
   const SKIP_LABEL = /^(備考|担当業務|案件名|内容|No\.|No)$/
   let startDate = ''
   let endDate   = ''
+  let pendingLabel: string | null = null  // 前行の単独ラベル（備考等）を次行の値に対応させる
 
   for (const [, rowCells] of [...rowMap.entries()].sort((a, b) => a[0] - b[0])) {
     const sorted = rowCells.sort((a, b) => a.col - b.col)
@@ -2682,6 +2683,7 @@ function _parseOneProject(noCell: SpanCell, allCells: SpanCell[], phaseMap?: Map
         const vv = vals[i].value.trim()
         if (lv !== 'No.' && lv !== 'No') proj[lv] = vv
       }
+      pendingLabel = null
       continue
     }
 
@@ -2694,17 +2696,28 @@ function _parseOneProject(noCell: SpanCell, allCells: SpanCell[], phaseMap?: Map
         : dur
       const rest = sorted.filter(c => c !== durCell)
       _extractLVPairs(rest, proj)
+      pendingLabel = null
       continue
     }
 
-    // 【担当業務行】"担当業務" ラベルを含む行 → 長テキストを保存
+    // 【担当業務行】"担当業務" ラベルを含む行 → 長テキストを保存・備考ラベルを記録
     if (sorted.some(c => c.value.trim() === '担当業務')) {
       const text = sorted.find(c => c.value.trim() !== '担当業務' && c.value.trim() !== '備考' && c.value.length > 5)
       if (text) proj['担当業務'] = text.value.trim().slice(0, 500)
+      // 同行に「備考」ラベルがあれば次行の単独セルをその値として扱う
+      if (sorted.some(c => c.value.trim() === '備考')) pendingLabel = '備考'
+      continue
+    }
+
+    // 【pendingLabel処理】前行が備考等のラベルのみだった場合、現行の単独セルを値として対応
+    if (pendingLabel && sorted.length === 1) {
+      proj[pendingLabel] = sorted[0].value.trim()
+      pendingLabel = null
       continue
     }
 
     // 【その他】連続ラベル:値ペア
+    pendingLabel = null
     _extractLVPairs(sorted, proj)
   }
 
