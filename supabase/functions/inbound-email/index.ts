@@ -2796,17 +2796,22 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     // ── プロジェクト表ヘッダー行スキップ（"No." ラベル行）────────────────
     if (colHeaderMap.size === 0 && /^No\.?$/i.test(rowCells[0].value.trim())
         && rowCells.some(c => /期間/.test(c.value.trim()))) {
-      // COL_HEADER_DICT に一致するセルをフェーズ評価列ヘッダーとしてキャプチャ
+      // 全列 → colHeaderMap（D.U形式の平坦テーブルを READ_COL_HEADERS モードで処理）
+      // COL_HEADER_DICT 列 → projectPhaseMap も設定（H.T形式の _parseOneProject 用）
       for (const c of rowCells) {
-        if (COL_HEADER_DICT.test(c.value.trim())) {
-          projectPhaseMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
+        if (c.value.trim()) {
+          colHeaderMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
+          if (COL_HEADER_DICT.test(c.value.trim())) {
+            projectPhaseMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
+          }
         }
       }
       continue
     }
 
     // ── プロジェクト履歴モード（No.セル検出）────────────────────────────
-    if (colHeaderMap.size === 0 && rowCells.length > 0 && _isProjectNo(rowCells[0])) {
+    // colHeaderMap.size === 0 条件は除去: プロジェクト表ヘッダー後も _isProjectNo が機能するよう
+    if (rowCells.length > 0 && _isProjectNo(rowCells[0])) {
       const proj = _parseOneProject(rowCells[0], sorted, projectPhaseMap)
       if (Object.keys(proj).length > 0) results.push(proj)
       for (let r = rowCells[0].row; r <= rowCells[0].rowEnd; r++) usedRows.add(r)
