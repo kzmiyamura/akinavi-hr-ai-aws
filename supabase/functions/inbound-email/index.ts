@@ -2559,6 +2559,10 @@ function worksheetToCells(sheet: Record<string, unknown>): SpanCell[] {
 const COL_HEADER_DICT =
   /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー)$/
 
+/** フェーズ評価列のみ（projectPhaseMap に登録する列。コンテンツ列=期間等は含めない） */
+const PHASE_EVAL_RE =
+  /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守)$/
+
 const _cs = (c: SpanCell) => c.colEnd - c.col + 1   // colSpan
 const _rs = (c: SpanCell) => c.rowEnd - c.row + 1   // rowSpan
 
@@ -2632,7 +2636,12 @@ function _extractLVPairs(cells: SpanCell[], out: Record<string, any>): void {
 
 /** No.セル配下の全行を解析してプロジェクト1件分のオブジェクトを返す */
 // deno-lint-ignore no-explicit-any
-function _parseOneProject(noCell: SpanCell, allCells: SpanCell[], phaseMap?: Map<number, _ColHdr>): Record<string, any> {
+function _parseOneProject(
+  noCell: SpanCell,
+  allCells: SpanCell[],
+  phaseMap?: Map<number, _ColHdr>,
+  projColMap?: Map<number, _ColHdr>,  // プロジェクト列ヘッダー（期間・案件名・担当業務・備考等）
+): Record<string, any> {
   // deno-lint-ignore no-explicit-any
   const proj: Record<string, any> = {}
 
@@ -2647,6 +2656,80 @@ function _parseOneProject(noCell: SpanCell, allCells: SpanCell[], phaseMap?: Map
     c.value.trim()
   )
 
+  // ── projColMap がある場合: 列ヘッダーごとに縦スキャン ──────────────────
+  // 横方向（列ヘッダー順）に走査し、各列の範囲内セルを上→下で収集する
+  if (projColMap && projColMap.size > 0) {
+    const DATE_RE = /^\d{4}[\/\-年]\d{1,2}/
+    const DUR_RE  = /^\d+年\d+ヶ月$|^\d+ヶ月$|^\d+年$/
+
+    for (const [startCol, hdr] of [...projColMap.entries()].sort((a, b) => a[0] - b[0])) {
+      const key = hdr.text
+      if (/^No\.?$/i.test(key)) continue      // No.列はスキップ
+      if (phaseCols.has(startCol)) continue   // フェーズ列はフェーズ処理で別途扱う
+
+      // この列範囲に属するセルを上から下へ収集（縦スキャン）
+      const colCells = cells
+        .filter(c => c.col >= startCol && c.col <= hdr.colEnd)
+        .sort((a, b) => a.row - b.row)
+
+      if (colCells.length === 0) continue
+
+      if (/^期間/.test(key)) {
+        // 日付セル + 期間テキストから "YYYY/MM〜YYYY/MM（Xヶ月）" を組み立て
+        const dates = colCells.filter(c => DATE_RE.test(c.value.trim()))
+        const dur   = colCells.find(c => DUR_RE.test(c.value.trim()))
+        if (dates.length >= 2 && dur) {
+          proj['期間'] = `${dates[0].value.trim()}〜${dates[dates.length - 1].value.trim()}（${dur.value.trim()}）`
+        } else if (dates.length >= 1 && dur) {
+          proj['期間'] = `${dates[0].value.trim()}〜（${dur.value.trim()}）`
+        } else if (dur) {
+          proj['期間'] = dur.value.trim()
+        } else if (dates.length >= 1) {
+          proj['期間'] = dates.map(d => d.value.trim()).join('〜')
+        }
+        // 期間列内のラベル→値ペアを追加抽出（例: 備考→lang_block）
+        const usedSet = new Set([...dates, dur].filter(Boolean))
+        const remaining = colCells.filter(c =>
+          !usedSet.has(c) && !/^[-ー－]+$/.test(c.value.trim())
+        )
+        for (let i = 0; i < remaining.length - 1; i++) {
+          const lbl = remaining[i].value.trim()
+          const val = remaining[i + 1].value.trim()
+          if (/^[^\n]{1,10}$/.test(lbl) && val.length > lbl.length) {
+            proj[lbl] = val.slice(0, 500)
+            i++  // 値セルを消費
+          }
+        }
+      } else if (/^(担当業務|業務内容|内容|概要)$/.test(key)) {
+        // 最初の長テキストセル（500字まで）
+        const text = colCells.find(c => c.value.trim().length > 5)
+        if (text) proj[key] = text.value.trim().slice(0, 500)
+      } else {
+        // 案件名・ポジション・チーム規模・備考 等 → 最初の値セル
+        const val = colCells.find(c => c.value.trim())
+        if (val) proj[key] = val.value.trim()
+      }
+    }
+
+    // フェーズ評価（計画立案・要件定義・基本設計等）を追加
+    if (phaseMap && phaseMap.size > 0) {
+      const phaseCells = allCells.filter(c =>
+        c !== noCell &&
+        c.row >= noCell.row && c.row <= noCell.rowEnd &&
+        phaseCols.has(c.col) &&
+        c.value.trim() &&
+        !/^[-ー－]+$/.test(c.value.trim())
+      )
+      for (const pc of phaseCells) {
+        const phaseKey = _findHdr(phaseMap, pc.col)
+        if (phaseKey) proj[phaseKey] = pc.value.trim()
+      }
+    }
+
+    return proj
+  }
+
+  // ── 従来の行ループ処理（projColMap なし時のフォールバック）──────────────
   // 行ごとにグループ化
   const rowMap = new Map<number, SpanCell[]>()
   for (const c of cells) {
@@ -2815,7 +2898,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
         for (const c of rowCells) {
           if (c.value.trim()) {
             colHeaderMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
-            if (COL_HEADER_DICT.test(c.value.trim())) {
+            if (PHASE_EVAL_RE.test(c.value.trim())) {
               projectPhaseMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
             }
           }
@@ -2827,7 +2910,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     // ── プロジェクト履歴モード（No.セル検出）────────────────────────────
     // colHeaderMap.size === 0 条件は除去: プロジェクト表ヘッダー後も _isProjectNo が機能するよう
     if (rowCells.length > 0 && _isProjectNo(rowCells[0])) {
-      const proj = _parseOneProject(rowCells[0], sorted, projectPhaseMap)
+      const proj = _parseOneProject(rowCells[0], sorted, projectPhaseMap, colHeaderMap)
       if (Object.keys(proj).length > 0) results.push(proj)
       for (let r = rowCells[0].row; r <= rowCells[0].rowEnd; r++) usedRows.add(r)
       continue
@@ -2875,10 +2958,10 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
         }
         sectionKey = null; sectionData = {}; catKey = null; catData = {}
         sectionKeyCol = -1; sectionKeyColEnd = -1; phaseSections = {}
-        // colHeaderMap クリア前に COL_HEADER_DICT 列を projectPhaseMap に保存
+        // colHeaderMap クリア前に PHASE_EVAL_RE 列を projectPhaseMap に保存
         // （プロジェクト表でスキルマトリクスと同じフェーズ列を使用するケース対応）
         for (const [col, hdr] of colHeaderMap) {
-          if (COL_HEADER_DICT.test(hdr.text)) {
+          if (PHASE_EVAL_RE.test(hdr.text)) {
             projectPhaseMap.set(col, hdr)
           }
         }
