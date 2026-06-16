@@ -10,25 +10,25 @@
 
 | 評価順 | 条件 | 意味 | 遷移 |
 |---|---|---|---|
-| 1 | COL_HEADER_DICT に一致 | 列ヘッダー語彙 → rowSpan に関わらずキー（兄弟） | READ_COL_HEADERS |
-| 2 | 右セル.rowSpan > キー.rowSpan | 縦に長い → 現在キーは下へ | KEY_V |
-| 3 | 右セル.rowSpan == キー.rowSpan | 縦幅が同じ → バリュー | KV_DONE |
-| 4 | 右セル.rowSpan < キー.rowSpan | 縦に小さい → 子コンテナ | CONTAINER |
+| 1 | COL_HEADER_DICT に一致 **かつ** 右セル.rowSpan **<** キー.rowSpan | 縦に小さい列ヘッダー語彙 → マトリクスヘッダー行 | READ_COL_HEADERS |
+| 2 | 右セル.rowSpan **>** キー.rowSpan | 縦に長い → 現在キーは下へ | KEY_V |
+| 3 | 右セル.rowSpan **==** キー.rowSpan **かつ** COL_HEADER_DICT に一致 | 同じ高さの兄弟キー → 現在キーは KEY_V へ、右セルは次のキーとして残す | KEY_V |
+| 4 | 右セル.rowSpan **==** キー.rowSpan | 縦幅が同じ → バリュー | KV_DONE |
+| 5 | 右セル.rowSpan **<** キー.rowSpan **かつ** タグ | 縦に小さくタグ → 子コンテナ | CONTAINER |
+| 6 | 右セル.rowSpan **<** キー.rowSpan **かつ** 非タグ | 縦に小さく非タグ → 値収集開始 | VALUE_COLLECT |
 
 **KEY_V（縦方向）: 下セルの colSpan とキーの colSpan を比較する**
 
-| 比較 | 意味 | 遷移 |
-|---|---|---|
-| 下セル.colSpan == キー.colSpan | 横幅が同じ → バリューとして確定 | KV_DONE |
-| 下セル.colSpan < キー.colSpan | 下セルが横に小さい → キーの子 | CONTAINER |
-| 下セル.colSpan > キー.colSpan | 下セルが横に大きい → バリューとして確定 | KV_DONE |
+| 比較 | タグ判定 | 意味 | 遷移 |
+|---|---|---|---|
+| 下セル.colSpan == キー.colSpan | タグ | 同サイズかつタグ → キー終了・次のキーへ | KV_DONE（空値）→ NEW_ROW |
+| 下セル.colSpan == キー.colSpan | 非タグ | 同サイズ非タグ → バリューとして確定 | KV_DONE |
+| 下セル.colSpan < キー.colSpan | タグ | 横に小さくタグ → 子コンテナ | CONTAINER |
+| 下セル.colSpan < キー.colSpan | 非タグ | 横に小さく非タグ → 値収集開始 | VALUE_COLLECT |
+| 下セル.colSpan > キー.colSpan | — | 下セルが横に大きい → バリューとして確定 | KV_DONE |
 
-`MATCHES_COL_HEADER_DICT` は CONTAINER 判定には使わない。READ_COL_HEADERS のトリガーとしてのみ使う。
-
-**使わないもの（却下済み）：**
-- スコアリング方式（点数の合計で判定）：却下。IF/ELSEIF/ELSE の決定論的遷移に統一する
-- `cell.value.length > 50`：っぽい判定のため却下
-- `MATCHES_KNOWN_CONTAINER_REGEX`：ラベル列挙に戻るため却下
+`COL_HEADER_DICT` は READ_COL_HEADERS のトリガーと兄弟キー判定にのみ使う。  
+`タグ判定` は COL_HEADER_DICT または既知のラベル語彙との一致で行う。
 
 ---
 
@@ -59,6 +59,7 @@ type SpanCell = {
 |---|---|
 | `KEY_H` | 現在セルをキーとして確定。横方向（右）にバリューを探す |
 | `KEY_V` | 現在セルをキーとして確定。縦方向（下）にバリューを探す |
+| `VALUE_COLLECT` | 非タグ・小サイズセルを値として収集する。スパン合計でキー継続を判定 |
 | `READ_COL_HEADERS` | マトリクス表の列ヘッダー行をキャッシュする |
 | `CONTAINER` | 現在セルをコンテナとして確定。内部を再帰スキャンする |
 | `KV_DONE` | キーバリューペアが確定した。次のキーを探す |
@@ -81,10 +82,12 @@ type SpanCell = {
 
 | 条件 | 遷移先 | 意味 |
 |---|---|---|
-| 右セルが存在する かつ `MATCHES_COL_HEADER_DICT(右セル.value) === true` | **READ_COL_HEADERS** | 辞書にある列ヘッダー語彙。rowSpan に関わらずキー（兄弟）として扱う |
+| 右セルが存在する かつ `MATCHES_COL_HEADER_DICT(右セル.value) === true` かつ 右セル.rowSpan **<** キー.rowSpan | **READ_COL_HEADERS** | 縦に小さい列ヘッダー語彙 → マトリクスヘッダー行 |
 | 右セルが存在する かつ 右セル.rowSpan **>** キー.rowSpan | **KEY_V** | 右セルの方が縦に長い。現在キーは下へ。右セルは消費せず次のキーとして残す |
+| 右セルが存在する かつ 右セル.rowSpan **==** キー.rowSpan かつ `MATCHES_COL_HEADER_DICT(右セル.value) === true` | **KEY_V** | 同じ高さの兄弟キー。現在キーは KEY_V へ。右セルは消費せず次のキーとして残す（i++ のみ） |
 | 右セルが存在する かつ 右セル.rowSpan **==** キー.rowSpan | **KV_DONE** | 縦幅が同じ。右セルはこのキーのバリューである |
-| 右セルが存在する かつ 右セル.rowSpan **<** キー.rowSpan | **CONTAINER** | 縦に小さい。通常の子コンテナとして扱う |
+| 右セルが存在する かつ 右セル.rowSpan **<** キー.rowSpan かつ **タグ** | **CONTAINER** | 縦に小さくタグ。子コンテナとして再帰処理 |
+| 右セルが存在する かつ 右セル.rowSpan **<** キー.rowSpan かつ **非タグ** | **VALUE_COLLECT** | 縦に小さく非タグ。値収集モードへ |
 | 右にセルなし | **KEY_V** | 右にセルなし。下を確認する |
 
 ---
@@ -97,10 +100,50 @@ type SpanCell = {
 
 | 条件 | 遷移先 | 意味 |
 |---|---|---|
-| 下セルが存在する かつ 下セル.colSpan **==** キー.colSpan | **KV_DONE** | 横幅が同じ。下セルはこのキーのバリューである |
-| 下セルが存在する かつ 下セル.colSpan **<** キー.colSpan | **CONTAINER** | 下セルが横に小さい。現在のキー自体がコンテナであり、下セル群は子である |
+| 下セルが存在する かつ 下セル.colSpan **==** キー.colSpan かつ **非タグ** | **KV_DONE** | 横幅が同じ非タグ。下セルはこのキーのバリューである |
+| 下セルが存在する かつ 下セル.colSpan **==** キー.colSpan かつ **タグ** | **NEW_ROW** | 横幅が同じタグ。キーの値は空。タグは次のキーとして NEW_ROW へ |
+| 下セルが存在する かつ 下セル.colSpan **<** キー.colSpan かつ **タグ** | **CONTAINER** | 下セルが横に小さくタグ。子コンテナとして再帰処理 |
+| 下セルが存在する かつ 下セル.colSpan **<** キー.colSpan かつ **非タグ** | **VALUE_COLLECT** | 下セルが横に小さく非タグ。値収集モードへ |
 | 下セルが存在する かつ 下セル.colSpan **>** キー.colSpan | **KV_DONE** | 下セルが横に大きい。下セルはバリューとして確定 |
 | 下にセルなし | **END** | スキャン終了 |
+
+---
+
+## VALUE_COLLECT
+
+**「非タグ・小サイズセルを値として収集する。スパン合計でキー継続を判定する。」**
+
+KEY_H または KEY_V から遷移してくる。親キーの方向（横 or 縦）を引き継ぐ。
+
+### 縦方向（KEY_V から遷移）
+
+1. 現在行を左から右へスキャンし、非タグセルを収集する。  
+   - タグが出現した時点で横方向収集を打ち止め。そのタグは次のキー候補として保留する。
+2. 収集したセルの **colSpan 合計** を計算する。
+   - **合計 == 親キーの colSpan** → キー継続。次の行へ進み 1. を繰り返す。
+   - **合計 < 親キーの colSpan**（タグで打ち止めになった場合など）→ 収集終了。
+3. 次の行の先頭セルがタグであれば収集終了。そのタグは次のキーとして **KEY_H / KEY_V** へ。
+4. 収集したすべての値を親キーのバリューとして確定 → **KV_DONE**
+
+**具体例（期間列）：**
+```
+期間(c2-10, span=9) KEY_V
+  → r23: 2025/12(c2-6, span=5) 非タグ + 2026/04(c7-10, span=4) 非タグ → 合計9 == 9 → 継続
+  → r24: 0年5ヶ月(c2-10, span=9) 非タグ → 合計9 == 9 → 継続
+  → r25: 備考(c2-10, span=9) タグ → 打ち止め。備考は次のキーへ
+期間のバリュー = [["2025/12", "2026/04"], ["0年5ヶ月"]]
+```
+
+### 横方向（KEY_H から遷移）
+
+縦方向と対称。rowSpan で判定する。
+
+1. 現在列を上から下へスキャンし、非タグセルを収集する。
+   - タグが出現した時点で縦方向収集を打ち止め。
+2. 収集したセルの **rowSpan 合計** を計算する。
+   - **合計 == 親キーの rowSpan** → キー継続。次の列へ進み 1. を繰り返す。
+   - **合計 < 親キーの rowSpan** → 収集終了。
+3. 収集したすべての値を親キーのバリューとして確定 → **KV_DONE**
 
 ---
 
@@ -178,11 +221,30 @@ type SpanCell = {
 | シグナル | 種別 | 採否 | 理由 |
 |---|---|---|---|
 | `右セル.rowSpan > キー.rowSpan` | 幾何 | **採用** | 右セルが縦に長い → KEY_V へ |
-| `右セル.rowSpan == キー.rowSpan` | 幾何 | **採用** | 縦幅同じ → KV_DONE（兄弟）|
-| `右セル.rowSpan < キー.rowSpan` | 幾何 | **採用** | 縦に小さい → CONTAINER または READ_COL_HEADERS |
-| `MATCHES_COL_HEADER_DICT(cell.value)` | 辞書 | **採用（限定）** | READ_COL_HEADERS トリガーのみ。CONTAINER 判定には使わない |
+| `右セル.rowSpan == キー.rowSpan` かつ COL_HEADER_DICT | 幾何+辞書 | **採用** | 兄弟キー → KEY_V（右セルは次のキーとして残す） |
+| `右セル.rowSpan == キー.rowSpan` | 幾何 | **採用** | 縦幅同じ → KV_DONE（バリュー）|
+| `右セル.rowSpan < キー.rowSpan` かつ タグ | 幾何+辞書 | **採用** | タグ → CONTAINER |
+| `右セル.rowSpan < キー.rowSpan` かつ 非タグ | 幾何+辞書 | **採用** | 非タグ → VALUE_COLLECT |
+| `右セル.rowSpan < キー.rowSpan` かつ COL_HEADER_DICT | 幾何+辞書 | **採用** | マトリクスヘッダー行 → READ_COL_HEADERS（評価順1で先に処理） |
 | `cell.colSpan > 2` | 幾何 | **却下** | rowSpan 比較で十分なため不要 |
 | `cell.col === 0 または 1` | 位置 | **却下** | rowSpan 比較で十分なため不要 |
 | スコアリング方式 | スコア | **却下** | IF/ELSEIF/ELSE の決定論的遷移に統一 |
 | `cell.value.length > 50` | ヒューリスティック | **却下** | っぽい判定 |
 | `MATCHES_KNOWN_CONTAINER_REGEX` | ラベル列挙 | **却下** | ラベル全網羅問題に戻る |
+
+---
+
+## VALUE_COLLECT の具体例まとめ
+
+### 期間列（縦方向・複数小セルが横に並ぶ）
+```
+期間(span=9) → [2025/12(5) + 2026/04(4)] → sum=9 継続
+             → [0年5ヶ月(9)]              → sum=9 継続
+             → 備考(9) タグ               → 打ち止め
+値 = [["2025/12","2026/04"],["0年5ヶ月"]]
+```
+
+### コンピュータ言語（横方向・下がタグ）
+```
+コンピュータ言語 KEY_H → 右セルが縦に小さくタグ（業務経験）→ CONTAINER（再帰）
+```
