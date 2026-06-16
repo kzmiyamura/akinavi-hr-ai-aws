@@ -2563,6 +2563,14 @@ const COL_HEADER_DICT =
 const PHASE_EVAL_RE =
   /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守)$/
 
+/** VALUE_COLLECT タグ判定: COL_HEADER_DICT + 列内サブラベル語彙 */
+const VALUE_COLLECT_TAG_RE =
+  /^(備考|補足|メモ|コメント|環境|言語|OS|DB|ツール|技術スタック|開発環境|フレームワーク|クラウド|インフラ|ミドルウェア|その他|担当業務|ポジション|立場|チーム規模|開発規模|人数)$/
+function _isColTag(value: string): boolean {
+  const v = value.trim()
+  return COL_HEADER_DICT.test(v) || VALUE_COLLECT_TAG_RE.test(v)
+}
+
 const _cs = (c: SpanCell) => c.colEnd - c.col + 1   // colSpan
 const _rs = (c: SpanCell) => c.rowEnd - c.row + 1   // rowSpan
 
@@ -2656,8 +2664,10 @@ function _parseOneProject(
     c.value.trim()
   )
 
-  // ── projColMap がある場合: 列ヘッダーごとに縦スキャン ──────────────────
-  // 横方向（列ヘッダー順）に走査し、各列の範囲内セルを上→下で収集する
+  // ── projColMap がある場合: VALUE_COLLECT ステートマシン ────────────────
+  // 列ヘッダー順（横）に走査し、各列を縦方向に VALUE_COLLECT で処理する。
+  // 非タグ小サイズセルを行ごとに収集し、span合計が親spanと一致する間はキー継続。
+  // タグが出現した行以降はタグ→値ペアとして処理する。
   if (projColMap && projColMap.size > 0) {
     const DATE_RE = /^\d{4}[\/\-年]\d{1,2}/
     const DUR_RE  = /^\d+年\d+ヶ月$|^\d+ヶ月$|^\d+年$/
@@ -2667,47 +2677,108 @@ function _parseOneProject(
       if (/^No\.?$/i.test(key)) continue      // No.列はスキップ
       if (phaseCols.has(startCol)) continue   // フェーズ列はフェーズ処理で別途扱う
 
-      // この列範囲に属するセルを上から下へ収集（縦スキャン）
-      const colCells = cells
-        .filter(c => c.col >= startCol && c.col <= hdr.colEnd)
-        .sort((a, b) => a.row - b.row)
+      const parentSpan = hdr.colEnd - startCol + 1
+      const colCells = cells.filter(c => c.col >= startCol && c.col <= hdr.colEnd)
+      const rowNums = [...new Set(colCells.map(c => c.row))].sort((a, b) => a - b)
+      if (rowNums.length === 0) continue
 
-      if (colCells.length === 0) continue
+      // ── VALUE_COLLECT ────────────────────────────────────────────────
+      const collectedRows: string[][] = []
+      let tagStartIdx = rowNums.length
 
-      if (/^期間/.test(key)) {
-        // 日付セル + 期間テキストから "YYYY/MM〜YYYY/MM（Xヶ月）" を組み立て
-        const dates = colCells.filter(c => DATE_RE.test(c.value.trim()))
-        const dur   = colCells.find(c => DUR_RE.test(c.value.trim()))
-        if (dates.length >= 2 && dur) {
-          proj['期間'] = `${dates[0].value.trim()}〜${dates[dates.length - 1].value.trim()}（${dur.value.trim()}）`
-        } else if (dates.length >= 1 && dur) {
-          proj['期間'] = `${dates[0].value.trim()}〜（${dur.value.trim()}）`
-        } else if (dur) {
-          proj['期間'] = dur.value.trim()
-        } else if (dates.length >= 1) {
-          proj['期間'] = dates.map(d => d.value.trim()).join('〜')
+      for (let i = 0; i < rowNums.length; i++) {
+        const rowCells = colCells
+          .filter(c => c.row === rowNums[i] && !/^[-ー－]+$/.test(c.value.trim()))
+          .sort((a, b) => a.col - b.col)
+        if (rowCells.length === 0) continue
+
+        // 行の先頭がタグ → VALUE_COLLECT 終了、以降をタグ→値ペアで処理
+        if (_isColTag(rowCells[0].value)) {
+          tagStartIdx = i
+          break
         }
-        // 期間列内のラベル→値ペアを追加抽出（例: 備考→lang_block）
-        const usedSet = new Set([...dates, dur].filter(Boolean))
-        const remaining = colCells.filter(c =>
-          !usedSet.has(c) && !/^[-ー－]+$/.test(c.value.trim())
-        )
-        for (let i = 0; i < remaining.length - 1; i++) {
-          const lbl = remaining[i].value.trim()
-          const val = remaining[i + 1].value.trim()
-          if (/^[^\n]{1,10}$/.test(lbl) && val.length > lbl.length) {
-            proj[lbl] = val.slice(0, 500)
-            i++  // 値セルを消費
+
+        // 非タグセルを横に収集（タグが出たら打ち止め）
+        // spanSumはダッシュ含む全セルで計算（ダッシュは列幅を占めるが値は収集しない）
+        const allRowCells = colCells
+          .filter(c => c.row === rowNums[i])
+          .sort((a, b) => a.col - b.col)
+        const rowVals: string[] = []
+        let spanSum = 0
+        let cutByTag = false
+        for (const c of allRowCells) {
+          if (_isColTag(c.value)) { cutByTag = true; break }
+          spanSum += c.colEnd - c.col + 1
+          if (!/^[-ー－]+$/.test(c.value.trim())) rowVals.push(c.value.trim())
+        }
+        if (rowVals.length > 0) collectedRows.push(rowVals)
+
+        // タグで打ち切り or span合計が親span未満 → 収集終了
+        if (cutByTag || spanSum < parentSpan) {
+          tagStartIdx = i + 1
+          break
+        }
+        // spanSum >= parentSpan → 次の行へ継続
+      }
+
+      // 収集値をフォーマットして proj に格納
+      if (collectedRows.length > 0) {
+        const allVals = collectedRows.flat()
+        if (/^期間/.test(key)) {
+          const dates = allVals.filter(v => DATE_RE.test(v))
+          const dur   = allVals.find(v => DUR_RE.test(v))
+          if (dates.length >= 2 && dur) {
+            proj['期間'] = `${dates[0]}〜${dates[dates.length - 1]}（${dur}）`
+          } else if (dates.length >= 1 && dur) {
+            proj['期間'] = `${dates[0]}〜（${dur}）`
+          } else if (dur) {
+            proj['期間'] = dur
+          } else if (dates.length >= 1) {
+            proj['期間'] = dates.join('〜')
+          }
+        } else if (/^(担当業務|業務内容|内容|概要)$/.test(key)) {
+          const text = allVals.find(v => v.length > 5)
+          if (text) proj[key] = text.slice(0, 500)
+        } else {
+          if (allVals[0]) proj[key] = allVals[0]
+        }
+      }
+
+      // タグ→値ペアの処理（備考→lang_block 等）
+      // 同行インライン値（案件名+project名 が横並び）を優先し、なければ次行を使う
+      const remRowNums = rowNums.slice(tagStartIdx)
+      for (let i = 0; i < remRowNums.length; i++) {
+        const rowCells = colCells
+          .filter(c => c.row === remRowNums[i] && !/^[-ー－]+$/.test(c.value.trim()))
+          .sort((a, b) => a.col - b.col)
+        if (rowCells.length === 0) continue
+
+        // 行内を左から走査してタグ→値ペアをすべて抽出
+        let j = 0
+        while (j < rowCells.length) {
+          if (_isColTag(rowCells[j].value)) {
+            const tagKey = rowCells[j].value.trim()
+            // 同行の次セルが非タグ → インライン値として採用
+            if (j + 1 < rowCells.length && !_isColTag(rowCells[j + 1].value)) {
+              if (!proj[tagKey]) proj[tagKey] = rowCells[j + 1].value.trim().slice(0, 500)
+              j += 2
+            } else {
+              // 次行に値がある場合
+              if (i + 1 < remRowNums.length) {
+                const nextCells = colCells
+                  .filter(c => c.row === remRowNums[i + 1] && !/^[-ー－]+$/.test(c.value.trim()))
+                  .sort((a, b) => a.col - b.col)
+                if (nextCells.length > 0 && !_isColTag(nextCells[0].value)) {
+                  if (!proj[tagKey]) proj[tagKey] = nextCells.map(c => c.value.trim()).join('\n').slice(0, 500)
+                  i++
+                }
+              }
+              j++
+            }
+          } else {
+            j++
           }
         }
-      } else if (/^(担当業務|業務内容|内容|概要)$/.test(key)) {
-        // 最初の長テキストセル（500字まで）
-        const text = colCells.find(c => c.value.trim().length > 5)
-        if (text) proj[key] = text.value.trim().slice(0, 500)
-      } else {
-        // 案件名・ポジション・チーム規模・備考 等 → 最初の値セル
-        const val = colCells.find(c => c.value.trim())
-        if (val) proj[key] = val.value.trim()
       }
     }
 
