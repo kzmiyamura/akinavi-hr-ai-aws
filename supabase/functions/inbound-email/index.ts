@@ -2571,6 +2571,14 @@ function _isColTag(value: string): boolean {
   return COL_HEADER_DICT.test(v) || VALUE_COLLECT_TAG_RE.test(v)
 }
 
+/**
+ * KEY_H 兄弟キー判定: 同じ rowSpan を持つ右セルがプロフィールラベルなら
+ * 現在キーのバリューは空（未記録でスキップ）とみなす。
+ * 例: フリガナ → 性別(同 rowSpan) → フリガナは空値・性別が次のキー
+ */
+const PROFILE_LABEL_RE =
+  /^(氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働)$/
+
 const _cs = (c: SpanCell) => c.colEnd - c.col + 1   // colSpan
 const _rs = (c: SpanCell) => c.rowEnd - c.row + 1   // rowSpan
 
@@ -3139,6 +3147,11 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
             usedRows.add(below.row)
             i++
           }
+
+        } else if (_rs(right) === _rs(key) && PROFILE_LABEL_RE.test(right.value.trim())) {
+          // 同じ rowSpan かつ PROFILE_LABEL_RE（性別・年齢・氏名等）→ 右セルは兄弟キー
+          // 現在キーのバリューは空 → 記録しない（フリガナ→性別 等の空値スキップ）
+          i++
 
         } else if (_rs(right) === _rs(key)) {
           // KV_DONE: 縦幅が同じ → 右セルはバリュー

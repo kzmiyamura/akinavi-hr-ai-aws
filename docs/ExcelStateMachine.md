@@ -13,6 +13,7 @@
 | 1 | COL_HEADER_DICT に一致 **かつ** 右セル.rowSpan **<** キー.rowSpan | 縦に小さい列ヘッダー語彙 → マトリクスヘッダー行 | READ_COL_HEADERS |
 | 2 | 右セル.rowSpan **>** キー.rowSpan | 縦に長い → 現在キーは下へ | KEY_V |
 | 3 | 右セル.rowSpan **==** キー.rowSpan **かつ** COL_HEADER_DICT に一致 | 同じ高さの兄弟キー → 現在キーは KEY_V へ、右セルは次のキーとして残す | KEY_V |
+| 3b | 右セル.rowSpan **==** キー.rowSpan **かつ** PROFILE_LABEL_RE に一致 | 同じ高さのプロフィールラベル（性別・年齢・氏名等）→ 現在キーはバリュー空・記録しない、右セルを次のキーへ | i++ のみ（空値スキップ） |
 | 4 | 右セル.rowSpan **==** キー.rowSpan | 縦幅が同じ → バリュー | KV_DONE |
 | 5 | 右セル.rowSpan **<** キー.rowSpan **かつ** タグ | 縦に小さくタグ → 子コンテナ | CONTAINER |
 | 6 | 右セル.rowSpan **<** キー.rowSpan **かつ** 非タグ | 縦に小さく非タグ → 値収集開始 | VALUE_COLLECT |
