@@ -4073,12 +4073,17 @@ Deno.serve(async (req: Request) => {
       ? stripHtml(rawBody)
       : rawBody
     // stripHtml が過剰に空になるケース（構造だけの HTML 等）は解析不能になるため raw にフォールバック
+    // ただし rawBody 自体もタグ除去後に空なら HTML 構造のみ（空ボディ等）→ フォールバックしない
     if (!body.trim() && rawBody.trim()) {
-      console.warn('[body] stripHtml で空のため rawBody にフォールバック', {
-        picked_plain_len: pickedPlain.length,
-        rawBody_len: rawBody.length,
-      })
-      body = rawBody.trim()
+      const rawStripped = rawBody.replace(/<[^>]+>/g, '').trim()
+      if (rawStripped) {
+        console.warn('[body] stripHtml で空のため rawBody にフォールバック', {
+          picked_plain_len: pickedPlain.length,
+          rawBody_len: rawBody.length,
+        })
+        body = rawBody.trim()
+      }
+      // else: rawBodyもタグ除去で空 → 空メールボディのまま（HTML タグ由来の skill_master 誤マッチ防止）
     }
 
     // 転送・返信メールの引用ヘッダを除去（「取得 Outlook for Mac 差出人:...」等が先頭に追加される）
