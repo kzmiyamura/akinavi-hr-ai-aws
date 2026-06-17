@@ -2555,9 +2555,18 @@ function worksheetToCells(sheet: Record<string, unknown>): SpanCell[] {
 // 設計書: docs/ExcelStateMachine.md
 // 状態: KEY_H / KEY_V / READ_COL_HEADERS / CONTAINER / KV_DONE / NEW_ROW / END
 
-/** 列ヘッダー語彙辞書（READ_COL_HEADERS 検出 + isContainer スコアリング） */
+/** 列ヘッダー語彙辞書（READ_COL_HEADERS 検出 = 条件1 + _isColTag で使用） */
 const COL_HEADER_DICT =
-  /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー)$/
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー|備考|ポジション|チーム規模|担当業務)$/
+
+/**
+ * KEY_H 条件3「兄弟キー判定」専用辞書。
+ * COL_HEADER_DICT から役割略語（PM/PMO/TL/SE/PL/PG 等）を除いた構造的な列ヘッダー語のみ。
+ * 役割略語はスキルマトリクスの列ヘッダーにはなるが、「ポジション: PM」のように値としても出現するため
+ * 条件3 で誤って兄弟キーとみなすのを防ぐ。
+ */
+const SIBLING_KEY_DICT =
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務)$/
 
 /** フェーズ評価列のみ（projectPhaseMap に登録する列。コンテンツ列=期間等は含めない） */
 const PHASE_EVAL_RE =
@@ -2907,7 +2916,7 @@ function _findHdr(map: Map<number, _ColHdr>, col: number): string | undefined {
 }
 
 /** spanCellsToJson 内のステートマシン状態 (docs/ExcelStateMachine.md) */
-const enum Sm { START = 0, KEY_H = 1, KEY_V = 2, NEW_ROW = 3, END = 4 }
+const enum Sm { START = 0, KEY_H = 1, KEY_V = 2, VALUE_COLLECT = 5, NEW_ROW = 3, END = 4 }
 
 /**
  * CONTAINER ステート: 子セルをステートマシンで再帰スキャンし、1 つのオブジェクトに結合して返す。
@@ -2970,33 +2979,6 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
 
     const rowCells = (byRow.get(rowNum) ?? []).filter(c => c.value.trim())
     if (rowCells.length === 0) continue
-
-    // ── プロジェクト表ヘッダー行スキップ（"No." ラベル行）────────────────
-    // 繰り返しヘッダー行（各案件間に挟まる）も含めて常にスキップする
-    if (/^No\.?$/i.test(rowCells[0].value.trim())
-        && rowCells.some(c => /期間/.test(c.value.trim()))) {
-      // 初回のみ colHeaderMap を設定（D.U形式の平坦テーブルを READ_COL_HEADERS モードで処理）
-      if (colHeaderMap.size === 0) {
-        for (const c of rowCells) {
-          if (c.value.trim()) {
-            colHeaderMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
-            if (PHASE_EVAL_RE.test(c.value.trim())) {
-              projectPhaseMap.set(c.col, { text: c.value.trim(), colEnd: c.colEnd })
-            }
-          }
-        }
-      }
-      continue
-    }
-
-    // ── プロジェクト履歴モード（No.セル検出）────────────────────────────
-    // colHeaderMap.size === 0 条件は除去: プロジェクト表ヘッダー後も _isProjectNo が機能するよう
-    if (rowCells.length > 0 && _isProjectNo(rowCells[0])) {
-      const proj = _parseOneProject(rowCells[0], sorted, projectPhaseMap, colHeaderMap)
-      if (Object.keys(proj).length > 0) results.push(proj)
-      for (let r = rowCells[0].row; r <= rowCells[0].rowEnd; r++) usedRows.add(r)
-      continue
-    }
 
     // ── READ_COL_HEADERS モード（マトリクスデータ行）────────────────────
     if (colHeaderMap.size > 0) {
@@ -3085,6 +3067,11 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     let smI = 0
     let smKey: SpanCell | null = null
     let sm: Sm = Sm.START
+    // VALUE_COLLECT 用状態変数
+    let vcParent: SpanCell | null = null
+    let vcDir: 'h' | 'v' = 'v'
+    // deno-lint-ignore no-explicit-any
+    let vcValues: any[] = []
 
     // START: 次のキー候補を読む。インラインKV判定後 KEY_H / KEY_V へ
     const smStart = (): Sm => {
@@ -3130,19 +3117,10 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
       // 2. right.rowSpan > key.rowSpan → KEY_V（right は次のキーとして残す）
       if (_rs(right) > _rs(key)) return Sm.KEY_V
 
-      // 3. right.rowSpan == key.rowSpan かつ COL_HEADER_DICT → KEY_V inline（CONTAINER 後も継続）
-      if (_rs(right) === _rs(key) && COL_HEADER_DICT.test(right.value.trim())) {
-        const below = _belowCell(sorted, key)
-        if (!below) { smI++; return Sm.START }
-        if (_cs(below) < _cs(key)) {
-          const ch = _childCells(sorted, key)
-          record[key.value.trim()] = _scanContainer(ch)
-          for (const c of ch) { for (let r = c.row; r <= c.rowEnd; r++) usedRows.add(r) }
-          smI++; return Sm.START
-        }
-        record[key.value.trim()] = below.value.trim()
-        usedRows.add(below.row)
-        smI++; return Sm.START
+      // 3. right.rowSpan == key.rowSpan かつ SIBLING_KEY_DICT → 兄弟キー。現在キーは KEY_V へ、右セルは次のキーとして残す
+      // ※ 役割略語（PM/PMO 等）は値としても出現するため COL_HEADER_DICT ではなく SIBLING_KEY_DICT で判定
+      if (_rs(right) === _rs(key) && SIBLING_KEY_DICT.test(right.value.trim())) {
+        return Sm.KEY_V
       }
 
       // 3b. right.rowSpan == key.rowSpan かつ PROFILE_LABEL_RE → 現在キーはバリュー空・スキップ
@@ -3156,46 +3134,123 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
         smI += 2; return Sm.START
       }
 
-      // 5. right.rowSpan < key.rowSpan → CONTAINER → NEW_ROW
-      const ch = _childCells(sorted, right)
-      record[key.value.trim()] = _scanContainer(ch)
-      for (let r = right.row; r <= right.rowEnd; r++) usedRows.add(r)
-      smI += 2; return Sm.NEW_ROW
+      // 5. right.rowSpan < key.rowSpan かつ タグ → CONTAINER
+      if (_isColTag(right.value)) {
+        const ch = _childCells(sorted, right)
+        record[key.value.trim()] = _scanContainer(ch)
+        smI += 2; return Sm.NEW_ROW
+      }
+
+      // 6. right.rowSpan < key.rowSpan かつ 非タグ → VALUE_COLLECT（横方向）
+      vcParent = key; vcDir = 'h'; vcValues = []
+      return Sm.VALUE_COLLECT
     }
 
-    // KEY_V: 下セルを評価し次の状態を返す
+    // KEY_V: 下セルを評価し次の状態を返す（設計書 KEY_V セクション準拠）
     const smKeyV = (): Sm => {
       const key = smKey!
       const below = _belowCell(sorted, key)
 
-      // 下にセルなし → END（右に兄弟セルが残っていれば START → KEY_H で処理される）
+      // 下にセルなし → END
       if (!below) { smI++; return Sm.START }
 
-      if (_cs(below) < _cs(key)) {
-        // 下行に COL_HEADER_DICT がある → スキル行の開始行 → スキップして NEW_ROW
-        const belowHasCOLHDR = sorted.some(c =>
-          c.row === below.row && c !== below && COL_HEADER_DICT.test(c.value.trim())
-        )
-        if (belowHasCOLHDR) { smI++; return Sm.NEW_ROW }
-        // CONTAINER → NEW_ROW
-        const ch = _childCells(sorted, key)
-        record[key.value.trim()] = _scanContainer(ch)
-        for (const c of ch) { for (let r = c.row; r <= c.rowEnd; r++) usedRows.add(r) }
-        smI++; return Sm.NEW_ROW
+      if (_cs(below) === _cs(key)) {
+        if (_isColTag(below.value)) {
+          // 同幅タグ → NEW_ROW（現在キーは空値。タグは次のキーへ）
+          smI++; return Sm.NEW_ROW
+        }
+        // 同幅非タグ → KV_DONE
+        record[key.value.trim()] = below.value.trim()
+        smI++; return Sm.START
       }
 
-      // KV_DONE: 下セルが同幅または広い → バリュー
+      if (_cs(below) < _cs(key)) {
+        if (_isColTag(below.value)) {
+          // 小さくタグ → CONTAINER
+          const ch = _childCells(sorted, key)
+          record[key.value.trim()] = _scanContainer(ch)
+          smI++; return Sm.NEW_ROW
+        }
+        // 小さく非タグ → VALUE_COLLECT（縦方向）
+        vcParent = key; vcDir = 'v'; vcValues = []
+        return Sm.VALUE_COLLECT
+      }
+
+      // colSpan > key.colSpan → KV_DONE
       record[key.value.trim()] = below.value.trim()
-      usedRows.add(below.row)
+      smI++; return Sm.START
+    }
+
+    // VALUE_COLLECT: 非タグ小セルを値として収集（設計書 VALUE_COLLECT セクション準拠）
+    const smValueCollect = (): Sm => {
+      const parent = vcParent!
+      if (vcDir === 'v') {
+        // 縦方向: 親キーの下を行ごとにスキャン
+        const parentCS = _cs(parent)
+        let scanRow = parent.rowEnd + 1
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          // この行で親キーの列範囲にあるセルを取得
+          const rowCandidates = sorted.filter(c =>
+            c.row === scanRow && c.col >= parent.col && c.colEnd <= parent.colEnd
+          ).sort((a, b) => a.col - b.col)
+          if (rowCandidates.length === 0) break
+
+          // 先頭セルがタグなら収集終了
+          if (_isColTag(rowCandidates[0].value)) break
+
+          const rowVals: string[] = []
+          let spanSum = 0
+          for (const c of rowCandidates) {
+            if (_isColTag(c.value)) break  // タグ出現で横方向打ち止め
+            rowVals.push(c.value.trim())
+            spanSum += _cs(c)
+          }
+          if (rowVals.length > 0) {
+            vcValues.push(rowVals.length === 1 ? rowVals[0] : rowVals)
+          }
+          // スパン合計 == 親 colSpan → 継続、< → 終了
+          if (spanSum < parentCS) break
+          scanRow = rowCandidates[rowCandidates.length - 1].rowEnd + 1
+        }
+      } else {
+        // 横方向: 親キーの右を列ごとにスキャン
+        const parentRS = _rs(parent)
+        let scanCol = parent.colEnd + 1
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const colCandidates = sorted.filter(c =>
+            c.col === scanCol && c.row >= parent.row && c.rowEnd <= parent.rowEnd
+          ).sort((a, b) => a.row - b.row)
+          if (colCandidates.length === 0) break
+          if (_isColTag(colCandidates[0].value)) break
+
+          const colVals: string[] = []
+          let spanSum = 0
+          for (const c of colCandidates) {
+            if (_isColTag(c.value)) break
+            colVals.push(c.value.trim())
+            spanSum += _rs(c)
+          }
+          if (colVals.length > 0) {
+            vcValues.push(colVals.length === 1 ? colVals[0] : colVals)
+          }
+          if (spanSum < parentRS) break
+          scanCol = colCandidates[colCandidates.length - 1].colEnd + 1
+        }
+      }
+      // 収集結果を親キーのバリューとして確定
+      record[parent.value.trim()] = vcValues.length === 1 ? vcValues[0] : vcValues
       smI++; return Sm.START
     }
 
     while (sm !== Sm.NEW_ROW && sm !== Sm.END) {
       switch (sm) {
-        case Sm.START:  sm = smStart();  break
-        case Sm.KEY_H:  sm = smKeyH();   break
-        case Sm.KEY_V:  sm = smKeyV();   break
-        default:        sm = Sm.END
+        case Sm.START:          sm = smStart();         break
+        case Sm.KEY_H:          sm = smKeyH();          break
+        case Sm.KEY_V:          sm = smKeyV();          break
+        case Sm.VALUE_COLLECT:  sm = smValueCollect();  break
+        default:                sm = Sm.END
       }
     }
 
