@@ -2906,6 +2906,9 @@ function _findHdr(map: Map<number, _ColHdr>, col: number): string | undefined {
   return undefined
 }
 
+/** spanCellsToJson 内のステートマシン状態 (docs/ExcelStateMachine.md) */
+const enum Sm { START = 0, KEY_H = 1, KEY_V = 2, NEW_ROW = 3, END = 4 }
+
 /**
  * CONTAINER ステート: 子セルをステートマシンで再帰スキャンし、1 つのオブジェクトに結合して返す。
  * CONTAINER 完了後の遷移先は NEW_ROW（KV_DONE ではない）。
@@ -3079,122 +3082,120 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     // 詳細設計: docs/ExcelStateMachine.md
     // deno-lint-ignore no-explicit-any
     const record: Record<string, any> = {}
-    let i = 0
-    let newRow = false  // NEW_ROW フラグ: true になったらこの行のスキャンを終了
+    let smI = 0
+    let smKey: SpanCell | null = null
+    let sm: Sm = Sm.START
 
-    while (i < rowCells.length && !newRow) {
-      const key = rowCells[i]
-      const right = rowCells[i + 1]
+    // START: 次のキー候補を読む。インラインKV判定後 KEY_H / KEY_V へ
+    const smStart = (): Sm => {
+      if (smI >= rowCells.length) return Sm.END
+      smKey = rowCells[smI]
+      // インラインKV: キー候補セルに ：を含む → KV確定
+      const ci = smKey.value.indexOf('：')
+      if (ci > 0) {
+        record[smKey.value.slice(0, ci).trim()] = smKey.value.slice(ci + 1).trim()
+        smI++
+        return Sm.START
+      }
+      return rowCells[smI + 1] ? Sm.KEY_H : Sm.KEY_V
+    }
 
-      if (right) {
-        // ── KEY_H: 評価順 ────────────────────────────────────────────────
-        // 1. COL_HEADER_DICT かつ right.rowSpan < key.rowSpan → READ_COL_HEADERS
-        // 2. right.rowSpan > key.rowSpan → KEY_V
-        // 3. right.rowSpan == key.rowSpan かつ COL_HEADER_DICT → KEY_V（右セルは次のキー）
-        // 4. right.rowSpan == key.rowSpan → KV_DONE
-        // 5. right.rowSpan < key.rowSpan → CONTAINER
+    // KEY_H: 右セルを評価し次の状態を返す
+    const smKeyH = (): Sm => {
+      const key = smKey!
+      const right = rowCells[smI + 1]
 
-        if (COL_HEADER_DICT.test(right.value.trim()) && _rs(right) < _rs(key)) {
-          // READ_COL_HEADERS: 辞書一致 かつ 縦に小さい → 列ヘッダー行
-          for (let k = i + 1; k < rowCells.length; k++) {
-            const hc = rowCells[k]
-            if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
-          }
-          if (sectionKey !== null) {
-            if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
-            if (Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
-            for (const [ph, pv] of Object.entries(phaseSections)) {
-              if (Object.keys(pv).length > 0) results.push({ [ph]: pv })
-            }
-            sectionData = {}; catKey = null; catData = {}; phaseSections = {}
-          }
-          if (colHeaderMap.size > 0) {
-            sectionKey = key.value.trim()
-            sectionKeyCol = key.col
-            sectionKeyColEnd = key.colEnd
-          }
-          newRow = true
-
-        } else if (_rs(right) > _rs(key)) {
-          // KEY_V: 右セルの方が縦に長い → 現在キーは下へ。右セルは消費せず次のキーとして残す
-          const below = _belowCell(sorted, key)
-          if (!below) {
-            i++
-          } else if (_cs(below) < _cs(key)) {
-            const ch = _childCells(sorted, key)
-            record[key.value.trim()] = _scanContainer(ch)
-            for (const c of ch) { for (let r = c.row; r <= c.rowEnd; r++) usedRows.add(r) }
-            i++; newRow = true
-          } else {
-            record[key.value.trim()] = below.value.trim()
-            usedRows.add(below.row)
-            i++
-          }
-
-        } else if (_rs(right) === _rs(key) && COL_HEADER_DICT.test(right.value.trim())) {
-          // 同じ rowSpan かつ COL_HEADER_DICT → 右セルは兄弟キー → 現在キーは KEY_V
-          // newRow=true は付けない：右セルを同じ行で次のキーとして拾うため
-          const below = _belowCell(sorted, key)
-          if (!below) {
-            i++
-          } else if (_cs(below) < _cs(key)) {
-            const ch = _childCells(sorted, key)
-            record[key.value.trim()] = _scanContainer(ch)
-            for (const c of ch) { for (let r = c.row; r <= c.rowEnd; r++) usedRows.add(r) }
-            i++
-          } else {
-            record[key.value.trim()] = below.value.trim()
-            usedRows.add(below.row)
-            i++
-          }
-
-        } else if (_rs(right) === _rs(key) && PROFILE_LABEL_RE.test(right.value.trim())) {
-          // 同じ rowSpan かつ PROFILE_LABEL_RE（性別・年齢・氏名等）→ 右セルは兄弟キー
-          // 現在キーのバリューは空 → 記録しない（フリガナ→性別 等の空値スキップ）
-          i++
-
-        } else if (_rs(right) === _rs(key)) {
-          // KV_DONE: 縦幅が同じ → 右セルはバリュー
-          record[key.value.trim()] = right.value.trim()
-          i += 2
-
-        } else {
-          // CONTAINER: 右セルが縦に小さい → 子コンテナ → NEW_ROW
-          const ch = _childCells(sorted, right)
-          record[key.value.trim()] = _scanContainer(ch)
-          for (let r = right.row; r <= right.rowEnd; r++) usedRows.add(r)
-          i += 2; newRow = true
+      // 1. READ_COL_HEADERS: COL_HEADER_DICT かつ right.rowSpan < key.rowSpan
+      if (COL_HEADER_DICT.test(right.value.trim()) && _rs(right) < _rs(key)) {
+        for (let k = smI + 1; k < rowCells.length; k++) {
+          const hc = rowCells[k]
+          if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
         }
+        if (sectionKey !== null) {
+          if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
+          if (Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
+          for (const [ph, pv] of Object.entries(phaseSections)) {
+            if (Object.keys(pv).length > 0) results.push({ [ph]: pv })
+          }
+          sectionData = {}; catKey = null; catData = {}; phaseSections = {}
+        }
+        if (colHeaderMap.size > 0) {
+          sectionKey = key.value.trim()
+          sectionKeyCol = key.col
+          sectionKeyColEnd = key.colEnd
+        }
+        return Sm.NEW_ROW
+      }
 
-      } else {
-        // ── KEY_V: 右にセルなし → 真下のセルを確認 ─────────────────────
+      // 2. right.rowSpan > key.rowSpan → KEY_V（right は次のキーとして残す）
+      if (_rs(right) > _rs(key)) return Sm.KEY_V
+
+      // 3. right.rowSpan == key.rowSpan かつ COL_HEADER_DICT → KEY_V inline（CONTAINER 後も継続）
+      if (_rs(right) === _rs(key) && COL_HEADER_DICT.test(right.value.trim())) {
         const below = _belowCell(sorted, key)
-
-        if (!below) {
-          // 下にもセルなし → END
-          i++
-
-        } else if (_cs(below) < _cs(key)) {
-          // 下行に COL_HEADER_DICT 兄弟がある → スキル行等の開始行 → 現在セルは凡例ラベル → スキップ
-          const belowHasCOLHDR = sorted.some(c =>
-            c.row === below.row && c !== below && COL_HEADER_DICT.test(c.value.trim())
-          )
-          if (belowHasCOLHDR) {
-            i++; newRow = true
-          } else {
-            // CONTAINER: 下セルが横に小さい → 現在キーはコンテナ
-            const ch = _childCells(sorted, key)
-            record[key.value.trim()] = _scanContainer(ch)
-            for (const c of ch) { for (let r = c.row; r <= c.rowEnd; r++) usedRows.add(r) }
-            i++; newRow = true
-          }
-
-        } else {
-          // KV_DONE: 下セルが同幅または広い → バリュー
-          record[key.value.trim()] = below.value.trim()
-          usedRows.add(below.row)
-          i++
+        if (!below) { smI++; return Sm.START }
+        if (_cs(below) < _cs(key)) {
+          const ch = _childCells(sorted, key)
+          record[key.value.trim()] = _scanContainer(ch)
+          for (const c of ch) { for (let r = c.row; r <= c.rowEnd; r++) usedRows.add(r) }
+          smI++; return Sm.START
         }
+        record[key.value.trim()] = below.value.trim()
+        usedRows.add(below.row)
+        smI++; return Sm.START
+      }
+
+      // 3b. right.rowSpan == key.rowSpan かつ PROFILE_LABEL_RE → 現在キーはバリュー空・スキップ
+      if (_rs(right) === _rs(key) && PROFILE_LABEL_RE.test(right.value.trim())) {
+        smI++; return Sm.START
+      }
+
+      // 4. right.rowSpan == key.rowSpan → KV_DONE
+      if (_rs(right) === _rs(key)) {
+        record[key.value.trim()] = right.value.trim()
+        smI += 2; return Sm.START
+      }
+
+      // 5. right.rowSpan < key.rowSpan → CONTAINER → NEW_ROW
+      const ch = _childCells(sorted, right)
+      record[key.value.trim()] = _scanContainer(ch)
+      for (let r = right.row; r <= right.rowEnd; r++) usedRows.add(r)
+      smI += 2; return Sm.NEW_ROW
+    }
+
+    // KEY_V: 下セルを評価し次の状態を返す
+    const smKeyV = (): Sm => {
+      const key = smKey!
+      const below = _belowCell(sorted, key)
+
+      // 下にセルなし → END（右に兄弟セルが残っていれば START → KEY_H で処理される）
+      if (!below) { smI++; return Sm.START }
+
+      if (_cs(below) < _cs(key)) {
+        // 下行に COL_HEADER_DICT がある → スキル行の開始行 → スキップして NEW_ROW
+        const belowHasCOLHDR = sorted.some(c =>
+          c.row === below.row && c !== below && COL_HEADER_DICT.test(c.value.trim())
+        )
+        if (belowHasCOLHDR) { smI++; return Sm.NEW_ROW }
+        // CONTAINER → NEW_ROW
+        const ch = _childCells(sorted, key)
+        record[key.value.trim()] = _scanContainer(ch)
+        for (const c of ch) { for (let r = c.row; r <= c.rowEnd; r++) usedRows.add(r) }
+        smI++; return Sm.NEW_ROW
+      }
+
+      // KV_DONE: 下セルが同幅または広い → バリュー
+      record[key.value.trim()] = below.value.trim()
+      usedRows.add(below.row)
+      smI++; return Sm.START
+    }
+
+    while (sm !== Sm.NEW_ROW && sm !== Sm.END) {
+      switch (sm) {
+        case Sm.START:  sm = smStart();  break
+        case Sm.KEY_H:  sm = smKeyH();   break
+        case Sm.KEY_V:  sm = smKeyV();   break
+        default:        sm = Sm.END
       }
     }
 
