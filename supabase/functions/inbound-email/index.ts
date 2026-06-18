@@ -2628,8 +2628,6 @@ function _belowCell(sorted: SpanCell[], key: SpanCell): SpanCell | undefined {
 
 interface _ColHdr { text: string; colEnd: number }
 
-/** colHeaderMap から col が属する列ヘッダー文字列を返す */
-
 // ─── プロジェクト履歴パーサ ────────────────────────────────────────────────
 
 /** プロジェクト No. セルかどうかを判定（整数値・左端・rowSpan≥3） */
@@ -2906,23 +2904,20 @@ function _findHdr(map: Map<number, _ColHdr>, col: number): string | undefined {
   return undefined
 }
 
-/** spanCellsToJson 内のステートマシン状態 (docs/ExcelStateMachine.md) */
-const enum Sm { START = 0, KEY_H = 1, KEY_V = 2, VALUE_COLLECT = 5, NEW_ROW = 3, END = 4, KV_DONE = 6 }
+/** spanCellsToJson 内のステートマシン状態 */
+const enum SmState { START = 0, KEY_H = 1, KEY_V = 2, END = 3 }
 
 /**
- * CONTAINER ステート: 子セルをステートマシンで再帰スキャンし、1 つのオブジェクトに結合して返す。
- * CONTAINER 完了後の遷移先は NEW_ROW（KV_DONE ではない）。
- * 設計書補足: 子が単一セルのみの場合はその value を直接返す（CONTAINER: single value）。
+ * CONTAINER: 子セルをステートマシンで再帰スキャンし、1つのオブジェクトに結合して返す。
+ * 子が単一セルのみの場合はその value を直接返す。
  */
 // deno-lint-ignore no-explicit-any
 function _scanContainer(cells: SpanCell[]): Record<string, any> | string {
-  // 単一セルのみ → value をそのまま返す
   if (cells.length === 1) return cells[0].value.trim()
   const rows = spanCellsToJson(cells)
   // deno-lint-ignore no-explicit-any
   const merged: Record<string, any> = {}
   for (const r of rows) Object.assign(merged, r)
-  // 再帰結果が空（KV ペアが1つも取れなかった）場合も単一 value として返す
   if (Object.keys(merged).length === 0 && cells.length > 0) {
     return cells[0].value.trim()
   }
@@ -2931,7 +2926,11 @@ function _scanContainer(cells: SpanCell[]): Record<string, any> | string {
 
 /**
  * SpanCell 配列をステートマシンで走査し JSON 行配列に変換する。
- * 詳細設計: docs/ExcelStateMachine.md
+ *
+ * 状態遷移: START → (KEY_H or KEY_V) → ... → END/新行へ
+ *
+ * 入力: cells (SpanCell[])
+ * 出力: Array<Record<string, any>> (各行ごとの record を push)
  */
 // deno-lint-ignore no-explicit-any
 function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
@@ -2949,231 +2948,166 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
 
   // deno-lint-ignore no-explicit-any
   const results: Array<Record<string, any>> = []
-  const usedRows = new Set<number>()             // CONTAINER で消費済みの行
 
   for (const rowNum of rowNums) {
-    if (usedRows.has(rowNum)) continue
-
-    // 空セルも含めて全セルを rowCells に入れる（VALUE_COLLECT で空値として扱う）
     const rowCells = byRow.get(rowNum) ?? []
-    if (rowCells.filter(c => c.value.trim()).length === 0) continue  // 非空セルがない行だけスキップ
+    if (rowCells.filter(c => c.value.trim()).length === 0) continue
 
-    // ── 全行をステートマシンで処理 ──────────────────────────────────────
-    // 詳細設計: docs/ExcelStateMachine.md
-
-    // ── 通常モード（KEY_H / KEY_V ステートマシン）──────────────────────
-    // 詳細設計: docs/ExcelStateMachine.md
     // deno-lint-ignore no-explicit-any
     const record: Record<string, any> = {}
     let smI = 0
     let smKey: SpanCell | null = null
-    let sm: Sm = Sm.START
-    // VALUE_COLLECT 用状態変数
-    let vcParent: SpanCell | null = null
-    let vcDir: 'h' | 'v' = 'v'
-    // deno-lint-ignore no-explicit-any
-    let vcValues: any[] = []
-    // スキル深掘りフラグ: キー確定時にセット（設計書 inSkillDeepDive）
+    let sm = SmState.START
     let inSkillDeepDive = false
-    // KV_DONE 用: 値の蓄積バッファ
-    let kvValue = ''
 
-    // START: 次のキー候補を読む。インラインKV判定後 KEY_H / KEY_V へ
-    const smStart = (): Sm => {
-      if (smI >= rowCells.length) return Sm.END
+    // START: 次のキー候補を読む
+    const smStart = (): SmState => {
+      if (smI >= rowCells.length) return SmState.END
+
       smKey = rowCells[smI]
-      // inSkillDeepDive: B に一致するが A に一致しない → スキル深掘り語
       const kv = smKey.value.trim()
+
+      // inSkillDeepDive: TAG_DICT に一致するが STRUCTURE_KEY_DICT に一致しない → スキル深掘り語
       inSkillDeepDive = TAG_DICT.test(kv) && !STRUCTURE_KEY_DICT.test(kv)
-      // インラインKV: キー候補セルに ：を含む → KV確定
+
+      // インラインKV: キー候補セルに ： を含む → 値確定
       const ci = smKey.value.indexOf('：')
       if (ci > 0) {
         record[smKey.value.slice(0, ci).trim()] = smKey.value.slice(ci + 1).trim()
         smI++
-        return Sm.START
+        return SmState.START
       }
-      return rowCells[smI + 1] ? Sm.KEY_H : Sm.KEY_V
+
+      // 右セルがあれば KEY_H、なければ KEY_V
+      return rowCells[smI + 1] ? SmState.KEY_H : SmState.KEY_V
     }
 
-    // KEY_H: 右セルを評価し次の状態を返す
-    const smKeyH = (): Sm => {
+    // KEY_H: 右セルを確認して判定
+    const smKeyH = (): SmState => {
       const key = smKey!
       const right = rowCells[smI + 1]
 
-      // 1. READ_COL_HEADERS: TAG_DICT (B) かつ right.rowSpan < key.rowSpan
-      if (TAG_DICT.test(right.value.trim()) && _rs(right) < _rs(key)) {
-        for (let k = smI + 1; k < rowCells.length; k++) {
-          const hc = rowCells[k]
-          if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
-        }
-        return Sm.NEW_ROW
-      }
-
-      // 2. right.rowSpan > key.rowSpan → KEY_V（right は次のキーとして残す）
-      if (_rs(right) > _rs(key)) return Sm.KEY_V
-
-      // 3a. right.rowSpan == key.rowSpan かつ STRUCTURE_KEY_DICT (A) → 構造キーの兄弟
-      if (_rs(right) === _rs(key) && STRUCTURE_KEY_DICT.test(right.value.trim())) {
-        return Sm.KEY_V
-      }
-
-      // 3b. right.rowSpan == key.rowSpan かつ スキル深掘り中 かつ TAG_DICT (B) → スキル深掘り同士の兄弟
-      if (_rs(right) === _rs(key) && inSkillDeepDive && TAG_DICT.test(right.value.trim())) {
-        return Sm.KEY_V
-      }
-
-      // 4. right.rowSpan == key.rowSpan → KV_DONE（値継続チェック）
+      // 兄弟判定（rowSpan == key.rowSpan かつ STRUCTURE_KEY_DICT or (inSkillDeepDive && TAG_DICT)）→ KEY_V
       if (_rs(right) === _rs(key)) {
-        kvValue = right.value.trim()
-        smI += 2
-        return Sm.KV_DONE
+        if (STRUCTURE_KEY_DICT.test(right.value.trim())) return SmState.KEY_V
+        if (inSkillDeepDive && TAG_DICT.test(right.value.trim())) return SmState.KEY_V
       }
 
-      // 5. right.rowSpan < key.rowSpan かつ タグ → CONTAINER
-      if (_isColTag(right.value)) {
+      // コンテナ判定（TAG_DICT かつ rowSpan < key.rowSpan）→ 子ステートマシン実行
+      if (TAG_DICT.test(right.value.trim()) && _rs(right) < _rs(key)) {
         const ch = _childCells(sorted, right)
         record[key.value.trim()] = _scanContainer(ch)
-        smI += 2; return Sm.NEW_ROW
+        smI += 2
+        return SmState.START
       }
 
-      // 6. right.rowSpan < key.rowSpan かつ 非タグ → VALUE_COLLECT（横方向）
-      vcParent = key; vcDir = 'h'; vcValues = []
-      return Sm.VALUE_COLLECT
+      // 値判定（rowSpan == key.rowSpan）→ 値確定 + 右方向継続チェック
+      if (_rs(right) === _rs(key)) {
+        let kvValue = right.value.trim()
+        smI += 2
+        // KV_DONE: 右方向の値継続をチェック
+        const keyRS = _rs(key)
+        let prevColEnd = right.colEnd
+        while (smI < rowCells.length) {
+          const next = rowCells[smI]
+          const nv = next.value.trim()
+          if (_rs(next) !== keyRS) break
+          if (TAG_DICT.test(nv) || STRUCTURE_KEY_DICT.test(nv)) break
+          // ギャップ検出
+          if (prevColEnd >= 0 && next.col > prevColEnd + 1) break
+          kvValue += nv
+          prevColEnd = next.colEnd
+          smI++
+        }
+        record[key.value.trim()] = kvValue
+        return SmState.START
+      }
+
+      // KEY_V へ（rowSpan に差がある・その他の場合）
+      return SmState.KEY_V
     }
 
-    // KEY_V: 下セルを評価し次の状態を返す（設計書 KEY_V セクション準拠）
-    const smKeyV = (): Sm => {
+    // KEY_V: 下セルを確認して判定
+    const smKeyV = (): SmState => {
       const key = smKey!
       const below = _belowCell(sorted, key)
 
-      // 下にセルなし → END
-      if (!below) { smI++; return Sm.START }
-
-      if (_cs(below) === _cs(key)) {
-        if (_isColTag(below.value)) {
-          // 同幅タグ → NEW_ROW（現在キーは空値。タグは次のキーへ）
-          smI++; return Sm.NEW_ROW
-        }
-        // 同幅非タグ → KV_DONE
-        record[key.value.trim()] = below.value.trim()
-        smI++; return Sm.START
-      }
-
-      if (_cs(below) < _cs(key)) {
-        if (_isColTag(below.value)) {
-          // 小さくタグ → CONTAINER
-          const ch = _childCells(sorted, key)
-          record[key.value.trim()] = _scanContainer(ch)
-          smI++; return Sm.NEW_ROW
-        }
-        // 小さく非タグ → VALUE_COLLECT（縦方向）
-        vcParent = key; vcDir = 'v'; vcValues = []
-        return Sm.VALUE_COLLECT
-      }
-
-      // colSpan > key.colSpan → KV_DONE
-      record[key.value.trim()] = below.value.trim()
-      smI++; return Sm.START
-    }
-
-    // KV_DONE: 値確定後に右方向の値継続をチェック（設計書 KV_DONE セクション準拠）
-    // 次セルが非タグ・非構造キーで同じ rowSpan かつ直前セルと隣接なら値に連結して継続。
-    // タグ・構造キー・rowSpan 変化・ギャップ（空セル挟み）で確定し START へ。
-    const smKvDone = (): Sm => {
-      const key = smKey!
-      const keyRS = _rs(key)
-      // 直前セルの colEnd を追跡（初期値: value セル = smI-1 番目）
-      let prevColEnd = smI >= 2 ? rowCells[smI - 1].colEnd : (smI >= 1 ? rowCells[smI - 1].colEnd : -1)
-      while (smI < rowCells.length) {
-        const next = rowCells[smI]
-        const nv = next.value.trim()
-        if (_rs(next) !== keyRS) break
-        if (TAG_DICT.test(nv) || STRUCTURE_KEY_DICT.test(nv)) break
-        // ギャップ検出: 前セルの colEnd+1 と次セルの col の間に空セルがある場合打ち切り
-        if (prevColEnd >= 0 && next.col > prevColEnd + 1) {
-          // 間に空でない非空セルがないか（filter済みなので空は除外されている）→ ギャップ = 打ち切り
-          break
-        }
-        kvValue += nv
-        prevColEnd = next.colEnd
+      // 下にセルなし → 次キーへ
+      if (!below) {
         smI++
+        return SmState.START
       }
-      record[key.value.trim()] = kvValue
-      // smI は次のキー候補を指す（または末尾）。START が拾う
-      return Sm.START
+
+      // 兄弟判定（colSpan == key.colSpan かつ TAG_DICT）→ KEY_V で次キー候補へ
+      if (_cs(below) === _cs(key) && TAG_DICT.test(below.value.trim())) {
+        smI++
+        return SmState.START
+      }
+
+      // コンテナ判定（TAG_DICT かつ colSpan < key.colSpan）→ 子ステートマシン実行
+      if (TAG_DICT.test(below.value.trim()) && _cs(below) < _cs(key)) {
+        const ch = _childCells(sorted, key)
+        record[key.value.trim()] = _scanContainer(ch)
+        smI++
+        return SmState.START
+      }
+
+      // 値判定（colSpan == key.colSpan の非タグ or その他）→ 値確定 + 下方向継続チェック
+      if (_cs(below) === _cs(key) || _cs(below) > _cs(key)) {
+        let kvValue = below.value.trim()
+        smI++
+        // KEY_V 値継続: 下方向チェック
+        const keyCS = _cs(key)
+        let prevRowEnd = below.rowEnd
+        while (smI < rowCells.length) {
+          const next = rowCells[smI]
+          const nv = next.value.trim()
+          if (_cs(next) !== keyCS) break
+          if (TAG_DICT.test(nv)) break
+          // ギャップ検出（行の連続性）
+          if (prevRowEnd >= 0 && next.row > prevRowEnd + 1) break
+          kvValue += nv
+          prevRowEnd = next.rowEnd
+          smI++
+        }
+        record[key.value.trim()] = kvValue
+        return SmState.START
+      }
+
+      // デフォルト（colSpan < key.colSpan かつ非タグ）→ 複数値配列（値の縦継続）
+      let kvValues: string[] = []
+      kvValues.push(below.value.trim())
+      smI++
+      const keyCS = _cs(key)
+      let scanRow = below.rowEnd + 1
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const candidates = sorted.filter(c =>
+          c.row === scanRow && c.col >= key.col && c.colEnd <= key.colEnd
+        ).sort((a, b) => a.col - b.col)
+        if (candidates.length === 0) break
+        if (TAG_DICT.test(candidates[0].value.trim())) break
+        let spanSum = 0
+        const rowVals: string[] = []
+        for (const c of candidates) {
+          if (TAG_DICT.test(c.value.trim())) break
+          rowVals.push(c.value.trim())
+          spanSum += _cs(c)
+        }
+        if (rowVals.length > 0) kvValues.push(...rowVals)
+        if (spanSum < keyCS) break
+        scanRow = candidates[candidates.length - 1].rowEnd + 1
+      }
+      record[key.value.trim()] = kvValues.length === 1 ? kvValues[0] : kvValues
+      return SmState.START
     }
 
-    // VALUE_COLLECT: 非タグ小セルを値として収集（設計書 VALUE_COLLECT セクション準拠）
-    const smValueCollect = (): Sm => {
-      const parent = vcParent!
-      if (vcDir === 'v') {
-        // 縦方向: 親キーの下を行ごとにスキャン
-        const parentCS = _cs(parent)
-        let scanRow = parent.rowEnd + 1
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          // この行で親キーの列範囲にあるセルを取得
-          const rowCandidates = sorted.filter(c =>
-            c.row === scanRow && c.col >= parent.col && c.colEnd <= parent.colEnd
-          ).sort((a, b) => a.col - b.col)
-          if (rowCandidates.length === 0) break
-
-          // 先頭セルがタグなら収集終了
-          if (_isColTag(rowCandidates[0].value)) break
-
-          const rowVals: string[] = []
-          let spanSum = 0
-          for (const c of rowCandidates) {
-            if (_isColTag(c.value)) break  // タグ出現で横方向打ち止め
-            // 空セルも値として扱う
-            rowVals.push(c.value.trim())
-            spanSum += _cs(c)
-          }
-          // rowVals.length > 0 チェック削除 → 空セルだけでも配列として push
-          vcValues.push(rowVals.length === 1 ? rowVals[0] : rowVals)
-          // スパン合計 == 親 colSpan → 継続、< → 終了
-          if (spanSum < parentCS) break
-          scanRow = rowCandidates[rowCandidates.length - 1].rowEnd + 1
-        }
-      } else {
-        // 横方向: 親キーの右を列ごとにスキャン
-        const parentRS = _rs(parent)
-        let scanCol = parent.colEnd + 1
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const colCandidates = sorted.filter(c =>
-            c.col === scanCol && c.row >= parent.row && c.rowEnd <= parent.rowEnd
-          ).sort((a, b) => a.row - b.row)
-          if (colCandidates.length === 0) break
-          if (_isColTag(colCandidates[0].value)) break
-
-          const colVals: string[] = []
-          let spanSum = 0
-          for (const c of colCandidates) {
-            if (_isColTag(c.value)) break
-            // 空セルも値として扱う
-            colVals.push(c.value.trim())
-            spanSum += _rs(c)
-          }
-          // colVals.length > 0 チェック削除 → 空セルだけでも配列として push
-          vcValues.push(colVals.length === 1 ? colVals[0] : colVals)
-          if (spanSum < parentRS) break
-          scanCol = colCandidates[colCandidates.length - 1].colEnd + 1
-        }
-      }
-      // 収集結果を親キーのバリューとして確定
-      record[parent.value.trim()] = vcValues.length === 1 ? vcValues[0] : vcValues
-      smI++; return Sm.START
-    }
-
-    while (sm !== Sm.NEW_ROW && sm !== Sm.END) {
+    while (sm !== SmState.END) {
       switch (sm) {
-        case Sm.START:          sm = smStart();         break
-        case Sm.KEY_H:          sm = smKeyH();          break
-        case Sm.KEY_V:          sm = smKeyV();          break
-        case Sm.KV_DONE:        sm = smKvDone();        break
-        case Sm.VALUE_COLLECT:  sm = smValueCollect();  break
-        default:                sm = Sm.END
+        case SmState.START:  sm = smStart(); break
+        case SmState.KEY_H:  sm = smKeyH(); break
+        case SmState.KEY_V:  sm = smKeyV(); break
+        default:             sm = SmState.END
       }
     }
 
