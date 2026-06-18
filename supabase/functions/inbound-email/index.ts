@@ -2555,38 +2555,29 @@ function worksheetToCells(sheet: Record<string, unknown>): SpanCell[] {
 // 設計書: docs/ExcelStateMachine.md
 // 状態: KEY_H / KEY_V / READ_COL_HEADERS / CONTAINER / KV_DONE / NEW_ROW / END
 
-/** 列ヘッダー語彙辞書（READ_COL_HEADERS 検出 = 条件1 + _isColTag で使用） */
-const COL_HEADER_DICT =
-  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー|備考|ポジション|チーム規模|担当業務)$/
+/**
+ * 辞書A: 構造キー辞書（A ⊂ B）。常にキーとして出現し、値にはならない語。
+ * KEY_H 条件3a の兄弟キー判定で使用。
+ */
+const STRUCTURE_KEY_DICT =
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働)$/
 
 /**
- * KEY_H 条件3「兄弟キー判定」専用辞書。
- * COL_HEADER_DICT から役割略語（PM/PMO/TL/SE/PL/PG 等）を除いた構造的な列ヘッダー語のみ。
- * 役割略語はスキルマトリクスの列ヘッダーにはなるが、「ポジション: PM」のように値としても出現するため
- * 条件3 で誤って兄弟キーとみなすのを防ぐ。
+ * 辞書B: タグ辞書（B ⊃ A）。構造キー＋スキル深掘り語＋サブラベルの全部入り。
+ * 条件1（READ_COL_HEADERS）/ _isColTag（CONTAINER vs VALUE_COLLECT）で使用。
+ * B \ A = スキル深掘り語（PM/TL 等）。キーにも値にもなる。
  */
-const SIBLING_KEY_DICT =
-  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務)$/
+const TAG_DICT =
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|補足|メモ|コメント|環境|言語|OS|DB|ツール|開発環境|フレームワーク|クラウド|インフラ|ミドルウェア|その他|立場|開発規模|人数)$/
 
 /** フェーズ評価列のみ（projectPhaseMap に登録する列。コンテンツ列=期間等は含めない） */
 const PHASE_EVAL_RE =
   /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守)$/
 
-/** VALUE_COLLECT タグ判定: COL_HEADER_DICT + 列内サブラベル語彙 */
-const VALUE_COLLECT_TAG_RE =
-  /^(備考|補足|メモ|コメント|環境|言語|OS|DB|ツール|技術スタック|開発環境|フレームワーク|クラウド|インフラ|ミドルウェア|その他|担当業務|ポジション|立場|チーム規模|開発規模|人数)$/
+/** タグ判定: TAG_DICT (B) に一致するかどうか */
 function _isColTag(value: string): boolean {
-  const v = value.trim()
-  return COL_HEADER_DICT.test(v) || VALUE_COLLECT_TAG_RE.test(v)
+  return TAG_DICT.test(value.trim())
 }
-
-/**
- * KEY_H 兄弟キー判定: 同じ rowSpan を持つ右セルがプロフィールラベルなら
- * 現在キーのバリューは空（未記録でスキップ）とみなす。
- * 例: フリガナ → 性別(同 rowSpan) → フリガナは空値・性別が次のキー
- */
-const PROFILE_LABEL_RE =
-  /^(氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働)$/
 
 const _cs = (c: SpanCell) => c.colEnd - c.col + 1   // colSpan
 const _rs = (c: SpanCell) => c.rowEnd - c.row + 1   // rowSpan
@@ -2601,7 +2592,7 @@ function _isContainer(cell: SpanCell, key: SpanCell): boolean {
   if (_rs(cell) > _rs(key))                    s += 1  // 幾何: 縦に大きい
   if (_cs(cell) > 2)                           s += 1  // 幾何: 横に広い
   if (cell.col === 0 || cell.col === 1)        s += 1  // 位置: 左端付近
-  if (COL_HEADER_DICT.test(cell.value.trim())) s += 2  // 辞書: 列ヘッダー語彙
+  if (TAG_DICT.test(cell.value.trim()))        s += 2  // 辞書: タグ語彙
   return s >= 2
 }
 
@@ -2916,7 +2907,7 @@ function _findHdr(map: Map<number, _ColHdr>, col: number): string | undefined {
 }
 
 /** spanCellsToJson 内のステートマシン状態 (docs/ExcelStateMachine.md) */
-const enum Sm { START = 0, KEY_H = 1, KEY_V = 2, VALUE_COLLECT = 5, NEW_ROW = 3, END = 4 }
+const enum Sm { START = 0, KEY_H = 1, KEY_V = 2, VALUE_COLLECT = 5, NEW_ROW = 3, END = 4, KV_DONE = 6 }
 
 /**
  * CONTAINER ステート: 子セルをステートマシンで再帰スキャンし、1 つのオブジェクトに結合して返す。
@@ -2958,107 +2949,17 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
 
   // deno-lint-ignore no-explicit-any
   const results: Array<Record<string, any>> = []
-  let colHeaderMap = new Map<number, _ColHdr>()  // READ_COL_HEADERS キャッシュ
   const usedRows = new Set<number>()             // CONTAINER で消費済みの行
-  const projectPhaseMap = new Map<number, _ColHdr>()  // プロジェクト表フェーズ列ヘッダー
-
-  // セクション追跡（スキル等の左端ワイドキーの下に続くマトリクス）
-  let sectionKey: string | null = null           // e.g., "スキル"
-  // deno-lint-ignore no-explicit-any
-  let sectionData: Record<string, any> = {}      // セクション内カテゴリ集積
-  let catKey: string | null = null               // e.g., "コンピュータ言語"
-  // deno-lint-ignore no-explicit-any
-  let catData: Record<string, any> = {}          // 現在カテゴリの KV
-  let sectionKeyCol = -1                         // セクションキーの col（e.g., 0）
-  let sectionKeyColEnd = -1                      // セクションキーの colEnd（e.g., 35）。カテゴリ判定境界
-  // deno-lint-ignore no-explicit-any
-  let phaseSections: Record<string, Record<string, any>> = {}  // 兄弟フェーズ列 { 計画立案: { コンピュータ言語: "◎", ... } }
 
   for (const rowNum of rowNums) {
     if (usedRows.has(rowNum)) continue
 
-    const rowCells = (byRow.get(rowNum) ?? []).filter(c => c.value.trim())
-    if (rowCells.length === 0) continue
+    // 空セルも含めて全セルを rowCells に入れる（VALUE_COLLECT で空値として扱う）
+    const rowCells = byRow.get(rowNum) ?? []
+    if (rowCells.filter(c => c.value.trim()).length === 0) continue  // 非空セルがない行だけスキップ
 
-    // ── READ_COL_HEADERS モード（マトリクスデータ行）────────────────────
-    if (colHeaderMap.size > 0) {
-      // deno-lint-ignore no-explicit-any
-      const matRec: Record<string, any> = {}     // 平坦マトリクスモード用
-      let matched = false
-      let newCatLabel: string | null = null
-      const kvCells: SpanCell[] = []             // sectionKeyCol 以外の非hdrセル（KVペア候補）
-      // セクションモード時のhdrセルを一時収集（catKey確定後に phaseSections へ振り分ける）
-      const hdrCells: Array<{ hdr: string; val: string }> = []
-
-      for (const cell of rowCells) {
-        const hdr = _findHdr(colHeaderMap, cell.col)
-        if (hdr) {
-          matched = true
-          if (sectionKey !== null) {
-            hdrCells.push({ hdr, val: cell.value.trim() })
-          } else {
-            matRec[hdr] = matRec[hdr] ? matRec[hdr] + '\n' + cell.value.trim() : cell.value.trim()
-          }
-        } else if (sectionKey !== null && cell.col === sectionKeyCol && cell.colEnd < sectionKeyColEnd) {
-          // セクション内カテゴリラベル（col が sectionKey と同じ かつ colSpan が小さい）
-          // 例: コンピュータ言語 (c0-6) はスキル (c0-35) より狭い → カテゴリ
-          //     業務内容 (c0-53) はスキル (c0-35) より広い → セクション終端シグナル
-          newCatLabel = cell.value.trim()
-        } else if (sectionKey !== null) {
-          kvCells.push(cell)
-        }
-      }
-
-      // kvCells が KV ペアを形成できるかどうか（知識有り+ShellScript 等）
-      const hasKvPairs = kvCells.length >= 2
-        && !!kvCells[0].value.trim() && !!kvCells[1].value.trim()
-
-      if (!matched && newCatLabel === null && !hasKvPairs) {
-        // この行にマトリクス列なし → マトリクス終了・通常処理へ fall through
-        if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
-        if (sectionKey !== null && Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
-        for (const [ph, pv] of Object.entries(phaseSections)) {
-          if (Object.keys(pv).length > 0) results.push({ [ph]: pv })
-        }
-        sectionKey = null; sectionData = {}; catKey = null; catData = {}
-        sectionKeyCol = -1; sectionKeyColEnd = -1; phaseSections = {}
-        // colHeaderMap クリア前に PHASE_EVAL_RE 列を projectPhaseMap に保存
-        // （プロジェクト表でスキルマトリクスと同じフェーズ列を使用するケース対応）
-        for (const [col, hdr] of colHeaderMap) {
-          if (PHASE_EVAL_RE.test(hdr.text)) {
-            projectPhaseMap.set(col, hdr)
-          }
-        }
-        colHeaderMap = new Map()
-      } else {
-        if (sectionKey !== null) {
-          // 1. カテゴリ遷移（catKey 確定を先に行う）
-          if (newCatLabel !== null && newCatLabel !== catKey) {
-            if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
-            catKey = newCatLabel
-            catData = {}
-          }
-          // 2. KV ペア → catData（業務経験: PHP/Python 等）
-          for (let j = 0; j + 1 < kvCells.length; j += 2) {
-            const kv = kvCells[j].value.trim()
-            const vv = kvCells[j + 1].value.trim()
-            if (kv && vv) { catData[kv] = vv; matched = true }
-          }
-          // 3. hdrCells → phaseSections（計画立案: {コンピュータ言語: ◎} 等・スキルの兄弟）
-          if (catKey !== null) {
-            for (const { hdr, val } of hdrCells) {
-              if (!phaseSections[hdr]) phaseSections[hdr] = {}
-              const prev = phaseSections[hdr][catKey]
-              phaseSections[hdr][catKey] = prev ? prev + '\n' + val : val
-            }
-          }
-        } else {
-          // 平坦マトリクスモード（セクションキーなし・旧動作）
-          if (Object.keys(matRec).length > 0) results.push(matRec)
-        }
-        continue
-      }
-    }
+    // ── 全行をステートマシンで処理 ──────────────────────────────────────
+    // 詳細設計: docs/ExcelStateMachine.md
 
     // ── 通常モード（KEY_H / KEY_V ステートマシン）──────────────────────
     // 詳細設計: docs/ExcelStateMachine.md
@@ -3072,11 +2973,18 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     let vcDir: 'h' | 'v' = 'v'
     // deno-lint-ignore no-explicit-any
     let vcValues: any[] = []
+    // スキル深掘りフラグ: キー確定時にセット（設計書 inSkillDeepDive）
+    let inSkillDeepDive = false
+    // KV_DONE 用: 値の蓄積バッファ
+    let kvValue = ''
 
     // START: 次のキー候補を読む。インラインKV判定後 KEY_H / KEY_V へ
     const smStart = (): Sm => {
       if (smI >= rowCells.length) return Sm.END
       smKey = rowCells[smI]
+      // inSkillDeepDive: B に一致するが A に一致しない → スキル深掘り語
+      const kv = smKey.value.trim()
+      inSkillDeepDive = TAG_DICT.test(kv) && !STRUCTURE_KEY_DICT.test(kv)
       // インラインKV: キー候補セルに ：を含む → KV確定
       const ci = smKey.value.indexOf('：')
       if (ci > 0) {
@@ -3092,24 +3000,11 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
       const key = smKey!
       const right = rowCells[smI + 1]
 
-      // 1. READ_COL_HEADERS: COL_HEADER_DICT かつ right.rowSpan < key.rowSpan
-      if (COL_HEADER_DICT.test(right.value.trim()) && _rs(right) < _rs(key)) {
+      // 1. READ_COL_HEADERS: TAG_DICT (B) かつ right.rowSpan < key.rowSpan
+      if (TAG_DICT.test(right.value.trim()) && _rs(right) < _rs(key)) {
         for (let k = smI + 1; k < rowCells.length; k++) {
           const hc = rowCells[k]
           if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
-        }
-        if (sectionKey !== null) {
-          if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
-          if (Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
-          for (const [ph, pv] of Object.entries(phaseSections)) {
-            if (Object.keys(pv).length > 0) results.push({ [ph]: pv })
-          }
-          sectionData = {}; catKey = null; catData = {}; phaseSections = {}
-        }
-        if (colHeaderMap.size > 0) {
-          sectionKey = key.value.trim()
-          sectionKeyCol = key.col
-          sectionKeyColEnd = key.colEnd
         }
         return Sm.NEW_ROW
       }
@@ -3117,21 +3012,21 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
       // 2. right.rowSpan > key.rowSpan → KEY_V（right は次のキーとして残す）
       if (_rs(right) > _rs(key)) return Sm.KEY_V
 
-      // 3. right.rowSpan == key.rowSpan かつ SIBLING_KEY_DICT → 兄弟キー。現在キーは KEY_V へ、右セルは次のキーとして残す
-      // ※ 役割略語（PM/PMO 等）は値としても出現するため COL_HEADER_DICT ではなく SIBLING_KEY_DICT で判定
-      if (_rs(right) === _rs(key) && SIBLING_KEY_DICT.test(right.value.trim())) {
+      // 3a. right.rowSpan == key.rowSpan かつ STRUCTURE_KEY_DICT (A) → 構造キーの兄弟
+      if (_rs(right) === _rs(key) && STRUCTURE_KEY_DICT.test(right.value.trim())) {
         return Sm.KEY_V
       }
 
-      // 3b. right.rowSpan == key.rowSpan かつ PROFILE_LABEL_RE → 現在キーはバリュー空・スキップ
-      if (_rs(right) === _rs(key) && PROFILE_LABEL_RE.test(right.value.trim())) {
-        smI++; return Sm.START
+      // 3b. right.rowSpan == key.rowSpan かつ スキル深掘り中 かつ TAG_DICT (B) → スキル深掘り同士の兄弟
+      if (_rs(right) === _rs(key) && inSkillDeepDive && TAG_DICT.test(right.value.trim())) {
+        return Sm.KEY_V
       }
 
-      // 4. right.rowSpan == key.rowSpan → KV_DONE
+      // 4. right.rowSpan == key.rowSpan → KV_DONE（値継続チェック）
       if (_rs(right) === _rs(key)) {
-        record[key.value.trim()] = right.value.trim()
-        smI += 2; return Sm.START
+        kvValue = right.value.trim()
+        smI += 2
+        return Sm.KV_DONE
       }
 
       // 5. right.rowSpan < key.rowSpan かつ タグ → CONTAINER
@@ -3181,6 +3076,33 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
       smI++; return Sm.START
     }
 
+    // KV_DONE: 値確定後に右方向の値継続をチェック（設計書 KV_DONE セクション準拠）
+    // 次セルが非タグ・非構造キーで同じ rowSpan かつ直前セルと隣接なら値に連結して継続。
+    // タグ・構造キー・rowSpan 変化・ギャップ（空セル挟み）で確定し START へ。
+    const smKvDone = (): Sm => {
+      const key = smKey!
+      const keyRS = _rs(key)
+      // 直前セルの colEnd を追跡（初期値: value セル = smI-1 番目）
+      let prevColEnd = smI >= 2 ? rowCells[smI - 1].colEnd : (smI >= 1 ? rowCells[smI - 1].colEnd : -1)
+      while (smI < rowCells.length) {
+        const next = rowCells[smI]
+        const nv = next.value.trim()
+        if (_rs(next) !== keyRS) break
+        if (TAG_DICT.test(nv) || STRUCTURE_KEY_DICT.test(nv)) break
+        // ギャップ検出: 前セルの colEnd+1 と次セルの col の間に空セルがある場合打ち切り
+        if (prevColEnd >= 0 && next.col > prevColEnd + 1) {
+          // 間に空でない非空セルがないか（filter済みなので空は除外されている）→ ギャップ = 打ち切り
+          break
+        }
+        kvValue += nv
+        prevColEnd = next.colEnd
+        smI++
+      }
+      record[key.value.trim()] = kvValue
+      // smI は次のキー候補を指す（または末尾）。START が拾う
+      return Sm.START
+    }
+
     // VALUE_COLLECT: 非タグ小セルを値として収集（設計書 VALUE_COLLECT セクション準拠）
     const smValueCollect = (): Sm => {
       const parent = vcParent!
@@ -3203,12 +3125,12 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
           let spanSum = 0
           for (const c of rowCandidates) {
             if (_isColTag(c.value)) break  // タグ出現で横方向打ち止め
+            // 空セルも値として扱う
             rowVals.push(c.value.trim())
             spanSum += _cs(c)
           }
-          if (rowVals.length > 0) {
-            vcValues.push(rowVals.length === 1 ? rowVals[0] : rowVals)
-          }
+          // rowVals.length > 0 チェック削除 → 空セルだけでも配列として push
+          vcValues.push(rowVals.length === 1 ? rowVals[0] : rowVals)
           // スパン合計 == 親 colSpan → 継続、< → 終了
           if (spanSum < parentCS) break
           scanRow = rowCandidates[rowCandidates.length - 1].rowEnd + 1
@@ -3229,12 +3151,12 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
           let spanSum = 0
           for (const c of colCandidates) {
             if (_isColTag(c.value)) break
+            // 空セルも値として扱う
             colVals.push(c.value.trim())
             spanSum += _rs(c)
           }
-          if (colVals.length > 0) {
-            vcValues.push(colVals.length === 1 ? colVals[0] : colVals)
-          }
+          // colVals.length > 0 チェック削除 → 空セルだけでも配列として push
+          vcValues.push(colVals.length === 1 ? colVals[0] : colVals)
           if (spanSum < parentRS) break
           scanCol = colCandidates[colCandidates.length - 1].colEnd + 1
         }
@@ -3249,6 +3171,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
         case Sm.START:          sm = smStart();         break
         case Sm.KEY_H:          sm = smKeyH();          break
         case Sm.KEY_V:          sm = smKeyV();          break
+        case Sm.KV_DONE:        sm = smKvDone();        break
         case Sm.VALUE_COLLECT:  sm = smValueCollect();  break
         default:                sm = Sm.END
       }
@@ -3257,14 +3180,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     if (Object.keys(record).length > 0) results.push(record)
   }
 
-  // ループ終了後: 未確定のセクションを flush
-  if (catKey !== null && Object.keys(catData).length > 0) sectionData[catKey] = catData
-  if (sectionKey !== null && Object.keys(sectionData).length > 0) results.push({ [sectionKey]: sectionData })
-  for (const [ph, pv] of Object.entries(phaseSections)) {
-    if (Object.keys(pv).length > 0) results.push({ [ph]: pv })
-  }
-
-  console.log(`[spanCells:sm] rows=${results.length} hdrMap=${colHeaderMap.size} sample=${results.slice(0, 2).map(r => Object.keys(r).slice(0, 4).join(',')).join(' | ')}`)
+  console.log(`[spanCells:sm] rows=${results.length} sample=${results.slice(0, 2).map(r => Object.keys(r).slice(0, 4).join(',')).join(' | ')}`)
   return results
 }
 
