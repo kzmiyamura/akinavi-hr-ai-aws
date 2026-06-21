@@ -2623,6 +2623,17 @@ function findCellAtCoord(cells: SpanCell[], row: number, col: number): SpanCell 
   )
 }
 
+/** row と同じ行で、col 以上の位置にある最初のセルを探す */
+function findNextCellToRight(cells: SpanCell[], row: number, minCol: number): SpanCell | undefined {
+  let result: SpanCell | undefined
+  for (const c of cells) {
+    if (c.row <= row && row <= c.rowEnd && c.col >= minCol) {
+      if (!result || c.col < result.col) result = c
+    }
+  }
+  return result
+}
+
 /** セルから次の走査座標を取得。null なら初期値 (0,0)、KEY_H なら右へ、KEY_V なら下へ */
 function getNextCoord(cell: SpanCell | null, state: 'KEY_H' | 'KEY_V'): [number, number] {
   if (!cell) return [0, 0]
@@ -2637,25 +2648,19 @@ function handleStart(
   col: number,
   context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
   skillNameSet: Set<string>
-): [Sm, [number, number]] {
+): [Sm, [number, number], boolean] {
   if (!cell) {
-    return [Sm.START, [row, col + 1]]
+    return [Sm.START, [row, col + 1], false]
   }
-  // 処理済みセルは2回処理しない
-  if (context.visited.has(cell)) {
-    return [Sm.START, [row, col + 1]]
-  }
-  context.visited.add(cell)
   const keyValue = cell.value.trim()
   context.smKey = cell
-  context.currentRecord[keyValue] = ""
+  context.currentRecord[keyValue] = undefined
 
   // inSkillDeepDive をセット: キー自体がスキル名（PHP, Java 等）のとき true
   // スキルがキー位置に来る場合（PHP | 3年）、右隣の TAG_DICT 語を兄弟キーとして扱うため
   context.inSkillDeepDive = skillNameSet.has(keyValue.toLowerCase().replace(/\s+/g, ''))
 
-  const nextCoord = getNextCoord(cell, 'KEY_H')
-  return [Sm.KEY_H, nextCoord]
+  return [Sm.KEY_H, getNextCoord(cell, 'KEY_H'), true]
 }
 
 /** KEY_H 状態のハンドラー */
@@ -2663,16 +2668,18 @@ function handleKeyH(
   cell: SpanCell | undefined,
   row: number,
   col: number,
-  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> }
-): [Sm, [number, number]] {
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
+  skillNameSet: Set<string>
+): [Sm, [number, number], boolean] {
   const right = cell
   if (!right) {
-    // キーバリュー成立: value="" で確定
+    // キーバリュー成立: undefined を "" に変換
     const keyName = context.smKey!.value.trim()
-    context.currentRecord[keyName] = ""
-    return [Sm.START, [row, col + 1]]
+    if (context.currentRecord[keyName] === undefined || context.currentRecord[keyName] === "") {
+      context.currentRecord[keyName] = ""
+    }
+    return [Sm.KEY_H, [row, col + 1], false]
   }
-
   const key = context.smKey!
   const keyRS = _rs(key)
   const rightRS = _rs(right)
@@ -2687,16 +2694,31 @@ function handleKeyH(
     console.log(`[KEY_H] key="${keyValue}" right="${rightValue}" rs=${keyRS}==${rightRS} struct=${isStructureKey} tag=${isTagKey} skill=${context.inSkillDeepDive} -> sibling=${shouldBeSibling}`)
 
     if (shouldBeSibling) {
-      // 兄弟キー → currentRecord に追加してから key のままで KEY_V へ
-      context.currentRecord[rightValue] = ""
-      return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
+      if (context.currentRecord[keyValue] === undefined) {
+        // 兄弟キー → currentRecord に追加してから key のままで KEY_V へ
+        return [Sm.KEY_V, getNextCoord(key, 'KEY_V'), false]
+      } else {
+        context.smKey = cell
+        context.currentRecord[rightValue] = undefined
+
+        // inSkillDeepDive をセット: キー自体がスキル名（PHP, Java 等）のとき true
+        // スキルがキー位置に来る場合（PHP | 3年）、右隣の TAG_DICT 語を兄弟キーとして扱うため
+        context.inSkillDeepDive = skillNameSet.has(rightValue.toLowerCase().replace(/\s+/g, ''))
+
+        return [Sm.KEY_H, getNextCoord(cell, 'KEY_H'), true]
+      }
     }
   }
 
   if (rightRS > keyRS) {
-    // 右セルが key より縦に大きい → 別の構造ブロック
-    // キーバリューはここまでで成立、right は次の START で処理
-    return [Sm.START, [right.row, right.col]]
+    context.smKey = cell
+    context.currentRecord[rightValue] = undefined
+
+    // inSkillDeepDive をセット: キー自体がスキル名（PHP, Java 等）のとき true
+    // スキルがキー位置に来る場合（PHP | 3年）、右隣の TAG_DICT 語を兄弟キーとして扱うため
+    context.inSkillDeepDive = skillNameSet.has(rightValue.toLowerCase().replace(/\s+/g, ''))
+
+    return [Sm.KEY_H, getNextCoord(cell, 'KEY_H'), true]
   }
 
   if (rightRS < keyRS) {
@@ -2709,15 +2731,15 @@ function handleKeyH(
       context.recordStack.push(context.currentRecord)
       context.keyStack.push(keyName)  // 親キー名を積む（inSkillDeepDive 判定に使用）
       context.currentRecord = newContainer
-      return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
+      return [Sm.KEY_H, getNextCoord(key, 'KEY_H'), true]
     }
   }
 
   // 共通：値確定処理
   const keyName = key.value.trim()
 
-  if (context.currentRecord[keyName] === "") {
-    // 空から値に
+  if (context.currentRecord[keyName] === undefined || context.currentRecord[keyName] === "") {
+    // undefined から値に
     context.currentRecord[keyName] = rightValue
   } else if (Array.isArray(context.currentRecord[keyName])) {
     // すでに配列なら要素追加
@@ -2727,8 +2749,8 @@ function handleKeyH(
     const existing = context.currentRecord[keyName]
     context.currentRecord[keyName] = [existing, rightValue]
   }
-  // 値確定後は KEY_V へ（右で兄弟キーがあるかチェック）
-  return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
+  // 値確定後は さらなるバリューを求めてKEY_Hのまま次へ
+  return [Sm.KEY_H, getNextCoord(key, 'KEY_H'), true]
 }
 
 /** KEY_V 状態のハンドラー */
@@ -2780,7 +2802,7 @@ function handleKeyV(
 
   // 値確定
   const keyName = key.value.trim()
-  if (context.currentRecord[keyName] === "") {
+  if (context.currentRecord[keyName] === undefined) {
     context.currentRecord[keyName] = belowValue
   } else if (Array.isArray(context.currentRecord[keyName])) {
     (context.currentRecord[keyName] as unknown[]).push(belowValue)
@@ -2792,50 +2814,68 @@ function handleKeyV(
 }
 
 /** 座標ベースのステートマシン走査メインループ */
-function processExcelWithStateMachine(cells: SpanCell[], skillNameSet: Set<string>): Record<string, unknown> {
+function processExcelWithStateMachine(cells: SpanCell[], skillNameSet: Set<string>, sheetName: string = 'Sheet'): Record<string, unknown> {
   const bounds = getBounds(cells)
   if (!bounds) return {}
 
   const [minRow, minCol] = bounds.topLeft
   const [maxRow, maxCol] = bounds.bottomRight
 
-  const record: Record<string, unknown> = {}
+  const record: Record<string, unknown> = { [sheetName]: {} }
   let row = minRow
   let col = minCol
   let state = Sm.START
+  let flg = false
+  let currentRecord: Record<string, unknown> = record[sheetName] as Record<string, unknown>
   const context = {
     smKey: null as SpanCell | null,
-    currentRecord: record,
-    recordStack: [record] as Record<string, unknown>[],
+    currentRecord: currentRecord,
+    recordStack: [record[sheetName]] as Record<string, unknown>[],
     keyStack: [] as string[],  // コンテナ昇格時の親キー名スタック（inSkillDeepDive 判定用）
     inSkillDeepDive: false,
     visited: new Set<SpanCell>()
   }
 
   while (row <= maxRow) {
+    // KEY_H では右隣のセルを探すため、KEY_H 時は findNextCellToRight を使う（列間のギャップを超える）
     const cell = findCellAtCoord(cells, row, col)
 
-    switch (state) {
-      case Sm.START:
-        [state, [row, col]] = handleStart(cell, row, col, context, skillNameSet)
-        break
-      case Sm.KEY_H:
-        [state, [row, col]] = handleKeyH(cell, row, col, context)
-        break
-      case Sm.KEY_V:
-        [state, [row, col]] = handleKeyV(cell, row, col, context)
-        break
-      case Sm.END:
-        row = maxRow + 1
-        break
-      default:
-        row = maxRow + 1
+    // 処理済みセルは2回処理しない
+    if (context.visited.has(cell!)) {
+      col++
+    } else {
+      switch (state) {
+        case Sm.START:
+          [state, [row, col], flg] = handleStart(cell, row, col, context, skillNameSet)
+          break
+        case Sm.KEY_H:
+          [state, [row, col], flg] = handleKeyH(cell, row, col, context, skillNameSet)
+          break
+        case Sm.KEY_V:
+          [state, [row, col]] = handleKeyV(cell, row, col, context)
+          break
+        case Sm.END:
+          row = maxRow + 1
+          break
+        default:
+          row = maxRow + 1
+      }
+      if (flg) {
+        context.visited.add(cell!)
+      }
     }
 
     // 右端到達で次行へ
     if (col > maxCol) {
+      if (state === Sm.KEY_H) {
+        const keyName = context.smKey!.value.trim()
+        if (context.currentRecord[keyName] === undefined || context.currentRecord[keyName] === "") {
+          context.currentRecord[keyName] = ""
+        }
+      }
       row++
       col = minCol
+      state = Sm.START
     }
   }
 
