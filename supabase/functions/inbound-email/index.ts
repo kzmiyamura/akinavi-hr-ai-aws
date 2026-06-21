@@ -2646,7 +2646,7 @@ function handleStart(
   cell: SpanCell | undefined,
   row: number,
   col: number,
-  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: SpanCell[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
   skillNameSet: Set<string>
 ): [Sm, [number, number], boolean] {
   if (!cell) {
@@ -2668,7 +2668,7 @@ function handleKeyH(
   cell: SpanCell | undefined,
   row: number,
   col: number,
-  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: SpanCell[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
   skillNameSet: Set<string>
 ): [Sm, [number, number], boolean] {
   const right = cell
@@ -2762,7 +2762,7 @@ function handleKeyV(
   cell: SpanCell | undefined,
   row: number,
   col: number,
-  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: SpanCell[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
   skillNameSet: Set<string>
 ): [Sm, [number, number], boolean] {
   const below = cell
