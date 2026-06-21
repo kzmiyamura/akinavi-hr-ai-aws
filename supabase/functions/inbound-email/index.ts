@@ -2762,20 +2762,21 @@ function handleKeyV(
   cell: SpanCell | undefined,
   row: number,
   col: number,
-  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> }
-): [Sm, [number, number]] {
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
+  skillNameSet: Set<string>
+): [Sm, [number, number], boolean] {
   const below = cell
   if (!below) {
     // 下セルなし → キーの値は空文字のまま確定、親に遡って兄弟キーを探す
     if (context.recordStack.length > 1) {
       context.currentRecord = context.recordStack.pop()!
       context.keyStack.pop()
-      return [Sm.KEY_H, getNextCoord(context.smKey!, 'KEY_H')]
+      return [Sm.KEY_H, getNextCoord(context.smKey!, 'KEY_H'), false]
     }
     // 右セルなし → START へ
     const nextCoord = getNextCoord(context.smKey!, 'KEY_H')
     context.smKey = null
-    return [Sm.START, nextCoord]
+    return [Sm.START, nextCoord, false]
   }
 
   const key = context.smKey!
@@ -2785,10 +2786,17 @@ function handleKeyV(
 
   // 兄弟キー: colSpan が同じかつ (STRUCTURE_KEY_DICT or (inSkillDeepDive && TAG_DICT))
   if (belowCS === keyCS && (STRUCTURE_KEY_DICT.test(belowValue) || (context.inSkillDeepDive && TAG_DICT.test(belowValue)))) {
-    context.currentRecord[belowValue] = ""
-    context.smKey = below
-    // KEY_H へ → 右隣の値を取りに行く
-    return [Sm.KEY_H, getNextCoord(below, 'KEY_H')]
+    const keyName = key.value.trim()
+    if (context.currentRecord[keyName] === undefined) {
+      // キーの値が未確定 → KEY_V で下へ進む（次の兄弟キーか値を探す）
+      return [Sm.KEY_V, getNextCoord(key, 'KEY_V'), false]
+    } else {
+      // キーの値が既に確定 → 新しい兄弟キーを登録
+      context.smKey = below
+      context.currentRecord[belowValue] = ""
+      // KEY_H へ → 右隣の値を取りに行く
+      return [Sm.KEY_H, getNextCoord(below, 'KEY_H'), true]
+    }
   }
 
   // コンテナ昇格: TAG_DICT 一致かつ colSpan < key → 階層を下げる
@@ -2801,7 +2809,7 @@ function handleKeyV(
     context.keyStack.push(keyName)
     context.currentRecord = newContainer
     context.smKey = below
-    return [Sm.KEY_H, getNextCoord(below, 'KEY_H')]
+    return [Sm.KEY_H, getNextCoord(below, 'KEY_H'), true]
   }
 
   // 値確定
@@ -2814,7 +2822,7 @@ function handleKeyV(
     const existing = context.currentRecord[keyName]
     context.currentRecord[keyName] = [existing, belowValue]
   }
-  return [Sm.KEY_V, getNextCoord(below, 'KEY_V')]
+  return [Sm.KEY_V, getNextCoord(below, 'KEY_V'), true]
 }
 
 /** 座標ベースのステートマシン走査メインループ */
@@ -2856,7 +2864,7 @@ function processExcelWithStateMachine(cells: SpanCell[], skillNameSet: Set<strin
           [state, [row, col], flg] = handleKeyH(cell, row, col, context, skillNameSet)
           break
         case Sm.KEY_V:
-          [state, [row, col]] = handleKeyV(cell, row, col, context)
+          [state, [row, col], flg] = handleKeyV(cell, row, col, context, skillNameSet)
           break
         case Sm.END:
           row = maxRow + 1
