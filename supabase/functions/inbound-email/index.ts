@@ -2579,7 +2579,7 @@ function worksheetToCells(sheet: Record<string, unknown>): SpanCell[] {
  * KEY_H 条件3a の兄弟キー判定で使用。
  */
 const STRUCTURE_KEY_DICT =
-  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働)$/
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働)$/
 
 /**
  * 辞書B: タグ辞書（B ⊃ A）。構造キー＋スキル深掘り語＋サブラベルの全部入り。
@@ -2587,7 +2587,7 @@ const STRUCTURE_KEY_DICT =
  * B \ A = スキル深掘り語（PM/TL 等）。キーにも値にもなる。
  */
 const TAG_DICT =
-  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|補足|メモ|コメント|環境|言語|OS|DB|ツール|開発環境|フレームワーク|クラウド|インフラ|ミドルウェア|その他|立場|開発規模|人数|スキル|コンピュータ言語|サーバ[ー]?OS|業務経験|知識有り)$/
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|補足|メモ|コメント|環境|言語|OS|DB|ツール|開発環境|フレームワーク|クラウド|インフラ|ミドルウェア|その他|立場|開発規模|人数|スキル|コンピュータ言語|サーバ[ー]?OS|業務経験|知識有り)$/
 
 /** フェーズ評価列のみ（projectPhaseMap に登録する列。コンテンツ列=期間等は含めない） */
 const PHASE_EVAL_RE =
@@ -2635,12 +2635,17 @@ function handleStart(
   cell: SpanCell | undefined,
   row: number,
   col: number,
-  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean },
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
   skillNameSet: Set<string>
 ): [Sm, [number, number]] {
   if (!cell) {
     return [Sm.START, [row, col + 1]]
   }
+  // 処理済みセルは2回処理しない
+  if (context.visited.has(cell)) {
+    return [Sm.START, [row, col + 1]]
+  }
+  context.visited.add(cell)
   const keyValue = cell.value.trim()
   context.smKey = cell
   context.currentRecord[keyValue] = ""
@@ -2658,11 +2663,13 @@ function handleKeyH(
   cell: SpanCell | undefined,
   row: number,
   col: number,
-  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean }
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> }
 ): [Sm, [number, number]] {
   const right = cell
   if (!right) {
-    // 値なし → currentRecord[key] は START で "" 初期化済みなのでそのまま成立
+    // キーバリュー成立: value="" で確定
+    const keyName = context.smKey!.value.trim()
+    context.currentRecord[keyName] = ""
     return [Sm.START, [row, col + 1]]
   }
 
@@ -2670,13 +2677,26 @@ function handleKeyH(
   const keyRS = _rs(key)
   const rightRS = _rs(right)
   const rightValue = right.value.trim()
+  const keyValue = key.value.trim()
 
   if (rightRS === keyRS) {
-    if (STRUCTURE_KEY_DICT.test(rightValue) || (context.inSkillDeepDive && TAG_DICT.test(rightValue))) {
+    const isStructureKey = STRUCTURE_KEY_DICT.test(rightValue)
+    const isTagKey = TAG_DICT.test(rightValue)
+    const shouldBeSibling = isStructureKey || (context.inSkillDeepDive && isTagKey)
+
+    console.log(`[KEY_H] key="${keyValue}" right="${rightValue}" rs=${keyRS}==${rightRS} struct=${isStructureKey} tag=${isTagKey} skill=${context.inSkillDeepDive} -> sibling=${shouldBeSibling}`)
+
+    if (shouldBeSibling) {
       // 兄弟キー → currentRecord に追加してから key のままで KEY_V へ
       context.currentRecord[rightValue] = ""
       return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
     }
+  }
+
+  if (rightRS > keyRS) {
+    // 右セルが key より縦に大きい → 別の構造ブロック
+    // キーバリューはここまでで成立、right は次の START で処理
+    return [Sm.START, [right.row, right.col]]
   }
 
   if (rightRS < keyRS) {
@@ -2707,6 +2727,7 @@ function handleKeyH(
     const existing = context.currentRecord[keyName]
     context.currentRecord[keyName] = [existing, rightValue]
   }
+  // 値確定後は KEY_V へ（右で兄弟キーがあるかチェック）
   return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
 }
 
@@ -2715,7 +2736,7 @@ function handleKeyV(
   cell: SpanCell | undefined,
   row: number,
   col: number,
-  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean }
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean; visited: Set<SpanCell> }
 ): [Sm, [number, number]] {
   const below = cell
   if (!below) {
@@ -2740,7 +2761,8 @@ function handleKeyV(
   if (belowCS === keyCS && (STRUCTURE_KEY_DICT.test(belowValue) || (context.inSkillDeepDive && TAG_DICT.test(belowValue)))) {
     context.currentRecord[belowValue] = ""
     context.smKey = below
-    return [Sm.START, getNextCoord(below, 'KEY_H')]
+    // KEY_H へ → 右隣の値を取りに行く
+    return [Sm.KEY_H, getNextCoord(below, 'KEY_H')]
   }
 
   // コンテナ昇格: TAG_DICT 一致かつ colSpan < key → 階層を下げる
@@ -2786,7 +2808,8 @@ function processExcelWithStateMachine(cells: SpanCell[], skillNameSet: Set<strin
     currentRecord: record,
     recordStack: [record] as Record<string, unknown>[],
     keyStack: [] as string[],  // コンテナ昇格時の親キー名スタック（inSkillDeepDive 判定用）
-    inSkillDeepDive: false
+    inSkillDeepDive: false,
+    visited: new Set<SpanCell>()
   }
 
   while (row <= maxRow) {

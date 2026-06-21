@@ -2,7 +2,7 @@
  * Excel ステートマシン ローカルテスト
  * Usage: node scripts/test_excel_statemachine.mjs <path-to-xlsx>
  *
- * Edge Function の spanCellsToJson / worksheetToCells を Node.js で再現し、
+ * Edge Function の processExcelWithStateMachine / worksheetToCells を Node.js で再現し、
  * 実際の Excel ファイルに対して出力を検証する。
  */
 import { readFileSync } from 'fs'
@@ -10,14 +10,20 @@ import { read as xlsxRead, utils as xlsxUtils } from 'xlsx'
 
 const filePath = process.argv[2] ?? '/Users/kazukimiyamura/Downloads/D.U_浦和駅.xlsx'
 
-// ─── 定数 ─────────────────────────────────────────────────────────────────
+// ─── 定数（Edge Function と同一）─────────────────────────────────────────
 
-const DECORATION_RE = /^[─━═\-=＝_＿◆◇■□●○▶▷▲△※＊\*・⁻\+×÷…‥†‡§¶@＠#＃$＄%％\^＾&＆|｜~～ーー]{2,}$/
+const STRUCTURE_KEY_DICT =
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働)$/
 
-const COL_HEADER_DICT =
-  /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー)$/
+const TAG_DICT =
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|補足|メモ|コメント|環境|言語|OS|DB|ツール|開発環境|フレームワーク|クラウド|インフラ|ミドルウェア|その他|立場|開発規模|人数|スキル|コンピュータ言語|サーバ[ー]?OS|業務経験|知識有り)$/
 
-// ─── ユーティリティ ────────────────────────────────────────────────────────
+const Sm = { START: 0, KEY_H: 1, KEY_V: 2, END: 3 }
+
+// ─── ユーティリティ（Edge Function と同一）────────────────────────────────
+
+const _cs = (c) => c.colEnd - c.col + 1   // colSpan
+const _rs = (c) => c.rowEnd - c.row + 1   // rowSpan
 
 function encodeXlsxCell(r, c) {
   let col = ''
@@ -72,154 +78,212 @@ function worksheetToCells(sheet) {
   return cells
 }
 
-// ─── ステートマシン（Edge Function と同一ロジック）────────────────────────
+// ─── 状態機械（Edge Function processExcelWithStateMachine と同一）────────
 
-const _cs = (c) => c.colEnd - c.col + 1
-const _rs = (c) => c.rowEnd - c.row + 1
-
-function _isContainer(cell, key) {
-  let s = 0
-  if (_rs(cell) > _rs(key))                    s += 1
-  if (_cs(cell) > 2)                           s += 1
-  if (cell.col === 0 || cell.col === 1)        s += 1
-  if (COL_HEADER_DICT.test(cell.value.trim())) s += 2
-  return s >= 2
-}
-
-function _childCells(all, cont) {
-  return all.filter(c =>
-    c !== cont &&
-    c.row  >= cont.row  && c.rowEnd  <= cont.rowEnd &&
-    c.col  >= cont.col  && c.colEnd  <= cont.colEnd
-  )
-}
-
-function _belowCell(sorted, key) {
-  return sorted.find(c =>
-    c.row === key.rowEnd + 1 && c.col >= key.col && c.col <= key.colEnd
-  )
-}
-
-function _findHdr(map, col) {
-  for (const [c, h] of map) if (col >= c && col <= h.colEnd) return h.text
-  return undefined
-}
-
-function _scanContainer(cells) {
-  const rows = spanCellsToJson(cells)
-  const merged = {}
-  for (const r of rows) Object.assign(merged, r)
-  return merged
-}
-
-function spanCellsToJson(cells) {
-  if (cells.length === 0) return []
-
-  const sorted = [...cells].sort((a, b) =>
-    a.row !== b.row ? a.row - b.row : a.col - b.col
-  )
-  const byRow = new Map()
-  for (const c of sorted) {
-    if (!byRow.has(c.row)) byRow.set(c.row, [])
-    byRow.get(c.row).push(c)
+function getBounds(cells) {
+  if (cells.length === 0) return null
+  let minRow = Infinity, minCol = Infinity
+  let maxRow = -Infinity, maxCol = -Infinity
+  for (const c of cells) {
+    minRow = Math.min(minRow, c.row)
+    minCol = Math.min(minCol, c.col)
+    maxRow = Math.max(maxRow, c.rowEnd)
+    maxCol = Math.max(maxCol, c.colEnd)
   }
-  const rowNums = [...byRow.keys()].sort((a, b) => a - b)
+  return { topLeft: [minRow, minCol], bottomRight: [maxRow, maxCol] }
+}
 
-  const results = []
-  let colHeaderMap = new Map()
-  const usedRows = new Set()
+function findCellAtCoord(cells, row, col) {
+  return cells.find(c =>
+    row >= c.row && row <= c.rowEnd &&
+    col >= c.col && col <= c.colEnd
+  )
+}
 
-  for (const rowNum of rowNums) {
-    if (usedRows.has(rowNum)) continue
+function getNextCoord(cell, state) {
+  if (!cell) return [0, 0]
+  if (state === 'KEY_H') return [cell.row, cell.colEnd + 1]
+  return [cell.rowEnd + 1, cell.col]
+}
 
-    const rowCells = (byRow.get(rowNum) ?? []).filter(c => c.value.trim())
-    if (rowCells.length === 0) continue
+function handleStart(cell, row, col, context, skillNameSet) {
+  if (!cell) {
+    return [Sm.START, [row, col + 1]]
+  }
+  // 処理済みセルは2回処理しない
+  if (context.visited.has(cell)) {
+    return [Sm.START, [row, col + 1]]
+  }
+  context.visited.add(cell)
+  const keyValue = cell.value.trim()
+  context.smKey = cell
+  context.currentRecord[keyValue] = ""
 
-    // READ_COL_HEADERS モード
-    if (colHeaderMap.size > 0) {
-      const matRec = {}
-      let matched = false
-      for (const cell of rowCells) {
-        const hdr = _findHdr(colHeaderMap, cell.col)
-        if (hdr) {
-          matRec[hdr] = matRec[hdr] ? matRec[hdr] + '\n' + cell.value.trim() : cell.value.trim()
-          matched = true
-        }
-      }
-      if (!matched) {
-        colHeaderMap = new Map()
-      } else {
-        if (Object.keys(matRec).length > 0) results.push(matRec)
-        continue
-      }
-    }
+  context.inSkillDeepDive = skillNameSet.has(keyValue.toLowerCase().replace(/\s+/g, ''))
 
-    // 通常モード
-    const record = {}
-    let i = 0
-    let newRow = false
+  const nextCoord = getNextCoord(cell, 'KEY_H')
+  return [Sm.KEY_H, nextCoord]
+}
 
-    while (i < rowCells.length && !newRow) {
-      const key = rowCells[i]
-      const right = rowCells[i + 1]
-
-      if (right) {
-        if (_rs(right) < _rs(key) && COL_HEADER_DICT.test(right.value.trim())) {
-          for (let k = i + 1; k < rowCells.length; k++) {
-            const hc = rowCells[k]
-            if (hc.value.trim()) colHeaderMap.set(hc.col, { text: hc.value.trim(), colEnd: hc.colEnd })
-          }
-          newRow = true
-
-        } else if (_isContainer(right, key)) {
-          const ch = _childCells(sorted, right)
-          record[key.value.trim()] = _scanContainer(ch)
-          for (let r = right.row; r <= right.rowEnd; r++) usedRows.add(r)
-          i += 2; newRow = true
-
-        } else if (_rs(right) === _rs(key)) {
-          record[key.value.trim()] = right.value.trim()
-          i += 2
-
-        } else if (_rs(right) < _rs(key)) {
-          const ch = _childCells(sorted, right)
-          record[right.value.trim()] = _scanContainer(ch)
-          for (let r = right.row; r <= right.rowEnd; r++) usedRows.add(r)
-          i += 2; newRow = true
-
-        } else {
-          i++
-        }
-
-      } else {
-        const below = _belowCell(sorted, key)
-
-        if (!below) {
-          i++
-        } else if (_cs(below) > _cs(key) && _isContainer(below, key)) {
-          const ch = _childCells(sorted, below)
-          record[key.value.trim()] = _scanContainer(ch)
-          for (let r = below.row; r <= below.rowEnd; r++) usedRows.add(r)
-          i++; newRow = true
-
-        } else if (_cs(below) >= _cs(key)) {
-          record[key.value.trim()] = below.value.trim()
-          usedRows.add(below.row)
-          i++
-
-        } else {
-          const ch = _childCells(sorted, key)
-          record[key.value.trim()] = _scanContainer(ch)
-          for (let r = key.row + 1; r <= key.rowEnd; r++) usedRows.add(r)
-          i++; newRow = true
-        }
-      }
-    }
-
-    if (Object.keys(record).length > 0) results.push(record)
+function handleKeyH(cell, row, col, context) {
+  const right = cell
+  if (!right) {
+    // キーバリュー成立: value="" で確定
+    const keyName = context.smKey.value.trim()
+    context.currentRecord[keyName] = ""
+    return [Sm.START, [row, col + 1]]
   }
 
-  return results
+  const key = context.smKey
+  const keyRS = _rs(key)
+  const rightRS = _rs(right)
+  const rightValue = right.value.trim()
+
+  if (rightRS === keyRS) {
+    if (STRUCTURE_KEY_DICT.test(rightValue) || (context.inSkillDeepDive && TAG_DICT.test(rightValue))) {
+      // 兄弟キー → currentRecord に追加してから key のままで KEY_V へ
+      context.currentRecord[rightValue] = ""
+      return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
+    }
+  }
+
+  if (rightRS > keyRS) {
+    // 右セルが key より縦に大きい → 別の構造ブロック
+    // キーバリューはここまでで成立、right は次の START で処理
+    return [Sm.START, [right.row, right.col]]
+  }
+
+  if (rightRS < keyRS) {
+    if (TAG_DICT.test(rightValue)) {
+      // コンテナ昇格: key の値を {} にし、その中に rightValue をキーとして追加
+      const keyName = key.value.trim()
+      const newContainer = {}
+      context.currentRecord[keyName] = newContainer
+      newContainer[rightValue] = ""
+      context.recordStack.push(context.currentRecord)
+      context.keyStack.push(keyName)
+      context.currentRecord = newContainer
+      return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
+    }
+  }
+
+  // 共通：値確定処理
+  const keyName = key.value.trim()
+
+  if (context.currentRecord[keyName] === "") {
+    context.currentRecord[keyName] = rightValue
+  } else if (Array.isArray(context.currentRecord[keyName])) {
+    context.currentRecord[keyName].push(rightValue)
+  } else {
+    const existing = context.currentRecord[keyName]
+    context.currentRecord[keyName] = [existing, rightValue]
+  }
+  // 値確定後は KEY_V へ（右で兄弟キーがあるかチェック）
+  return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
+}
+
+function handleKeyV(cell, row, col, context) {
+  const below = cell
+  if (!below) {
+    // 下セルなし → 親に遡って兄弟キーを探す
+    if (context.recordStack.length > 1) {
+      context.currentRecord = context.recordStack.pop()
+      context.keyStack.pop()
+      return [Sm.KEY_H, getNextCoord(context.smKey, 'KEY_H')]
+    }
+    const nextCoord = getNextCoord(context.smKey, 'KEY_H')
+    context.smKey = null
+    return [Sm.START, nextCoord]
+  }
+
+  const key = context.smKey
+  const keyCS = _cs(key)
+  const belowCS = _cs(below)
+  const belowValue = below.value.trim()
+
+  // 兄弟キー: colSpan が同じかつ (STRUCTURE_KEY_DICT or (inSkillDeepDive && TAG_DICT))
+  if (belowCS === keyCS && (STRUCTURE_KEY_DICT.test(belowValue) || (context.inSkillDeepDive && TAG_DICT.test(belowValue)))) {
+    context.currentRecord[belowValue] = ""
+    context.smKey = below
+    // KEY_H へ → 右隣の値を取りに行く
+    return [Sm.KEY_H, getNextCoord(below, 'KEY_H')]
+  }
+
+  // コンテナ昇格: TAG_DICT 一致かつ colSpan < key → 階層を下げる
+  if (TAG_DICT.test(belowValue) && belowCS < keyCS) {
+    const keyName = key.value.trim()
+    const newContainer = {}
+    context.currentRecord[keyName] = newContainer
+    newContainer[belowValue] = ""
+    context.recordStack.push(context.currentRecord)
+    context.keyStack.push(keyName)
+    context.currentRecord = newContainer
+    context.smKey = below
+    return [Sm.START, getNextCoord(below, 'KEY_H')]
+  }
+
+  // 値確定
+  const keyName = key.value.trim()
+  if (context.currentRecord[keyName] === "") {
+    context.currentRecord[keyName] = belowValue
+  } else if (Array.isArray(context.currentRecord[keyName])) {
+    context.currentRecord[keyName].push(belowValue)
+  } else {
+    const existing = context.currentRecord[keyName]
+    context.currentRecord[keyName] = [existing, belowValue]
+  }
+  return [Sm.START, getNextCoord(below, 'KEY_V')]
+}
+
+/** 座標ベースのステートマシン走査メインループ（Edge Function processExcelWithStateMachine と同一） */
+function processExcelWithStateMachine(cells, skillNameSet) {
+  const bounds = getBounds(cells)
+  if (!bounds) return {}
+
+  const [minRow, minCol] = bounds.topLeft
+  const [maxRow, maxCol] = bounds.bottomRight
+
+  const record = {}
+  let row = minRow
+  let col = minCol
+  let state = Sm.START
+  const context = {
+    smKey: null,
+    currentRecord: record,
+    recordStack: [record],
+    keyStack: [],
+    inSkillDeepDive: false,
+    visited: new Set()
+  }
+
+  while (row <= maxRow) {
+    const cell = findCellAtCoord(cells, row, col)
+
+    switch (state) {
+      case Sm.START:
+        [state, [row, col]] = handleStart(cell, row, col, context, skillNameSet)
+        break
+      case Sm.KEY_H:
+        [state, [row, col]] = handleKeyH(cell, row, col, context)
+        break
+      case Sm.KEY_V:
+        [state, [row, col]] = handleKeyV(cell, row, col, context)
+        break
+      case Sm.END:
+        row = maxRow + 1
+        break
+      default:
+        row = maxRow + 1
+    }
+
+    // 右端到達で次行へ
+    if (col > maxCol) {
+      row++
+      col = minCol
+    }
+  }
+
+  return record
 }
 
 // ─── extractSkillYearsFromSheetJson（Edge Function と同一ロジック）─────────
@@ -233,7 +297,10 @@ function parseDurationToMonths(text) {
   return null
 }
 
-function extractSkillYearsFromSheetJson(rows) {
+function extractSkillYearsFromSheetJson(record) {
+  // processExcelWithStateMachine は 1 つの record（オブジェクト）を返す
+  // extractSkillYearsFromSheetJson は旧版と同じく rows 配列を期待するので変換
+  const rows = Array.isArray(record) ? record : [record]
   if (rows.length === 0) return {}
   const headers = Object.keys(rows[0])
 
@@ -296,6 +363,7 @@ function extractSkillYearsFromSheetJson(rows) {
 
     for (const col of skillCols) {
       const val = row[col] ?? ''
+      if (typeof val !== 'string') continue
       const JSON_SKILL_BLOCKLIST = /^(自己PR|PR|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|担当|役割|役職|ポジション|立場|評価|合計|スコア|レベル|プロジェクト名|企業名|規模|人数|期間|開始|終了|弊社社員|自社社員|社員|派遣|契約|フリー|なし|特になし|未経験|なし$)$/
       const skills = val.split(/[\n\r、，,\/・]+/).map(s => s.trim()).filter(s => s && s !== '-' && s !== '－' && s.length >= 2 && !/^\d+$/.test(s) && !JSON_SKILL_BLOCKLIST.test(s))
       for (const skill of skills) {
@@ -326,6 +394,9 @@ const wb = xlsxRead(buf, { type: 'buffer', cellDates: false, raw: false })
 console.log('シート一覧:', wb.SheetNames)
 console.log()
 
+// skillNameSet: ローカルテストでは空（skill_master DB 接続なし）
+const skillNameSet = new Set()
+
 for (const sheetName of wb.SheetNames) {
   console.log(`\n${'='.repeat(60)}`)
   console.log(`シート: ${sheetName}`)
@@ -336,24 +407,24 @@ for (const sheetName of wb.SheetNames) {
 
   console.log(`SpanCell 数: ${cells.length}`)
 
-  // セルダンプ（上位20件）
+  // セルダンプ（上位30件）
   console.log('\n--- SpanCell サンプル (上位30件) ---')
   for (const c of cells.slice(0, 30)) {
     const rowSpan = c.rowEnd - c.row + 1
     const colSpan = c.colEnd - c.col + 1
     const span = (rowSpan > 1 || colSpan > 1) ? ` [r${rowSpan}×c${colSpan}]` : ''
-    console.log(`  (${c.row},${c.col})${span}: ${JSON.stringify(c.value.slice(0, 40))}`)
+    console.log(`  (${c.row},${c.col})${span}: ${JSON.stringify(c.value.slice(0, 60))}`)
   }
 
   // ステートマシン実行
   console.log('\n--- ステートマシン出力 ---')
-  const smOutput = spanCellsToJson(cells)
-  console.log(`出力レコード数: ${smOutput.length}`)
+  const smOutput = processExcelWithStateMachine(cells, skillNameSet)
+  const keys = Object.keys(smOutput)
+  console.log(`出力キー数: ${keys.length}`)
   console.log(JSON.stringify(smOutput, null, 2).slice(0, 5000))
 
   // extractSkillYearsFromSheetJson テスト
-  const flatRows = smOutput.filter(r => typeof r === 'object' && !Array.isArray(r))
   console.log('\n--- extractSkillYearsFromSheetJson ---')
-  const skillYears = extractSkillYearsFromSheetJson(flatRows)
+  const skillYears = extractSkillYearsFromSheetJson(smOutput)
   console.log('skillYears:', JSON.stringify(skillYears, null, 2))
 }
