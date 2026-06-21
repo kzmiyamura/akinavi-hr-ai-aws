@@ -2743,11 +2743,15 @@ function handleKeyH(
     context.currentRecord[keyName] = rightValue
   } else if (Array.isArray(context.currentRecord[keyName])) {
     // すでに配列なら要素追加
-    (context.currentRecord[keyName] as unknown[]).push(rightValue)
+    if (rightValue !== "") {
+      (context.currentRecord[keyName] as unknown[]).push(rightValue)
+    }
   } else {
     // 既存値があれば配列化
-    const existing = context.currentRecord[keyName]
-    context.currentRecord[keyName] = [existing, rightValue]
+    if (rightValue !== "") {
+      const existing = context.currentRecord[keyName]
+      context.currentRecord[keyName] = [existing, rightValue]
+    }
   }
   // 値確定後は さらなるバリューを求めてKEY_Hのまま次へ
   return [Sm.KEY_H, getNextCoord(key, 'KEY_H'), true]

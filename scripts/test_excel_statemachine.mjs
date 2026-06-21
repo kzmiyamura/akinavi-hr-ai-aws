@@ -188,10 +188,14 @@ function handleKeyH(cell, row, col, context, skillNameSet) {
   if (context.currentRecord[keyName] === undefined || context.currentRecord[keyName] === "") {
     context.currentRecord[keyName] = rightValue
   } else if (Array.isArray(context.currentRecord[keyName])) {
-    context.currentRecord[keyName].push(rightValue)
+    if (rightValue !== "") {
+      context.currentRecord[keyName].push(rightValue)
+    }
   } else {
-    const existing = context.currentRecord[keyName]
-    context.currentRecord[keyName] = [existing, rightValue]
+    if (rightValue !== "") {
+      const existing = context.currentRecord[keyName]
+      context.currentRecord[keyName] = [existing, rightValue]
+    }
   }
   // 値確定後は さらなるバリューを求めてKEY_Hのまま次へ
   return [Sm.KEY_H, getNextCoord(key, 'KEY_H'), true]
@@ -242,10 +246,14 @@ function handleKeyV(cell, row, col, context) {
   if (context.currentRecord[keyName] === undefined || context.currentRecord[keyName] === "") {
     context.currentRecord[keyName] = belowValue
   } else if (Array.isArray(context.currentRecord[keyName])) {
-    context.currentRecord[keyName].push(belowValue)
+    if (belowValue !== "") {
+      context.currentRecord[keyName].push(belowValue)
+    }
   } else {
-    const existing = context.currentRecord[keyName]
-    context.currentRecord[keyName] = [existing, belowValue]
+    if (belowValue !== "") {
+      const existing = context.currentRecord[keyName]
+      context.currentRecord[keyName] = [existing, belowValue]
+    }
   }
   return [Sm.START, getNextCoord(below, 'KEY_V')]
 }
