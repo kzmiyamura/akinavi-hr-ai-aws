@@ -2729,7 +2729,7 @@ function handleKeyH(
       context.currentRecord[keyName] = newContainer
       newContainer[rightValue] = ""
       context.recordStack.push(context.currentRecord)
-      context.keyStack.push(keyName)  // 親キー名を積む（inSkillDeepDive 判定に使用）
+      context.keyStack.push(key)  // 親キーセルを積む（rowEnd/colEnd で範囲判定）
       context.currentRecord = newContainer
       return [Sm.KEY_H, getNextCoord(key, 'KEY_H'), true]
     }
@@ -2806,7 +2806,7 @@ function handleKeyV(
     context.currentRecord[keyName] = newContainer
     newContainer[belowValue] = ""
     context.recordStack.push(context.currentRecord)
-    context.keyStack.push(keyName)
+    context.keyStack.push(key)  // 親キーセルを積む（rowEnd/colEnd で範囲判定）
     context.currentRecord = newContainer
     context.smKey = below
     return [Sm.KEY_H, getNextCoord(below, 'KEY_H'), true]
@@ -2843,7 +2843,7 @@ function processExcelWithStateMachine(cells: SpanCell[], skillNameSet: Set<strin
     smKey: null as SpanCell | null,
     currentRecord: currentRecord,
     recordStack: [record[sheetName]] as Record<string, unknown>[],
-    keyStack: [] as string[],  // コンテナ昇格時の親キー名スタック（inSkillDeepDive 判定用）
+    keyStack: [] as SpanCell[],  // コンテナ昇格時の親キー（セル情報付き）
     inSkillDeepDive: false,
     visited: new Set<SpanCell>()
   }
