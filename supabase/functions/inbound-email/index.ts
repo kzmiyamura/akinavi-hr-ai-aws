@@ -2649,6 +2649,28 @@ function handleStart(
   context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: SpanCell[]; inSkillDeepDive: boolean; visited: Set<SpanCell> },
   skillNameSet: Set<string>
 ): [Sm, [number, number], boolean] {
+  // 見つかったセルが親コンテナからはみ出ているかチェック
+  // はみ出ていたら親から独立させる。親の親からもはみ出ていたら更に独立させる。
+  // これを繰り返す。
+  if (cell) {
+    while (context.keyStack.length > 0) {
+      const parentContainer = context.keyStack[context.keyStack.length - 1]
+
+      // 4方向ではみ出しをチェック
+      if (cell.col < parentContainer.col ||          // 左
+          cell.colEnd > parentContainer.colEnd ||    // 右
+          cell.row < parentContainer.row ||          // 上
+          cell.rowEnd > parentContainer.rowEnd) {    // 下
+        // はみ出ている → 親から独立
+        context.currentRecord = context.recordStack.pop()!
+        context.keyStack.pop()
+      } else {
+        // はみ出ていない → 親内におさまっている
+        break
+      }
+    }
+  }
+
   if (!cell) {
     return [Sm.START, [row, col + 1], false]
   }
