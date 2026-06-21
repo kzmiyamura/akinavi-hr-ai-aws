@@ -289,6 +289,24 @@ function handleKeyV(cell, row, col, context, skillNameSet) {
     return [Sm.KEY_H, getNextCoord(below, 'KEY_H'), true]
   }
 
+  // 値確定前に親からのはみ出し判定
+  while (context.keyStack.length > 0) {
+    const parentContainer = context.keyStack[context.keyStack.length - 1]
+
+    // はみ出しをチェック
+    if (below.col < parentContainer.col ||                                               // 左にはみ出し
+        below.row < parentContainer.row ||                                               // 上にはみ出し
+        (parentContainer.colEnd < below.col && below.rowEnd < parentContainer.rowEnd) || // 右にはみ出し（縦の子）
+        (parentContainer.rowEnd < below.row && below.colEnd < parentContainer.colEnd)) { // 下にはみ出し（横の子）
+      // はみ出ている → 親から独立
+      context.currentRecord = context.recordStack.pop()
+      context.keyStack.pop()
+    } else {
+      // はみ出ていない → 親内におさまっている
+      break
+    }
+  }
+
   // 値確定
   const keyName = key.value.trim()
   if (context.currentRecord[keyName] === undefined || context.currentRecord[keyName] === "") {
