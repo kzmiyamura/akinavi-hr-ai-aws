@@ -2802,7 +2802,7 @@ function handleKeyV(
 
   // 値確定
   const keyName = key.value.trim()
-  if (context.currentRecord[keyName] === undefined) {
+  if (context.currentRecord[keyName] === undefined || context.currentRecord[keyName] === "") {
     context.currentRecord[keyName] = belowValue
   } else if (Array.isArray(context.currentRecord[keyName])) {
     (context.currentRecord[keyName] as unknown[]).push(belowValue)

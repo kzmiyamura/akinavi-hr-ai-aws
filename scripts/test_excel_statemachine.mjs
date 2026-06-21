@@ -185,7 +185,7 @@ function handleKeyH(cell, row, col, context, skillNameSet) {
   // 共通：値確定処理
   const keyName = key.value.trim()
 
-  if (context.currentRecord[keyName] === undefined) {
+  if (context.currentRecord[keyName] === undefined || context.currentRecord[keyName] === "") {
     context.currentRecord[keyName] = rightValue
   } else if (Array.isArray(context.currentRecord[keyName])) {
     context.currentRecord[keyName].push(rightValue)
@@ -239,7 +239,7 @@ function handleKeyV(cell, row, col, context) {
 
   // 値確定
   const keyName = key.value.trim()
-  if (context.currentRecord[keyName] === undefined) {
+  if (context.currentRecord[keyName] === undefined || context.currentRecord[keyName] === "") {
     context.currentRecord[keyName] = belowValue
   } else if (Array.isArray(context.currentRecord[keyName])) {
     context.currentRecord[keyName].push(belowValue)
