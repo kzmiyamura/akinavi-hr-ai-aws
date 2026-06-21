@@ -457,6 +457,25 @@ async function getSkillMasterFromDb(
   return _skillDbCache!
 }
 
+/** skill_master の名前＋エイリアスを小文字 Set で保持（inSkillDeepDive 判定用） */
+let _skillNameSet: Set<string> | null = null
+let _skillNameSetExpiry = 0
+
+/** skill_master のスキル名 Set を返す。getSkillMasterFromDb のキャッシュを流用 */
+function getSkillNameSet(masterSkills: SkillMasterEntry[]): Set<string> {
+  if (_skillNameSet && Date.now() < _skillNameSetExpiry) return _skillNameSet
+  const s = new Set<string>()
+  for (const entry of masterSkills) {
+    s.add(entry.name.toLowerCase().replace(/\s+/g, ''))
+    for (const alias of entry.aliases) {
+      s.add(alias.toLowerCase().replace(/\s+/g, ''))
+    }
+  }
+  _skillNameSet = s
+  _skillNameSetExpiry = Date.now() + 5 * 60 * 1000
+  return s
+}
+
 /**
  * テキストから skill_master エントリを照合してスキルを抽出する。
  * マッチしたスキルをテキストから除去した残テキストも返す。
@@ -2568,7 +2587,7 @@ const STRUCTURE_KEY_DICT =
  * B \ A = スキル深掘り語（PM/TL 等）。キーにも値にもなる。
  */
 const TAG_DICT =
-  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|補足|メモ|コメント|環境|言語|OS|DB|ツール|開発環境|フレームワーク|クラウド|インフラ|ミドルウェア|その他|立場|開発規模|人数)$/
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|補足|メモ|コメント|環境|言語|OS|DB|ツール|開発環境|フレームワーク|クラウド|インフラ|ミドルウェア|その他|立場|開発規模|人数|スキル|コンピュータ言語|サーバ[ー]?OS|業務経験|知識有り)$/
 
 /** フェーズ評価列のみ（projectPhaseMap に登録する列。コンテンツ列=期間等は含めない） */
 const PHASE_EVAL_RE =
@@ -2581,6 +2600,223 @@ function _isColTag(value: string): boolean {
 
 const _cs = (c: SpanCell) => c.colEnd - c.col + 1   // colSpan
 const _rs = (c: SpanCell) => c.rowEnd - c.row + 1   // rowSpan
+
+/** 全セルの左上と右下の座標を取得 */
+function getBounds(cells: SpanCell[]): { topLeft: [number, number]; bottomRight: [number, number] } | null {
+  if (cells.length === 0) return null
+  let minRow = Infinity, minCol = Infinity
+  let maxRow = -Infinity, maxCol = -Infinity
+  for (const c of cells) {
+    minRow = Math.min(minRow, c.row)
+    minCol = Math.min(minCol, c.col)
+    maxRow = Math.max(maxRow, c.rowEnd)
+    maxCol = Math.max(maxCol, c.colEnd)
+  }
+  return { topLeft: [minRow, minCol], bottomRight: [maxRow, maxCol] }
+}
+
+/** 指定座標 (row, col) を包含するセルを返す。複数結合セルに含まれる場合は最初の1件 */
+function findCellAtCoord(cells: SpanCell[], row: number, col: number): SpanCell | undefined {
+  return cells.find(c =>
+    row >= c.row && row <= c.rowEnd &&
+    col >= c.col && col <= c.colEnd
+  )
+}
+
+/** セルから次の走査座標を取得。null なら初期値 (0,0)、KEY_H なら右へ、KEY_V なら下へ */
+function getNextCoord(cell: SpanCell | null, state: 'KEY_H' | 'KEY_V'): [number, number] {
+  if (!cell) return [0, 0]
+  if (state === 'KEY_H') return [cell.row, cell.colEnd + 1]
+  return [cell.rowEnd + 1, cell.col]
+}
+
+/** START 状態のハンドラー */
+function handleStart(
+  cell: SpanCell | undefined,
+  row: number,
+  col: number,
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean },
+  skillNameSet: Set<string>
+): [Sm, [number, number]] {
+  if (!cell) {
+    return [Sm.START, [row, col + 1]]
+  }
+  const keyValue = cell.value.trim()
+  context.smKey = cell
+  context.currentRecord[keyValue] = ""
+
+  // inSkillDeepDive をセット: キー自体がスキル名（PHP, Java 等）のとき true
+  // スキルがキー位置に来る場合（PHP | 3年）、右隣の TAG_DICT 語を兄弟キーとして扱うため
+  context.inSkillDeepDive = skillNameSet.has(keyValue.toLowerCase().replace(/\s+/g, ''))
+
+  const nextCoord = getNextCoord(cell, 'KEY_H')
+  return [Sm.KEY_H, nextCoord]
+}
+
+/** KEY_H 状態のハンドラー */
+function handleKeyH(
+  cell: SpanCell | undefined,
+  row: number,
+  col: number,
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean }
+): [Sm, [number, number]] {
+  const right = cell
+  if (!right) {
+    // 右セルなし → キーの値は空で確定、START で次に行く
+    const nextCoord = getNextCoord(context.smKey!, 'KEY_V')
+    return [Sm.START, nextCoord]
+  }
+
+  const key = context.smKey!
+  const keyRS = _rs(key)
+  const rightRS = _rs(right)
+  const rightValue = right.value.trim()
+
+  if (rightRS === keyRS) {
+    if (STRUCTURE_KEY_DICT.test(rightValue) || (context.inSkillDeepDive && TAG_DICT.test(rightValue))) {
+      // 兄弟キー → currentRecord に追加してから key のままで KEY_V へ
+      context.currentRecord[rightValue] = ""
+      return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
+    }
+  }
+
+  if (rightRS < keyRS) {
+    if (TAG_DICT.test(rightValue)) {
+      // コンテナ昇格: key の値を {} にし、その中に rightValue をキーとして追加
+      const keyName = key.value.trim()
+      const newContainer: Record<string, unknown> = {}
+      context.currentRecord[keyName] = newContainer
+      newContainer[rightValue] = ""
+      context.recordStack.push(context.currentRecord)
+      context.keyStack.push(keyName)  // 親キー名を積む（inSkillDeepDive 判定に使用）
+      context.currentRecord = newContainer
+      return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
+    }
+  }
+
+  // 共通：値確定処理
+  const keyName = key.value.trim()
+
+  if (context.currentRecord[keyName] === "") {
+    // 空から値に
+    context.currentRecord[keyName] = rightValue
+  } else if (Array.isArray(context.currentRecord[keyName])) {
+    // すでに配列なら要素追加
+    (context.currentRecord[keyName] as unknown[]).push(rightValue)
+  } else {
+    // 既存値があれば配列化
+    const existing = context.currentRecord[keyName]
+    context.currentRecord[keyName] = [existing, rightValue]
+  }
+  return [Sm.KEY_V, getNextCoord(key, 'KEY_V')]
+}
+
+/** KEY_V 状態のハンドラー */
+function handleKeyV(
+  cell: SpanCell | undefined,
+  row: number,
+  col: number,
+  context: { smKey: SpanCell | null; currentRecord: Record<string, unknown>; recordStack: Record<string, unknown>[]; keyStack: string[]; inSkillDeepDive: boolean }
+): [Sm, [number, number]] {
+  const below = cell
+  if (!below) {
+    // 下セルなし → キーの値は空文字のまま確定、親に遡って兄弟キーを探す
+    if (context.recordStack.length > 1) {
+      context.currentRecord = context.recordStack.pop()!
+      context.keyStack.pop()
+      return [Sm.KEY_H, getNextCoord(context.smKey!, 'KEY_H')]
+    }
+    context.smKey = null
+    return [Sm.START, [row + 1, col]]
+  }
+
+  const key = context.smKey!
+  const keyCS = _cs(key)
+  const belowCS = _cs(below)
+  const belowValue = below.value.trim()
+
+  // 兄弟キー: colSpan が同じかつ (STRUCTURE_KEY_DICT or (inSkillDeepDive && TAG_DICT))
+  if (belowCS === keyCS && (STRUCTURE_KEY_DICT.test(belowValue) || (context.inSkillDeepDive && TAG_DICT.test(belowValue)))) {
+    context.currentRecord[belowValue] = ""
+    context.smKey = below
+    return [Sm.START, getNextCoord(below, 'KEY_H')]
+  }
+
+  // コンテナ昇格: TAG_DICT 一致かつ colSpan < key → 階層を下げる
+  if (TAG_DICT.test(belowValue) && belowCS < keyCS) {
+    const keyName = key.value.trim()
+    const newContainer: Record<string, unknown> = {}
+    context.currentRecord[keyName] = newContainer
+    newContainer[belowValue] = ""
+    context.recordStack.push(context.currentRecord)
+    context.keyStack.push(keyName)
+    context.currentRecord = newContainer
+    context.smKey = below
+    return [Sm.START, getNextCoord(below, 'KEY_H')]
+  }
+
+  // 値確定
+  const keyName = key.value.trim()
+  if (context.currentRecord[keyName] === "") {
+    context.currentRecord[keyName] = belowValue
+  } else if (Array.isArray(context.currentRecord[keyName])) {
+    (context.currentRecord[keyName] as unknown[]).push(belowValue)
+  } else {
+    const existing = context.currentRecord[keyName]
+    context.currentRecord[keyName] = [existing, belowValue]
+  }
+  return [Sm.START, getNextCoord(below, 'KEY_V')]
+}
+
+/** 座標ベースのステートマシン走査メインループ */
+function processExcelWithStateMachine(cells: SpanCell[], skillNameSet: Set<string>): Record<string, unknown> {
+  const bounds = getBounds(cells)
+  if (!bounds) return {}
+
+  const [minRow, minCol] = bounds.topLeft
+  const [maxRow, maxCol] = bounds.bottomRight
+
+  const record: Record<string, unknown> = {}
+  let row = minRow
+  let col = minCol
+  let state = Sm.START
+  const context = {
+    smKey: null as SpanCell | null,
+    currentRecord: record,
+    recordStack: [record] as Record<string, unknown>[],
+    keyStack: [] as string[],  // コンテナ昇格時の親キー名スタック（inSkillDeepDive 判定用）
+    inSkillDeepDive: false
+  }
+
+  while (row <= maxRow) {
+    const cell = findCellAtCoord(cells, row, col)
+
+    switch (state) {
+      case Sm.START:
+        [state, [row, col]] = handleStart(cell, row, col, context, skillNameSet)
+        break
+      case Sm.KEY_H:
+        [state, [row, col]] = handleKeyH(cell, row, col, context)
+        break
+      case Sm.KEY_V:
+        [state, [row, col]] = handleKeyV(cell, row, col, context)
+        break
+      case Sm.END:
+        row = maxRow + 1
+        break
+      default:
+        row = maxRow + 1
+    }
+
+    // 右端到達で次行へ
+    if (col > maxCol) {
+      row++
+      col = minCol
+    }
+  }
+
+  return record
+}
 
 /**
  * ハイブリッドスコアによるコンテナ判定。
@@ -2598,19 +2834,19 @@ function _isContainer(cell: SpanCell, key: SpanCell): boolean {
 
 /** container の座標内にある子セルを返す（container 自身は除く） */
 function _childCells(all: SpanCell[], cont: SpanCell): SpanCell[] {
-  // 通常ケース: rowSpan > 1 → rowEnd で範囲を確定
+  // 通常ケース: rowSpan > 1 → rowEnd で範囲を確定。col は左端のみ判定
   if (cont.rowEnd > cont.row) {
     return all.filter(c =>
       c !== cont &&
       c.row >= cont.row && c.rowEnd <= cont.rowEnd &&
-      c.col >= cont.col && c.colEnd <= cont.colEnd
+      c.col >= cont.col
     )
   }
   // rowSpan=1 ケース: col 範囲内にセルが存在しない行（空行）が来るまで下方向にスキャン
   const candidates = all.filter(c =>
     c !== cont &&
     c.row > cont.row &&
-    c.col >= cont.col && c.colEnd <= cont.colEnd
+    c.col >= cont.col
   )
   if (candidates.length === 0) return []
   const rowsWithCells = new Set(candidates.map(c => c.row))
@@ -2905,7 +3141,7 @@ function _findHdr(map: Map<number, _ColHdr>, col: number): string | undefined {
 }
 
 /** spanCellsToJson 内のステートマシン状態 */
-const enum SmState { START = 0, KEY_H = 1, KEY_V = 2, END = 3 }
+const enum Sm { START = 0, KEY_H = 1, KEY_V = 2, END = 3 }
 
 /**
  * CONTAINER: 子セルをステートマシンで再帰スキャンし、1つのオブジェクトに結合して返す。
@@ -2957,12 +3193,12 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     const record: Record<string, any> = {}
     let smI = 0
     let smKey: SpanCell | null = null
-    let sm = SmState.START
+    let sm = Sm.START
     let inSkillDeepDive = false
 
     // START: 次のキー候補を読む
-    const smStart = (): SmState => {
-      if (smI >= rowCells.length) return SmState.END
+    const smStart = (): Sm => {
+      if (smI >= rowCells.length) return Sm.END
 
       smKey = rowCells[smI]
       const kv = smKey.value.trim()
@@ -2975,22 +3211,22 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
       if (ci > 0) {
         record[smKey.value.slice(0, ci).trim()] = smKey.value.slice(ci + 1).trim()
         smI++
-        return SmState.START
+        return Sm.START
       }
 
       // 右セルがあれば KEY_H、なければ KEY_V
-      return rowCells[smI + 1] ? SmState.KEY_H : SmState.KEY_V
+      return rowCells[smI + 1] ? Sm.KEY_H : Sm.KEY_V
     }
 
     // KEY_H: 右セルを確認して判定
-    const smKeyH = (): SmState => {
+    const smKeyH = (): Sm => {
       const key = smKey!
       const right = rowCells[smI + 1]
 
       // 兄弟判定（rowSpan == key.rowSpan かつ STRUCTURE_KEY_DICT or (inSkillDeepDive && TAG_DICT)）→ KEY_V
       if (_rs(right) === _rs(key)) {
-        if (STRUCTURE_KEY_DICT.test(right.value.trim())) return SmState.KEY_V
-        if (inSkillDeepDive && TAG_DICT.test(right.value.trim())) return SmState.KEY_V
+        if (STRUCTURE_KEY_DICT.test(right.value.trim())) return Sm.KEY_V
+        if (inSkillDeepDive && TAG_DICT.test(right.value.trim())) return Sm.KEY_V
       }
 
       // コンテナ判定（TAG_DICT かつ rowSpan < key.rowSpan）→ 子ステートマシン実行
@@ -2998,7 +3234,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
         const ch = _childCells(sorted, right)
         record[key.value.trim()] = _scanContainer(ch)
         smI += 2
-        return SmState.START
+        return Sm.START
       }
 
       // 値判定（rowSpan == key.rowSpan）→ 値確定 + 右方向継続チェック
@@ -3020,28 +3256,28 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
           smI++
         }
         record[key.value.trim()] = kvValue
-        return SmState.START
+        return Sm.START
       }
 
       // KEY_V へ（rowSpan に差がある・その他の場合）
-      return SmState.KEY_V
+      return Sm.KEY_V
     }
 
     // KEY_V: 下セルを確認して判定
-    const smKeyV = (): SmState => {
+    const smKeyV = (): Sm => {
       const key = smKey!
       const below = _belowCell(sorted, key)
 
       // 下にセルなし → 次キーへ
       if (!below) {
         smI++
-        return SmState.START
+        return Sm.START
       }
 
       // 兄弟判定（colSpan == key.colSpan かつ TAG_DICT）→ KEY_V で次キー候補へ
       if (_cs(below) === _cs(key) && TAG_DICT.test(below.value.trim())) {
         smI++
-        return SmState.START
+        return Sm.START
       }
 
       // コンテナ判定（TAG_DICT かつ colSpan < key.colSpan）→ 子ステートマシン実行
@@ -3049,7 +3285,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
         const ch = _childCells(sorted, key)
         record[key.value.trim()] = _scanContainer(ch)
         smI++
-        return SmState.START
+        return Sm.START
       }
 
       // 値判定（colSpan == key.colSpan の非タグ or その他）→ 値確定 + 下方向継続チェック
@@ -3071,7 +3307,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
           smI++
         }
         record[key.value.trim()] = kvValue
-        return SmState.START
+        return Sm.START
       }
 
       // デフォルト（colSpan < key.colSpan かつ非タグ）→ 複数値配列（値の縦継続）
@@ -3099,15 +3335,15 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
         scanRow = candidates[candidates.length - 1].rowEnd + 1
       }
       record[key.value.trim()] = kvValues.length === 1 ? kvValues[0] : kvValues
-      return SmState.START
+      return Sm.START
     }
 
-    while (sm !== SmState.END) {
+    while (sm !== Sm.END) {
       switch (sm) {
-        case SmState.START:  sm = smStart(); break
-        case SmState.KEY_H:  sm = smKeyH(); break
-        case SmState.KEY_V:  sm = smKeyV(); break
-        default:             sm = SmState.END
+        case Sm.START:  sm = smStart(); break
+        case Sm.KEY_H:  sm = smKeyH(); break
+        case Sm.KEY_V:  sm = smKeyV(); break
+        default:             sm = Sm.END
       }
     }
 
