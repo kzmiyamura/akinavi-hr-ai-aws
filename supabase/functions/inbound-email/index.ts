@@ -2662,8 +2662,18 @@ function handleKeyH(
 ): [Sm, [number, number]] {
   const right = cell
   if (!right) {
-    // 右セルなし → キーの値は空で確定、START で次に行く
+    // 右セルなし → キーの値は空で確定、親に戻す
+    const keyName = context.smKey!.value.trim()
+    // currentRecord[keyName] はすでに START で "" に初期化済み
+
+    if (context.recordStack.length > 1) {
+      context.currentRecord = context.recordStack.pop()!
+      context.keyStack.pop()
+      return [Sm.KEY_H, getNextCoord(context.smKey!, 'KEY_H')]
+    }
+
     const nextCoord = getNextCoord(context.smKey!, 'KEY_V')
+    context.smKey = null
     return [Sm.START, nextCoord]
   }
 
