@@ -2659,8 +2659,8 @@ function handleStart(
       // はみ出しをチェック
       if (cell.col < parentContainer.col ||                                              // 左にはみ出し
           cell.row < parentContainer.row ||                                              // 上にはみ出し
-          (parentContainer.colEnd < cell.col && cell.rowEnd < parentContainer.rowEnd) || // 右にはみ出し（縦の子）
-          (parentContainer.rowEnd < cell.row && cell.colEnd < parentContainer.colEnd)) { // 下にはみ出し（横の子）
+          (parentContainer.colEnd < cell.col && parentContainer.rowEnd < cell.rowEnd) || // 横の子のはみ出し
+          (parentContainer.rowEnd < cell.row && parentContainer.colEnd < cell.colEnd)) { // 縦の子のはみ出し
         // はみ出ている → 親から独立
         context.currentRecord = context.recordStack.pop()!
         context.keyStack.pop()
@@ -2764,8 +2764,8 @@ function handleKeyH(
     // はみ出しをチェック
     if (right.col < parentContainer.col ||                                               // 左にはみ出し
         right.row < parentContainer.row ||                                               // 上にはみ出し
-        (parentContainer.colEnd < right.col && right.rowEnd < parentContainer.rowEnd) || // 右にはみ出し（縦の子）
-        (parentContainer.rowEnd < right.row && right.colEnd < parentContainer.colEnd)) { // 下にはみ出し（横の子）
+        (parentContainer.colEnd < right.col && parentContainer.rowEnd < right.rowEnd) || // 横の子のはみ出し
+        (parentContainer.rowEnd < right.row && right.colEnd < parentContainer.colEnd)) { // 縦の子のはみ出し
       // はみ出ている → 親から独立
       context.currentRecord = context.recordStack.pop()!
       context.keyStack.pop()
@@ -2859,8 +2859,8 @@ function handleKeyV(
     // はみ出しをチェック
     if (below.col < parentContainer.col ||                                               // 左にはみ出し
         below.row < parentContainer.row ||                                               // 上にはみ出し
-        (parentContainer.colEnd < below.col && below.rowEnd < parentContainer.rowEnd) || // 右にはみ出し（縦の子）
-        (parentContainer.rowEnd < below.row && below.colEnd < parentContainer.colEnd)) { // 下にはみ出し（横の子）
+        (parentContainer.colEnd < below.col && parentContainer.rowEnd < below.rowEnd) || // 横の子のはみ出し
+        (parentContainer.rowEnd < below.row && parentContainer.colEnd < below.colEnd)) { // 縦の子のはみ出し
       // はみ出ている → 親から独立
       context.currentRecord = context.recordStack.pop()!
       context.keyStack.pop()
