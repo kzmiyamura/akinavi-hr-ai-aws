@@ -2656,11 +2656,11 @@ function handleStart(
     while (context.keyStack.length > 0) {
       const parentContainer = context.keyStack[context.keyStack.length - 1]
 
-      // 4方向ではみ出しをチェック
-      if (cell.col < parentContainer.col ||          // 左
-          cell.colEnd > parentContainer.colEnd ||    // 右
-          cell.row < parentContainer.row ||          // 上
-          cell.rowEnd > parentContainer.rowEnd) {    // 下
+      // はみ出しをチェック
+      if (cell.col < parentContainer.col ||                                              // 左にはみ出し
+          cell.row < parentContainer.row ||                                              // 上にはみ出し
+          (parentContainer.colEnd < cell.col && cell.rowEnd < parentContainer.rowEnd) || // 右にはみ出し（縦の子）
+          (parentContainer.rowEnd < cell.row && cell.colEnd < parentContainer.colEnd)) { // 下にはみ出し（横の子）
         // はみ出ている → 親から独立
         context.currentRecord = context.recordStack.pop()!
         context.keyStack.pop()
@@ -2754,6 +2754,24 @@ function handleKeyH(
       context.keyStack.push(key)  // 親キーセルを積む（rowEnd/colEnd で範囲判定）
       context.currentRecord = newContainer
       return [Sm.KEY_H, getNextCoord(key, 'KEY_H'), true]
+    }
+  }
+
+  // 値確定前に親からのはみ出し判定
+  while (context.keyStack.length > 0) {
+    const parentContainer = context.keyStack[context.keyStack.length - 1]
+
+    // はみ出しをチェック
+    if (right.col < parentContainer.col ||                                               // 左にはみ出し
+        right.row < parentContainer.row ||                                               // 上にはみ出し
+        (parentContainer.colEnd < right.col && right.rowEnd < parentContainer.rowEnd) || // 右にはみ出し（縦の子）
+        (parentContainer.rowEnd < right.row && right.colEnd < parentContainer.colEnd)) { // 下にはみ出し（横の子）
+      // はみ出ている → 親から独立
+      context.currentRecord = context.recordStack.pop()!
+      context.keyStack.pop()
+    } else {
+      // はみ出ていない → 親内におさまっている
+      break
     }
   }
 
