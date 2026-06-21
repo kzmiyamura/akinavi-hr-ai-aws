@@ -2579,7 +2579,7 @@ function worksheetToCells(sheet: Record<string, unknown>): SpanCell[] {
  * KEY_H 条件3a の兄弟キー判定で使用。
  */
 const STRUCTURE_KEY_DICT =
-  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働)$/
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|業務経験|知識有り)$/
 
 /**
  * 辞書B: タグ辞書（B ⊃ A）。構造キー＋スキル深掘り語＋サブラベルの全部入り。
@@ -2801,7 +2801,7 @@ function handleKeyV(
     context.keyStack.push(keyName)
     context.currentRecord = newContainer
     context.smKey = below
-    return [Sm.START, getNextCoord(below, 'KEY_H')]
+    return [Sm.KEY_H, getNextCoord(below, 'KEY_H')]
   }
 
   // 値確定
@@ -2814,7 +2814,7 @@ function handleKeyV(
     const existing = context.currentRecord[keyName]
     context.currentRecord[keyName] = [existing, belowValue]
   }
-  return [Sm.START, getNextCoord(below, 'KEY_V')]
+  return [Sm.KEY_V, getNextCoord(below, 'KEY_V')]
 }
 
 /** 座標ベースのステートマシン走査メインループ */

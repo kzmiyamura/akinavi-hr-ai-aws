@@ -13,7 +13,7 @@ const filePath = process.argv[2] ?? '/Users/kazukimiyamura/Downloads/D.U_浦和�
 // ─── 定数（Edge Function と同一）─────────────────────────────────────────
 
 const STRUCTURE_KEY_DICT =
-  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働)$/
+  /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|業務経験|知識有り)$/
 
 const TAG_DICT =
   /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|補足|メモ|コメント|環境|言語|OS|DB|ツール|開発環境|フレームワーク|クラウド|インフラ|ミドルウェア|その他|立場|開発規模|人数|スキル|コンピュータ言語|サーバ[ー]?OS|業務経験|知識有り)$/
@@ -210,6 +210,7 @@ function handleKeyV(cell, row, col, context) {
       context.keyStack.pop()
       return [Sm.KEY_H, getNextCoord(context.smKey, 'KEY_H')]
     }
+    // 右セルなし → START へ
     const nextCoord = getNextCoord(context.smKey, 'KEY_H')
     context.smKey = null
     return [Sm.START, nextCoord]
@@ -238,7 +239,7 @@ function handleKeyV(cell, row, col, context) {
     context.keyStack.push(keyName)
     context.currentRecord = newContainer
     context.smKey = below
-    return [Sm.START, getNextCoord(below, 'KEY_H')]
+    return [Sm.KEY_H, getNextCoord(below, 'KEY_H')]
   }
 
   // 値確定
@@ -255,7 +256,7 @@ function handleKeyV(cell, row, col, context) {
       context.currentRecord[keyName] = [existing, belowValue]
     }
   }
-  return [Sm.START, getNextCoord(below, 'KEY_V')]
+  return [Sm.KEY_V, getNextCoord(below, 'KEY_V')]
 }
 
 /** 座標ベースのステートマシン走査メインループ（Edge Function processExcelWithStateMachine と同一） */
