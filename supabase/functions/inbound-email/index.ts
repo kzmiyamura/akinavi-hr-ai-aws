@@ -2702,11 +2702,33 @@ function handleKeyH(
     }
     return [Sm.KEY_H, [row, col + 1], false]
   }
+
   const key = context.smKey!
   const keyRS = _rs(key)
   const rightRS = _rs(right)
   const rightValue = right.value.trim()
   const keyValue = key.value.trim()
+
+  // 完全なる親からのはみ出し判定
+  while (context.keyStack.length > 0) {
+    const parentContainer = context.keyStack[context.keyStack.length - 1]
+    // はみ出しをチェック
+    if (parentContainer.colEnd <= right.col && parentContainer.rowEnd <= right.row) {
+      if (context.currentRecord[keyValue] === undefined) {
+        // 兄弟キー → currentRecord に追加してから key のままで KEY_V へ
+        return [Sm.KEY_V, getNextCoord(key, 'KEY_V'), false]
+      } else {
+        context.smKey = cell
+        context.currentRecord[rightValue] = undefined
+
+        // inSkillDeepDive をセット: キー自体がスキル名（PHP, Java 等）のとき true
+        // スキルがキー位置に来る場合（PHP | 3年）、右隣の TAG_DICT 語を兄弟キーとして扱うため
+        context.inSkillDeepDive = skillNameSet.has(rightValue.toLowerCase().replace(/\s+/g, ''))
+
+        return [Sm.KEY_H, getNextCoord(cell, 'KEY_H'), true]
+      }
+    }
+  }
 
   if (rightRS === keyRS) {
     const isStructureKey = STRUCTURE_KEY_DICT.test(rightValue)
@@ -2823,6 +2845,25 @@ function handleKeyV(
   const keyCS = _cs(key)
   const belowCS = _cs(below)
   const belowValue = below.value.trim()
+
+  // 完全なる親からのはみ出し判定
+  while (context.keyStack.length > 0) {
+    const parentContainer = context.keyStack[context.keyStack.length - 1]
+    // はみ出しをチェック
+    if (parentContainer.colEnd <= below.col && parentContainer.rowEnd <= below.row) {
+      const keyName = key.value.trim()
+      if (context.currentRecord[keyName] === undefined) {
+        // キーの値が未確定 → KEY_V で下へ進む（次の兄弟キーか値を探す）
+        return [Sm.KEY_V, getNextCoord(key, 'KEY_V'), false]
+      } else {
+        // キーの値が既に確定 → 新しい兄弟キーを登録
+        context.smKey = below
+        context.currentRecord[belowValue] = ""
+        // KEY_H へ → 右隣の値を取りに行く
+        return [Sm.KEY_H, getNextCoord(below, 'KEY_H'), true]
+      }
+    }
+  }
 
   // 兄弟キー: colSpan が同じかつ (STRUCTURE_KEY_DICT or (inSkillDeepDive && TAG_DICT))
   if (belowCS === keyCS && (STRUCTURE_KEY_DICT.test(belowValue) || (context.inSkillDeepDive && TAG_DICT.test(belowValue)))) {

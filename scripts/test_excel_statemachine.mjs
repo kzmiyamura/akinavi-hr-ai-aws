@@ -157,6 +157,19 @@ function handleKeyH(cell, row, col, context, skillNameSet) {
   const rightValue = right.value.trim()
   const keyValue = key.value.trim()
 
+  // 右セル検索中に親からはみ出したセルに出会ったら、親から独立させる
+  while (context.keyStack.length > 0) {
+    const parentContainer = context.keyStack[context.keyStack.length - 1]
+    // はみ出しをチェック
+    if (parentContainer.colEnd <= right.col && parentContainer.rowEnd <= right.row) {
+      // はみ出ている → 親から独立
+      context.currentRecord = context.recordStack.pop()
+      context.keyStack.pop()
+    } else {
+      break
+    }
+  }
+
   if (rightRS === keyRS) {
     const isStructureKey = STRUCTURE_KEY_DICT.test(rightValue)
     const isTagKey = TAG_DICT.test(rightValue)
@@ -260,6 +273,19 @@ function handleKeyV(cell, row, col, context, skillNameSet) {
   const keyCS = _cs(key)
   const belowCS = _cs(below)
   const belowValue = below.value.trim()
+
+  // 下セル検索中に親からはみ出したセルに出会ったら、親から独立させる
+  while (context.keyStack.length > 0) {
+    const parentContainer = context.keyStack[context.keyStack.length - 1]
+    // はみ出しをチェック
+    if (parentContainer.colEnd <= below.col && parentContainer.rowEnd <= below.row) {
+      // はみ出ている → 親から独立
+      context.currentRecord = context.recordStack.pop()
+      context.keyStack.pop()
+    } else {
+      break
+    }
+  }
 
   // 兄弟キー: colSpan が同じかつ (STRUCTURE_KEY_DICT or (inSkillDeepDive && TAG_DICT))
   if (belowCS === keyCS && (STRUCTURE_KEY_DICT.test(belowValue) || (context.inSkillDeepDive && TAG_DICT.test(belowValue)))) {
