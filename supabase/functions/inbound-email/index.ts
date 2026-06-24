@@ -3602,10 +3602,12 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
           if (!v || v === '-' || v === '－' || v.length < 2 || v.length > 80) continue
           // 業務内容テキスト（長文）は除外
           if (v.length > 50 && v.includes('\n')) continue
-          // 改行・カンマ・スペース区切りで分割
-          for (const s of v.split(/[\n\r、，,\s　]+/).map(s2 => s2.trim()).filter(s2 => s2 && s2.length >= 2 && s2 !== '-')) {
-            if (!SKILL_BLOCK.test(s) && !/^[◎○◇△▲×〇]+$/.test(s) && !/^\d+$/.test(s)) {
-              blockSkills.push(s)
+          // 改行→行ごとに2+空白/全角スペース/カンマで分割（"Excel VBA"の単一スペースは保持）
+          for (const line of v.split(/[\r\n]+/)) {
+            for (const s of line.split(/[、，,]+|　|\s{2,}/).map(s2 => s2.trim()).filter(s2 => s2 && s2.length >= 2 && s2 !== '-' && s2 !== '－')) {
+              if (!SKILL_BLOCK.test(s) && !/^[◎○◇△▲×〇]+$/.test(s) && !/^\d+$/.test(s)) {
+                blockSkills.push(s)
+              }
             }
           }
         }
@@ -5181,7 +5183,24 @@ Deno.serve(async (req: Request) => {
         fromCompany: null,
       }
       // スキルはDB照合結果のみ使用（AIによるスキル抽出廃止）
-      const skills = dbSkillNames
+      // ただし skillYears のキーに skill_master 登録済みのスキルがあれば追加
+      const skillSet = new Set(dbSkillNames)
+      const syKeys = Object.keys(excelSkillYears).filter(k => !k.startsWith('_'))
+      for (const syKey of syKeys) {
+        if (skillSet.has(syKey)) continue
+        const syLower = syKey.toLowerCase().replace(/\s+/g, '')
+        // skill_master の name or alias に一致するか確認
+        const smEntry = masterSkills.find(sm => {
+          if (sm.name.toLowerCase().replace(/\s+/g, '') === syLower) return true
+          return sm.aliases.some(a => a.toLowerCase().replace(/\s+/g, '') === syLower)
+        })
+        if (smEntry && !skillSet.has(smEntry.name)) {
+          skillSet.add(smEntry.name)
+          // カテゴリ別にも追加
+          dbMatchedSkills.push(smEntry)
+        }
+      }
+      const skills = [...skillSet]
 
       // AI結果が空の項目をregex 2段階補完
       const allAttachmentNames = [
@@ -5372,8 +5391,47 @@ Deno.serve(async (req: Request) => {
             )
             // 名前後ろ括弧のスキル年数（#79）: 「K.T（Java 5年 / Python 3年）」形式
             const nameYears = regexFields.nameSkillYears ?? {}
-            if (Object.keys(displayExcel).length > 0) return { ...nameYears, ...displayExcel }
-            if (Object.keys(wordSkillYearsForDisplay).length > 0) return { ...nameYears, ...wordSkillYearsForDisplay }
+            // skillYears キーを skill_master 名・候補者スキルに正規化
+            const normalizeKeys = (sy: Record<string, number>): Record<string, number> => {
+              if (Object.keys(sy).length === 0) return sy
+              const norm: Record<string, number> = {}
+              const usedSkills = new Set<string>()
+              for (const [rawKey, months] of Object.entries(sy)) {
+                const rawLower = rawKey.toLowerCase().replace(/\s+/g, '')
+                let matched: string | null = null
+                // 1. 候補者スキル名に完全一致（大文字小文字・スペース無視）
+                for (const sn of dbSkillNames) {
+                  const snLower = sn.toLowerCase().replace(/\s+/g, '')
+                  if (snLower === rawLower) { matched = sn; break }
+                }
+                // 2. 候補者スキル名に部分一致（"SQL"⊂"SQL Server" 等）
+                //    短い名前（≤2文字）は誤マッチしやすいため両辺とも3文字以上を要求
+                if (!matched && rawLower.length > 2) {
+                  for (const sn of dbSkillNames) {
+                    if (usedSkills.has(sn)) continue
+                    const snLower = sn.toLowerCase().replace(/\s+/g, '')
+                    if (snLower.length <= 2) continue // "C" 等の短い名前は部分一致しない
+                    if (snLower.includes(rawLower) || rawLower.includes(snLower)) {
+                      matched = sn; break
+                    }
+                  }
+                }
+                // 3. skill_master alias → name が候補者スキルに含まれるか確認
+                if (!matched) {
+                  for (const sm of masterSkills) {
+                    const smLower = sm.name.toLowerCase().replace(/\s+/g, '')
+                    const aliasMatch = smLower === rawLower || sm.aliases.some(a => a.toLowerCase().replace(/\s+/g, '') === rawLower)
+                    if (aliasMatch && dbSkillNames.includes(sm.name)) { matched = sm.name; break }
+                  }
+                }
+                const key = matched ?? rawKey
+                if (matched) usedSkills.add(matched)
+                norm[key] = (norm[key] ?? 0) + months
+              }
+              return norm
+            }
+            if (Object.keys(displayExcel).length > 0) return normalizeKeys({ ...nameYears, ...displayExcel })
+            if (Object.keys(wordSkillYearsForDisplay).length > 0) return normalizeKeys({ ...nameYears, ...wordSkillYearsForDisplay })
             if (Object.keys(nameYears).length > 0) return nameYears
             return undefined
           })(),
