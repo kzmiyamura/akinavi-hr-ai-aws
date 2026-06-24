@@ -3611,24 +3611,22 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       }
       if (gridText.trim()) texts.push(`--- シート: ${sheetName} ---\n${gridText}`)
 
-      // skillYears 抽出（spanCellsToJson で空間的に JSON 化）
+      // skillYears 抽出: grid ベースと SpanCell ベースの両方を試し、スキル数が多い方を採用
       if (Object.keys(skillYears).length === 0) {
         const jsonRows = spanCellsToJson(cells)
         console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
-        const sy = extractSkillYearsUnified(grid)
-        if (Object.keys(sy).filter(k => !k.startsWith('_')).length > 0) {
-          skillYears = sy
+        const syGrid = extractSkillYearsUnified(grid)
+        const syCells = extractSkillYearsFromCells(cells)
+        const countGrid = Object.keys(syGrid).filter(k => !k.startsWith('_')).length
+        const countCells = Object.keys(syCells).filter(k => !k.startsWith('_')).length
+        if (countGrid > 0 || countCells > 0) {
+          // スキル数が多い方を採用（同数なら SpanCell ベースを優先＝空間構造が正確）
+          skillYears = countCells >= countGrid ? syCells : syGrid
           firstJsonRows = jsonRows
+          console.log(`[skillYears-pick] grid=${countGrid} cells=${countCells} winner=${countCells >= countGrid ? 'cells' : 'grid'}`)
         } else {
-          // フォールバック: SpanCell[] から直接抽出（セル結合でgridが崩れるフォーマット用）
-          const syCells = extractSkillYearsFromCells(cells)
-          if (Object.keys(syCells).filter(k => !k.startsWith('_')).length > 0) {
-            skillYears = syCells
-            firstJsonRows = jsonRows
-          } else {
-            console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
-            if (!firstJsonRows) firstJsonRows = jsonRows
-          }
+          console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
+          if (!firstJsonRows) firstJsonRows = jsonRows
         }
       }
     }
@@ -4842,9 +4840,9 @@ Deno.serve(async (req: Request) => {
               skills: blockSkillNames,
               experience_years: (() => {
                 let expYears = blockRegexFields.experienceYears
-                // Excel skillYears フォールバック（本文に経験年数がない場合）
+                // Excel skillYears から経験年数を推定
                 // 優先順位: max-min日付スパン → _totalProjectMonths合計 → スキル最大月数
-                if (expYears == null && matchedTextContent?.skillYears) {
+                if (matchedTextContent?.skillYears) {
                   const sy = matchedTextContent.skillYears
                   const dateSpanMonths = sy['_dateSpanMonths'] ?? null
                   const totalMonths = sy['_totalProjectMonths'] ?? null
@@ -4854,7 +4852,11 @@ Deno.serve(async (req: Request) => {
                     .reduce((a, b) => Math.max(a, b), 0)
                   const estimatedMonths = dateSpanMonths ?? totalMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
                   if (estimatedMonths && estimatedMonths > 0) {
-                    expYears = estimatedMonths / 12
+                    const excelYears = estimatedMonths / 12
+                    // Excel の方が大きければ Excel を採用（実プロジェクト期間ベースで正確）
+                    if (expYears == null || excelYears > expYears) {
+                      expYears = excelYears
+                    }
                   }
                 }
                 return toExperienceYears(expYears)
