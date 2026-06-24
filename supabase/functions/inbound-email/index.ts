@@ -3381,7 +3381,7 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
   // ヘッダー行: 同じ行に「期間」「内容」等のラベルが並ぶ
   const firstNo = noCells[0]
   const sameRowLabels = sorted.filter(c => c.row === firstNo.row && c !== firstNo)
-  const isHeaderRow = sameRowLabels.some(c => /^(期間|内容|案件名)$/.test(c.value.trim()))
+  const isHeaderRow = sameRowLabels.some(c => /^(期間|内容|案件名|業務内容)$/.test(c.value.trim()))
 
   // プロジェクト境界の行範囲を決定
   interface ProjectBlock { startRow: number; endRow: number }
@@ -3390,8 +3390,25 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
   // D.U 型: ヘッダー行(rs=1) の下に No.=1,2,3... が来るのではなく、
   //          ヘッダー行が繰り返される（各プロジェクトが独立したヘッダー+データ構造）
   // T.K 型: No.(rs≥3) 自体がプロジェクトブロックの開始マーカー
+  // M.T 型: No ヘッダーが1個だけ → 下の数字セル(1,2,3...)でブロック分割
 
-  if (isHeaderRow) {
+  if (isHeaderRow && noCells.length === 1) {
+    // M.T 型: No ヘッダーが1個だけ → 下の同列にある数字セル(1,2,3...)をプロジェクト境界にする
+    const noCol = firstNo.col
+    const numberCells = sorted.filter(c =>
+      c.col === noCol && c.row > firstNo.rowEnd && /^\d+$/.test(c.value.trim())
+    ).sort((a, b) => a.row - b.row)
+    if (numberCells.length > 0) {
+      for (let i = 0; i < numberCells.length; i++) {
+        const startRow = numberCells[i].row
+        const endRow = i + 1 < numberCells.length ? numberCells[i + 1].row - 1 : Math.max(...sorted.map(c => c.rowEnd))
+        blocks.push({ startRow, endRow })
+      }
+    } else {
+      // 数字セルが見つからない場合はヘッダー行以降を1ブロックとする
+      blocks.push({ startRow: firstNo.row, endRow: Math.max(...sorted.map(c => c.rowEnd)) })
+    }
+  } else if (isHeaderRow) {
     // D.U 型: ヘッダー行が繰り返されるパターン
     // 各 No. セルの行 = ヘッダー行、その下がデータ
     for (let i = 0; i < noCells.length; i++) {
@@ -3416,6 +3433,9 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
   const SERIAL_MAX = 48000 // ~2031
   const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
 
+  // US 日付形式 M/D/YY or M/D/YYYY
+  const US_DATE_RE = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/
+
   const parseYM = (s: string): number | null => {
     // Excel シリアル日付
     const num = parseFloat(s)
@@ -3423,8 +3443,18 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
       const d = new Date(Date.UTC(1899, 11, 30) + num * 86400000)
       return d.getUTCFullYear() * 12 + d.getUTCMonth() + 1
     }
+    // YYYY/MM 形式
     const m = s.match(DATE_RE)
-    return m ? parseInt(m[1]) * 12 + parseInt(m[2]) : null
+    if (m) return parseInt(m[1]) * 12 + parseInt(m[2])
+    // US 日付形式 M/D/YY → YY<50 は 20YY、50以上は 19YY
+    const usm = s.trim().match(US_DATE_RE)
+    if (usm) {
+      const month = parseInt(usm[1])
+      let year = parseInt(usm[3])
+      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+      if (month >= 1 && month <= 12 && year >= 1970 && year <= 2100) return year * 12 + month
+    }
+    return null
   }
   const resolveEnd = (s: string): number | null => {
     if (/現在|今|present|継続|在籍中/i.test(s)) return nowYM
@@ -3438,10 +3468,10 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
     const blockCells = sorted.filter(c => c.row >= block.startRow && c.row <= block.endRow)
 
     // ── 期間の抽出 ──
-    // 日付っぽいセルを収集
+    // 日付っぽいセルを収集（YYYY/MM、US形式 M/D/YY、シリアル日付）
     const dateCells = blockCells.filter(c => {
       const v = c.value.trim()
-      return DATE_RE.test(v) || (!isNaN(parseFloat(v)) && parseFloat(v) >= SERIAL_MIN && parseFloat(v) <= SERIAL_MAX)
+      return DATE_RE.test(v) || US_DATE_RE.test(v) || (!isNaN(parseFloat(v)) && parseFloat(v) >= SERIAL_MIN && parseFloat(v) <= SERIAL_MAX)
     })
 
     let months: number | null = null
@@ -3471,6 +3501,23 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
           endYM = resolveEnd(pm[2])
           if (startYM && endYM) { months = endYM - startYM + 1; break }
         }
+      }
+    }
+
+    // 期間テキスト（"X年Yヶ月" / "Xか月"）セルから直接取得（M.T 型）
+    if (!months) {
+      for (const c of blockCells) {
+        const v = c.value.trim()
+        const dm = v.match(/(\d+)年(\d+)[ヶか]月/)
+        if (dm) { months = parseInt(dm[1]) * 12 + parseInt(dm[2]); break }
+        const mm = v.match(/^(\d+)[ヶか]月$/)
+        if (mm) { months = parseInt(mm[1]); break }
+        // 全角数字対応（"１か月" や "３年２ヶ月"）
+        const normalized = v.replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+        const dm3 = normalized.match(/(\d+)年(\d+)[ヶか]月/)
+        if (dm3) { months = parseInt(dm3[1]) * 12 + parseInt(dm3[2]); break }
+        const mm2 = normalized.match(/^(\d+)[ヶか]月$/)
+        if (mm2) { months = parseInt(mm2[1]); break }
       }
     }
 
@@ -3533,6 +3580,34 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
         if (/^【/.test(line)) { inSection = false; continue }
         if (inSection && line !== '-' && line !== '－' && line.length >= 2 && line.length <= 40) {
           blockSkills.push(line)
+        }
+      }
+    }
+
+    // パターン D: M.T 型 — ヘッダー行の「OS等」「DB/DC」「言語/ツール等」列位置から、同列のブロック内セルを取得
+    if (blockSkills.length === 0) {
+      // ヘッダー行（blocks の前）からスキル列の位置を特定
+      const headerCells = sorted.filter(c => c.row >= firstNo.row && c.row <= firstNo.rowEnd)
+      const skillColCells = headerCells.filter(c =>
+        /^(OS等?|DB\/DC|言語\/ツール等?|言語|ツール|DB|環境|機種)$/.test(c.value.trim())
+      )
+      for (const hdr of skillColCells) {
+        // ヘッダーと同じ列のブロック内セルからスキルを取得（「機種」列は PC/サーバ等でスキップ）
+        if (/^機種$/.test(hdr.value.trim())) continue
+        const colCells = blockCells.filter(c =>
+          c.col >= hdr.col && c.col <= hdr.colEnd && c.row > firstNo.rowEnd
+        )
+        for (const cc of colCells) {
+          const v = cc.value.trim()
+          if (!v || v === '-' || v === '－' || v.length < 2 || v.length > 80) continue
+          // 業務内容テキスト（長文）は除外
+          if (v.length > 50 && v.includes('\n')) continue
+          // 改行・カンマ・スペース区切りで分割
+          for (const s of v.split(/[\n\r、，,\s　]+/).map(s2 => s2.trim()).filter(s2 => s2 && s2.length >= 2 && s2 !== '-')) {
+            if (!SKILL_BLOCK.test(s) && !/^[◎○◇△▲×〇]+$/.test(s) && !/^\d+$/.test(s)) {
+              blockSkills.push(s)
+            }
+          }
         }
       }
     }
