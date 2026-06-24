@@ -2924,88 +2924,58 @@ function handleKeyV(
   return [Sm.KEY_V, getNextCoord(below, 'KEY_V'), true]
 }
 
-/** 座標ベースのステートマシン走査メインループ */
-function processExcelWithStateMachine(cells: SpanCell[], skillNameSet: Set<string>, sheetName: string = 'Sheet'): Record<string, unknown> {
-  const bounds = getBounds(cells)
-  if (!bounds) return {}
-
-  const [minRow, minCol] = bounds.topLeft
-  const [maxRow, maxCol] = bounds.bottomRight
-
-  const record: Record<string, unknown> = { [sheetName]: {} }
-  let row = minRow
-  let col = minCol
-  let state = Sm.START
-  let flg = false
-  let currentRecord: Record<string, unknown> = record[sheetName] as Record<string, unknown>
-  const context = {
-    smKey: null as SpanCell | null,
-    currentRecord: currentRecord,
-    recordStack: [record[sheetName]] as Record<string, unknown>[],
-    keyStack: [] as SpanCell[],  // コンテナ昇格時の親キー（セル情報付き）
-    inSkillDeepDive: false,
-    visited: new Set<SpanCell>()
-  }
-
-  while (row <= maxRow) {
-    // KEY_H では右隣のセルを探すため、KEY_H 時は findNextCellToRight を使う（列間のギャップを超える）
-    const cell = findCellAtCoord(cells, row, col)
-
-    // 処理済みセルは2回処理しない
-    if (context.visited.has(cell!)) {
-      col++
-    } else {
-      switch (state) {
-        case Sm.START:
-          [state, [row, col], flg] = handleStart(cell, row, col, context, skillNameSet)
-          break
-        case Sm.KEY_H:
-          [state, [row, col], flg] = handleKeyH(cell, row, col, context, skillNameSet)
-          break
-        case Sm.KEY_V:
-          [state, [row, col], flg] = handleKeyV(cell, row, col, context, skillNameSet)
-          break
-        case Sm.END:
-          row = maxRow + 1
-          break
-        default:
-          row = maxRow + 1
-      }
-      if (flg) {
-        context.visited.add(cell!)
-      }
-    }
-
-    // 右端到達で次行へ
-    if (col > maxCol) {
-      if (state === Sm.KEY_H) {
-        const keyName = context.smKey!.value.trim()
-        if (context.currentRecord[keyName] === undefined || context.currentRecord[keyName] === "") {
-          context.currentRecord[keyName] = ""
-        }
-      }
-      row++
-      col = minCol
-      state = Sm.START
-    }
-  }
-
-  return record
+/** rowが小さい順、同じrowならcolが小さい順にソート */
+function sortCellsByRowThenCol(cells: SpanCell[]): SpanCell[] {
+  return cells.sort((a, b) => a.row - b.row || a.col - b.col)
 }
 
-/**
- * ハイブリッドスコアによるコンテナ判定。
- * 幾何（rowSpan/colSpan）+ 位置（左端付近）+ 辞書（列ヘッダー語彙）のスコアが 2 以上でコンテナとみなす。
- * cell.value.length > 50 や MATCHES_KNOWN_CONTAINER_REGEX は使わない（っぽい判定を排除）。
- */
-function _isContainer(cell: SpanCell, key: SpanCell): boolean {
-  let s = 0
-  if (_rs(cell) > _rs(key))                    s += 1  // 幾何: 縦に大きい
-  if (_cs(cell) > 2)                           s += 1  // 幾何: 横に広い
-  if (cell.col === 0 || cell.col === 1)        s += 1  // 位置: 左端付近
-  if (TAG_DICT.test(cell.value.trim()))        s += 2  // 辞書: タグ語彙
-  return s >= 2
+/** 指定セルの直上にあるセル（最も近い）を探す */
+function findCellDirectlyAbove(cells: SpanCell[], cell: SpanCell): SpanCell | undefined {
+  const candidates = cells.filter(c =>
+    c.rowEnd < cell.row &&
+    c.col <= cell.col &&
+    cell.col <= c.colEnd
+  )
+  if (candidates.length === 0) return undefined
+  return candidates.reduce((max, c) => c.rowEnd > max.rowEnd ? c : max)
 }
+
+/** 指定セルの直上に接していて含むセルを探す */
+function findCellOnTop(cells: SpanCell[], cell: SpanCell): SpanCell | undefined {
+  const candidates = cells.filter(c =>
+    c.rowEnd === cell.row &&
+    c.col <= cell.col &&
+    cell.col <= c.colEnd
+  )
+  if (candidates.length === 0) return undefined
+  return candidates[0]
+}
+
+/** 指定セルの直左にあるセル（最も近い）を探す */
+function findCellDirectlyToLeft(cells: SpanCell[], cell: SpanCell): SpanCell | undefined {
+  const candidates = cells.filter(c =>
+    c.colEnd < cell.col &&
+    c.row <= cell.row &&
+    cell.row <= c.rowEnd
+  )
+  if (candidates.length === 0) return undefined
+  return candidates.reduce((max, c) => c.colEnd > max.colEnd ? c : max)
+}
+
+/** 指定セルの直左にあるセル（最も近い）を探す */
+function findCellOnLeft(cells: SpanCell[], cell: SpanCell): SpanCell | undefined {
+  const candidates = cells.filter(c =>
+    c.colEnd === cell.col &&
+    c.row <= cell.row &&
+    cell.row <= c.rowEnd
+  )
+  if (candidates.length === 0) return undefined
+  return candidates[0]
+}
+
+/** V1 processExcelWithStateMachine は テストスクリプト (test_excel_statemachine.mjs) に移動済み */
+
+// ─── spanCellsToJson 用共有ヘルパー ─────────────────────────────────────────
 
 /** container の座標内にある子セルを返す（container 自身は除く） */
 function _childCells(all: SpanCell[], cont: SpanCell): SpanCell[] {
@@ -3035,284 +3005,6 @@ function _belowCell(sorted: SpanCell[], key: SpanCell): SpanCell | undefined {
   return sorted.find(c =>
     c.row === key.rowEnd + 1 && c.col >= key.col && c.col <= key.colEnd
   )
-}
-
-interface _ColHdr { text: string; colEnd: number }
-
-// ─── プロジェクト履歴パーサ ────────────────────────────────────────────────
-
-/** プロジェクト No. セルかどうかを判定（整数値・左端・rowSpan≥3） */
-function _isProjectNo(cell: SpanCell): boolean {
-  return cell.col <= 1
-    && cell.colEnd <= 1
-    && (cell.rowEnd - cell.row) >= 2
-    && /^\d+$/.test(cell.value.trim())
-}
-
-/** ラベル（narrow）＋値（wide）の連続ペアを out に追加 */
-// deno-lint-ignore no-explicit-any
-function _extractLVPairs(cells: SpanCell[], out: Record<string, any>): void {
-  for (let i = 0; i + 1 < cells.length; i += 2) {
-    const lv = cells[i].value.trim()
-    const vv = cells[i + 1].value.trim()
-    if (lv && vv && !/^[-ー－]+$/.test(lv) && !/^[-ー－]+$/.test(vv)) out[lv] = vv
-  }
-}
-
-/** No.セル配下の全行を解析してプロジェクト1件分のオブジェクトを返す */
-// deno-lint-ignore no-explicit-any
-function _parseOneProject(
-  noCell: SpanCell,
-  allCells: SpanCell[],
-  phaseMap?: Map<number, _ColHdr>,
-  projColMap?: Map<number, _ColHdr>,  // プロジェクト列ヘッダー（期間・案件名・担当業務・備考等）
-): Record<string, any> {
-  // deno-lint-ignore no-explicit-any
-  const proj: Record<string, any> = {}
-
-  // フェーズ評価列のcolセット（phaseMapがあれば除外対象）
-  const phaseCols = phaseMap ? new Set(phaseMap.keys()) : new Set<number>()
-
-  // No.セル範囲内・No.自身以外のセル（フェーズ評価列は除外）
-  const cells = allCells.filter(c =>
-    c !== noCell &&
-    c.row >= noCell.row && c.row <= noCell.rowEnd &&
-    !phaseCols.has(c.col) &&
-    c.value.trim()
-  )
-
-  // ── projColMap がある場合: VALUE_COLLECT ステートマシン ────────────────
-  // 列ヘッダー順（横）に走査し、各列を縦方向に VALUE_COLLECT で処理する。
-  // 非タグ小サイズセルを行ごとに収集し、span合計が親spanと一致する間はキー継続。
-  // タグが出現した行以降はタグ→値ペアとして処理する。
-  if (projColMap && projColMap.size > 0) {
-    const DATE_RE = /^\d{4}[\/\-年]\d{1,2}/
-    const DUR_RE  = /^\d+年\d+ヶ月$|^\d+ヶ月$|^\d+年$/
-
-    for (const [startCol, hdr] of [...projColMap.entries()].sort((a, b) => a[0] - b[0])) {
-      const key = hdr.text
-      if (/^No\.?$/i.test(key)) continue      // No.列はスキップ
-      if (phaseCols.has(startCol)) continue   // フェーズ列はフェーズ処理で別途扱う
-
-      const parentSpan = hdr.colEnd - startCol + 1
-      const colCells = cells.filter(c => c.col >= startCol && c.col <= hdr.colEnd)
-      const rowNums = [...new Set(colCells.map(c => c.row))].sort((a, b) => a - b)
-      if (rowNums.length === 0) continue
-
-      // ── VALUE_COLLECT ────────────────────────────────────────────────
-      const collectedRows: string[][] = []
-      let tagStartIdx = rowNums.length
-
-      for (let i = 0; i < rowNums.length; i++) {
-        const rowCells = colCells
-          .filter(c => c.row === rowNums[i] && !/^[-ー－]+$/.test(c.value.trim()))
-          .sort((a, b) => a.col - b.col)
-        if (rowCells.length === 0) continue
-
-        // 行の先頭がタグ → VALUE_COLLECT 終了、以降をタグ→値ペアで処理
-        if (_isColTag(rowCells[0].value)) {
-          tagStartIdx = i
-          break
-        }
-
-        // 非タグセルを横に収集（タグが出たら打ち止め）
-        // spanSumはダッシュ含む全セルで計算（ダッシュは列幅を占めるが値は収集しない）
-        const allRowCells = colCells
-          .filter(c => c.row === rowNums[i])
-          .sort((a, b) => a.col - b.col)
-        const rowVals: string[] = []
-        let spanSum = 0
-        let cutByTag = false
-        for (const c of allRowCells) {
-          if (_isColTag(c.value)) { cutByTag = true; break }
-          spanSum += c.colEnd - c.col + 1
-          if (!/^[-ー－]+$/.test(c.value.trim())) rowVals.push(c.value.trim())
-        }
-        if (rowVals.length > 0) collectedRows.push(rowVals)
-
-        // タグで打ち切り or span合計が親span未満 → 収集終了
-        if (cutByTag || spanSum < parentSpan) {
-          tagStartIdx = i + 1
-          break
-        }
-        // spanSum >= parentSpan → 次の行へ継続
-      }
-
-      // 収集値をフォーマットして proj に格納
-      if (collectedRows.length > 0) {
-        const allVals = collectedRows.flat()
-        if (/^期間/.test(key)) {
-          const dates = allVals.filter(v => DATE_RE.test(v))
-          const dur   = allVals.find(v => DUR_RE.test(v))
-          if (dates.length >= 2 && dur) {
-            proj['期間'] = `${dates[0]}〜${dates[dates.length - 1]}（${dur}）`
-          } else if (dates.length >= 1 && dur) {
-            proj['期間'] = `${dates[0]}〜（${dur}）`
-          } else if (dur) {
-            proj['期間'] = dur
-          } else if (dates.length >= 1) {
-            proj['期間'] = dates.join('〜')
-          }
-        } else if (/^(担当業務|業務内容|内容|概要)$/.test(key)) {
-          const text = allVals.find(v => v.length > 5)
-          if (text) proj[key] = text.slice(0, 500)
-        } else {
-          if (allVals[0]) proj[key] = allVals[0]
-        }
-      }
-
-      // タグ→値ペアの処理（備考→lang_block 等）
-      // 同行インライン値（案件名+project名 が横並び）を優先し、なければ次行を使う
-      const remRowNums = rowNums.slice(tagStartIdx)
-      for (let i = 0; i < remRowNums.length; i++) {
-        const rowCells = colCells
-          .filter(c => c.row === remRowNums[i] && !/^[-ー－]+$/.test(c.value.trim()))
-          .sort((a, b) => a.col - b.col)
-        if (rowCells.length === 0) continue
-
-        // 行内を左から走査してタグ→値ペアをすべて抽出
-        let j = 0
-        while (j < rowCells.length) {
-          if (_isColTag(rowCells[j].value)) {
-            const tagKey = rowCells[j].value.trim()
-            // 同行の次セルが非タグ → インライン値として採用
-            if (j + 1 < rowCells.length && !_isColTag(rowCells[j + 1].value)) {
-              if (!proj[tagKey]) proj[tagKey] = rowCells[j + 1].value.trim().slice(0, 500)
-              j += 2
-            } else {
-              // 次行に値がある場合
-              if (i + 1 < remRowNums.length) {
-                const nextCells = colCells
-                  .filter(c => c.row === remRowNums[i + 1] && !/^[-ー－]+$/.test(c.value.trim()))
-                  .sort((a, b) => a.col - b.col)
-                if (nextCells.length > 0 && !_isColTag(nextCells[0].value)) {
-                  if (!proj[tagKey]) proj[tagKey] = nextCells.map(c => c.value.trim()).join('\n').slice(0, 500)
-                  i++
-                }
-              }
-              j++
-            }
-          } else {
-            j++
-          }
-        }
-      }
-    }
-
-    // フェーズ評価（計画立案・要件定義・基本設計等）を追加
-    if (phaseMap && phaseMap.size > 0) {
-      const phaseCells = allCells.filter(c =>
-        c !== noCell &&
-        c.row >= noCell.row && c.row <= noCell.rowEnd &&
-        phaseCols.has(c.col) &&
-        c.value.trim() &&
-        !/^[-ー－]+$/.test(c.value.trim())
-      )
-      for (const pc of phaseCells) {
-        const phaseKey = _findHdr(phaseMap, pc.col)
-        if (phaseKey) proj[phaseKey] = pc.value.trim()
-      }
-    }
-
-    return proj
-  }
-
-  // ── 従来の行ループ処理（projColMap なし時のフォールバック）──────────────
-  // 行ごとにグループ化
-  const rowMap = new Map<number, SpanCell[]>()
-  for (const c of cells) {
-    if (!rowMap.has(c.row)) rowMap.set(c.row, [])
-    rowMap.get(c.row)!.push(c)
-  }
-
-  const DATE_RE = /^\d{4}[\/\-年]\d{1,2}/
-  const DUR_RE  = /^\d+年\d+ヶ月$|^\d+ヶ月$|^\d+年$/
-  const SKIP_LABEL = /^(備考|担当業務|案件名|内容|No\.|No)$/
-  let startDate = ''
-  let endDate   = ''
-  let pendingLabel: string | null = null  // 前行の単独ラベル（備考等）を次行の値に対応させる
-
-  for (const [, rowCells] of [...rowMap.entries()].sort((a, b) => a[0] - b[0])) {
-    const sorted = rowCells.sort((a, b) => a.col - b.col)
-
-    // 【日付行】DATE_RE に一致するセルが2つ以上 → 開始日・終了日 + 案件名
-    const dateCells = sorted.filter(c => DATE_RE.test(c.value.trim()))
-    if (dateCells.length >= 2) {
-      startDate = dateCells[0].value.trim()
-      endDate   = dateCells[dateCells.length - 1].value.trim()
-      const rest = sorted.filter(c => !DATE_RE.test(c.value.trim()) && c.value.trim() !== '-')
-      // ラベル:値ペアとして処理（案件名 → 値）
-      const labels: SpanCell[] = []
-      const vals:   SpanCell[] = []
-      for (const c of rest) {
-        if (SKIP_LABEL.test(c.value.trim())) labels.push(c)
-        else                                  vals.push(c)
-      }
-      // ラベルと値を順番にペアリング
-      for (let i = 0; i < Math.min(labels.length, vals.length); i++) {
-        const lv = labels[i].value.trim()
-        const vv = vals[i].value.trim()
-        if (lv !== 'No.' && lv !== 'No') proj[lv] = vv
-      }
-      pendingLabel = null
-      continue
-    }
-
-    // 【期間行】DUR_RE に一致するセルがある → 期間確定 + ポジション等
-    const durCell = sorted.find(c => DUR_RE.test(c.value.trim()))
-    if (durCell) {
-      const dur = durCell.value.trim()
-      proj['期間'] = startDate
-        ? (endDate ? `${startDate}〜${endDate}（${dur}）` : `${startDate}〜（${dur}）`)
-        : dur
-      const rest = sorted.filter(c => c !== durCell)
-      _extractLVPairs(rest, proj)
-      pendingLabel = null
-      continue
-    }
-
-    // 【担当業務行】"担当業務" ラベルを含む行 → 長テキストを保存・備考ラベルを記録
-    if (sorted.some(c => c.value.trim() === '担当業務')) {
-      const text = sorted.find(c => c.value.trim() !== '担当業務' && c.value.trim() !== '備考' && c.value.length > 5)
-      if (text) proj['担当業務'] = text.value.trim().slice(0, 500)
-      // 同行に「備考」ラベルがあれば次行の単独セルをその値として扱う
-      if (sorted.some(c => c.value.trim() === '備考')) pendingLabel = '備考'
-      continue
-    }
-
-    // 【pendingLabel処理】前行が備考等のラベルのみだった場合、現行の単独セルを値として対応
-    if (pendingLabel && sorted.length === 1) {
-      proj[pendingLabel] = sorted[0].value.trim()
-      pendingLabel = null
-      continue
-    }
-
-    // 【その他】連続ラベル:値ペア
-    pendingLabel = null
-    _extractLVPairs(sorted, proj)
-  }
-
-  // フェーズ評価（計画立案・要件定義・基本設計等）を追加
-  if (phaseMap && phaseMap.size > 0) {
-    const phaseCells = allCells.filter(c =>
-      c !== noCell &&
-      c.row >= noCell.row && c.row <= noCell.rowEnd &&
-      phaseCols.has(c.col) &&
-      c.value.trim() &&
-      !/^[-ー－]+$/.test(c.value.trim())
-    )
-    for (const pc of phaseCells) {
-      const phaseKey = _findHdr(phaseMap, pc.col)
-      if (phaseKey) proj[phaseKey] = pc.value.trim()
-    }
-  }
-
-  return proj
-}
-
-function _findHdr(map: Map<number, _ColHdr>, col: number): string | undefined {
-  for (const [c, h] of map) if (col >= c && col <= h.colEnd) return h.text
-  return undefined
 }
 
 /** spanCellsToJson 内のステートマシン状態 */
@@ -3668,6 +3360,206 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
   return best
 }
 
+/**
+ * SpanCell[] からプロジェクトブロック単位でスキル別経験月数を抽出する。
+ * grid ベースの extractSkillYearsUnified が失敗するケース（セル結合で列構造が崩れるフォーマット）のフォールバック。
+ *
+ * 対応フォーマット:
+ *   - D.U 型: No. ヘッダー行 → 日付行 → 【言語】マルチラインブロック
+ *   - T.K/H.A 型: No.(rs≥3) → 期間(rs≥3) → 日付行 → 「言語 FW」行 → スキル行
+ */
+function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
+  if (cells.length === 0) return {}
+  const sorted = [...cells].sort((a, b) => a.row !== b.row ? a.row - b.row : a.col - b.col)
+  const _rsC = (c: SpanCell) => c.rowEnd - c.row + 1
+
+  // ── Step 1: No. セルでプロジェクト境界を特定 ──
+  const noCells = sorted.filter(c => /^No\.?$/i.test(c.value.trim()))
+  if (noCells.length === 0) return {}
+
+  // ヘッダー No.（最初の No.）とデータ No. を分離
+  // ヘッダー行: 同じ行に「期間」「内容」等のラベルが並ぶ
+  const firstNo = noCells[0]
+  const sameRowLabels = sorted.filter(c => c.row === firstNo.row && c !== firstNo)
+  const isHeaderRow = sameRowLabels.some(c => /^(期間|内容|案件名)$/.test(c.value.trim()))
+
+  // プロジェクト境界の行範囲を決定
+  interface ProjectBlock { startRow: number; endRow: number }
+  const blocks: ProjectBlock[] = []
+
+  // D.U 型: ヘッダー行(rs=1) の下に No.=1,2,3... が来るのではなく、
+  //          ヘッダー行が繰り返される（各プロジェクトが独立したヘッダー+データ構造）
+  // T.K 型: No.(rs≥3) 自体がプロジェクトブロックの開始マーカー
+
+  if (isHeaderRow) {
+    // D.U 型: ヘッダー行が繰り返されるパターン
+    // 各 No. セルの行 = ヘッダー行、その下がデータ
+    for (let i = 0; i < noCells.length; i++) {
+      const startRow = noCells[i].row
+      const endRow = i + 1 < noCells.length ? noCells[i + 1].row - 1 : Math.max(...sorted.map(c => c.rowEnd))
+      blocks.push({ startRow, endRow })
+    }
+  } else {
+    // T.K 型: No.(rs≥3) 自体がブロック開始
+    for (let i = 0; i < noCells.length; i++) {
+      const startRow = noCells[i].row
+      const endRow = i + 1 < noCells.length ? noCells[i + 1].row - 1 : Math.max(...sorted.map(c => c.rowEnd))
+      blocks.push({ startRow, endRow })
+    }
+  }
+
+  // ── Step 2: 各ブロックから期間（月数）とスキルを抽出 ──
+  const skillMonths: Record<string, number> = {}
+  const projectPeriods: Array<{ startYM: number; endYM: number }> = []
+  const DATE_RE = /(\d{4})[\/\-年](\d{1,2})/
+  const SERIAL_MIN = 36526 // 2000-01-01
+  const SERIAL_MAX = 48000 // ~2031
+  const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
+
+  const parseYM = (s: string): number | null => {
+    // Excel シリアル日付
+    const num = parseFloat(s)
+    if (!isNaN(num) && num >= SERIAL_MIN && num <= SERIAL_MAX) {
+      const d = new Date(Date.UTC(1899, 11, 30) + num * 86400000)
+      return d.getUTCFullYear() * 12 + d.getUTCMonth() + 1
+    }
+    const m = s.match(DATE_RE)
+    return m ? parseInt(m[1]) * 12 + parseInt(m[2]) : null
+  }
+  const resolveEnd = (s: string): number | null => {
+    if (/現在|今|present|継続|在籍中/i.test(s)) return nowYM
+    return parseYM(s)
+  }
+
+  // スキルブロッカー（スキルとして拾わないラベル）
+  const SKILL_BLOCK = /^(No\.?|期間|案件名|内容|業務内容|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|担当工程|担当業務|規模|開発人数|備考|ポジション|役割|雇用形態|チーム|人数|改修|調査|テスト|固定|立場|氏名|年齢|性別|言語|FW|ツール|OS|DB|環境|フレームワーク|ミドル|インフラ|クラウド|データベース|スキル|経歴|能力指標|OS\s.*etc)$/i
+
+  for (const block of blocks) {
+    const blockCells = sorted.filter(c => c.row >= block.startRow && c.row <= block.endRow)
+
+    // ── 期間の抽出 ──
+    // 日付っぽいセルを収集
+    const dateCells = blockCells.filter(c => {
+      const v = c.value.trim()
+      return DATE_RE.test(v) || (!isNaN(parseFloat(v)) && parseFloat(v) >= SERIAL_MIN && parseFloat(v) <= SERIAL_MAX)
+    })
+
+    let months: number | null = null
+    let startYM: number | null = null
+    let endYM: number | null = null
+
+    if (dateCells.length >= 2) {
+      // 開始日と終了日のペア
+      const yms = dateCells.map(c => parseYM(c.value.trim())).filter((v): v is number => v !== null)
+      if (yms.length >= 2) {
+        startYM = Math.min(...yms)
+        endYM = Math.max(...yms)
+        months = endYM - startYM + 1
+      }
+    } else if (dateCells.length === 1) {
+      // 単独日付（D.U 型: 終了年月のみ → 次ブロックとの差分で推定できないので 12 ヶ月仮定）
+      const ym = parseYM(dateCells[0].value.trim())
+      if (ym) { startYM = ym; endYM = ym; months = 12 }
+    }
+
+    // 期間テキスト（"2020/04〜2023/03" 形式）をブロック内テキストから探す
+    if (!months) {
+      for (const c of blockCells) {
+        const pm = c.value.match(/(\d{4}[\/年]\d{1,2})\s*[〜～\-〜]\s*(\S+)/)
+        if (pm) {
+          startYM = parseYM(pm[1])
+          endYM = resolveEnd(pm[2])
+          if (startYM && endYM) { months = endYM - startYM + 1; break }
+        }
+      }
+    }
+
+    if (!months || months <= 0 || months > 600) continue
+    if (startYM && endYM) projectPeriods.push({ startYM, endYM })
+
+    // ── スキルの抽出 ──
+    const blockSkills: string[] = []
+
+    // パターン A: 【言語】マルチラインブロック（D.U 型）
+    const langBlocks = blockCells.filter(c => c.value.includes('【言語】') && _rsC(c) >= 3)
+    if (langBlocks.length > 0) {
+      for (const lb of langBlocks) {
+        // 【言語】\r\n Java\r\n Python\r\n【OS】\r\n Mac... から言語セクションを抽出
+        const lines = lb.value.split(/\r?\n/).map(l => l.trim()).filter(l => l)
+        let inLangSection = false
+        for (const line of lines) {
+          if (/^【(言語|FW|フレームワーク|ツール|DB|データベース|インフラ|クラウド|ミドルウェア)】/.test(line)) {
+            inLangSection = true
+            continue
+          }
+          if (/^【/.test(line)) { inLangSection = false; continue }
+          if (inLangSection && line !== '-' && line !== '－' && line.length >= 2) {
+            // "/" 区切りも分割（"HTML/CSS" → "HTML/CSS" はそのまま）
+            blockSkills.push(line)
+          }
+        }
+      }
+    }
+
+    // パターン B: 「言語 FW」ラベルの下方（同列範囲のみ）からスキル値を収集（T.K/H.A 型）
+    if (blockSkills.length === 0) {
+      const langLabelCells = blockCells.filter(c =>
+        /^(言語|使用言語|言語\s*FW|使用技術|技術スタック)$/i.test(c.value.trim().replace(/[\r\n]/g, ' ').trim())
+      )
+      for (const ll of langLabelCells) {
+        // ラベルと同じ列範囲の下方セルのみ検索（右の業務内容を拾わない）
+        const candidates = blockCells.filter(c =>
+          c !== ll && c.row > ll.row && c.row <= ll.row + 5 &&
+          c.col >= ll.col && c.colEnd <= ll.colEnd + 2
+        )
+        for (const cc of candidates) {
+          const v = cc.value.trim()
+          if (v && v !== '-' && v !== '－' && v.length >= 2 && v.length <= 50 && !SKILL_BLOCK.test(v) && !/^[◎○◇△▲×〇]+$/.test(v)) {
+            for (const s of v.split(/[\n\r、，,]+/).map(s2 => s2.trim()).filter(s2 => s2 && s2.length >= 2 && s2 !== '-')) {
+              blockSkills.push(s)
+            }
+          }
+        }
+      }
+    }
+
+    // パターン C: 【OS】/【環境】マルチラインブロック（rs≥2）からツール名を抽出
+    const osEnvBlocks = blockCells.filter(c => c.value.includes('【OS】') && _rsC(c) >= 2)
+    for (const ob of osEnvBlocks) {
+      const lines = ob.value.split(/\r?\n/).map(l => l.trim()).filter(l => l)
+      let inSection = false
+      for (const line of lines) {
+        if (/^【(OS|環境|ツール|アプリ|ミドルウェア)】/.test(line)) { inSection = true; continue }
+        if (/^【/.test(line)) { inSection = false; continue }
+        if (inSection && line !== '-' && line !== '－' && line.length >= 2 && line.length <= 40) {
+          blockSkills.push(line)
+        }
+      }
+    }
+
+    // スキルに月数を加算（先頭の「- 」「・」を除去）
+    for (let skill of blockSkills) {
+      skill = skill.replace(/^[-・]\s*/, '').trim()
+      if (skill.length < 2) continue
+      skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+    }
+  }
+
+  if (Object.keys(skillMonths).length === 0) return {}
+
+  // _totalProjectMonths / _dateSpanMonths
+  if (projectPeriods.length > 0) {
+    skillMonths['_totalProjectMonths'] = projectPeriods.reduce((s, p) => s + (p.endYM - p.startYM + 1), 0)
+    const allStarts = projectPeriods.map(p => p.startYM)
+    const allEnds = projectPeriods.map(p => p.endYM)
+    const span = Math.max(...allEnds) - Math.min(...allStarts) + 1
+    if (span > 0) skillMonths['_dateSpanMonths'] = span
+  }
+
+  console.log(`[skillYears-cells] projects=${blocks.length} skills=${Object.keys(skillMonths).filter(k => !k.startsWith('_')).length}`)
+  return skillMonths
+}
+
 /** スキル別経験月数を Excel ファイル（base64）から抽出 */
 async function extractSkillYearsFromExcel(base64: string): Promise<Record<string, number>> {
   const { skillYears } = await extractExcelAll(base64)
@@ -3728,8 +3620,15 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
           skillYears = sy
           firstJsonRows = jsonRows
         } else {
-          console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
-          if (!firstJsonRows) firstJsonRows = jsonRows
+          // フォールバック: SpanCell[] から直接抽出（セル結合でgridが崩れるフォーマット用）
+          const syCells = extractSkillYearsFromCells(cells)
+          if (Object.keys(syCells).filter(k => !k.startsWith('_')).length > 0) {
+            skillYears = syCells
+            firstJsonRows = jsonRows
+          } else {
+            console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
+            if (!firstJsonRows) firstJsonRows = jsonRows
+          }
         }
       }
     }
