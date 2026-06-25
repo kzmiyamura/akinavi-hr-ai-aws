@@ -3468,31 +3468,80 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
     const blockCells = sorted.filter(c => c.row >= block.startRow && c.row <= block.endRow)
 
     // ── 期間の抽出 ──
-    // 日付っぽいセルを収集（YYYY/MM、US形式 M/D/YY、シリアル日付）
-    const dateCells = blockCells.filter(c => {
-      const v = c.value.trim()
-      return DATE_RE.test(v) || US_DATE_RE.test(v) || (!isNaN(parseFloat(v)) && parseFloat(v) >= SERIAL_MIN && parseFloat(v) <= SERIAL_MAX)
-    })
-
     let months: number | null = null
     let startYM: number | null = null
     let endYM: number | null = null
 
-    if (dateCells.length >= 2) {
-      // 開始日と終了日のペア
-      const yms = dateCells.map(c => parseYM(c.value.trim())).filter((v): v is number => v !== null)
-      if (yms.length >= 2) {
-        startYM = Math.min(...yms)
-        endYM = Math.max(...yms)
-        months = endYM - startYM + 1
+    // ① 分割セル型の期間集計（H.E 型: "0"+"年"+"9"+"ヶ月" が別セルに分散）— 最優先
+    {
+      const rowNums = [...new Set(blockCells.map(c => c.row))]
+      for (const rn of rowNums) {
+        const rowCells = blockCells.filter(c => c.row === rn)
+        const monthMarker = rowCells.find(c => /^[ヶか]月$/.test(c.value.trim()))
+        const yearMarker = rowCells.find(c => c.value.trim() === '年')
+        if (monthMarker && yearMarker) {
+          const yearNumCell = rowCells.filter(c => c.col < yearMarker.col && /^\d+$/.test(c.value.trim())).pop()
+          const monthNumCell = rowCells.filter(c => c.col > yearMarker.col && c.col < monthMarker.col && /^\d+$/.test(c.value.trim())).pop()
+          if (yearNumCell && monthNumCell) {
+            const yy = parseInt(yearNumCell.value.trim())
+            const mm = parseInt(monthNumCell.value.trim())
+            if (yy >= 0 && yy <= 50 && mm >= 0 && mm <= 11) {
+              months = yy * 12 + mm
+              if (months === 0) months = null
+              if (months) break
+            }
+          }
+        }
       }
-    } else if (dateCells.length === 1) {
-      // 単独日付（D.U 型: 終了年月のみ → 次ブロックとの差分で推定できないので 12 ヶ月仮定）
-      const ym = parseYM(dateCells[0].value.trim())
-      if (ym) { startYM = ym; endYM = ym; months = 12 }
     }
 
-    // 期間テキスト（"2020/04〜2023/03" 形式）をブロック内テキストから探す
+    // ② 分割セル型の開始/終了年月（H.E 型: "2025"+"年"+"9"+"月"）
+    {
+      const rowNums = [...new Set(blockCells.map(c => c.row))]
+      const dateYMs: number[] = []
+      for (const rn of rowNums) {
+        const rowCells = blockCells.filter(c => c.row === rn)
+        const yearMarker = rowCells.find(c => c.value.trim() === '年')
+        const monthMarkerExact = rowCells.find(c => c.value.trim() === '月')
+        if (yearMarker && monthMarkerExact) {
+          const yearNumCell = rowCells.filter(c => c.col < yearMarker.col && /^\d{4}$/.test(c.value.trim())).pop()
+          const monthNumCell = rowCells.filter(c => c.col > yearMarker.col && c.col < monthMarkerExact.col && /^\d{1,2}$/.test(c.value.trim())).pop()
+          if (yearNumCell && monthNumCell) {
+            const y = parseInt(yearNumCell.value.trim())
+            const m = parseInt(monthNumCell.value.trim())
+            if (y >= 1970 && y <= 2100 && m >= 1 && m <= 12) dateYMs.push(y * 12 + m)
+          }
+        }
+        const currentCell = rowCells.find(c => /^(現在|今|present|継続|在籍中)$/i.test(c.value.trim()))
+        if (currentCell) dateYMs.push(nowYM)
+      }
+      if (dateYMs.length >= 2) {
+        startYM = Math.min(...dateYMs)
+        endYM = Math.max(...dateYMs)
+        if (!months) months = endYM - startYM + 1
+      }
+    }
+
+    // ③ 日付っぽいセルを収集（YYYY/MM、US形式 M/D/YY、シリアル日付）
+    if (!months) {
+      const dateCells = blockCells.filter(c => {
+        const v = c.value.trim()
+        return DATE_RE.test(v) || US_DATE_RE.test(v) || (!isNaN(parseFloat(v)) && parseFloat(v) >= SERIAL_MIN && parseFloat(v) <= SERIAL_MAX)
+      })
+      if (dateCells.length >= 2) {
+        const yms = dateCells.map(c => parseYM(c.value.trim())).filter((v): v is number => v !== null)
+        if (yms.length >= 2) {
+          startYM = Math.min(...yms)
+          endYM = Math.max(...yms)
+          months = endYM - startYM + 1
+        }
+      } else if (dateCells.length === 1) {
+        const ym = parseYM(dateCells[0].value.trim())
+        if (ym) { startYM = ym; endYM = ym; months = 12 }
+      }
+    }
+
+    // ④ 期間テキスト（"2020/04〜2023/03" 形式）
     if (!months) {
       for (const c of blockCells) {
         const pm = c.value.match(/(\d{4}[\/年]\d{1,2})\s*[〜～\-〜]\s*(\S+)/)
@@ -3504,7 +3553,7 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
       }
     }
 
-    // 期間テキスト（"X年Yヶ月" / "Xか月"）セルから直接取得（M.T 型）
+    // ⑤ "X年Yヶ月" / "Xか月" 単一セル（M.T 型）
     if (!months) {
       for (const c of blockCells) {
         const v = c.value.trim()
@@ -3512,7 +3561,6 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
         if (dm) { months = parseInt(dm[1]) * 12 + parseInt(dm[2]); break }
         const mm = v.match(/^(\d+)[ヶか]月$/)
         if (mm) { months = parseInt(mm[1]); break }
-        // 全角数字対応（"１か月" や "３年２ヶ月"）
         const normalized = v.replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
         const dm3 = normalized.match(/(\d+)年(\d+)[ヶか]月/)
         if (dm3) { months = parseInt(dm3[1]) * 12 + parseInt(dm3[2]); break }
@@ -3588,9 +3636,11 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
     if (blockSkills.length === 0) {
       // ヘッダー行（blocks の前）からスキル列の位置を特定
       const headerCells = sorted.filter(c => c.row >= firstNo.row && c.row <= firstNo.rowEnd)
-      const skillColCells = headerCells.filter(c =>
-        /^(OS等?|DB\/DC|言語\/ツール等?|言語|ツール|DB|環境|機種)$/.test(c.value.trim())
-      )
+      const skillColCells = headerCells.filter(c => {
+        const v = c.value.trim().replace(/[\r\n]+/g, ' ').trim()
+        return /^(OS等?|DB\/DC|言語\/ツール等?|言語|ツール|DB|環境|機種)$/.test(v) ||
+          /使用言語|使用技術|技術スタック|サーバ\s*OS|FW[・／]|ミドルウェア|開発環境/i.test(v)
+      })
       for (const hdr of skillColCells) {
         // ヘッダーと同じ列のブロック内セルからスキルを取得（「機種」列は PC/サーバ等でスキップ）
         if (/^機種$/.test(hdr.value.trim())) continue
@@ -3599,13 +3649,13 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
         )
         for (const cc of colCells) {
           const v = cc.value.trim()
-          if (!v || v === '-' || v === '－' || v.length < 2 || v.length > 80) continue
-          // 業務内容テキスト（長文）は除外
-          if (v.length > 50 && v.includes('\n')) continue
+          if (!v || v === '-' || v === '－' || v.length < 2) continue
+          // 業務内容テキスト（長文）は除外（ただし改行区切りのスキルリストは許容: 200文字まで）
+          if (v.length > 200 && v.includes('\n')) continue
           // 改行→行ごとに2+空白/全角スペース/カンマで分割（"Excel VBA"の単一スペースは保持）
           for (const line of v.split(/[\r\n]+/)) {
             for (const s of line.split(/[、，,]+|　|\s{2,}/).map(s2 => s2.trim()).filter(s2 => s2 && s2.length >= 2 && s2 !== '-' && s2 !== '－')) {
-              if (!SKILL_BLOCK.test(s) && !/^[◎○◇△▲×〇]+$/.test(s) && !/^\d+$/.test(s)) {
+              if (!SKILL_BLOCK.test(s) && !/^[◎○◇△▲×〇]+$/.test(s) && !/^\d+$/.test(s) && !/^[<＜][^>＞]+[>＞]$/.test(s)) {
                 blockSkills.push(s)
               }
             }
@@ -3699,6 +3749,13 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
         if (countGrid > 0 || countCells > 0) {
           // スキル数が多い方を採用（同数なら SpanCell ベースを優先＝空間構造が正確）
           skillYears = countCells >= countGrid ? syCells : syGrid
+          // cells ベースの _totalProjectMonths / _dateSpanMonths を常に保持（grid にはこの情報がない）
+          if (syCells['_totalProjectMonths'] && !skillYears['_totalProjectMonths']) {
+            skillYears['_totalProjectMonths'] = syCells['_totalProjectMonths']
+          }
+          if (syCells['_dateSpanMonths'] && !skillYears['_dateSpanMonths']) {
+            skillYears['_dateSpanMonths'] = syCells['_dateSpanMonths']
+          }
           firstJsonRows = jsonRows
           console.log(`[skillYears-pick] grid=${countGrid} cells=${countCells} winner=${countCells >= countGrid ? 'cells' : 'grid'}`)
         } else {
