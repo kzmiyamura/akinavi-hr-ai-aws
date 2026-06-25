@@ -4470,7 +4470,9 @@ Deno.serve(async (req: Request) => {
         const parsed = JSON.parse(raw.attachmentsJson) as unknown
         if (Array.isArray(parsed)) attachments = attachmentsFromParsedArray(parsed)
       } catch { /* ignore */ }
-    } else if (raw.attachments?.trim()) {
+    } else if (Array.isArray(raw.attachments)) {
+      attachments = attachmentsFromParsedArray(raw.attachments)
+    } else if (typeof raw.attachments === 'string' && raw.attachments.trim()) {
       attachments = attachmentsFromJsonArrayString(raw.attachments)
     }
 
