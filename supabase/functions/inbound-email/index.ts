@@ -2173,8 +2173,11 @@ function parseDurationToMonths(text: string): number | null {
 /** "2025/06" と "2026/03" のような開始・終了年月から月数を計算 */
 function calcMonthsFromDates(start: string, end: string): number | null {
   const parseYM = (s: string) => {
-    const m = s.match(/(\d{4})[\/\-年](\d{1,2})/)
-    return m ? { year: parseInt(m[1]), month: parseInt(m[2]) } : null
+    const m = s.match(/(\d{2,4})[\/\-年](\d{1,2})/)
+    if (!m) return null
+    let year = parseInt(m[1])
+    if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+    return { year, month: parseInt(m[2]) }
   }
   const s = parseYM(start)
   const e = parseYM(end)
@@ -2251,8 +2254,11 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
         skillMonths['_totalProjectMonths'] = totalProjectMonths
         // max日付 − min日付 スパン（空白期間込みのキャリア全体幅）
         const parseYM = (s: string) => {
-          const m = s.match(/(\d{4})[\/\-年](\d{1,2})/)
-          return m ? parseInt(m[1]) * 12 + parseInt(m[2]) : null
+          const m = s.match(/(\d{2,4})[\/\-年](\d{1,2})/)
+          if (!m) return null
+          let year = parseInt(m[1])
+          if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+          return year * 12 + parseInt(m[2])
         }
         const starts = projectPeriods.map(p => parseYM(p.start)).filter((v): v is number => v !== null)
         const ends   = projectPeriods.map(p => parseYM(p.end)).filter((v): v is number => v !== null)
@@ -3246,8 +3252,13 @@ function extractSkillYearsFromSheetJson(rows: Array<Record<string, string>>): Re
   const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
 
   const parseYM = (s: string): number | null => {
-    const m = s.match(/(\d{4})[\/\-年](\d{1,2})/)
-    return m ? parseInt(m[1]) * 12 + parseInt(m[2]) : null
+    const m = s.match(/(\d{2,4})[\/\-年](\d{1,2})/)
+    if (m) {
+      let year = parseInt(m[1])
+      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+      return year * 12 + parseInt(m[2])
+    }
+    return null
   }
   const resolveEndYM = (s: string): number | null => {
     if (/現在|今|present|継続|在籍中/i.test(s)) return nowYM
@@ -3374,14 +3385,14 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
   const _rsC = (c: SpanCell) => c.rowEnd - c.row + 1
 
   // ── Step 1: No. セルでプロジェクト境界を特定 ──
-  const noCells = sorted.filter(c => /^No\.?$/i.test(c.value.trim()))
+  const noCells = sorted.filter(c => /^(No\.?|項番)$/i.test(c.value.trim()))
   if (noCells.length === 0) return {}
 
   // ヘッダー No.（最初の No.）とデータ No. を分離
   // ヘッダー行: 同じ行に「期間」「内容」等のラベルが並ぶ
   const firstNo = noCells[0]
   const sameRowLabels = sorted.filter(c => c.row === firstNo.row && c !== firstNo)
-  const isHeaderRow = sameRowLabels.some(c => /^(期間|内容|案件名|業務内容)$/.test(c.value.trim()))
+  const isHeaderRow = sameRowLabels.some(c => /^(期間|内容|案件名|業務内容|システム名|業種)$/.test(c.value.trim()))
 
   // プロジェクト境界の行範囲を決定
   interface ProjectBlock { startRow: number; endRow: number }
@@ -3428,7 +3439,7 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
   // ── Step 2: 各ブロックから期間（月数）とスキルを抽出 ──
   const skillMonths: Record<string, number> = {}
   const projectPeriods: Array<{ startYM: number; endYM: number }> = []
-  const DATE_RE = /(\d{4})[\/\-年](\d{1,2})/
+  const DATE_RE = /(\d{2,4})[\/\-年](\d{1,2})/
   const SERIAL_MIN = 36526 // 2000-01-01
   const SERIAL_MAX = 48000 // ~2031
   const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
@@ -3443,9 +3454,13 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
       const d = new Date(Date.UTC(1899, 11, 30) + num * 86400000)
       return d.getUTCFullYear() * 12 + d.getUTCMonth() + 1
     }
-    // YYYY/MM 形式
+    // YYYY/MM or YY年MM月 形式
     const m = s.match(DATE_RE)
-    if (m) return parseInt(m[1]) * 12 + parseInt(m[2])
+    if (m) {
+      let year = parseInt(m[1])
+      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+      return year * 12 + parseInt(m[2])
+    }
     // US 日付形式 M/D/YY → YY<50 は 20YY、50以上は 19YY
     const usm = s.trim().match(US_DATE_RE)
     if (usm) {
@@ -3638,8 +3653,10 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
       const headerCells = sorted.filter(c => c.row >= firstNo.row && c.row <= firstNo.rowEnd)
       const skillColCells = headerCells.filter(c => {
         const v = c.value.trim().replace(/[\r\n]+/g, ' ').trim()
-        return /^(OS等?|DB\/DC|言語\/ツール等?|言語|ツール|DB|環境|機種)$/.test(v) ||
-          /使用言語|使用技術|技術スタック|サーバ\s*OS|FW[・／]|ミドルウェア|開発環境/i.test(v)
+        // 全角英数→半角英数に正規化してマッチ
+        const vNorm = v.replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+        return /^(OS等?|DB\/DC|言語\/ツール等?|言語|ツール|DB|DCその他|環境|機種)$/.test(vNorm) ||
+          /機種\s*OS|使用言語|使用技術|技術スタック|サーバ\s*OS|FW[・／]|ミドルウェア|開発環境/i.test(vNorm)
       })
       for (const hdr of skillColCells) {
         // ヘッダーと同じ列のブロック内セルからスキルを取得（「機種」列は PC/サーバ等でスキップ）
@@ -3664,11 +3681,17 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
       }
     }
 
-    // スキルに月数を加算（先頭の「- 」「・」を除去）
+    // スキルに月数を加算（先頭の「- 」「・」を除去、改行区切りの複合セルは個別スキルに分離）
     for (let skill of blockSkills) {
-      skill = skill.replace(/^[-・]\s*/, '').trim()
-      if (skill.length < 2) continue
-      skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+      // セル内改行で複数スキルが入っている場合は分離（例: "Win10\nAWS\nLinux"）
+      const subSkills = skill.includes('\n') ? skill.split('\n') : [skill]
+      for (let sub of subSkills) {
+        sub = sub.replace(/^[-・]\s*/, '').trim()
+        // 括弧付き補足を除去（例: "(CloudSearch)" → 独立扱いしない）
+        if (/^\([^)]+\)$/.test(sub) || /^（[^）]+）$/.test(sub)) continue
+        if (sub.length < 2) continue
+        skillMonths[sub] = (skillMonths[sub] ?? 0) + months
+      }
     }
   }
 
@@ -5453,9 +5476,24 @@ Deno.serve(async (req: Request) => {
             // skillYears キーを skill_master 名・候補者スキルに正規化
             const normalizeKeys = (sy: Record<string, number>): Record<string, number> => {
               if (Object.keys(sy).length === 0) return sy
+              // 改行区切りの複合キーを個別スキルに分離（"Mac\nAWS" → "Mac":months, "AWS":months）
+              const expanded: Record<string, number> = {}
+              for (const [rawKey, months] of Object.entries(sy)) {
+                if (rawKey.includes('\n')) {
+                  for (const sub of rawKey.split('\n')) {
+                    const s = sub.trim()
+                    if (s.length < 2) continue
+                    if (/^\([^)]+\)$/.test(s) || /^（[^）]+）$/.test(s)) continue
+                    // 分離したスキルは最大値を採用（同じプロジェクトでの重複加算を防止）
+                    expanded[s] = Math.max(expanded[s] ?? 0, months)
+                  }
+                } else {
+                  expanded[rawKey] = Math.max(expanded[rawKey] ?? 0, months)
+                }
+              }
               const norm: Record<string, number> = {}
               const usedSkills = new Set<string>()
-              for (const [rawKey, months] of Object.entries(sy)) {
+              for (const [rawKey, months] of Object.entries(expanded)) {
                 const rawLower = rawKey.toLowerCase().replace(/\s+/g, '')
                 let matched: string | null = null
                 // 1. 候補者スキル名に完全一致（大文字小文字・スペース無視）
