@@ -74,6 +74,8 @@ type CandidateBatchInput = {
   desiredProject?: string | null
   hakenOk?: boolean | null
   englishLevel?: 'business' | 'daily' | null
+  employmentType?: string | null
+  hakenLicenseVerified?: boolean | null
 }
 
 function toCandidateBatchInput(
@@ -309,44 +311,6 @@ function candidateSkillSet(candidate: Candidate): Set<string> {
   return new Set(arr.map((x) => normalizeSkillToken(String(x))).filter((x) => x.length > 0))
 }
 
-function countRequiredOverlap(candidate: Candidate, required: string[]): number {
-  if (required.length === 0) return 0
-  const set = candidateSkillSet(candidate)
-  let n = 0
-  for (const r of required) {
-    const t = normalizeSkillToken(String(r))
-    if (!t) continue
-    if (set.has(t)) n += 1
-  }
-  return n
-}
-
-function pickCandidatesForProjectMatch(project: Project, allCandidates: Candidate[], mode: MatchingRunMode, maxCandidates = MATCHING_DEFAULTS.fast_max_candidates_per_project): Candidate[] {
-  const required = (project.required_skills as string[] | undefined) ?? []
-  if (mode === 'full') return allCandidates
-
-  const scored = allCandidates
-    .map((c) => ({
-      c,
-      overlap: countRequiredOverlap(c, required),
-      exp: c.experience_years ?? -1,
-    }))
-    .sort((a, b) => {
-      if (b.overlap !== a.overlap) return b.overlap - a.overlap
-      if (b.exp !== a.exp) return b.exp - a.exp
-      return a.c.name.localeCompare(b.c.name, 'ja')
-    })
-
-  // 必須スキルが空の案件は”絞り”の根拠が弱いので、経験年数が多い順に上限人数へ
-  if (required.length === 0) {
-    return scored
-      .map((x) => x.c)
-      .sort((a, b) => (b.experience_years ?? -1) - (a.experience_years ?? -1) || a.name.localeCompare(b.name, 'ja'))
-      .slice(0, maxCandidates)
-  }
-
-  return scored.slice(0, maxCandidates).map((x) => x.c)
-}
 
 function pickProjectsForCandidateMatch(candidate: Candidate, openProjects: Project[], mode: MatchingRunMode, maxProjects = MATCHING_DEFAULTS.fast_max_projects_per_candidate): Project[] {
   if (mode === 'full') return openProjects
@@ -466,22 +430,6 @@ function RankingRestAccordion({
   )
 }
 
-function CandidateRawEmailToggle({ rawText }: { rawText: string }) {
-  const [show, setShow] = useState(false)
-  return (
-    <div className="mt-1">
-      <button type="button" onClick={() => setShow(v => !v)}
-        className="inline-flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 transition-colors">
-        {show ? '▲ 元メールを隠す' : '▼ 元メールを表示'}
-      </button>
-      {show && (
-        <pre className="mt-1 text-[10px] text-gray-500 whitespace-pre-wrap break-words bg-gray-50 border border-gray-100 rounded p-2 max-h-48 overflow-y-auto">
-          {rawText.slice(0, 1500)}
-        </pre>
-      )}
-    </div>
-  )
-}
 
 function ProjectModeRankCard({
   s,
@@ -1627,7 +1575,7 @@ const { data: projects = [] } = useQuery({
                     await saveProjectMatchWeights(
                       selectedProject.id,
                       dataEnv,
-                      scoringWeights,
+                      scoringWeights as Record<string, number>,
                       (selectedProject.raw_data ?? {}) as Record<string, unknown>,
                     )
                     queryClient.invalidateQueries({ queryKey: projectsQueryKeys.open(dataEnv) })
@@ -1782,7 +1730,7 @@ const { data: projects = [] } = useQuery({
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-gray-800 truncate flex items-center gap-1">
                           {p.title}
-                          {(p.raw_data as Record<string, unknown>)?.matchWeights && (
+                          {!!((p.raw_data as Record<string, unknown>)?.matchWeights) && (
                             <span className="text-[10px] bg-green-100 text-green-700 rounded px-1 shrink-0">⚖ カスタム</span>
                           )}
                         </div>
