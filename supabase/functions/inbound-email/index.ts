@@ -3682,6 +3682,8 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
     }
 
     // スキルに月数を加算（先頭の「- 」「・」を除去、改行区切りの複合セルは個別スキルに分離）
+    // 同一ブロック内で複数スキル列に同じスキルが重複しないよう Set で正規化してから加算
+    const blockSkillSet = new Set<string>()
     for (let skill of blockSkills) {
       // セル内改行で複数スキルが入っている場合は分離（例: "Win10\nAWS\nLinux"）
       const subSkills = skill.includes('\n') ? skill.split('\n') : [skill]
@@ -3690,8 +3692,11 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
         // 括弧付き補足を除去（例: "(CloudSearch)" → 独立扱いしない）
         if (/^\([^)]+\)$/.test(sub) || /^（[^）]+）$/.test(sub)) continue
         if (sub.length < 2) continue
-        skillMonths[sub] = (skillMonths[sub] ?? 0) + months
+        blockSkillSet.add(sub)
       }
+    }
+    for (const sub of blockSkillSet) {
+      skillMonths[sub] = (skillMonths[sub] ?? 0) + months
     }
   }
 
