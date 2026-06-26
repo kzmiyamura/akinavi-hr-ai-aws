@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tansta
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile } from '../lib/db/candidates'
-import type { CandidateFilter } from '../lib/db/candidates'
+import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -99,11 +99,22 @@ interface FilterDraft {
   name: string
   skillInput: string
   skills: string[]
+  skillYearFilters: SkillYearFilter[]
   prefecture: string
   expMin: string
 }
 
-const EMPTY_DRAFT: FilterDraft = { name: '', skillInput: '', skills: [], prefecture: '', expMin: '' }
+const EMPTY_DRAFT: FilterDraft = { name: '', skillInput: '', skills: [], skillYearFilters: [], prefecture: '', expMin: '' }
+
+/** "Java 10年" / "Java10年以上" → {skill:"Java", minYears:10} に変換。マッチしなければ null */
+function parseSkillYear(input: string): SkillYearFilter | null {
+  const m = input.trim().match(/^(.+?)\s*(\d+)\s*年(?:以上)?$/)
+  if (!m) return null
+  const skill = m[1].trim()
+  const minYears = parseInt(m[2], 10)
+  if (!skill || minYears <= 0 || minYears > 50) return null
+  return { skill, minYears }
+}
 
 /**
  * スキル重要度スコアを計算する（raw_profile.text をもとに）
@@ -857,6 +868,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const isFiltered = !!(
     appliedFilter.name ||
     appliedFilter.skills?.length ||
+    appliedFilter.skillYearFilters?.length ||
     appliedFilter.prefecture ||
     appliedFilter.expMin != null
   )
@@ -912,8 +924,23 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     enabled: isFiltered,
   })
 
-  // サーバー側で絞り込み済みなのでそのまま使う
-  const filteredCandidates = candidates
+  // スキル年数クライアントフィルター（RPC では skillYears を参照できないため後続で絞り込む）
+  const filteredCandidates = useMemo(() => {
+    const syFilters = appliedFilter.skillYearFilters
+    if (!syFilters?.length) return candidates
+    return candidates.filter(c => {
+      const skillYears = (c.raw_profile as Record<string, unknown>)?.skillYears as Record<string, number> | null | undefined
+      if (!skillYears) return false
+      return syFilters.every(({ skill, minYears }) => {
+        const lower = skill.toLowerCase().replace(/\s/g, '')
+        const months = Object.entries(skillYears).find(([k]) => {
+          const kl = k.toLowerCase().replace(/\s/g, '')
+          return kl === lower || kl.includes(lower) || lower.includes(kl)
+        })?.[1] ?? null
+        return months != null && months >= minYears * 12
+      })
+    })
+  }, [candidates, appliedFilter.skillYearFilters])
 
   const onRegisterSuccess = (candidate: Candidate) => {
     queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
@@ -1070,6 +1097,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
               {/* スキル */}
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">スキル（Enter または , で追加）</label>
+                <p className="text-xs text-gray-400 mb-1.5">「Java 10年」のように入力すると年数でも絞り込めます</p>
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {filterDraft.skills.map(s => (
                     <span key={s} className="flex items-center gap-1 bg-green-50 text-green-700 text-xs rounded-full px-2.5 py-1">
@@ -1083,6 +1111,18 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       </button>
                     </span>
                   ))}
+                  {filterDraft.skillYearFilters.map(f => (
+                    <span key={`${f.skill}-${f.minYears}`} className="flex items-center gap-1 bg-blue-50 text-blue-700 text-xs rounded-full px-2.5 py-1">
+                      {f.skill}（{f.minYears}年↑）
+                      <button
+                        type="button"
+                        onClick={() => setFilterDraft(prev => ({ ...prev, skillYearFilters: prev.skillYearFilters.filter(x => x.skill !== f.skill) }))}
+                        className="hover:text-red-500"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
                 </div>
                 <input
                   type="text"
@@ -1090,9 +1130,16 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   onChange={e => {
                     const val = e.target.value
                     if (val.endsWith(',')) {
-                      const skill = val.slice(0, -1).trim()
-                      if (skill && !filterDraft.skills.includes(skill)) {
-                        setFilterDraft(prev => ({ ...prev, skills: [...prev.skills, skill], skillInput: '' }))
+                      const raw = val.slice(0, -1).trim()
+                      const syf = parseSkillYear(raw)
+                      if (syf) {
+                        if (!filterDraft.skillYearFilters.some(x => x.skill === syf.skill)) {
+                          setFilterDraft(prev => ({ ...prev, skillYearFilters: [...prev.skillYearFilters, syf], skillInput: '' }))
+                        } else {
+                          setFilterDraft(prev => ({ ...prev, skillInput: '' }))
+                        }
+                      } else if (raw && !filterDraft.skills.includes(raw)) {
+                        setFilterDraft(prev => ({ ...prev, skills: [...prev.skills, raw], skillInput: '' }))
                       } else {
                         setFilterDraft(prev => ({ ...prev, skillInput: '' }))
                       }
@@ -1103,13 +1150,18 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   onKeyDown={e => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
-                      const skill = filterDraft.skillInput.trim()
-                      if (skill && !filterDraft.skills.includes(skill)) {
-                        setFilterDraft(prev => ({ ...prev, skills: [...prev.skills, skill], skillInput: '' }))
+                      const raw = filterDraft.skillInput.trim()
+                      const syf = parseSkillYear(raw)
+                      if (syf) {
+                        if (!filterDraft.skillYearFilters.some(x => x.skill === syf.skill)) {
+                          setFilterDraft(prev => ({ ...prev, skillYearFilters: [...prev.skillYearFilters, syf], skillInput: '' }))
+                        }
+                      } else if (raw && !filterDraft.skills.includes(raw)) {
+                        setFilterDraft(prev => ({ ...prev, skills: [...prev.skills, raw], skillInput: '' }))
                       }
                     }
                   }}
-                  placeholder="例: Java"
+                  placeholder="例: Java　または　Java 10年"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -1163,17 +1215,25 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                 <button
                   type="button"
                   onClick={() => {
-                    // 入力中のスキルを確定
+                    // 入力中のスキルを確定（年数付きかどうか判定）
+                    const raw = filterDraft.skillInput.trim()
                     const skills = [...filterDraft.skills]
-                    if (filterDraft.skillInput.trim() && !skills.includes(filterDraft.skillInput.trim())) {
-                      skills.push(filterDraft.skillInput.trim())
+                    const skillYearFilters = [...filterDraft.skillYearFilters]
+                    if (raw) {
+                      const syf = parseSkillYear(raw)
+                      if (syf && !skillYearFilters.some(x => x.skill === syf.skill)) {
+                        skillYearFilters.push(syf)
+                      } else if (!syf && !skills.includes(raw)) {
+                        skills.push(raw)
+                      }
                     }
                     const filter: CandidateFilter = {}
                     if (filterDraft.name.trim()) filter.name = filterDraft.name.trim()
                     if (skills.length > 0) filter.skills = skills
+                    if (skillYearFilters.length > 0) filter.skillYearFilters = skillYearFilters
                     if (filterDraft.prefecture) filter.prefecture = filterDraft.prefecture
                     if (filterDraft.expMin.trim() !== '') filter.expMin = parseInt(filterDraft.expMin, 10)
-                    setFilterDraft(prev => ({ ...prev, skills, skillInput: '' }))
+                    setFilterDraft(prev => ({ ...prev, skills, skillYearFilters, skillInput: '' }))
                     setAppliedFilter(filter)
                     setShowFilterPopup(false)
                   }}
@@ -1335,6 +1395,12 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                 <span key={s} className="flex items-center gap-1 bg-green-50 text-green-700 text-xs rounded-full px-2.5 py-1">
                   {s}
                   <button onClick={() => setAppliedFilter(prev => ({ ...prev, skills: prev.skills?.filter(x => x !== s) }))} className="hover:text-red-500"><X size={10} /></button>
+                </span>
+              ))}
+              {appliedFilter.skillYearFilters?.map(f => (
+                <span key={`${f.skill}-${f.minYears}`} className="flex items-center gap-1 bg-blue-50 text-blue-700 text-xs rounded-full px-2.5 py-1">
+                  {f.skill}（{f.minYears}年↑）
+                  <button onClick={() => setAppliedFilter(prev => ({ ...prev, skillYearFilters: prev.skillYearFilters?.filter(x => x.skill !== f.skill) }))} className="hover:text-red-500"><X size={10} /></button>
                 </span>
               ))}
               {appliedFilter.prefecture && (

@@ -344,11 +344,25 @@ export async function searchCandidateCount(
   return (data as number) ?? 0
 }
 
+export interface SkillYearFilter {
+  skill: string
+  minYears: number
+}
+
 export interface CandidateFilter {
   name?: string
   skills?: string[]
+  skillYearFilters?: SkillYearFilter[]
   prefecture?: string
   expMin?: number
+}
+
+/** RPC に渡すスキル一覧（通常スキル + 年数付きスキルのスキル名） */
+function rpcSkills(filter: CandidateFilter): string[] | null {
+  const base = filter.skills ?? []
+  const fromYear = (filter.skillYearFilters ?? []).map(f => f.skill)
+  const merged = [...new Set([...base, ...fromYear])]
+  return merged.length > 0 ? merged : null
 }
 
 /** 個別フィールドでフィルタリング（filter_candidates RPC） */
@@ -361,7 +375,7 @@ export async function filterCandidates(
   const { data, error } = await supabase.rpc('filter_candidates', {
     p_data_env:   dataEnv,
     p_name:       filter.name       ?? null,
-    p_skills:     filter.skills?.length ? filter.skills : null,
+    p_skills:     rpcSkills(filter),
     p_prefecture: filter.prefecture ?? null,
     p_exp_min:    filter.expMin     ?? null,
     p_limit:      limit,
@@ -379,7 +393,7 @@ export async function filterCandidateCount(
   const { data, error } = await supabase.rpc('count_filter_candidates', {
     p_data_env:   dataEnv,
     p_name:       filter.name       ?? null,
-    p_skills:     filter.skills?.length ? filter.skills : null,
+    p_skills:     rpcSkills(filter),
     p_prefecture: filter.prefecture ?? null,
     p_exp_min:    filter.expMin     ?? null,
   })
