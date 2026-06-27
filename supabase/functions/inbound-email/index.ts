@@ -2170,10 +2170,28 @@ function parseDurationToMonths(text: string): number | null {
   return months > 0 ? months : null
 }
 
-/** "2025/06" と "2026/03" のような開始・終了年月から月数を計算 */
+/** Excelシリアル日付（整数）を "YYYY/M" 形式に変換 */
+function excelSerialToDateStr(s: string): string {
+  const n = parseInt(s)
+  // 36526〜50000 = 2000年〜2036年の範囲のみ変換（誤認識防止）
+  if (isNaN(n) || n < 36526 || n > 50000) return s
+  const d = new Date(Date.UTC(1899, 11, 30) + n * 86400000)
+  return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}`
+}
+
+/** セル内に "2025年3月\n～\n2026年2月" 形式で開始〜終了が入っている場合に月数を抽出 */
+function calcMonthsFromMultilineCell(cellValue: string): number | null {
+  const parts = cellValue.split(/[\r\n]+/).map(s => s.trim())
+    .filter(s => s && !/^[～~〜\-－]$/.test(s) && s !== '現在' && s !== '継続中')
+  if (parts.length < 2) return null
+  return calcMonthsFromDates(parts[0], parts[parts.length - 1])
+}
+
+/** "2025/06" と "2026/03" のような開始・終了年月から月数を計算（Excelシリアル日付も対応） */
 function calcMonthsFromDates(start: string, end: string): number | null {
   const parseYM = (s: string) => {
-    const m = s.match(/(\d{2,4})[\/\-年](\d{1,2})/)
+    const normalized = excelSerialToDateStr(s.trim())
+    const m = normalized.match(/(\d{2,4})[\/\-年](\d{1,2})/)
     if (!m) return null
     let year = parseInt(m[1])
     if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
@@ -2219,9 +2237,14 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   for (let i = 0; i < Math.min(60, data.length); i++) {
     const row = data[i]
     for (let j = 0; j < row.length; j++) {
-      const v = String(row[j] ?? '').trim()
-      if ((v.includes('使用言語') || v === '言語' || v.includes('使用技術') || v.includes('技術スタック') || v === '技術' || v === '言語/技術') && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
-      if ((v.includes('FW') || v.includes('ツール') || v.includes('フレームワーク') || v.includes('ミドル')) && fwColIdx < 0) fwColIdx = j
+      // セル内改行がある場合は先頭行のみ使用（"言語\nDB" → "言語"）
+      const v = String(row[j] ?? '').split(/[\r\n]/)[0].trim()
+      if ((v.includes('使用言語') || v === '言語' || v.includes('使用技術') || v.includes('技術スタック') || v === '技術' || v === '言語/技術'
+           || v.includes('開発言語')  // "OS・DB・開発言語" 等の複合ヘッダー対応
+           // 複合列ヘッダー対応: "言語　FW" / "言語/FW" / "言語・FW" / "言語 ツール" 等
+           || (v.includes('言語') && (v.includes('FW') || v.includes('ツール') || v.includes('技術')))
+         ) && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
+      if ((v.includes('FW') || v.includes('ツール') || v.includes('フレームワーク') || v.includes('ミドル')) && fwColIdx < 0 && j !== langColIdx) fwColIdx = j
     }
     if (langColIdx >= 0) break
   }
@@ -2235,12 +2258,20 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       if (!noCell || !/^\d+$/.test(noCell)) continue
       const langCell = String(row[langColIdx] ?? '').trim()
       const fwCell = fwColIdx >= 0 ? String(row[fwColIdx] ?? '').trim() : ''
-      // 期間は次の行 index=1 の "10年9ヶ月" テキストから取得、なければ開始・終了日時から計算
+      // 期間は次の行の "10年9ヶ月" テキストから取得（最大3行後まで・col[1]とcol[2]を確認）
       let months: number | null = null
-      if (i + 1 < data.length) months = parseDurationToMonths(String(data[i + 1][1] ?? ''))
-      if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), String(row[5] ?? ''))
+      for (let di = 1; di <= 3 && !months; di++) {
+        if (i + di < data.length) {
+          months = parseDurationToMonths(String(data[i + di][1] ?? ''))
+               ?? parseDurationToMonths(String(data[i + di][2] ?? ''))
+        }
+      }
+      // col[1] に "2025年3月\n～\n2026年2月" 形式で開始〜終了が入っている場合
+      if (!months) months = calcMonthsFromMultilineCell(String(row[1] ?? ''))
+      // col[1]/col[3] が別々の日付の場合（またはExcelシリアル日付）
+      if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), String(row[3] ?? ''))
       if (!months || months <= 0) continue
-      projectPeriods.push({ start: String(row[1] ?? ''), end: String(row[5] ?? ''), months })
+      projectPeriods.push({ start: String(row[1] ?? ''), end: String(row[3] ?? ''), months })
       const skillTexts = (langCell + '\n' + fwCell).split(/[\n\r、，,]+/).map(s => s.trim())
         .filter(s => s && s !== '-' && s !== '－' && !/^[\s\-－]+$/.test(s))
       for (const skill of skillTexts) {
@@ -2429,7 +2460,10 @@ function worksheetToGrid(sheet: Record<string, unknown>): string[][] {
   for (let r = range.s.r; r <= range.e.r; r++) {
     const row: string[] = []
     for (let c = range.s.c; c <= range.e.c; c++) {
-      if (skipCells.has(`${r},${c}`)) continue
+      if (skipCells.has(`${r},${c}`)) {
+        row.push('')  // 結合セル内部は空文字で列位置を保持（sheet_to_json の defval:'' と同等）
+        continue
+      }
       const cell = sheet[encodeXlsxCell(r, c)] as XlsxCell | undefined
       const val = String(cell?.w ?? (cell?.v !== undefined ? cell.v : '')).replace(/\r\n?/g, '\n').trim()
       row.push(val)
@@ -4883,12 +4917,6 @@ Deno.serve(async (req: Request) => {
       // earlyMultiCheck は body で事前計算済み（effectiveBody と同一の場合は再利用）
       const multiBlocks = earlyMultiCheck ?? splitMultiCandidateBody(effectiveBody)
       if (multiBlocks && multiBlocks.length >= 2) {
-        // 区切り線より前のプリアンブル（共通スキルリスト等）を抽出してスキル照合に使う
-        // multiBlocks の最初のブロックが effectiveBody のどこから始まるかで判定
-        const firstBlockStart = effectiveBody.indexOf(multiBlocks[0].trim().slice(0, 30))
-        const multiPreamble = firstBlockStart > 50
-          ? effectiveBody.slice(0, firstBlockStart).trim()
-          : ''
         console.log(`[multi-candidate] ${multiBlocks.length}人検出 from=${from} subject=${subject.slice(0, 80)}`)
         tracePhase = 'multi_candidate'
 
@@ -4959,10 +4987,9 @@ Deno.serve(async (req: Request) => {
             }
 
             // ── Step3: ブロック固有のスキル照合 ──────────────────────────────────
-            // プリアンブル（区切り線前の共通スキルリスト等）もスキル照合に含める
-            // 件名（subject）は複数人材メールでは全員共通のため per-block スキル照合から除外する
-            // （件名に「/SQL,ShellScript,Linux」等が含まれると他ブロックの人材にも誤付与される）
-            const blockBodyText = [multiPreamble, block].filter(Boolean).join('\n')
+            // 件名・プリアンブルはいずれも全員共通のため per-block スキル照合から除外する
+            // （プリアンブルに最初の候補者の ※C言語(8年1ヶ月) 等が含まれると他全員に誤付与される）
+            const blockBodyText = block
             const { matched: blockBodyMatched } = extractAndRemoveSkills(blockBodyText, masterSkills, { looseCert: false })
             const blockBodyMatchedNames = new Set(blockBodyMatched.map(s => s.name))
             const blockAttachRaw = blockAttachText.trim()
@@ -5057,9 +5084,17 @@ Deno.serve(async (req: Request) => {
                 nationality: blockRegexFields.nationality,
                 selfPR: extractSelfPR(block, blockAttachText) ?? null,
                 agentComment: extractAgentComment(block, blockAttachText) ?? null,
+                // 添付テキスト（再解析時に skillYears を再抽出できるよう保存）
+                attachmentText: blockAttachText ? blockAttachText.slice(0, 5000) : undefined,
                 multiCandidateBlock: true,
                 // 名前後ろ括弧のスキル年数（#79）: 「K.T（Java 5年 / Python 3年）」形式
-                skillYears: blockRegexFields.nameSkillYears ?? undefined,
+                // Excel skillYears: マッチした添付 > 再解析時の global excelSkillYears（blockIdx=0） > nameSkillYears
+                skillYears: (() => {
+                  const excSY = matchedTextContent?.skillYears
+                    ?? (blockIdx === 0 && targetCandidateId && Object.keys(excelSkillYears).length > 0 ? excelSkillYears : {})
+                  const display = Object.fromEntries(Object.entries(excSY).filter(([k]) => !k.startsWith('_')))
+                  return Object.keys(display).length > 0 ? display : (blockRegexFields.nameSkillYears ?? undefined)
+                })(),
                 // Excel スキルシートの「スキルサマリ」セル（selfPR・agentComment と並列の独自フィールド）
                 skillSummary: excelSkillSummary ?? undefined,
                 // Excel スキルシートの JSON 化データ（HF Spaces 品質チェック用）
@@ -5469,6 +5504,10 @@ Deno.serve(async (req: Request) => {
           selfPR: extractSelfPR(body, attachText) ?? null,
           agentComment: extractAgentComment(body, attachText) ?? null,
           geminiParseFallback: parseFallback,
+          // Excel/Word 添付テキスト（再解析時に skillYears を再抽出できるよう保存）
+          attachmentText: officeTextContents.length > 0
+            ? officeTextContents.map(t => t.content).join('\n').slice(0, 5000)
+            : undefined,
           // Excel スキルシートの「スキルサマリ」セル（selfPR・agentComment と並列の独自フィールド）
           skillSummary: excelSkillSummary ?? undefined,
           skillYears: (() => {
