@@ -3391,12 +3391,69 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
   }
   const count3 = Object.keys(sy3).length
 
+  // 方式4: Word 職務経歴書型（YYYY年MM月~約N年間 + [OS]/[言語]/[DB] パターン）
+  const sy4: Record<string, number> = {}
+  {
+    let curMonths = 0
+    const parseWordPeriod = (line: string): number => {
+      // 約N年Mか月 / 約N年Mヶ月間 / 約N年間
+      const m1 = line.match(/約(\d+)年(?:(\d+)[ヵヶか]ヶ?月)?間?/)
+      if (m1) return parseInt(m1[1]) * 12 + parseInt(m1[2] || '0')
+      if (/約半年/.test(line)) return 6
+      // 約N年Mか月（間なし）
+      const m2 = line.match(/約(\d+)年(\d+)か月/)
+      if (m2) return parseInt(m2[1]) * 12 + parseInt(m2[2])
+      // YYYY年MM月~YYYY年MM月
+      const m3 = line.match(/(\d{4})年(\d{1,2})月[〜~～\-]+(\d{4})年(\d{1,2})月/)
+      if (m3) {
+        const sYM = parseInt(m3[1]) * 12 + parseInt(m3[2])
+        const eYM = parseInt(m3[3]) * 12 + parseInt(m3[4])
+        return Math.max(0, eYM - sYM + 1)
+      }
+      // YYYY年MM月~現在
+      const m4 = line.match(/(\d{4})年(\d{1,2})月[〜~～\-]+現在/)
+      if (m4) {
+        const sYM = parseInt(m4[1]) * 12 + parseInt(m4[2])
+        const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
+        return Math.max(0, nowYM - sYM + 1)
+      }
+      return 0
+    }
+    const SKIP_RE = /^(なし|[-－ー]|特記|注|備考)\s*[：:]?$/
+    const TECH_LBL_RE = /^(OS|DB|言語|ミドルウェア|その他|ツール|クラウド|フレームワーク|FW|MW|サーバ)/i
+    const extractFromSkillLine = (line: string) => {
+      const markerRE = /[\[【]([^\]】]{1,20})[\]】]\s*([^\[【]*)/g
+      let mm: RegExpExecArray | null
+      while ((mm = markerRE.exec(line)) !== null) {
+        const label = mm[1].trim()
+        const content = mm[2].replace(/全\d+名.*$/, '').trim()
+        if (!TECH_LBL_RE.test(label)) continue
+        for (const raw of content.split(/[,、，]+/).map(s => s.trim())) {
+          const skill = raw.trim()
+          if (!skill || skill.length < 2 || SKIP_RE.test(skill)) continue
+          if (/^(特記|注|備考)\s*[：:]/.test(skill)) continue
+          if (/^\d+$/.test(skill)) continue // 純粋な数字はOSバージョンなので除外
+          sy4[skill] = (sy4[skill] ?? 0) + curMonths
+        }
+      }
+    }
+    for (const para of extraTexts) {
+      const months = parseWordPeriod(para)
+      if (months > 0) { curMonths = months; continue }
+      if (curMonths > 0 && (para.includes('[') || para.includes('【'))) {
+        extractFromSkillLine(para)
+      }
+    }
+  }
+  const count4 = Object.keys(sy4).length
+
   // 最も多く取れた方式を採用
   let best: Record<string, number> = {}
   let bestMethod = 'none'
-  if (count1 >= count2 && count1 >= count3 && count1 > 0) { best = sy1; bestMethod = 'column' }
-  else if (count2 >= count3 && count2 > 0)                 { best = sy2; bestMethod = 'array' }
-  else if (count3 > 0)                                      { best = sy3; bestMethod = 'text' }
+  if (count1 >= count2 && count1 >= count3 && count1 >= count4 && count1 > 0) { best = sy1; bestMethod = 'column' }
+  else if (count2 >= count3 && count2 >= count4 && count2 > 0)                 { best = sy2; bestMethod = 'array' }
+  else if (count4 >= count3 && count4 > 0)                                      { best = sy4; bestMethod = 'word-narrative' }
+  else if (count3 > 0)                                                          { best = sy3; bestMethod = 'text' }
 
   if (bestMethod !== 'none') {
     const count = Object.keys(best).filter(k => !k.startsWith('_')).length
