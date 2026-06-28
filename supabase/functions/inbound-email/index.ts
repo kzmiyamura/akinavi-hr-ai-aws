@@ -3463,6 +3463,103 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
 }
 
 /**
+ * R.O 型: 「期間」ヘッダーが同一列に複数回繰り返す形式。
+ * 各プロジェクトが独自の「期間」ヘッダーを持ち、隣列にプロジェクト番号/☆ マーカーが並ぶ。
+ * スキルは「【言語】\n...\n【OS】\n...」形式のセルに格納される。
+ */
+function extractSkillYearsRepeatPeriodHeader(sorted: SpanCell[], periodHeaders: SpanCell[]): Record<string, number> {
+  const maxRow = Math.max(...sorted.map(c => c.rowEnd))
+  const skillMonths: Record<string, number> = {}
+  let totalProjectMonths = 0
+  const projectPeriods: Array<{ startYM: number; endYM: number }> = []
+  const SERIAL_MIN = 25569
+  const SERIAL_MAX = 48000
+  const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
+
+  const parseSerial = (s: string): number | null => {
+    const num = parseFloat(s)
+    if (!isNaN(num) && num >= SERIAL_MIN && num <= SERIAL_MAX) {
+      const d = new Date(Date.UTC(1899, 11, 30) + num * 86400000)
+      return d.getUTCFullYear() * 12 + d.getUTCMonth() + 1
+    }
+    const m = s.match(/(\d{2,4})[\/\-年](\d{1,2})/)
+    if (m) {
+      let year = parseInt(m[1])
+      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+      return year * 12 + parseInt(m[2])
+    }
+    return null
+  }
+
+  for (let i = 0; i < periodHeaders.length; i++) {
+    const ph = periodHeaders[i]
+    const blockStart = ph.row
+    const blockEnd = i + 1 < periodHeaders.length ? periodHeaders[i + 1].row - 1 : maxRow
+    const blockCells = sorted.filter(c => c.row >= blockStart && c.rowEnd <= blockEnd)
+
+    // 期間の抽出
+    let months: number | null = null
+    let startYM: number | null = null
+    let endYM: number | null = null
+
+    // ① 明示的な "X年Yヶ月" / "Xヶ月"
+    for (const bc of blockCells) {
+      const v = bc.value.trim()
+      const dm = v.match(/(\d+)年(\d+)[ヵヶか]月/)
+      if (dm) { months = parseInt(dm[1]) * 12 + parseInt(dm[2]); break }
+      const mm = v.match(/^(\d+)[ヵヶか]月$/)
+      if (mm) { months = parseInt(mm[1]); break }
+    }
+    // ② シリアル日付
+    if (!months) {
+      const dateCells = blockCells.filter(c => {
+        const num = parseFloat(c.value.trim())
+        return !isNaN(num) && num >= SERIAL_MIN && num <= SERIAL_MAX
+      })
+      const presentCell = blockCells.find(c => /^(現在|今|継続|在籍中)$/i.test(c.value.trim()))
+      if (dateCells.length >= 2) {
+        const yms = dateCells.map(c => parseSerial(c.value.trim())).filter((v): v is number => v !== null)
+        if (yms.length >= 2) { startYM = Math.min(...yms); endYM = Math.max(...yms); months = endYM - startYM + 1 }
+      } else if (dateCells.length === 1 && presentCell) {
+        startYM = parseSerial(dateCells[0].value.trim())
+        if (startYM) { endYM = nowYM; months = nowYM - startYM + 1 }
+      }
+    }
+
+    if (!months || months <= 0 || months > 600) continue
+    totalProjectMonths += months
+    if (startYM && endYM) projectPeriods.push({ startYM, endYM })
+
+    // スキルの抽出: 「【言語】\n...\n【OS】\n...」形式
+    const ENV_LBL_RE = /^【(言語|OS|FW|フレームワーク|ツール|DB|データベース|ミドルウェア|クラウド|インフラ|その他|NW)】/
+    for (const bc of blockCells) {
+      if (!bc.value.includes('【')) continue
+      const lines = bc.value.split(/\r?\n/).map(l => l.replace(/^[　\s・]+/, '').trim()).filter(l => l)
+      let inSection = false
+      for (const line of lines) {
+        if (ENV_LBL_RE.test(line)) { inSection = true; continue }
+        if (/^【/.test(line)) { inSection = false; continue }
+        if (!inSection || line === '-' || line === '－' || line.length < 2) continue
+        for (const skill of line.split(/[、，,\/]+/).map(s => s.trim())) {
+          if (skill && skill.length >= 2 && skill !== '-' && !/^\d+$/.test(skill)) {
+            skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+          }
+        }
+      }
+    }
+  }
+
+  if (Object.keys(skillMonths).length === 0) return {}
+  if (totalProjectMonths > 0) skillMonths['_totalProjectMonths'] = totalProjectMonths
+  if (projectPeriods.length > 0) {
+    const span = Math.max(...projectPeriods.map(p => p.endYM)) - Math.min(...projectPeriods.map(p => p.startYM)) + 1
+    if (span > 0) skillMonths['_dateSpanMonths'] = span
+  }
+  console.log(`[skillYears-repeat-period] projects=${periodHeaders.length} skills=${Object.keys(skillMonths).filter(k => !k.startsWith('_')).length}`)
+  return skillMonths
+}
+
+/**
  * 期間ヘッダー型（M.A / Y.Y / M.T / M.H 型）:
  * 「No.」「項番」も丸数字もないが、「期間」ヘッダーの下に数字(1,2,3...)が並ぶ
  * 日本ITスキルシートの一般的なフォーマット。
@@ -3477,6 +3574,15 @@ function extractSkillYearsPeriodHeader(sorted: SpanCell[]): Record<string, numbe
 
   // 同列(c.col === periodHeader.col)の下に数字(1,2,3...)があるか確認
   const periodCol = periodHeader.col
+
+  // R.O 型: 同じ列に「期間」ヘッダーが複数回繰り返す（各プロジェクトが独自ヘッダーを持つ）
+  const allPeriodHeaders = sorted.filter(c =>
+    /^期間$/.test(c.value.trim()) && c.col === periodCol
+  ).sort((a, b) => a.row - b.row)
+  if (allPeriodHeaders.length >= 2) {
+    return extractSkillYearsRepeatPeriodHeader(sorted, allPeriodHeaders)
+  }
+
   const numberCells = sorted.filter(c =>
     c.col === periodCol && c.row > periodHeader.rowEnd && /^\d+$/.test(c.value.trim())
   ).sort((a, b) => a.row - b.row)
@@ -3803,10 +3909,25 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
   } else if (isHeaderRow) {
     // D.U 型: ヘッダー行が繰り返されるパターン
     // 各 No. セルの行 = ヘッダー行、その下がデータ
+    // A.N 型: 各 No. セクション内に数字セルが存在する場合はさらに M.T 型分割を適用
+    const maxRow = Math.max(...sorted.map(c => c.rowEnd))
     for (let i = 0; i < noCells.length; i++) {
-      const startRow = noCells[i].row
-      const endRow = i + 1 < noCells.length ? noCells[i + 1].row - 1 : Math.max(...sorted.map(c => c.rowEnd))
-      blocks.push({ startRow, endRow })
+      const sectionStart = noCells[i].row
+      const sectionEnd = i + 1 < noCells.length ? noCells[i + 1].row - 1 : maxRow
+      const noCol = noCells[i].col
+      const subNums = sorted.filter(c =>
+        c.col === noCol && c.row > noCells[i].rowEnd && c.row <= sectionEnd && /^\d+$/.test(c.value.trim())
+      ).sort((a, b) => a.row - b.row)
+      if (subNums.length > 0) {
+        // A.N 型: セクション内を数字セルでさらに分割
+        for (let j = 0; j < subNums.length; j++) {
+          const startRow = subNums[j].row
+          const endRow = j + 1 < subNums.length ? subNums[j + 1].row - 1 : sectionEnd
+          blocks.push({ startRow, endRow })
+        }
+      } else {
+        blocks.push({ startRow: sectionStart, endRow: sectionEnd })
+      }
     }
   } else {
     // T.K 型: No.(rs≥3) 自体がブロック開始
