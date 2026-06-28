@@ -3406,12 +3406,106 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
 }
 
 /**
+ * S.Y 型: 丸数字（①〜⑳）始まりセルをプロジェクト境界として経験月数を抽出するサブ関数。
+ * - プロジェクト行: c1-4 に "⑫保険業..." など丸数字始まりのタイトル
+ * - 期間セル: 同じ行の別セル（c5-7）に "YYYY年M月 〜 YYYY年M月 / X年Yヶ月"
+ * - 環境行: "開発環境" ラベルの右のセルにスキルが ／ 区切りで入る
+ */
+function extractSkillYearsCircledNum(sorted: SpanCell[]): Record<string, number> {
+  // ①〜⑳ (U+2460-U+2473)
+  const CIRCLED_RE = /^[①-⑳]/
+  const projectCells = sorted.filter(c => CIRCLED_RE.test(c.value.trim()))
+  if (projectCells.length === 0) return {}
+
+  const skillMonths: Record<string, number> = {}
+  const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
+  const maxRow = Math.max(...sorted.map(c => c.rowEnd))
+  let totalProjectMonths = 0
+  const projectPeriods: Array<{ startYM: number; endYM: number }> = []
+
+  for (let i = 0; i < projectCells.length; i++) {
+    const ph = projectCells[i]
+    const startRow = ph.row
+    const endRow = i + 1 < projectCells.length
+      ? projectCells[i + 1].row - 1
+      : maxRow
+    const blockCells = sorted.filter(c => c.row >= startRow && c.rowEnd <= endRow)
+
+    // ── 期間の抽出（プロジェクトヘッダーと同じ行の別セル）──
+    let months: number | null = null
+    let startYM: number | null = null
+    let endYM: number | null = null
+
+    const sameRowCells = sorted.filter(c => c.row === ph.row && c !== ph)
+    for (const rc of sameRowCells) {
+      const v = rc.value.trim()
+      // 明示的な月数を優先: "/ X年Yヶ月"
+      const dm = v.match(/[/／]\s*(\d+)年(\d+)[ヶか]月/)
+      if (dm) months = parseInt(dm[1]) * 12 + parseInt(dm[2])
+      // "/ X年" (月なし)
+      if (!months) { const ym3 = v.match(/[/／]\s*(\d+)年\s*$/); if (ym3) months = parseInt(ym3[1]) * 12 }
+      // "/ Xヶ月"
+      if (!months) { const mmS = v.match(/[/／]\s*(\d+)[ヶか]月/); if (mmS) months = parseInt(mmS[1]) }
+      // "YYYY年M月 〜 YYYY年M月" → startYM/endYM を記録
+      const rm = v.match(/(\d{4})年(\d{1,2})月.*?[〜～].*?(\d{4})年(\d{1,2})月/)
+      if (rm) {
+        startYM = parseInt(rm[1]) * 12 + parseInt(rm[2])
+        endYM = parseInt(rm[3]) * 12 + parseInt(rm[4])
+        if (!months) months = endYM - startYM + 1
+      }
+      // "YYYY年M月 〜 現在/継続中"
+      if (!months) {
+        const rm2 = v.match(/(\d{4})年(\d{1,2})月.*?[〜～].*?(現在|今|継続|在籍中)/i)
+        if (rm2) {
+          startYM = parseInt(rm2[1]) * 12 + parseInt(rm2[2])
+          endYM = nowYM
+          months = nowYM - startYM + 1
+        }
+      }
+      if (months) break
+    }
+
+    if (!months || months <= 0 || months > 600) continue
+    totalProjectMonths += months
+    if (startYM && endYM) projectPeriods.push({ startYM, endYM })
+
+    // ── スキルの抽出（「開発環境」ラベルの右隣セル）──
+    for (const cell of blockCells) {
+      if (!/^開発環境$/.test(cell.value.trim())) continue
+      const valueCell = sorted.find(c => c.row === cell.row && c.col > cell.col)
+      if (!valueCell) break
+      for (const seg of valueCell.value.split(/[/／\r\n、，,]+/)) {
+        const skill = seg.trim()
+        if (skill.length >= 2 && skill.length <= 50) {
+          skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+        }
+      }
+      break
+    }
+  }
+
+  if (Object.keys(skillMonths).length === 0) return {}
+
+  if (totalProjectMonths > 0) skillMonths['_totalProjectMonths'] = totalProjectMonths
+  if (projectPeriods.length > 0) {
+    const allStarts = projectPeriods.map(p => p.startYM)
+    const allEnds = projectPeriods.map(p => p.endYM)
+    const span = Math.max(...allEnds) - Math.min(...allStarts) + 1
+    if (span > 0) skillMonths['_dateSpanMonths'] = span
+  }
+
+  console.log(`[skillYears-circled] projects=${projectCells.length} skills=${Object.keys(skillMonths).filter(k => !k.startsWith('_')).length}`)
+  return skillMonths
+}
+
+/**
  * SpanCell[] からプロジェクトブロック単位でスキル別経験月数を抽出する。
  * grid ベースの extractSkillYearsUnified が失敗するケース（セル結合で列構造が崩れるフォーマット）のフォールバック。
  *
  * 対応フォーマット:
  *   - D.U 型: No. ヘッダー行 → 日付行 → 【言語】マルチラインブロック
  *   - T.K/H.A 型: No.(rs≥3) → 期間(rs≥3) → 日付行 → 「言語 FW」行 → スキル行
+ *   - S.Y 型: ①〜⑳始まりセル → 同行の期間セル → 「開発環境」行のスキル（extractSkillYearsCircledNum にフォールバック）
  */
 function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
   if (cells.length === 0) return {}
@@ -3420,7 +3514,7 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
 
   // ── Step 1: No. セルでプロジェクト境界を特定 ──
   const noCells = sorted.filter(c => /^(No\.?|項番)$/i.test(c.value.trim()))
-  if (noCells.length === 0) return {}
+  if (noCells.length === 0) return extractSkillYearsCircledNum(sorted)
 
   // ヘッダー No.（最初の No.）とデータ No. を分離
   // ヘッダー行: 同じ行に「期間」「内容」等のラベルが並ぶ
@@ -3907,9 +4001,50 @@ async function fetchGoogleLinks(body: string): Promise<{
             driveSheetSkillYears = sy
           }
         }
+        // CSV で skillYears が取れなかった場合、XLSX バイナリで再試行（Excel パイプラインの方が精度高い）
+        if (Object.keys(driveSheetSkillYears).length === 0) {
+          const xlsxUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx`
+          try {
+            const xlsxRes = await fetchWithTimeout(xlsxUrl, 15000)
+            if (xlsxRes.ok) {
+              const buf = await xlsxRes.arrayBuffer()
+              const bytes = new Uint8Array(buf)
+              let b64 = ''
+              const chunk = 8192
+              for (let i = 0; i < bytes.length; i += chunk) {
+                b64 += String.fromCharCode(...bytes.subarray(i, i + chunk))
+              }
+              const base64 = btoa(b64)
+              const sy2 = await extractSkillYearsFromExcel(base64)
+              if (Object.keys(sy2).length > 0) {
+                driveSheetSkillYears = sy2
+                console.log(`[DriveLink] Sheets XLSX skillYears取得: ${Object.keys(sy2).length}件 id=${id}`)
+              }
+            }
+          } catch (e2) { console.warn(`[DriveLink] Sheets XLSX fetch error: ${id}`, e2) }
+        }
       } else {
-        // フォールバックDLは認証が必要なSheetsではHTMLゴミを返すためスキップ
-        console.warn(`[DriveLink] Sheetsエクスポート失敗(${res.status}): ${id} - スキップ（公開設定を確認してください）`)
+        // CSVが失敗した場合も XLSX を試みる
+        console.warn(`[DriveLink] Sheets CSV失敗(${res.status}): ${id} - XLSXで再試行`)
+        const xlsxUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx`
+        try {
+          const xlsxRes = await fetchWithTimeout(xlsxUrl, 15000)
+          if (xlsxRes.ok) {
+            const buf = await xlsxRes.arrayBuffer()
+            const bytes = new Uint8Array(buf)
+            let b64 = ''
+            const chunk = 8192
+            for (let i = 0; i < bytes.length; i += chunk) {
+              b64 += String.fromCharCode(...bytes.subarray(i, i + chunk))
+            }
+            const base64 = btoa(b64)
+            const sy2 = await extractSkillYearsFromExcel(base64)
+            if (Object.keys(sy2).length > 0) {
+              driveSheetSkillYears = sy2
+              console.log(`[DriveLink] Sheets XLSX skillYears取得（CSVフォールバック）: ${Object.keys(sy2).length}件 id=${id}`)
+            }
+          }
+        } catch (e2) { console.warn(`[DriveLink] Sheets XLSX fetch error: ${id}`, e2) }
       }
     } catch (e) { console.warn(`[DriveLink] Sheets fetch error: ${id}`, e) }
   }
