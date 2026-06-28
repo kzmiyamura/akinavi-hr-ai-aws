@@ -3406,6 +3406,160 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
 }
 
 /**
+ * 期間ヘッダー型（M.A / Y.Y / M.T / M.H 型）:
+ * 「No.」「項番」も丸数字もないが、「期間」ヘッダーの下に数字(1,2,3...)が並ぶ
+ * 日本ITスキルシートの一般的なフォーマット。
+ * - Col 0: 数字（プロジェクト番号、複数行をまたぐ結合セルのこともある）
+ * - Col 1: 開始日シリアル / Col 3: 終了日シリアル or 「現在」
+ * - 別行に "X年Yヶ月" / "Xヶ月" が入ることも多い
+ * - スキル列: 「使用言語」「DB」「サーバOS」「ミドルウェア」「FW・MW」等
+ */
+function extractSkillYearsPeriodHeader(sorted: SpanCell[]): Record<string, number> {
+  const periodHeader = sorted.find(c => /^期間$/.test(c.value.trim()))
+  if (!periodHeader) return {}
+
+  // 同列(c.col === periodHeader.col)の下に数字(1,2,3...)があるか確認
+  const periodCol = periodHeader.col
+  const numberCells = sorted.filter(c =>
+    c.col === periodCol && c.row > periodHeader.rowEnd && /^\d+$/.test(c.value.trim())
+  ).sort((a, b) => a.row - b.row)
+  if (numberCells.length === 0) return {}
+
+  // ヘッダー行からスキル列を特定
+  const headerRowCells = sorted.filter(c =>
+    c.row >= periodHeader.row && c.row <= periodHeader.rowEnd + 1
+  )
+  const SKILL_HDR_RE = /^(使用言語|言語|DB|ＤＢ|サーバ[ーー]?OS|OS等?|ミドルウェア|NW機器|ツール(他|類)?|FW[・\/]MW|パッケージ|クラウド|環境|フレームワーク|技術スタック|使用技術|機種[・]?OS)/i
+  const skillHeaderCells = headerRowCells.filter(c => {
+    const v = c.value.trim().replace(/[\r\n]+/g, ' ')
+    const vn = v.replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    return SKILL_HDR_RE.test(vn)
+  })
+  if (skillHeaderCells.length === 0) return {}
+
+  // 「期間」列のヘッダー位置（OMT型: 小数値が入る "期間" 列）
+  const durationHeaderCell = headerRowCells.find(c =>
+    /^期間$/.test(c.value.trim()) && c !== periodHeader
+  )
+
+  const skillMonths: Record<string, number> = {}
+  const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
+  const maxRow = Math.max(...sorted.map(c => c.rowEnd))
+  let totalProjectMonths = 0
+  const projectPeriods: Array<{ startYM: number; endYM: number }> = []
+
+  const SERIAL_MIN = 25569 // 1970-01-01（古い案件対応）
+  const SERIAL_MAX = 48000
+  const parseSerial = (s: string): number | null => {
+    const num = parseFloat(s)
+    if (!isNaN(num) && num >= SERIAL_MIN && num <= SERIAL_MAX) {
+      const d = new Date(Date.UTC(1899, 11, 30) + num * 86400000)
+      return d.getUTCFullYear() * 12 + d.getUTCMonth() + 1
+    }
+    const m = s.match(/(\d{2,4})[\/\-年](\d{1,2})/)
+    if (m) {
+      let year = parseInt(m[1])
+      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+      return year * 12 + parseInt(m[2])
+    }
+    return null
+  }
+
+  for (let i = 0; i < numberCells.length; i++) {
+    const nc = numberCells[i]
+    const startRow = nc.row
+    const endRow = nc.rowEnd > nc.row
+      ? nc.rowEnd
+      : (i + 1 < numberCells.length ? numberCells[i + 1].row - 1 : maxRow)
+    const blockCells = sorted.filter(c => c.row >= startRow && c.rowEnd <= endRow)
+
+    // ── 期間の抽出 ──
+    let months: number | null = null
+    let startYM: number | null = null
+    let endYM: number | null = null
+
+    // ① 明示的な "X年Yヶ月" / "Xヶ月" を優先
+    for (const bc of blockCells) {
+      const v = bc.value.trim()
+      const dm = v.match(/(\d+)年(\d+)[ヵヶか]月/)
+      if (dm) { months = parseInt(dm[1]) * 12 + parseInt(dm[2]); break }
+      const mm = v.match(/^(\d+)[ヵヶか]月$/)
+      if (mm) { months = parseInt(mm[1]); break }
+    }
+
+    // ② シリアル日付から計算
+    if (!months) {
+      const dateCells = blockCells.filter(c => {
+        const num = parseFloat(c.value.trim())
+        return !isNaN(num) && num >= SERIAL_MIN && num <= SERIAL_MAX
+      })
+      const presentCell = blockCells.find(c => /^(現在|今|継続|在籍中)$/i.test(c.value.trim()))
+      if (dateCells.length >= 2) {
+        const yms = dateCells.map(c => parseSerial(c.value.trim())).filter((v): v is number => v !== null)
+        if (yms.length >= 2) {
+          startYM = Math.min(...yms); endYM = Math.max(...yms)
+          months = endYM - startYM + 1
+        }
+      } else if (dateCells.length === 1 && presentCell) {
+        startYM = parseSerial(dateCells[0].value.trim())
+        if (startYM) { endYM = nowYM; months = nowYM - startYM + 1 }
+      }
+    }
+
+    // ③ 「期間」列の小数値（OMT型: "16.9856262" など）
+    if (!months && durationHeaderCell) {
+      const durCells = blockCells.filter(c =>
+        c.col >= durationHeaderCell.col && c.col <= durationHeaderCell.colEnd
+      )
+      for (const dc of durCells) {
+        const num = parseFloat(dc.value.trim())
+        if (!isNaN(num) && num > 0 && num < 600) { months = Math.round(num); break }
+      }
+    }
+
+    if (!months || months <= 0 || months > 600) continue
+    totalProjectMonths += months
+    if (startYM && endYM) projectPeriods.push({ startYM, endYM })
+
+    // ── スキルの抽出 ──
+    for (const hdr of skillHeaderCells) {
+      const colCells = blockCells.filter(c =>
+        c.col >= hdr.col && c.col <= hdr.colEnd
+      )
+      for (const cc of colCells) {
+        const v = cc.value.trim()
+        if (!v || v === '-' || v === '－' || v.length < 2) continue
+        for (const line of v.split(/[\r\n]+/)) {
+          let skill = line.trim()
+          if (!skill || skill.length < 2 || skill === '-' || skill === '－') continue
+          // 括弧不完全なフラグメント処理
+          const op = (skill.match(/[（(]/g) || []).length
+          const cl = (skill.match(/[）)]/g) || []).length
+          if (op > cl) { skill = skill.replace(/[（(].*$/, '').trim(); if (!skill || skill.length < 2) continue }
+          else if (cl > op) continue
+          if (skill.length <= 50) {
+            skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+          }
+        }
+      }
+    }
+  }
+
+  if (Object.keys(skillMonths).length === 0) return {}
+
+  if (totalProjectMonths > 0) skillMonths['_totalProjectMonths'] = totalProjectMonths
+  if (projectPeriods.length > 0) {
+    const allStarts = projectPeriods.map(p => p.startYM)
+    const allEnds = projectPeriods.map(p => p.endYM)
+    const span = Math.max(...allEnds) - Math.min(...allStarts) + 1
+    if (span > 0) skillMonths['_dateSpanMonths'] = span
+  }
+
+  console.log(`[skillYears-period] projects=${numberCells.length} skills=${Object.keys(skillMonths).filter(k => !k.startsWith('_')).length}`)
+  return skillMonths
+}
+
+/**
  * S.Y 型: 丸数字（①〜⑳）始まりセルをプロジェクト境界として経験月数を抽出するサブ関数。
  * - プロジェクト行: c1-4 に "⑫保険業..." など丸数字始まりのタイトル
  * - 期間セル: 同じ行の別セル（c5-7）に "YYYY年M月 〜 YYYY年M月 / X年Yヶ月"
@@ -3550,8 +3704,12 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
   const _rsC = (c: SpanCell) => c.rowEnd - c.row + 1
 
   // ── Step 1: No. セルでプロジェクト境界を特定 ──
-  const noCells = sorted.filter(c => /^(No\.?|項番)$/i.test(c.value.trim()))
-  if (noCells.length === 0) return extractSkillYearsCircledNum(sorted)
+  const noCells = sorted.filter(c => /^(No\.?|№|項番)$/i.test(c.value.trim()))
+  if (noCells.length === 0) {
+    const circled = extractSkillYearsCircledNum(sorted)
+    if (Object.keys(circled).length > 0) return circled
+    return extractSkillYearsPeriodHeader(sorted)
+  }
 
   // ヘッダー No.（最初の No.）とデータ No. を分離
   // ヘッダー行: 同じ行に「期間」「内容」等のラベルが並ぶ
@@ -3823,7 +3981,8 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
         const vNorm = v.replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
         return /^(OS等?|DB\/DC|言語\/ツール等?|言語|ツール|DB|DCその他|環境|機種)$/.test(vNorm) ||
           /機種\s*OS|使用言語|使用技術|技術スタック|サーバ\s*OS|FW[・／]|ミドルウェア|開発環境/i.test(vNorm) ||
-          /^環境[・・]?(言語|ツール|スキル)|^(言語|ツール)[・・]?環境|(言語|環境)[・・]?等$/.test(vNorm)
+          /^環境[・・]?(言語|ツール|スキル)|^(言語|ツール)[・・]?環境|(言語|環境)[・・]?等$/.test(vNorm) ||
+          /機種[・]?OS|ツール(他|類)$|ＤＢ/i.test(vNorm)
       })
       for (const hdr of skillColCells) {
         // ヘッダーと同じ列のブロック内セルからスキルを取得（「機種」列は PC/サーバ等でスキップ）
@@ -3838,7 +3997,16 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
           if (v.length > 200 && v.includes('\n')) continue
           // 改行→行ごとに2+空白/全角スペース/カンマで分割（"Excel VBA"の単一スペースは保持）
           for (const line of v.split(/[\r\n]+/)) {
-            for (const s of line.split(/[、，,]+|　|\s{2,}/).map(s2 => s2.trim()).filter(s2 => s2 && s2.length >= 2 && s2 !== '-' && s2 !== '－')) {
+            for (let s of line.split(/[、，,]+|　|\s{2,}/).map(s2 => s2.trim()).filter(s2 => s2 && s2.length >= 2 && s2 !== '-' && s2 !== '－')) {
+              // 括弧が不完全なフラグメントを処理: "Azure(RG" → "Azure", "WAF等)" → skip
+              const openP = (s.match(/[（(]/g) || []).length
+              const closeP = (s.match(/[）)]/g) || []).length
+              if (openP > closeP) {
+                s = s.replace(/[（(].*$/, '').trim()
+                if (!s || s.length < 2) continue
+              } else if (closeP > openP) {
+                continue
+              }
               if (!SKILL_BLOCK.test(s) && !/^[◎○◇△▲×〇]+$/.test(s) && !/^\d+$/.test(s) && !/^[<＜][^>＞]+[>＞]$/.test(s)) {
                 blockSkills.push(s)
               }
