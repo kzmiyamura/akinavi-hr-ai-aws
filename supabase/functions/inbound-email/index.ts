@@ -3531,8 +3531,9 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
   // T.K 型: No.(rs≥3) 自体がプロジェクトブロックの開始マーカー
   // M.T 型: No ヘッダーが1個だけ → 下の数字セル(1,2,3...)でブロック分割
 
-  if (isHeaderRow && noCells.length === 1) {
+  if (noCells.length === 1) {
     // M.T 型: No ヘッダーが1個だけ → 下の同列にある数字セル(1,2,3...)をプロジェクト境界にする
+    // isHeaderRow に依存せず、数字セルの有無で判断（KK 型: "開始年月"等のラベルでも対応）
     const noCol = firstNo.col
     const numberCells = sorted.filter(c =>
       c.col === noCol && c.row > firstNo.rowEnd && /^\d+$/.test(c.value.trim())
@@ -3784,7 +3785,8 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
         // 全角英数→半角英数に正規化してマッチ
         const vNorm = v.replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
         return /^(OS等?|DB\/DC|言語\/ツール等?|言語|ツール|DB|DCその他|環境|機種)$/.test(vNorm) ||
-          /機種\s*OS|使用言語|使用技術|技術スタック|サーバ\s*OS|FW[・／]|ミドルウェア|開発環境/i.test(vNorm)
+          /機種\s*OS|使用言語|使用技術|技術スタック|サーバ\s*OS|FW[・／]|ミドルウェア|開発環境/i.test(vNorm) ||
+          /^環境[・・]?(言語|ツール|スキル)|^(言語|ツール)[・・]?環境|(言語|環境)[・・]?等$/.test(vNorm)
       })
       for (const hdr of skillColCells) {
         // ヘッダーと同じ列のブロック内セルからスキルを取得（「機種」列は PC/サーバ等でスキップ）
