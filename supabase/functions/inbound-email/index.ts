@@ -3431,21 +3431,31 @@ function extractSkillYearsCircledNum(sorted: SpanCell[]): Record<string, number>
       : maxRow
     const blockCells = sorted.filter(c => c.row >= startRow && c.rowEnd <= endRow)
 
-    // ── 期間の抽出（プロジェクトヘッダーと同じ行の別セル）──
+    // ── 期間の抽出 ──
     let months: number | null = null
     let startYM: number | null = null
     let endYM: number | null = null
 
+    // ヵ/ヶ/か すべて対応する月パターン
+    const tryExtractMonths = (v: string): number | null => {
+      const dm = v.match(/[/／（(]\s*(\d+)年(\d+)[ヵヶか]月/)
+      if (dm) return parseInt(dm[1]) * 12 + parseInt(dm[2])
+      const dm2 = v.match(/(\d+)年(\d+)[ヵヶか]月/)
+      if (dm2) return parseInt(dm2[1]) * 12 + parseInt(dm2[2])
+      const ym3 = v.match(/[/／]\s*(\d+)年\s*$/)
+      if (ym3) return parseInt(ym3[1]) * 12
+      const mmS = v.match(/[（(]\s*(\d+)[ヵヶか]月\s*[）)]/)
+      if (mmS) return parseInt(mmS[1])
+      const mmS2 = v.match(/[/／]\s*(\d+)[ヵヶか]月/)
+      if (mmS2) return parseInt(mmS2[1])
+      return null
+    }
+
+    // まず同行から探す
     const sameRowCells = sorted.filter(c => c.row === ph.row && c !== ph)
     for (const rc of sameRowCells) {
       const v = rc.value.trim()
-      // 明示的な月数を優先: "/ X年Yヶ月"
-      const dm = v.match(/[/／]\s*(\d+)年(\d+)[ヶか]月/)
-      if (dm) months = parseInt(dm[1]) * 12 + parseInt(dm[2])
-      // "/ X年" (月なし)
-      if (!months) { const ym3 = v.match(/[/／]\s*(\d+)年\s*$/); if (ym3) months = parseInt(ym3[1]) * 12 }
-      // "/ Xヶ月"
-      if (!months) { const mmS = v.match(/[/／]\s*(\d+)[ヶか]月/); if (mmS) months = parseInt(mmS[1]) }
+      months = tryExtractMonths(v)
       // "YYYY年M月 〜 YYYY年M月" → startYM/endYM を記録
       const rm = v.match(/(\d{4})年(\d{1,2})月.*?[〜～].*?(\d{4})年(\d{1,2})月/)
       if (rm) {
@@ -3453,7 +3463,6 @@ function extractSkillYearsCircledNum(sorted: SpanCell[]): Record<string, number>
         endYM = parseInt(rm[3]) * 12 + parseInt(rm[4])
         if (!months) months = endYM - startYM + 1
       }
-      // "YYYY年M月 〜 現在/継続中"
       if (!months) {
         const rm2 = v.match(/(\d{4})年(\d{1,2})月.*?[〜～].*?(現在|今|継続|在籍中)/i)
         if (rm2) {
@@ -3465,22 +3474,50 @@ function extractSkillYearsCircledNum(sorted: SpanCell[]): Record<string, number>
       if (months) break
     }
 
+    // 同行になければブロック内全体を検索（NS型: 期間が別行に入るフォーマット）
+    if (!months) {
+      for (const bc of blockCells) {
+        months = tryExtractMonths(bc.value.trim())
+        if (months) break
+      }
+    }
+
     if (!months || months <= 0 || months > 600) continue
     totalProjectMonths += months
     if (startYM && endYM) projectPeriods.push({ startYM, endYM })
 
-    // ── スキルの抽出（「開発環境」ラベルの右隣セル）──
+    // ── スキルの抽出 ──
     for (const cell of blockCells) {
-      if (!/^開発環境$/.test(cell.value.trim())) continue
-      const valueCell = sorted.find(c => c.row === cell.row && c.col > cell.col)
-      if (!valueCell) break
-      for (const seg of valueCell.value.split(/[/／\r\n、，,]+/)) {
-        const skill = seg.trim()
-        if (skill.length >= 2 && skill.length <= 50) {
-          skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+      const cv = cell.value.trim()
+      // S.Y型: 「開発環境」ラベル単体 → 右隣セルが値
+      if (/^開発環境$/.test(cv)) {
+        const valueCell = sorted.find(c => c.row === cell.row && c.col > cell.col)
+        if (valueCell) {
+          for (const seg of valueCell.value.split(/[/／\r\n、，,]+/)) {
+            const skill = seg.trim()
+            if (skill.length >= 2 && skill.length <= 50) {
+              skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+            }
+          }
         }
+        break
       }
-      break
+      // NS型: 「【開発環境】\nOS:...\nミドルウェア:...」マルチラインセル
+      if (cv.includes('【開発環境】') || /^開発環境[:：]/.test(cv)) {
+        const envContent = cv.replace(/^【?開発環境】?\s*/, '').replace(/^[:：]\s*/, '')
+        for (const line of envContent.split(/[\r\n]+/)) {
+          // "OS:" "ミドルウェア:" 等のラベルを除去して値だけ取る
+          const colonIdx = Math.max(line.indexOf(':'), line.indexOf('：'))
+          const content = colonIdx >= 0 ? line.slice(colonIdx + 1) : line
+          for (const seg of content.split(/[、，,/／\s]+/)) {
+            const skill = seg.trim()
+            if (skill.length >= 2 && skill.length <= 50) {
+              skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+            }
+          }
+        }
+        break
+      }
     }
   }
 
