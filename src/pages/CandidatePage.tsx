@@ -715,6 +715,10 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [replayingId, setReplayingId] = useState<string | null>(null)
   const [replayMsg, setReplayMsg] = useState<{ id: string; text: string; ok: boolean } | null>(null)
+  const [boxUploadingId, setBoxUploadingId] = useState<string | null>(null)
+  const [boxUploadMsg, setBoxUploadMsg] = useState<{ id: string; text: string; ok: boolean } | null>(null)
+  const boxFileInputRef = useRef<HTMLInputElement>(null)
+  const boxUploadTargetRef = useRef<Candidate | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showFilterPopup, setShowFilterPopup] = useState(false)
   const [filterDraft, setFilterDraft] = useState<FilterDraft>(EMPTY_DRAFT)
@@ -850,6 +854,46 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
       setReplayMsg({ id: c.id, text: `再解析失敗: ${String(e)}`, ok: false })
     } finally {
       setReplayingId(null)
+    }
+  }
+
+  async function handleBoxFileUpload(c: Candidate, file: File) {
+    setBoxUploadingId(c.id)
+    setBoxUploadMsg(null)
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const bytes = new Uint8Array(arrayBuffer)
+      let binary = ''
+      for (let i = 0; i < bytes.byteLength; i += 8192) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
+      }
+      const b64 = btoa(binary)
+
+      const originalFrom = (c.raw_profile as RawProfile)?.from ?? `box+${c.id}@upload.invalid`
+      const { error } = await supabase.functions.invoke('inbound-email', {
+        body: {
+          subject: `【Box経歴書】${c.name ?? ''}`,
+          body: `Box経歴書ファイル取込: ${file.name}`,
+          from: originalFrom,
+          attachments: [{ data: b64, mimeType: file.type || 'application/octet-stream', name: file.name }],
+          mode: dataEnv,
+          type: 'candidate',
+          force: true,
+          target_candidate_id: c.id,
+        },
+      })
+      if (error) throw error
+
+      await supabase.from('candidates').update({ box_status: 'enriched' }).eq('id', c.id)
+
+      setBoxUploadMsg({ id: c.id, text: `Box経歴書を取り込みました: ${file.name}`, ok: true })
+      queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
+      queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
+    } catch (e) {
+      setBoxUploadMsg({ id: c.id, text: `取り込み失敗: ${String(e)}`, ok: false })
+    } finally {
+      setBoxUploadingId(null)
+      boxUploadTargetRef.current = null
     }
   }
 
@@ -1578,16 +1622,35 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         ) : null
                       })()}
                       {selectedCandidate.box_url && (
-                        <a
-                          href={selectedCandidate.box_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-200 rounded-lg text-orange-600 hover:bg-orange-50 transition-colors"
-                          title="Box経歴書を開く"
-                        >
-                          <ExternalLink size={14} />
-                          Box{selectedCandidate.box_status === 'pending' ? '（処理待ち）' : selectedCandidate.box_status === 'enriched' ? '' : ''}
-                        </a>
+                        <>
+                          <a
+                            href={selectedCandidate.box_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-200 rounded-lg text-orange-600 hover:bg-orange-50 transition-colors"
+                            title="Box経歴書を開く"
+                          >
+                            <ExternalLink size={14} />
+                            Box{selectedCandidate.box_status === 'pending' ? '（処理待ち）' : ''}
+                          </a>
+                          {selectedCandidate.box_status === 'pending' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                boxUploadTargetRef.current = selectedCandidate
+                                boxFileInputRef.current?.click()
+                              }}
+                              disabled={boxUploadingId === selectedCandidate.id}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-300 rounded-lg text-orange-700 hover:bg-orange-50 transition-colors disabled:opacity-50"
+                              title="Boxからダウンロードしたファイルをアップロードして解析"
+                            >
+                              {boxUploadingId === selectedCandidate.id
+                                ? <Loader2 size={14} className="animate-spin" />
+                                : <Paperclip size={14} />}
+                              ファイルで更新
+                            </button>
+                          )}
+                        </>
                       )}
                       {getRaw(selectedCandidate).from && (() => {
                         const raw = getRaw(selectedCandidate)
@@ -1658,6 +1721,11 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   {replayMsg?.id === selectedCandidate.id && (
                     <p className={`text-xs px-3 py-2 rounded-lg ${replayMsg.ok ? 'bg-violet-50 text-violet-700' : 'bg-red-50 text-red-700'}`}>
                       {replayMsg.text}
+                    </p>
+                  )}
+                  {boxUploadMsg?.id === selectedCandidate.id && (
+                    <p className={`text-xs px-3 py-2 rounded-lg ${boxUploadMsg.ok ? 'bg-orange-50 text-orange-700' : 'bg-red-50 text-red-700'}`}>
+                      {boxUploadMsg.text}
                     </p>
                   )}
                   <CandidateProfileFields c={selectedCandidate} isExpanded detailMode agentDomainMap={agentDomainMap} />
@@ -1753,6 +1821,19 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           </div>
         )}
       </div>
+      {/* Box ファイルアップロード用 hidden input */}
+      <input
+        ref={boxFileInputRef}
+        type="file"
+        accept=".xlsx,.xls,.docx,.doc"
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0]
+          const target = boxUploadTargetRef.current
+          if (file && target) await handleBoxFileUpload(target, file)
+          e.target.value = ''
+        }}
+      />
     </div>
   )
 }
