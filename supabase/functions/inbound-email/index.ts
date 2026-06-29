@@ -1134,6 +1134,13 @@ function extractCandidateFieldsRegex(
     )
     if (commaInitialM) rawName = `${commaInitialM[1]}.${commaInitialM[2]}`
   }
+  // 末尾コロン除去後に NAME_FIELD_LABELS に該当するものを除外（例: 「性別：」→ null）(#92)
+  if (rawName) {
+    const strippedColon = rawName.replace(/[：:　\s]+$/, '').trim()
+    if (NAME_FIELD_LABELS.test(strippedColon)) rawName = null
+  }
+  // テンプレートプレースホルダー「イニシャル（性別、年齢）」等を名前として採用しない (#92)
+  if (rawName && /^イニシャル/.test(rawName.trim())) rawName = null
   // 先頭の区切り文字（：: 等）を除去（「：T.B（27）」→「T.B（27）」）
   const cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
   // 名前から年齢・性別を抽出して除去
@@ -1356,6 +1363,14 @@ function extractCandidateFieldsRegex(
   }
   // ④ 名前末尾の孤立した括弧・区切り記号を除去（例:「国PF（」→「国PF」）
   if (name) name = name.replace(/[（(【,、\/／・\s　]+$/, '').trim() || null
+  // ⑤ 名前内に残留する括弧内コメントを除去（例: K.K（録音音声ございます！）→ K.K）(#89)
+  // 年齢・性別・国籍・スキル年数は上位ステップで処理済みのため、残留括弧は全て不要情報
+  if (name) {
+    const firstBracket = name.search(/[（(]/)
+    if (firstBracket > 0) {
+      name = name.substring(0, firstBracket).trim() || null
+    }
+  }
 
   // ── イニシャルのみパターン フォールバック ─────────────────────
   // 「A.M」「K・S」「K.S（45歳/男性）」のようにラベルなしでイニシャルが記載されている場合
@@ -5175,6 +5190,11 @@ Deno.serve(async (req: Request) => {
         '注力案件リスト',
         'スキルマッチする案件がございましたら',
         '弊社営業.*名の注力',
+        // 案件紹介メールが人材BOXに届くパターン（#91）
+        '対応可能な要員様がいらっしゃいましたら',
+        '下記案件を紹介させていただきたく',
+        'ご対応いただける要員がいらっしゃいましたら',
+        '案件紹介させていただきたく',
       ]
       // 営業・広告・メルマガメールのスキップ（研修販売・サービス紹介等）
       const COMMERCIAL_SOLICITATION_KEYWORDS = [
@@ -5523,9 +5543,12 @@ Deno.serve(async (req: Request) => {
             // ── Step4: フィールド抽出（件名＋ブロック本文＋マッチ添付テキスト） ──
             const blockRegexBodyText = decodeHtmlEntities([subject, block, blockAttachLabel].join('\n'))
             const blockRegexFields = extractCandidateFieldsRegex(blockRegexBodyText, blockAttachText)
-            // ハードコードマップにない駅は DB を 1 件だけ問い合わせる
-            if (!blockRegexFields.prefecture && blockRegexFields.nearestStation) {
-              blockRegexFields.prefecture = await lookupStationPrefectureFromDb(blockRegexFields.nearestStation)
+            // 最寄駅 DB 照合で都道府県を確定（テキスト誤抽出も上書き）(#90)
+            if (blockRegexFields.nearestStation) {
+              const stationPref = await lookupStationPrefectureFromDb(blockRegexFields.nearestStation)
+              if (stationPref && stationPref !== blockRegexFields.prefecture) {
+                blockRegexFields.prefecture = stationPref
+              }
             }
             const blockProseFields = extractFromProse(blockRegexBodyText, blockAttachText)
 
@@ -5871,8 +5894,16 @@ Deno.serve(async (req: Request) => {
       // AI空項目にregexフォールバックを適用
       const resolvedStation = analyzed.nearestStation || regexFields.nearestStation
       // ハードコードマップにない駅は DB を 1 件だけ問い合わせる
-      const resolvedPrefecture = analyzed.prefecture || regexFields.prefecture
+      let resolvedPrefecture = analyzed.prefecture || regexFields.prefecture
         || (resolvedStation ? await lookupStationPrefectureFromDb(resolvedStation) : null)
+      // 最寄駅 DB 照合で都道府県を上書き（テキスト誤抽出対策。例: 署名欄の大阪 → 富士見台駅 → 東京都）(#90)
+      if (resolvedStation) {
+        const stationDbPref = await lookupStationPrefectureFromDb(resolvedStation)
+        if (stationDbPref && stationDbPref !== resolvedPrefecture) {
+          console.log(`[STATION_PREF_OVERRIDE] ${resolvedStation}: ${resolvedPrefecture} → ${stationDbPref}`)
+          resolvedPrefecture = stationDbPref
+        }
+      }
       let resolvedExperienceYears = analyzed.experienceYears ?? regexFields.experienceYears
       // skillYearsフォールバック: メール本文に経験年数が書かれていない場合、Excelから推定
       // 優先順位: max-min日付スパン → _totalProjectMonths合計 → スキル最大月数
