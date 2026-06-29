@@ -339,6 +339,52 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
 }
 
 /**
+ * 雇用形態・所属を抽出する。
+ * 単一候補パス・マルチ候補パス共通で使用。
+ * 対応ラベル: 雇用形態 / 就業形態 / 立場 / 所属 / 属性 / 契約形態 / 【 所 属 】等
+ * 対応値: 正社員 / フリーランス / 契約社員 / 派遣社員 / 業務委託 / SES / N社先社員 等
+ */
+function extractEmploymentType(bodyText: string, attachText: string): string | null {
+  const t = bodyText + ' ' + attachText
+  // 【 所 属 】形式（スペース区切り全角ラベル）: SES業界の複数人材メールに多い
+  const bracketM = t.match(/【[　 ]*所[　 ]*属[　 ]*】[　 ]*([^\n【】]{1,30})/)
+  if (bracketM) {
+    const val = bracketM[1].trim()
+    // N社先社員（1社先社員 / 2社先社員 など商流表現）
+    const nShaM = val.match(/^([0-9０-９一二三四五六七八九十]+社先(?:社員|フリー)?)/)
+    if (nShaM) return nShaM[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
+    if (/フリーランス|フリー|個人事業/.test(val)) return 'フリーランス'
+    if (/正社員/.test(val)) return '正社員'
+    if (/契約社員/.test(val)) return '契約社員'
+    if (/派遣社員|派遣/.test(val)) return '派遣社員'
+    if (/業務委託/.test(val)) return '業務委託'
+    if (/SES/.test(val)) return 'SES'
+  }
+  // ラベルあり（コロン区切り）: 雇用形態・就業形態・立場・所属・属性等
+  const labelM = t.match(/(?:雇用形態|就業形態|立場|エンジニアの立場|現在の立場|契約形態|ご状況|属性|所属)[　 ]*[：:][　 ]*([^\n]{1,30})/)
+  if (labelM) {
+    const val = labelM[1].trim()
+    if (/フリーランス|フリー|個人事業/.test(val)) return 'フリーランス'
+    if (/正社員/.test(val)) return '正社員'
+    if (/契約社員/.test(val)) return '契約社員'
+    if (/派遣社員|派遣/.test(val)) return '派遣社員'
+    if (/業務委託/.test(val)) return '業務委託'
+    if (/SES/.test(val)) return 'SES'
+    const nShaM = val.match(/([0-9０-９一二三四五六七八九十]+社先(?:社員|フリー)?)/)
+    if (nShaM) return nShaM[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
+  }
+  // ラベルなし（文脈パターン）
+  if (/弊社[　 ]*(正社員|社員)/.test(t)) return '正社員'
+  if (/[（(]正社員[）)]|正社員として登録|正社員エンジニア/.test(t)) return '正社員'
+  if (/フリーランス(エンジニア|技術者|の方|候補|案件)?|個人事業主/.test(t)) return 'フリーランス'
+  if (/業務委託(契約|のみ|希望|での)?/.test(t)) return '業務委託'
+  if (/弊社SES|SES(エンジニア|技術者|正社員|社員)?/.test(t)) return 'SES'
+  if (/契約社員/.test(t)) return '契約社員'
+  if (/派遣社員/.test(t)) return '派遣社員'
+  return null
+}
+
+/**
  * メール本文から労働者派遣事業・職業紹介事業の許可番号を抽出する。
  * 署名欄の「派 13-317179」「13-ユ-123456」等に対応。
  */
@@ -5645,6 +5691,7 @@ Deno.serve(async (req: Request) => {
                 age: blockRegexFields.age,
                 gender: blockRegexFields.gender,
                 nationality: blockRegexFields.nationality,
+                employmentType: extractEmploymentType(blockRegexBodyText, blockAttachText),
                 selfPR: extractSelfPR(block, blockAttachText) ?? null,
                 agentComment: extractAgentComment(block, blockAttachText) ?? null,
                 // 添付テキスト（再解析時に skillYears を再抽出できるよう保存）
@@ -5997,29 +6044,7 @@ Deno.serve(async (req: Request) => {
       })()
 
       // 雇用形態・立場（正社員/フリーランス/契約社員/派遣社員/業務委託/SES）
-      const employmentTypeRaw = (() => {
-        const t = bodyText + ' ' + attachText
-        // ラベルあり: 雇用形態・就業形態・立場・属性等
-        const labelM = t.match(/(?:雇用形態|就業形態|立場|エンジニアの立場|現在の立場|契約形態|ご状況|属性)[　 ]*[：:][　 ]*([^\n]{1,30})/)
-        if (labelM) {
-          const val = labelM[1].trim()
-          if (/フリーランス|フリー|個人事業/.test(val)) return 'フリーランス'
-          if (/正社員/.test(val)) return '正社員'
-          if (/契約社員/.test(val)) return '契約社員'
-          if (/派遣社員|派遣/.test(val)) return '派遣社員'
-          if (/業務委託/.test(val)) return '業務委託'
-          if (/SES/.test(val)) return 'SES'
-        }
-        // ラベルなし（文脈パターン）
-        if (/弊社[　 ]*(正社員|社員)/.test(t)) return '正社員'
-        if (/[（(]正社員[）)]|正社員として登録|正社員エンジニア/.test(t)) return '正社員'
-        if (/フリーランス(エンジニア|技術者|の方|候補|案件)?|個人事業主/.test(t)) return 'フリーランス'
-        if (/業務委託(契約|のみ|希望|での)?/.test(t)) return '業務委託'
-        if (/弊社SES|SES(エンジニア|技術者|正社員|社員)?/.test(t)) return 'SES'
-        if (/契約社員/.test(t)) return '契約社員'
-        if (/派遣社員/.test(t)) return '派遣社員'
-        return null
-      })()
+      const employmentTypeRaw = extractEmploymentType(bodyText, attachText)
 
       // ── AI必要性チェック用: フィールドごとの情報源を記録 ──────────────────
       // 'ai'=AI提供, 'regex'=正規表現補完, 'prose'=文章スキャン補完, 'none'=取得不可
