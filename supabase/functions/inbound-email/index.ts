@@ -338,6 +338,20 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
   return trimmed || null
 }
 
+/**
+ * メール本文から労働者派遣事業・職業紹介事業の許可番号を抽出する。
+ * 署名欄の「派 13-317179」「13-ユ-123456」等に対応。
+ */
+function extractLicenseNumbers(text: string): { haken: string | null; shokai: string | null } {
+  // 派遣許可番号: 「派 13-317179」「派13-317179」→「派13-317179」
+  const hakenM = text.match(/派\s*(\d{2}-\d{6})/)
+  const haken = hakenM ? `派${hakenM[1]}` : null
+  // 職業紹介許可番号: 「13-ユ-123456」「13-ユ123456」
+  const shokaiM = text.match(/(\d{2}-ユ[-ー]?\d{6})/)
+  const shokai = shokaiM ? shokaiM[1] : null
+  return { haken, shokai }
+}
+
 function dedupeTrimmedSkills(skills: unknown): string[] {
   if (!Array.isArray(skills)) return []
   return Array.from(
@@ -4900,10 +4914,10 @@ function splitMultiCandidateBody(body: string): string[] | null {
 
   // Pass 1: = と ー のみ（- を除外して laize 形式の内部 ---- による誤分割を防ぐ）
   // Pass 2: - を含む全パターン（ical 等の --- のみの形式に対応）
-  // Pass 1: - を除外（laize 内部の ---- による誤分割防止）。― U+2015 / ─ U+2500 / — U+2014 / ー U+30FC を含む
+  // Pass 1: - を除外（laize 内部の ---- による誤分割防止）。━ U+2501 / ─ U+2500 / ― U+2015 / — U+2014 / ー U+30FC を含む
   // Pass 2: - も含む（ical 等の --- のみ形式に対応）
-  return trySplit(/^[\*=＊＝ーー─―—]{8,}\s*$/)
-      ?? trySplit(/^[\*\-=＊＝ーー─―—]{8,}\s*$/)
+  return trySplit(/^[\*=＊＝━ーー─―—]{8,}\s*$/)
+      ?? trySplit(/^[\*\-=＊＝━ーー─―—]{8,}\s*$/)
 }
 
 Deno.serve(async (req: Request) => {
@@ -5810,6 +5824,23 @@ Deno.serve(async (req: Request) => {
         }
 
         if (allBlockBoxUrls.length > 0) await appendToBoxSpreadsheet(allBlockBoxUrls)
+
+        // agent_companies に会社名・ドメイン・許可番号を upsert（fire and forget）
+        {
+          const emailDomain = from ? from.split('@')[1]?.toLowerCase().trim() : null
+          const companyName = sanitizeFromCompany(results.length > 0 ? (results[0] as { name?: string }).name ?? undefined : undefined)
+          const ownDomain = 'i-voice.co.jp'
+          if (emailDomain && emailDomain !== ownDomain && !emailDomain.includes('gmail') && !emailDomain.includes('yahoo') && !emailDomain.includes('outlook') && !emailDomain.includes('demo.invalid')) {
+            const { haken, shokai } = extractLicenseNumbers(body)
+            const licenseStatus = haken && shokai ? 'both' : haken ? 'haken' : shokai ? 'shokai' : undefined
+            const upsertPayload: Record<string, unknown> = { domain: emailDomain, source: 'email' }
+            if (haken) { upsertPayload.haken_number = haken; upsertPayload.verified_at = new Date().toISOString(); upsertPayload.verified_by = 'email' }
+            if (shokai) { upsertPayload.shokai_number = shokai; upsertPayload.verified_at = new Date().toISOString(); upsertPayload.verified_by = 'email' }
+            if (licenseStatus) upsertPayload.license_status = licenseStatus
+            supabase.from('agent_companies').upsert(upsertPayload, { onConflict: 'domain', ignoreDuplicates: false }).then(() => {}).catch(() => {})
+          }
+        }
+
         await markEmailProcessed(supabase, dedupConfigKey)
         return new Response(
           JSON.stringify({ ok: true, type: 'multi-candidate', count: results.length, results }),
@@ -6301,20 +6332,23 @@ Deno.serve(async (req: Request) => {
         await appendToBoxSpreadsheet(boxUrls)
       }
 
-      // agent_companies に会社名・ドメインを upsert（fire and forget）
+      // agent_companies に会社名・ドメイン・許可番号を upsert（fire and forget）
       {
         const emailDomain = from ? from.split('@')[1]?.toLowerCase().trim() : null
         const companyName = sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany)
         const ownDomain = 'i-voice.co.jp'
         if (emailDomain && emailDomain !== ownDomain && !emailDomain.includes('gmail') && !emailDomain.includes('yahoo') && !emailDomain.includes('outlook') && !emailDomain.includes('demo.invalid')) {
-          supabase.from('agent_companies').upsert(
-            {
-              domain: emailDomain,
-              company_name: companyName ?? undefined,
-              source: 'email',
-            },
-            { onConflict: 'domain', ignoreDuplicates: false },
-          ).then(() => {}).catch(() => {})
+          const { haken, shokai } = extractLicenseNumbers(body)
+          const licenseStatus = haken && shokai ? 'both' : haken ? 'haken' : shokai ? 'shokai' : undefined
+          const upsertPayload: Record<string, unknown> = {
+            domain: emailDomain,
+            company_name: companyName ?? undefined,
+            source: 'email',
+          }
+          if (haken) { upsertPayload.haken_number = haken; upsertPayload.verified_at = new Date().toISOString(); upsertPayload.verified_by = 'email' }
+          if (shokai) { upsertPayload.shokai_number = shokai; upsertPayload.verified_at = new Date().toISOString(); upsertPayload.verified_by = 'email' }
+          if (licenseStatus) upsertPayload.license_status = licenseStatus
+          supabase.from('agent_companies').upsert(upsertPayload, { onConflict: 'domain', ignoreDuplicates: false }).then(() => {}).catch(() => {})
         }
       }
 
