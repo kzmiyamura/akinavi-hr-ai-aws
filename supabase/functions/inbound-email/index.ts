@@ -1952,6 +1952,7 @@ function extractDocRawText(bytes: Uint8Array): string {
 interface WordHtmlJson {
   tables: string[][][]   // tables[tableIdx][rowIdx][cellIdx]
   paragraphs: string[]   // テーブル外の段落テキスト
+  cells: SpanCell[]      // colspan/rowspan を保持した結合セル情報（Excel の worksheetToCells 相当）
 }
 
 /**
@@ -2008,18 +2009,58 @@ function splitRowIntoLines(cells: string[]): string[] {
   return lines.filter(l => l.trim())
 }
 
+/**
+ * Word の <table> 1つを SpanCell[] に変換する（Excel の worksheetToCells 相当）。
+ * colspan/rowspan を読み取り、結合セルの rowEnd/colEnd を正確に算出する。
+ * HTML中間変換でも colspan/rowspan さえ保持されればExcelの !merges と同等の情報になる。
+ */
+function htmlTableToSpanCells(
+  table: { querySelectorAll: (sel: string) => unknown[] },
+  rowOffset: number
+): { cells: SpanCell[]; rowCount: number } {
+  const cells: SpanCell[] = []
+  const occupied = new Set<string>()
+  let r = 0
+  const trs = table.querySelectorAll('tr') as Array<{ querySelectorAll: (sel: string) => unknown[] }>
+  for (const tr of trs) {
+    let c = 0
+    const tds = tr.querySelectorAll('td, th') as Array<{ innerHTML: string; getAttribute: (n: string) => string | null }>
+    for (const cellEl of tds) {
+      while (occupied.has(`${r},${c}`)) c++
+      const colspan = Math.max(1, parseInt(cellEl.getAttribute('colspan') || '1') || 1)
+      const rowspan = Math.max(1, parseInt(cellEl.getAttribute('rowspan') || '1') || 1)
+      const rEnd = r + rowspan - 1
+      const cEnd = c + colspan - 1
+      const value = cellInnerText(cellEl)
+      if (value) cells.push({ row: r + rowOffset, col: c, colEnd: cEnd, rowEnd: rEnd + rowOffset, value })
+      for (let rr = r; rr <= rEnd; rr++) {
+        for (let cc = c; cc <= cEnd; cc++) occupied.add(`${rr},${cc}`)
+      }
+      c = cEnd + 1
+    }
+    r++
+  }
+  return { cells, rowCount: r }
+}
+
 async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
   const { parse } = await import('npm:node-html-parser@6.1.13')
   const root = parse(html)
 
   const tables: string[][][] = []
+  const cells: SpanCell[] = []
+  let rowOffset = 0
   for (const table of root.querySelectorAll('table')) {
     const rows: string[][] = []
     for (const tr of table.querySelectorAll('tr')) {
-      const cells = tr.querySelectorAll('td, th').map(cell => cellInnerText(cell as unknown as { innerHTML: string })).filter(Boolean)
-      if (cells.length > 0) rows.push(cells)
+      const rowCells = tr.querySelectorAll('td, th').map(cell => cellInnerText(cell as unknown as { innerHTML: string })).filter(Boolean)
+      if (rowCells.length > 0) rows.push(rowCells)
     }
     if (rows.length > 0) tables.push(rows)
+
+    const { cells: tableCells, rowCount } = htmlTableToSpanCells(table as unknown as { querySelectorAll: (sel: string) => unknown[] }, rowOffset)
+    cells.push(...tableCells)
+    rowOffset += rowCount
   }
 
   const paragraphs: string[] = []
@@ -2028,7 +2069,7 @@ async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
     if (text) paragraphs.push(text)
   }
 
-  return { tables, paragraphs }
+  return { tables, paragraphs, cells }
 }
 
 /**
@@ -2167,7 +2208,22 @@ async function extractWordText(base64: string): Promise<{ text: string; totalPro
           const totalProjectMonths = calcWordProjectMonths(wordJson) ?? undefined
           // Word・Excel 統合方式で skillYears 抽出（列名・配列・テキストパターンを全試行）
           const wordGrid = wordJson.tables.flat(1)
-          const skillYears = extractSkillYearsUnified(wordGrid, wordJson.paragraphs)
+          const syGrid = extractSkillYearsUnified(wordGrid, wordJson.paragraphs)
+          // SpanCell（colspan/rowspan保持）ベースでも抽出し、Excelと同じく多く取れた方を採用
+          const syCells = extractSkillYearsFromCells(wordJson.cells)
+          const countGrid = Object.keys(syGrid).filter(k => !k.startsWith('_')).length
+          const countCells = Object.keys(syCells).filter(k => !k.startsWith('_')).length
+          let skillYears: Record<string, number> = {}
+          if (countCells > 0 || countGrid > 0) {
+            skillYears = countCells >= countGrid ? syCells : syGrid
+            if (syCells['_totalProjectMonths'] && !skillYears['_totalProjectMonths']) {
+              skillYears['_totalProjectMonths'] = syCells['_totalProjectMonths']
+            }
+            if (syCells['_dateSpanMonths'] && !skillYears['_dateSpanMonths']) {
+              skillYears['_dateSpanMonths'] = syCells['_dateSpanMonths']
+            }
+            console.log(`[Word-skillYears-pick] grid=${countGrid} cells=${countCells} winner=${countCells >= countGrid ? 'cells' : 'grid'}`)
+          }
           return { text, totalProjectMonths, skillYears: Object.keys(skillYears).length > 0 ? skillYears : undefined, grid: wordGrid }
         }
       } catch (e) {
