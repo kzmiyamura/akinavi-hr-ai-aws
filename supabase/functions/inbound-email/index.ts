@@ -2175,6 +2175,23 @@ function extractWordSkillYears(json: WordHtmlJson): Record<string, number> {
   return result
 }
 
+/**
+ * PDF（base64）からテキストを抽出する。
+ * スキャンPDF（画像のみ）の場合は空文字を返す。
+ */
+async function extractPdfText(base64: string): Promise<string> {
+  try {
+    const { extractText } = await import('npm:unpdf') as { extractText: (pdf: Uint8Array, opts?: { mergePages?: boolean }) => Promise<{ text: string; totalPages: number }> }
+    const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+    const { text, totalPages } = await extractText(bytes, { mergePages: true })
+    console.log(`[PDF] テキスト抽出完了: ${totalPages}ページ / ${text.length}文字`)
+    return text ?? ''
+  } catch (e) {
+    console.warn('[PDF] テキスト抽出失敗（スキャンPDF等）:', e instanceof Error ? e.message : String(e))
+    return ''
+  }
+}
+
 async function extractWordText(base64: string): Promise<{ text: string; totalProjectMonths?: number; skillYears?: Record<string, number>; grid?: string[][] }> {
   try {
     const mammothMod = npmDefault(await import('npm:mammoth@1.8.0'))
@@ -5398,6 +5415,14 @@ Deno.serve(async (req: Request) => {
         if (excelJsonRows && excelJsonRows.length > 0) {
           attachmentParsedGrid = { source: 'excel', rows: excelJsonRows }
         }
+      } else if (att.mimeType === 'application/pdf' || /\.pdf$/i.test(attNameLower)) {
+        // PDF テキスト抽出（スキャンPDFの場合は空文字になりStorage保存のみ）
+        const pdfText = await extractPdfText(att.data)
+        if (pdfText.trim()) {
+          officeTextContents.push({ label: `PDF(${att.name ?? 'document.pdf'})`, content: pdfText.slice(0, 8000) })
+        } else {
+          console.log(`[PDF] テキスト層なし（スキャンPDF）: ${att.name ?? 'document.pdf'}`)
+        }
       }
     }
     tracePhase = 'step3_office_done'
@@ -5627,7 +5652,7 @@ Deno.serve(async (req: Request) => {
     const rawAllAttachments = [...supportedAttachments, ...drivePdfs]
     tracePhase = 'drive_links_done'
 
-    // PDF は解析しない。Storage へのアップロードのみ（後続処理では除外）
+    // PDFはテキスト抽出済み（officeTextContents に追加済み）。allAttachments からは除外（Storage upload は別途実施）
     const allAttachments = rawAllAttachments.filter(a => a.mimeType !== 'application/pdf')
 
     // Box URL の検出（人材登録時にスプレッドシートへ書き込み・DB保存するため事前に抽出）
