@@ -3634,6 +3634,14 @@ function extractSkillYearsRepeatPeriodHeader(sorted: SpanCell[], periodHeaders: 
       const d = new Date(Date.UTC(1899, 11, 30) + num * 86400000)
       return d.getUTCFullYear() * 12 + d.getUTCMonth() + 1
     }
+    // SheetJS が Excel シリアル日付を M/D/YY 形式でフォーマットする場合に対応
+    const mdyM = s.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+    if (mdyM) {
+      let y = parseInt(mdyM[3])
+      if (y < 100) y = y < 50 ? 2000 + y : 1900 + y
+      const mo = parseInt(mdyM[1])
+      if (mo >= 1 && mo <= 12 && y >= 1990 && y <= 2040) return y * 12 + mo
+    }
     const m = s.match(/(\d{2,4})[\/\-年](\d{1,2})/)
     if (m) {
       let year = parseInt(m[1])
@@ -3662,11 +3670,19 @@ function extractSkillYearsRepeatPeriodHeader(sorted: SpanCell[], periodHeaders: 
       const mm = v.match(/^(\d+)[ヵヶか]月$/)
       if (mm) { months = parseInt(mm[1]); break }
     }
-    // ② シリアル日付
+    // ② シリアル日付（SheetJS が M/D/YY にフォーマットした日付も対象）
     if (!months) {
       const dateCells = blockCells.filter(c => {
-        const num = parseFloat(c.value.trim())
-        return !isNaN(num) && num >= SERIAL_MIN && num <= SERIAL_MAX
+        const v = c.value.trim()
+        const num = parseFloat(v)
+        if (!isNaN(num) && num >= SERIAL_MIN && num <= SERIAL_MAX) return true
+        // SheetJS M/D/YY 形式: "10/1/25" = Oct 2025
+        const mdyM = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+        if (mdyM) {
+          const y = parseInt(mdyM[3]) < 100 ? (parseInt(mdyM[3]) < 50 ? 2000 + parseInt(mdyM[3]) : 1900 + parseInt(mdyM[3])) : parseInt(mdyM[3])
+          return y >= 1990 && y <= 2040
+        }
+        return false
       })
       const presentCell = blockCells.find(c => /^(現在|今|継続|在籍中)$/i.test(c.value.trim()))
       if (dateCells.length >= 2) {
@@ -4306,13 +4322,22 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
       // ヘッダー行（blocks の前）からスキル列の位置を特定
       const headerCells = sorted.filter(c => c.row >= firstNo.row && c.row <= firstNo.rowEnd)
       const skillColCells = headerCells.filter(c => {
-        const v = c.value.trim().replace(/[\r\n]+/g, ' ').trim()
+        // 改行区切りのセル（"言語\nツール" / "OS\nDB"）は各行を個別に検査
+        const lines = c.value.trim().split(/[\r\n]+/).map(l => l.trim()).filter(l => l)
+        const v = lines.join(' ')
         // 全角英数→半角英数に正規化してマッチ
         const vNorm = v.replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
         return /^(OS等?|DB\/DC|言語\/ツール等?|言語|ツール|DB|DCその他|環境|機種)$/.test(vNorm) ||
           /機種\s*OS|使用言語|使用技術|技術スタック|サーバ\s*OS|FW[・／]|ミドルウェア|開発環境/i.test(vNorm) ||
           /^環境[・・]?(言語|ツール|スキル)|^(言語|ツール)[・・]?環境|(言語|環境)[・・]?等$/.test(vNorm) ||
-          /機種[・]?OS|ツール(他|類)$|ＤＢ/i.test(vNorm)
+          /機種[・]?OS|ツール(他|類)$|ＤＢ/i.test(vNorm) ||
+          // 複数行ヘッダー: "言語\nツール" / "OS\nDB" → 各行を個別チェック
+          lines.some(l => {
+            const ln = l.replace(/[Ａ-Ｚａ-ｚ０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+            return /^(OS等?|言語|ツール|DB|FW)$/.test(ln)
+          }) ||
+          // I.T 型: 「インフラ環境」/「アプリケーション環境」列ヘッダー
+          /インフラ環境|アプリケーション環境/.test(vNorm)
       })
       for (const hdr of skillColCells) {
         // ヘッダーと同じ列のブロック内セルからスキルを取得（「機種」列は PC/サーバ等でスキップ）
@@ -4327,7 +4352,15 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
           if (v.length > 200 && v.includes('\n')) continue
           // 改行→行ごとに2+空白/全角スペース/カンマで分割（"Excel VBA"の単一スペースは保持）
           for (const line of v.split(/[\r\n]+/)) {
+            // ラベル専用セル（"OS："/ "開発言語："等、末尾が：のみの行）はスキップ
+            if (/[：:]\s*$/.test(line.trim())) continue
             for (let s of line.split(/[、，,]+|　|\s{2,}/).map(s2 => s2.trim()).filter(s2 => s2 && s2.length >= 2 && s2 !== '-' && s2 !== '－')) {
+              // バージョン番号サフィックスを除去: "Laravel：12.0" → "Laravel"
+              const colonVerIdx = s.indexOf('：')
+              if (colonVerIdx > 0 && /^\d[\d.]+$/.test(s.slice(colonVerIdx + 1).trim())) {
+                s = s.slice(0, colonVerIdx).trim()
+                if (!s || s.length < 2) continue
+              }
               // 括弧が不完全なフラグメントを処理: "Azure(RG" → "Azure", "WAF等)" → skip
               const openP = (s.match(/[（(]/g) || []).length
               const closeP = (s.match(/[）)]/g) || []).length
@@ -4342,6 +4375,28 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
               }
             }
           }
+        }
+      }
+    }
+
+    // パターン E: インラインラベル値ペア（I.T 型）
+    // 同一行内で「技術ラベル：」のセルの右隣セルがスキル値（"OS：" → "Windows11"）
+    if (blockSkills.length === 0) {
+      const INLINE_LBL_RE = /^(OS|開発?言語|Framework|FW|DB|データベース|クラウド|ミドルウェア|仮想化|Network|Storage|Strage|Application|Other)[：:]\s*$/i
+      const sortedBlock = [...blockCells].sort((a, b) => a.row !== b.row ? a.row - b.row : a.col - b.col)
+      for (let i = 0; i < sortedBlock.length - 1; i++) {
+        const lbl = sortedBlock[i]
+        if (!INLINE_LBL_RE.test(lbl.value.trim())) continue
+        const nxt = sortedBlock[i + 1]
+        if (nxt.row !== lbl.row || nxt.col <= lbl.colEnd) continue
+        let sv = nxt.value.trim()
+        if (!sv || sv === '-' || sv === '－' || sv.length < 2) continue
+        // バージョン番号サフィックスを除去: "Laravel：12.0" → "Laravel"
+        const cvIdx = sv.indexOf('：')
+        if (cvIdx > 0 && /^\d[\d.]+$/.test(sv.slice(cvIdx + 1).trim())) sv = sv.slice(0, cvIdx).trim()
+        if (!sv || SKILL_BLOCK.test(sv) || /^[◎○◇△▲×〇]+$/.test(sv)) continue
+        for (const part of sv.split(/[,、，\/]+/).map(s => s.trim()).filter(s => s.length >= 2 && s !== '-')) {
+          blockSkills.push(part)
         }
       }
     }
