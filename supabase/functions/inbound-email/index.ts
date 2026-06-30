@@ -398,6 +398,83 @@ function extractLicenseNumbers(text: string): { haken: string | null; shokai: st
   return { haken, shokai }
 }
 
+/**
+ * メール本文の文章からスキル別経験年数を抽出する（Excel/Word添付がない場合のフォールバック）。
+ * 対応パターン:
+ *   1. 「PHP(Laravel)、JavaScript(Vue)の経験がそれぞれ3年以上あります」→ PHP:36, JavaScript:36
+ *   2. 「Javaの経験が5年以上」→ Java:60
+ *   3. 「Python 3年」「AWS（2年）」→ Python:36, AWS:24（箇条書き風）
+ */
+function extractSkillYearsFromBodyText(text: string): Record<string, number> {
+  const result: Record<string, number> = {}
+
+  // 全角数字を半角に変換して年数を月数へ
+  const parseYearsToMonths = (s: string): number | null => {
+    const m = s.match(/([0-9０-９]+)年/)
+    if (!m) return null
+    const n = parseInt(m[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+    return isNaN(n) || n < 1 || n > 40 ? null : n * 12
+  }
+
+  // 括弧内の補足・ラベルプレフィックスを除去してスキル名だけ返す
+  // 「PHP(Laravel)」→「PHP」 / 「アピールポイント: PHP」→「PHP」
+  const cleanSkillName = (s: string): string => {
+    let r = s.replace(/\s*[（(][^）)]*[）)]/g, '').replace(/[・、,，\s　]+$/, '').trim()
+    // コロン・全角コロンがある場合は最後のコロン以降を取る
+    const colonIdx = Math.max(r.lastIndexOf('：'), r.lastIndexOf(':'))
+    if (colonIdx >= 0) r = r.slice(colonIdx + 1).trim()
+    return r
+  }
+
+  // スキル名として不適切な語句（除外リスト）
+  const isNonSkill = (name: string): boolean => {
+    if (name.length < 2 || name.length > 30) return true
+    return /経験|以上|程度|開発|業務|システム|設計|構築|基盤|インフラ|サービス|アプリ|エンジニア|実務|案件|プロジェクト|当社|弊社|担当|スキル/.test(name)
+  }
+
+  // パターン1: 「スキル1、スキル2の経験がそれぞれN年以上」（複数スキル・同一年数）
+  const patternEach = /([^\n。]{2,80})の経験がそれぞれ([0-9０-９]+年)/g
+  let m: RegExpExecArray | null
+  while ((m = patternEach.exec(text)) !== null) {
+    const months = parseYearsToMonths(m[2])
+    if (!months) continue
+    const skills = m[1].split(/[、,，・とやおよび及び]/)
+    for (const raw of skills) {
+      const name = cleanSkillName(raw)
+      if (!isNonSkill(name)) {
+        result[name] = Math.max(result[name] ?? 0, months)
+      }
+    }
+  }
+
+  // パターン2: 「スキルの経験がN年以上」（単一スキル。それぞれ除外）
+  const patternSingle = /([^\s　、,，・（(）)\n]{2,20})の経験が(?!それぞれ)([0-9０-９]+年)/g
+  while ((m = patternSingle.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const months = parseYearsToMonths(m[2])
+    if (months && !isNonSkill(name)) {
+      result[name] = Math.max(result[name] ?? 0, months)
+    }
+  }
+
+  // パターン3: 「スキル：N年」「スキル N年」「スキル（N年）」（箇条書き・ラベル形式）
+  // スキル名は英数字・カタカナ主体の短い語を想定（誤爆防止のため2〜20文字）
+  const patternLabel = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15}|[一-龯々]{2,10})\s*[：:（(]?\s*([0-9０-９]+年[0-9０-９]*ヶ?月?)/g
+  while ((m = patternLabel.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const months = parseYearsToMonths(m[2])
+    if (months && !isNonSkill(name) && !(name in result)) {
+      // パターン3は1,2で取得済みのキーには上書きしない
+      result[name] = months
+    }
+  }
+
+  if (Object.keys(result).length > 0) {
+    console.log(`[skillYears-body] count=${Object.keys(result).length} keys=${Object.keys(result).join(',')}`)
+  }
+  return result
+}
+
 function dedupeTrimmedSkills(skills: unknown): string[] {
   if (!Array.isArray(skills)) return []
   return Array.from(
@@ -5703,7 +5780,11 @@ Deno.serve(async (req: Request) => {
                   const excSY = matchedTextContent?.skillYears
                     ?? (blockIdx === 0 && targetCandidateId && Object.keys(excelSkillYears).length > 0 ? excelSkillYears : {})
                   const display = Object.fromEntries(Object.entries(excSY).filter(([k]) => !k.startsWith('_')))
-                  return Object.keys(display).length > 0 ? display : (blockRegexFields.nameSkillYears ?? undefined)
+                  if (Object.keys(display).length > 0) return display
+                  if (blockRegexFields.nameSkillYears) return blockRegexFields.nameSkillYears
+                  // 添付なし・名前括弧なしのフォールバック: ブロック本文の文章パターンからスキル年数抽出
+                  const bodyYears = extractSkillYearsFromBodyText(blockRegexBodyText + '\n' + blockAttachText)
+                  return Object.keys(bodyYears).length > 0 ? bodyYears : undefined
                 })(),
                 // Excel スキルシートの「スキルサマリ」セル（selfPR・agentComment と並列の独自フィールド）
                 skillSummary: excelSkillSummary ?? undefined,
@@ -6187,6 +6268,9 @@ Deno.serve(async (req: Request) => {
             if (Object.keys(displayExcel).length > 0) return normalizeKeys({ ...nameYears, ...displayExcel })
             if (Object.keys(wordSkillYearsForDisplay).length > 0) return normalizeKeys({ ...nameYears, ...wordSkillYearsForDisplay })
             if (Object.keys(nameYears).length > 0) return nameYears
+            // 添付なし・名前括弧なしのフォールバック: 本文の文章パターンからスキル年数抽出
+            const bodyYears = extractSkillYearsFromBodyText(bodyText + '\n' + attachText)
+            if (Object.keys(bodyYears).length > 0) return normalizeKeys(bodyYears)
             return undefined
           })(),
           // Excel スキルシートの JSON 化データ（HF Spaces 品質チェック用）
