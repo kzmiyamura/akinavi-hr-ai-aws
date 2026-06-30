@@ -2367,7 +2367,7 @@ function parseDurationToMonths(text: string): number | null {
   const t = text.trim()
   let months = 0
   const yearMatch = t.match(/(\d+)\s*年/)
-  const monthMatch = t.match(/(\d+)\s*[ヶか]月/)
+  const monthMatch = t.match(/(\d+)\s*[ヶかカ]月/)
   if (yearMatch) {
     const y = parseInt(yearMatch[1])
     // 50年超は西暦年（例: 2020年）の誤マッチとして無視
@@ -2547,16 +2547,38 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   // ── Method 2: スキル一覧型 ──
   // セクション見出し語（スキル名として誤採用しないもの）
   const SKILL_LABEL_BLOCKLIST = /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|勤務先|担当|役割|役職|ポジション|立場|所属|評価|合計|スコア|レベル|備考欄|担当工程|プロジェクト名|案件名|企業名|会社名|規模|人数|期間|開始|終了|備考・コメント|弊社社員|自社社員|社員|派遣|契約|フリー)$/
+  const isSkillLabelCandidate = (s: string): boolean =>
+    s.length >= 2 && !/^\d+$/.test(s) && !/^[\s\-－◎○●▲×]+$/.test(s) && !SKILL_LABEL_BLOCKLIST.test(s)
   const skillMonths2: Record<string, number> = {}
   for (const row of data) {
     if (!row || row.length < 2) continue
+    // 行内の「期間セル」位置を事前収集（隣のスキルの領域に越境しないための境界として使う）
+    const durIdxs: number[] = []
     for (let j = 0; j < row.length; j++) {
-      const months = parseDurationToMonths(String(row[j] ?? ''))
-      if (!months) continue
-      for (let k = Math.max(0, j - 3); k <= Math.min(row.length - 1, j + 3); k++) {
-        if (k === j) continue
+      if (parseDurationToMonths(String(row[j] ?? ''))) durIdxs.push(j)
+    }
+    for (const j of durIdxs) {
+      const months = parseDurationToMonths(String(row[j] ?? ''))!
+      let matched = false
+      // ① 左方向に境界探索（他の期間セルを跨いだら停止）: "スキル名 ... 期間" の一般的な並びを優先
+      //    列間隔が広いシート（ラベルと値が3列以上離れている）でも正しく対応付けられる
+      const prevDur = [...durIdxs].reverse().find(d => d < j)
+      const leftBound = prevDur !== undefined ? prevDur + 1 : 0
+      for (let k = j - 1; k >= leftBound; k--) {
         const candidate = String(row[k] ?? '').trim()
-        if (candidate.length >= 2 && !/^\d+$/.test(candidate) && !/^[\s\-－◎○●▲×]+$/.test(candidate) && !SKILL_LABEL_BLOCKLIST.test(candidate)) {
+        if (isSkillLabelCandidate(candidate)) {
+          skillMonths2[candidate] = Math.max(skillMonths2[candidate] ?? 0, months)
+          matched = true
+          break
+        }
+      }
+      if (matched) continue
+      // ② 左に見つからない場合: 従来通り右側 ±3 セルを探索（"期間 スキル名" の並びに対応）
+      const nextDur = durIdxs.find(d => d > j)
+      const rightBound = Math.min(row.length - 1, j + 3, nextDur !== undefined ? nextDur - 1 : row.length - 1)
+      for (let k = j + 1; k <= rightBound; k++) {
+        const candidate = String(row[k] ?? '').trim()
+        if (isSkillLabelCandidate(candidate)) {
           skillMonths2[candidate] = Math.max(skillMonths2[candidate] ?? 0, months)
           break
         }
