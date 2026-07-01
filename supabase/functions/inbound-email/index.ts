@@ -6066,6 +6066,7 @@ Deno.serve(async (req: Request) => {
               const blockUpdatePayload: Record<string, unknown> = {
                 skills: blockSkillNames,
                 raw_profile: blockPayload.raw_profile,
+                experience_years: blockPayload.experience_years,
                 desired_rate: blockRegexFields.desiredRate ?? null,
                 created_at: new Date().toISOString(),
               }
