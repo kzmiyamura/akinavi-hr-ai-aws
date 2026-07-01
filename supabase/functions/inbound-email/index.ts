@@ -5938,11 +5938,12 @@ Deno.serve(async (req: Request) => {
                   const excSY = matchedTextContent?.skillYears
                     ?? (blockIdx === 0 && targetCandidateId && Object.keys(excelSkillYears).length > 0 ? excelSkillYears : {})
                   const display = Object.fromEntries(Object.entries(excSY).filter(([k]) => !k.startsWith('_')))
-                  if (Object.keys(display).length > 0) return display
-                  if (blockRegexFields.nameSkillYears) return blockRegexFields.nameSkillYears
-                  // 添付なし・名前括弧なしのフォールバック: ブロック本文の文章パターンからスキル年数抽出
+                  const nameYears = blockRegexFields.nameSkillYears ?? {}
+                  // 本文・添付の文章パターンから常に抽出してマージ（Excel/nameYearsが空のキーを補完）
                   const bodyYears = extractSkillYearsFromBodyText(blockRegexBodyText + '\n' + blockAttachText)
-                  return Object.keys(bodyYears).length > 0 ? bodyYears : undefined
+                  // 優先順位: bodyYears < nameYears < Excel（後が上書き）
+                  const merged = { ...bodyYears, ...nameYears, ...display }
+                  return Object.keys(merged).length > 0 ? merged : undefined
                 })(),
                 // Excel スキルシートの「スキルサマリ」セル（selfPR・agentComment と並列の独自フィールド）
                 skillSummary: excelSkillSummary ?? undefined,
@@ -6423,11 +6424,12 @@ Deno.serve(async (req: Request) => {
               }
               return norm
             }
-            if (Object.keys(displayExcel).length > 0) return normalizeKeys({ ...nameYears, ...displayExcel })
-            if (Object.keys(wordSkillYearsForDisplay).length > 0) return normalizeKeys({ ...nameYears, ...wordSkillYearsForDisplay })
-            if (Object.keys(nameYears).length > 0) return nameYears
-            // 添付なし・名前括弧なしのフォールバック: 本文の文章パターンからスキル年数抽出
+            // 本文・添付テキストの文章パターンからスキル年数を抽出（常に実行してマージ）
+            // Excel/Word/nameYears が空のキーを補完する。重複キーはExcel/Word優先（後が上書き）
             const bodyYears = extractSkillYearsFromBodyText(bodyText + '\n' + attachText)
+            if (Object.keys(displayExcel).length > 0) return normalizeKeys({ ...bodyYears, ...nameYears, ...displayExcel })
+            if (Object.keys(wordSkillYearsForDisplay).length > 0) return normalizeKeys({ ...bodyYears, ...nameYears, ...wordSkillYearsForDisplay })
+            if (Object.keys(nameYears).length > 0) return normalizeKeys({ ...bodyYears, ...nameYears })
             if (Object.keys(bodyYears).length > 0) return normalizeKeys(bodyYears)
             return undefined
           })(),
