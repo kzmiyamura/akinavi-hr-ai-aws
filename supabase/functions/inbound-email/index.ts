@@ -557,11 +557,6 @@ function isInboundMakeSoftFail(): boolean {
   return (Deno.env.get('INBOUND_MAKE_SOFT_FAIL') ?? '').toLowerCase() === 'true'
 }
 
-/** 1 リクエストを追跡（Supabase ログで rid で検索） */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function pipe(_rid: string, _phase: string, _detail?: Record<string, unknown>) {
-  // no-op: verbose logging removed
-}
 
 
 // ── skill_master DB照合（AIなし・高速） ──────────────────────────────────
@@ -2809,11 +2804,6 @@ function gridToFieldText(grid: string[][], maxChars = 6000): string {
   return text.length > maxChars ? text.slice(0, maxChars) + '\n...(省略)' : text
 }
 
-/** SheetJS が出力する HTML テーブルを 2D グリッドに変換（各 <td> を 1 セルとして取得） */
-function parseHtmlTableToGrid(_html: string): string[][] {
-  // 廃止: worksheetToGrid を使用すること（sheet_to_html 経由を廃止）
-  return []
-}
 
 /** 2D グリッド → ヘッダー付き JSON 行配列（後方互換・extractSkillYearsUnified 内部から呼ばれる） */
 function gridToJsonRows(grid: string[][]): Array<Record<string, string>> {
@@ -2897,46 +2887,10 @@ const TAG_DICT =
 const PHASE_EVAL_RE =
   /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守)$/
 
-/** タグ判定: TAG_DICT (B) に一致するかどうか */
-function _isColTag(value: string): boolean {
-  return TAG_DICT.test(value.trim())
-}
 
 const _cs = (c: SpanCell) => c.colEnd - c.col + 1   // colSpan
 const _rs = (c: SpanCell) => c.rowEnd - c.row + 1   // rowSpan
 
-/** 全セルの左上と右下の座標を取得 */
-function getBounds(cells: SpanCell[]): { topLeft: [number, number]; bottomRight: [number, number] } | null {
-  if (cells.length === 0) return null
-  let minRow = Infinity, minCol = Infinity
-  let maxRow = -Infinity, maxCol = -Infinity
-  for (const c of cells) {
-    minRow = Math.min(minRow, c.row)
-    minCol = Math.min(minCol, c.col)
-    maxRow = Math.max(maxRow, c.rowEnd)
-    maxCol = Math.max(maxCol, c.colEnd)
-  }
-  return { topLeft: [minRow, minCol], bottomRight: [maxRow, maxCol] }
-}
-
-/** 指定座標 (row, col) を包含するセルを返す。複数結合セルに含まれる場合は最初の1件 */
-function findCellAtCoord(cells: SpanCell[], row: number, col: number): SpanCell | undefined {
-  return cells.find(c =>
-    row >= c.row && row <= c.rowEnd &&
-    col >= c.col && col <= c.colEnd
-  )
-}
-
-/** row と同じ行で、col 以上の位置にある最初のセルを探す */
-function findNextCellToRight(cells: SpanCell[], row: number, minCol: number): SpanCell | undefined {
-  let result: SpanCell | undefined
-  for (const c of cells) {
-    if (c.row <= row && row <= c.rowEnd && c.col >= minCol) {
-      if (!result || c.col < result.col) result = c
-    }
-  }
-  return result
-}
 
 /** セルから次の走査座標を取得。null なら初期値 (0,0)、KEY_H なら右へ、KEY_V なら下へ */
 function getNextCoord(cell: SpanCell | null, state: 'KEY_H' | 'KEY_V'): [number, number] {
@@ -3228,54 +3182,6 @@ function handleKeyV(
   return [Sm.KEY_V, getNextCoord(below, 'KEY_V'), true]
 }
 
-/** rowが小さい順、同じrowならcolが小さい順にソート */
-function sortCellsByRowThenCol(cells: SpanCell[]): SpanCell[] {
-  return cells.sort((a, b) => a.row - b.row || a.col - b.col)
-}
-
-/** 指定セルの直上にあるセル（最も近い）を探す */
-function findCellDirectlyAbove(cells: SpanCell[], cell: SpanCell): SpanCell | undefined {
-  const candidates = cells.filter(c =>
-    c.rowEnd < cell.row &&
-    c.col <= cell.col &&
-    cell.col <= c.colEnd
-  )
-  if (candidates.length === 0) return undefined
-  return candidates.reduce((max, c) => c.rowEnd > max.rowEnd ? c : max)
-}
-
-/** 指定セルの直上に接していて含むセルを探す */
-function findCellOnTop(cells: SpanCell[], cell: SpanCell): SpanCell | undefined {
-  const candidates = cells.filter(c =>
-    c.rowEnd === cell.row &&
-    c.col <= cell.col &&
-    cell.col <= c.colEnd
-  )
-  if (candidates.length === 0) return undefined
-  return candidates[0]
-}
-
-/** 指定セルの直左にあるセル（最も近い）を探す */
-function findCellDirectlyToLeft(cells: SpanCell[], cell: SpanCell): SpanCell | undefined {
-  const candidates = cells.filter(c =>
-    c.colEnd < cell.col &&
-    c.row <= cell.row &&
-    cell.row <= c.rowEnd
-  )
-  if (candidates.length === 0) return undefined
-  return candidates.reduce((max, c) => c.colEnd > max.colEnd ? c : max)
-}
-
-/** 指定セルの直左にあるセル（最も近い）を探す */
-function findCellOnLeft(cells: SpanCell[], cell: SpanCell): SpanCell | undefined {
-  const candidates = cells.filter(c =>
-    c.colEnd === cell.col &&
-    c.row <= cell.row &&
-    cell.row <= c.rowEnd
-  )
-  if (candidates.length === 0) return undefined
-  return candidates[0]
-}
 
 /** V1 processExcelWithStateMachine は テストスクリプト (test_excel_statemachine.mjs) に移動済み */
 
@@ -5224,8 +5130,6 @@ Deno.serve(async (req: Request) => {
   try {
     traceRid = crypto.randomUUID().slice(0, 8)
     tracePhase = 'parse_raw'
-    pipe(traceRid, tracePhase, { method: req.method })
-
     // form-urlencoded と JSON 両対応
     const contentType = req.headers.get('content-type') ?? ''
     let raw: Record<string, string> = {}
@@ -5613,7 +5517,6 @@ Deno.serve(async (req: Request) => {
     }
 
     tracePhase = 'supabase_connect'
-    pipe(traceRid, tracePhase)
     const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
     tracePhase = 'pre_supabase'
@@ -5655,7 +5558,6 @@ Deno.serve(async (req: Request) => {
     }
 
     tracePhase = 'drive_links_fetch'
-    pipe(traceRid, tracePhase)
     // Google Drive / Sheets / Docs リンクの取得
     const { textContents: driveTexts, pdfAttachments: drivePdfs, driveWordProjectMonths, driveSheetSkillYears } = await fetchGoogleLinks(body)
     // Drive Word のプロジェクト期間も Excel 未取得時のフォールバックとして使用
