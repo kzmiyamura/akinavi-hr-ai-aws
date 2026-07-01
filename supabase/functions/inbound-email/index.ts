@@ -794,7 +794,7 @@ async function loadOwnEmailDomain(supabaseUrl: string, serviceKey: string): Prom
     _ownEmailDomain = null
   }
   _ownEmailDomainLoadedAt = Date.now()
-  return _ownEmailDomain
+  return _ownEmailDomain ?? null
 }
 
 /**
@@ -2065,7 +2065,7 @@ async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
   for (const table of root.querySelectorAll('table')) {
     const rows: string[][] = []
     for (const tr of table.querySelectorAll('tr')) {
-      const rowCells = tr.querySelectorAll('td, th').map(cell => cellInnerText(cell as unknown as { innerHTML: string })).filter(Boolean)
+      const rowCells = tr.querySelectorAll('td, th').map((cell: unknown) => cellInnerText(cell as unknown as { innerHTML: string })).filter(Boolean)
       if (rowCells.length > 0) rows.push(rowCells)
     }
     if (rows.length > 0) tables.push(rows)
@@ -4997,9 +4997,9 @@ async function unmarkEmailProcessed(
  */
 function assignAttachmentsToBlocks(
   blocks: Array<{ name: string | null; station: string | null }>,
-  attachments: Array<{ label: string; content?: string }>,
-): Map<number, { label: string; content?: string }> {
-  const result = new Map<number, { label: string; content?: string }>()
+  attachments: Array<{ label: string; content?: string; skillYears?: Record<string, number> }>,
+): Map<number, { label: string; content?: string; skillYears?: Record<string, number> }> {
+  const result = new Map<number, { label: string; content?: string; skillYears?: Record<string, number> }>()
   if (attachments.length === 0 || blocks.length === 0) return result
 
   const normFiles = attachments.map(att => {
@@ -5176,7 +5176,7 @@ Deno.serve(async (req: Request) => {
 
     const type: string = normalizeInboundType(raw.type)
     /** 手動登録など、app_config フラグをバイパスして強制処理する場合は true */
-    const forceProcess: boolean = raw.force === true || raw.force === 'true'
+    const forceProcess: boolean = raw.force === 'true'
     /** 再解析時に指定された既存候補者 ID。このブロックに対応するブロックを強制 UPDATE するために使う */
     const targetCandidateId: string | null = raw.target_candidate_id ?? null
     const from: string = parseFrom(raw.from ?? '')
@@ -6081,6 +6081,8 @@ Deno.serve(async (req: Request) => {
         remoteAvailable: boolean
         desiredRate: string | null
         fromCompany: string | null
+        age?: number | null
+        availableFrom?: string | null
       }
       const analyzed: CandAi = {
         name: '',
@@ -6639,7 +6641,7 @@ Deno.serve(async (req: Request) => {
       let remotePolicy: string | null = null
       const remotePolicyRaw = extractFieldTwoPhase(
         ['リモート', 'テレワーク', 'リモートワーク', '在宅', '出社'],
-        allProjectText, attachText, null, 30,
+        allProjectText, attachText, undefined, 30,
       )
       if (remotePolicyRaw) remotePolicy = remotePolicyRaw
       else if (/フルリモート|完全リモート|100[%％]リモート/.test(allProjectText)) remotePolicy = 'フルリモート'
@@ -6650,7 +6652,7 @@ Deno.serve(async (req: Request) => {
       // 契約形態
       const contractRaw = extractFieldTwoPhase(
         ['契約形態', '契約', '就業形態', '雇用形態', '契約種別'],
-        allProjectText, attachText, null, 30,
+        allProjectText, attachText, undefined, 30,
       )
       let contractType: string | null = contractRaw ?? null
       if (!contractType) {
@@ -6682,7 +6684,7 @@ Deno.serve(async (req: Request) => {
       // 予算: extractFieldTwoPhase で生文字列を取得してからパース
       const budgetRaw = extractFieldTwoPhase(
         ['単価', '単　価', '報酬', '月額', '予算', '報酬単価', '金額', '金　額'],
-        allProjectText, attachText, null, 50,
+        allProjectText, attachText, undefined, 50,
       )
       let budgetMin: number | null = null
       let budgetMax: number | null = null
@@ -6704,7 +6706,7 @@ Deno.serve(async (req: Request) => {
       // 開始時期・終了日: extractFieldTwoPhase で生文字列を取得してからパース
       const timingRaw = extractFieldTwoPhase(
         ['時期', '時　期', '開始時期', '参画時期', '稼働時期', '開始', '参画開始', 'スタート'],
-        allProjectText, attachText, null, 50,
+        allProjectText, attachText, undefined, 50,
       )
       let startDate: string | null = null
       let endDate: string | null = null
@@ -7021,7 +7023,7 @@ Deno.serve(async (req: Request) => {
         }
       })
 
-      const { data: insertedRows, error } = await supabase.from('projects').insert(insertRows).select()
+      const { data: insertedRows, error } = await supabase.from('projects').insert(insertRows).select() as { data: Array<{ id: string; title: string }> | null; error: { message: string } | null }
 
       if (error) throw new Error(`案件保存エラー: ${error.message}`)
       if (!insertedRows?.length) throw new Error('案件保存後に行が返りませんでした')
