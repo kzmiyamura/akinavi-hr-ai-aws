@@ -457,9 +457,9 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
     }
   }
 
-  // パターン3: 「スキル：N年」「スキル N年」「スキル（N年）」（箇条書き・ラベル形式）
-  // スキル名は英数字・カタカナ主体の短い語を想定（誤爆防止のため2〜20文字）
-  const patternLabel = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15}|[一-龯々]{2,10})\s*[：:（(]?\s*([0-9０-９]+年[0-9０-９]*ヶ?月?)/g
+  // パターン3: 「スキル：N年」「スキル（N年）」（明示的なコロン・括弧区切り必須）
+  // 「スキル 年」のようなスペース区切りは日付と誤爆しやすいため除外
+  const patternLabel = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15}|[一-龯々]{2,10})\s*[：:（(]\s*([0-9０-９]+年[0-9０-９]*ヶ?月?)/g
   while ((m = patternLabel.exec(text)) !== null) {
     const name = cleanSkillName(m[1])
     const months = parseYearsToMonths(m[2])
@@ -6443,7 +6443,10 @@ Deno.serve(async (req: Request) => {
                 }
                 const key = matched ?? rawKey
                 if (matched) usedSkills.add(matched)
-                norm[key] = (norm[key] ?? 0) + months
+                // MAX採用（加算すると複数ソースで同一スキルが重複カウントされる）
+                // 上限: 360ヶ月（30年）— それ以上はデータ異常とみなしてキャップ
+                const cappedMonths = Math.min(months, 360)
+                norm[key] = Math.max(norm[key] ?? 0, cappedMonths)
               }
               return norm
             }
