@@ -5957,7 +5957,12 @@ Deno.serve(async (req: Request) => {
                   const display = Object.fromEntries(Object.entries(excSY).filter(([k]) => !k.startsWith('_')))
                   const nameYears = blockRegexFields.nameSkillYears ?? {}
                   // 本文・添付の文章パターンから常に抽出してマージ（Excel/nameYearsが空のキーを補完）
-                  const bodyYears = extractSkillYearsFromBodyText(blockRegexBodyText + '\n' + blockAttachText)
+                  // ※ blockAttachText はこのブロック（本人）専用に確実にマッチした添付（matchedTextContent）の
+                  //   場合のみ含める。ケースB/C（未割当添付の共有プール・全添付フォールバック）では
+                  //   他人の経歴書の文章から年数を誤って拾ってしまうため対象外にする
+                  const bodyYears = extractSkillYearsFromBodyText(
+                    blockRegexBodyText + (matchedTextContent ? '\n' + blockAttachText : '')
+                  )
                   // 優先順位: bodyYears < nameYears < Excel（後が上書き）
                   const merged = { ...bodyYears, ...nameYears, ...display }
                   return Object.keys(merged).length > 0 ? merged : undefined
