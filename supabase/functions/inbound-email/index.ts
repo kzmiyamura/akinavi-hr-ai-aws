@@ -1687,6 +1687,23 @@ function extractCandidateFieldsRegex(
       if (y > 0 && y <= 50 && String(y).length < 4) { experienceYears = y; break }
     }
   }
+  // フォールバック: 「経験年数」を明言せず「・項目：期間」の箇条書き内訳のみのケース
+  // （例: ・ヘルプデスク：10ヶ月 / ・テスト実施：5ヶ月）→ 合算して概算の経験年数とする
+  // 2件以上の箇条書きがある場合のみ採用（1件だけだと単一案件の期間と区別できないため）
+  if (experienceYears === null) {
+    const bulletDurationRE = /^[・\-]\s*[^：:\n]{1,40}[：:]\s*((?:\d+\s*年)?\s*(?:\d+\s*[ヶかカ]月)?)\s*$/gm
+    let totalMonths = 0
+    let bulletCount = 0
+    let bm: RegExpExecArray | null
+    while ((bm = bulletDurationRE.exec(allText)) !== null) {
+      const months = parseDurationToMonths(bm[1])
+      if (months) { totalMonths += months; bulletCount++ }
+    }
+    if (bulletCount >= 2 && totalMonths > 0) {
+      const y = Math.round(totalMonths / 12)
+      if (y > 0 && y <= 50) experienceYears = y
+    }
+  }
 
   // ── 希望単価 ──────────────────────────────────────────────────
   let desiredRate: string | null = extractFieldTwoPhase(

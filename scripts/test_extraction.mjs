@@ -452,6 +452,35 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     const m = allTextNorm.match(p)
     if (m) { const y = parseInt(m[1], 10); if (y > 0 && y <= 50 && String(y).length < 4) { experienceYears = y; break } }
   }
+  // フォールバック: 「経験年数」を明言せず「・項目：期間」の箇条書き内訳のみのケース
+  // （例: ・ヘルプデスク：10ヶ月 / ・テスト実施：5ヶ月）→ 合算して概算の経験年数とする
+  if (experienceYears === null) {
+    const parseDurationToMonths = (text) => {
+      if (!text) return null
+      let months = 0
+      const yearMatch = text.match(/(\d+)\s*年/)
+      const monthMatch = text.match(/(\d+)\s*[ヶかカ]月/)
+      if (yearMatch) {
+        const y = parseInt(yearMatch[1])
+        if (y > 50) return null
+        months += y * 12
+      }
+      if (monthMatch) months += parseInt(monthMatch[1])
+      return months > 0 ? months : null
+    }
+    const bulletDurationRE = /^[・\-]\s*[^：:\n]{1,40}[：:]\s*((?:\d+\s*年)?\s*(?:\d+\s*[ヶかカ]月)?)\s*$/gm
+    let totalMonths = 0
+    let bulletCount = 0
+    let bm
+    while ((bm = bulletDurationRE.exec(allTextNorm)) !== null) {
+      const months = parseDurationToMonths(bm[1])
+      if (months) { totalMonths += months; bulletCount++ }
+    }
+    if (bulletCount >= 2 && totalMonths > 0) {
+      const y = Math.round(totalMonths / 12)
+      if (y > 0 && y <= 50) experienceYears = y
+    }
+  }
 
   let desiredRate = extractFieldTwoPhase(
     ['希望単価','目安単価','単価','単金','単　金','単 金','希望報酬','希望月額','月額','月単価','希望料金'],
