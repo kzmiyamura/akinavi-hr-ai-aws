@@ -147,6 +147,7 @@ export interface ScoringWeights {
   rate: number
   location: number
   remote: number
+  [key: string]: number
 }
 
 export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {

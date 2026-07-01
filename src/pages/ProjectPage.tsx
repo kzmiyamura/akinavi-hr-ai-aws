@@ -1018,7 +1018,7 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                   <div className="flex items-start justify-between gap-3">
                     <h3 className="text-base font-semibold text-gray-800 min-w-0 break-words">{selectedProject.title}</h3>
                     <div className="flex items-center gap-2 shrink-0">
-                      {(selectedProject.raw_data as Record<string, unknown>)?.text && (
+                      {!!((selectedProject.raw_data as Record<string, unknown>)?.text) && (
                         <button
                           type="button"
                           onClick={() => handleProjectReplay(selectedProject)}
