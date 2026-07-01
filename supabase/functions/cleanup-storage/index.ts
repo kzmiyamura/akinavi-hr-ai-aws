@@ -83,6 +83,20 @@ Deno.serve(async (req) => {
           deleted += paths.length
           freedBytes += oldFiles.reduce((sum, f) => sum + ((f.metadata as Record<string, number> | null)?.size ?? 0), 0)
           console.log(`[cleanup-storage] deleted ${paths.length} files from ${bucket}/${folder}: ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? '...' : ''}`)
+
+          // 削除したファイルを参照している candidates.resume_url を NULL クリア
+          const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
+          const publicUrlPrefix = `${supabaseUrl}/storage/v1/object/public/${bucket}/`
+          const deletedUrls = paths.map(p => `${publicUrlPrefix}${p}`)
+          const { error: urlClearError } = await supabase
+            .from('candidates')
+            .update({ resume_url: null })
+            .in('resume_url', deletedUrls)
+          if (urlClearError) {
+            console.error(`[cleanup-storage] resume_url clear error:`, urlClearError.message)
+          } else {
+            console.log(`[cleanup-storage] cleared resume_url for up to ${deletedUrls.length} candidates`)
+          }
         }
       }
 
