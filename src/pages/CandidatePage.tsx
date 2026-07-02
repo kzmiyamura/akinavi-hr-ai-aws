@@ -328,11 +328,17 @@ export function CandidateProfileFields({
               対応: {availableRegions.join('・')}
             </span>
           )}
-          {remoteAvailable && (
-            <span className="flex items-center gap-1 text-xs bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">
-              <Wifi size={10} />リモート可
-            </span>
-          )}
+          {(() => {
+            const rws = (raw as Record<string, unknown>).remoteWorkStyle as string | null | undefined
+            const label = rws ?? (remoteAvailable ? ((raw as Record<string, unknown>).wantsFullRemote ? 'フルリモート希望' : 'リモート可') : null)
+            if (!label) return null
+            const isStrong = label === 'フルリモート希望' || label === 'リモート希望'
+            return (
+              <span className={`flex items-center gap-1 text-xs rounded px-1.5 py-0.5 ${isStrong ? 'bg-indigo-50 text-indigo-600' : 'bg-blue-50 text-blue-600'}`}>
+                <Wifi size={10} />{label}
+              </span>
+            )
+          })()}
           {(raw as Record<string, unknown>).hakenOk === true && (
             <span className="text-xs bg-green-50 text-green-700 rounded px-1.5 py-0.5">派遣OK</span>
           )}

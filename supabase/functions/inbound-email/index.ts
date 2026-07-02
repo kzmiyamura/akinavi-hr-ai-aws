@@ -3651,12 +3651,45 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
   }
   const count4 = Object.keys(sy4).length
 
+  // 方式5: キャリアシート型（「スキル名 [N] 年 [M] ヶ月」が1行に複数並ぶ形式）
+  // 例: "Win 28 年 2 ヶ月 Java 16 年 4 ヶ月 Oracle 16 年 2 ヶ月"（各トークンが別セル）
+  const sy5: Record<string, number> = {}
+  {
+    // ヘッダー行に「OS」「経験年数」「言語」が並ぶキャリアシートのみ対象
+    const isCareerSheet = grid.slice(0, 30).some(row => {
+      const joined = row.join('\t')
+      return /OS.*経験年数.*言語|経験年数.*言語.*経験年数|技術.*経験.*OS.*言語/i.test(joined)
+    })
+    if (isCareerSheet) {
+      // 業務スキル・業種名は除外（技術スキルのみ抽出）
+      const BIZ_SKILL_RE = /^(金融|流通|公共|官公庁|人事|給与|医療|保険|製造|販売|管理|保守|業務|マイグレ|マイグレーション|小売|通信|社会保険|不動産|電力|自治体)/
+      for (const row of grid) {
+        // 連続トークンとして「[スキル名] [N] 年 [M?] ヶ月」を全検索
+        // 年・月が別セルで存在するため、行全体をスペース結合してスキャン
+        const line = row.join(' ')
+        const re = /([^\s\d年ヶ月][^\s]{0,19})\s+(\d+)\s+年(?:\s+(\d+)\s+ヶ月|\s+ヶ月)?/g
+        let mm: RegExpExecArray | null
+        while ((mm = re.exec(line)) !== null) {
+          const skill = mm[1].trim()
+          const years = parseInt(mm[2])
+          const months = parseInt(mm[3] ?? '0')
+          const totalMonths = years * 12 + months
+          if (!skill || years <= 0 || years > 50) continue
+          if (/^\d/.test(skill) || BIZ_SKILL_RE.test(skill)) continue
+          sy5[skill] = Math.max(sy5[skill] ?? 0, totalMonths)
+        }
+      }
+    }
+  }
+  const count5 = Object.keys(sy5).filter(k => !k.startsWith('_')).length
+
   // 最も多く取れた方式を採用
   let best: Record<string, number> = {}
   let bestMethod = 'none'
-  if (count1 >= count2 && count1 >= count3 && count1 >= count4 && count1 > 0) { best = sy1; bestMethod = 'column' }
-  else if (count2 >= count3 && count2 >= count4 && count2 > 0)                 { best = sy2; bestMethod = 'array' }
-  else if (count4 >= count3 && count4 > 0)                                      { best = sy4; bestMethod = 'word-narrative' }
+  if (count1 >= count2 && count1 >= count3 && count1 >= count4 && count1 >= count5 && count1 > 0) { best = sy1; bestMethod = 'column' }
+  else if (count2 >= count3 && count2 >= count4 && count2 >= count5 && count2 > 0)                 { best = sy2; bestMethod = 'array' }
+  else if (count5 >= count3 && count5 >= count4 && count5 > 0)                                      { best = sy5; bestMethod = 'career-sheet' }
+  else if (count4 >= count3 && count4 > 0)                                                          { best = sy4; bestMethod = 'word-narrative' }
   else if (count3 > 0)                                                          { best = sy3; bestMethod = 'text' }
 
   if (bestMethod !== 'none') {
@@ -6236,6 +6269,20 @@ Deno.serve(async (req: Request) => {
         || proseFields.workStyle === 'リモート希望'
       // フルリモート希望: 常駐案件を避けマッチングスコアを下げるために使用
       const resolvedWantsFullRemote = proseFields.workStyle === 'フルリモート'
+      // リモート勤務スタイル（表示用文字列）
+      const remoteWorkStyleRaw = (() => {
+        const t = bodyText + ' ' + attachText
+        // 週X日パターンを優先抽出
+        const weekM = t.match(/週(\d)[〜~～]?(\d?)日[　 ]?(?:程度)?(?:[　 ]?以内)?[^\n]{0,10}(?:リモート|在宅|テレワーク)|(?:リモート|在宅|テレワーク)[^\n]{0,10}週(\d)[〜~～]?(\d?)日/)
+        if (weekM) {
+          const d1 = weekM[1] || weekM[3]
+          return `週${d1}日リモート可`
+        }
+        if (proseFields.workStyle === 'フルリモート') return 'フルリモート希望'
+        if (proseFields.workStyle === 'リモート希望') return 'リモート希望'
+        if (resolvedRemoteAvailable) return 'リモート可'
+        return null
+      })()
       // 英語レベル抽出（ビジネス / 日常会話 / null）
       const englishLevelRaw = (() => {
         const t = bodyText + ' ' + attachText
@@ -6306,6 +6353,7 @@ Deno.serve(async (req: Request) => {
           currentWorkLocation: analyzed.currentWorkLocation ?? null,
           remoteAvailable: resolvedRemoteAvailable,
           wantsFullRemote: resolvedWantsFullRemote || null,
+          remoteWorkStyle: remoteWorkStyleRaw,
           hakenOk: hakenOkRaw,
           englishLevel: englishLevelRaw,
           employmentType: employmentTypeRaw,
