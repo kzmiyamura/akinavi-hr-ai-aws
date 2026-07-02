@@ -26,9 +26,12 @@ const EDGE_URL     = `${SUPABASE_URL}/functions/v1`
 const supabase     = createClient(SUPABASE_URL, ANON_KEY)
 
 const DRY_RUN     = process.argv.includes('--dry-run')
-const DAYS        = parseInt(process.argv[process.argv.indexOf('--days') + 1] ?? '7', 10)
-const LIMIT       = parseInt(process.argv[process.argv.indexOf('--limit') + 1] ?? '200', 10)
-const CONCURRENCY = parseInt(process.argv[process.argv.indexOf('--concurrency') + 1] ?? '1', 10)
+const _daysIdx = process.argv.indexOf('--days')
+const _limitIdx = process.argv.indexOf('--limit')
+const _concIdx = process.argv.indexOf('--concurrency')
+const DAYS        = _daysIdx !== -1 ? parseInt(process.argv[_daysIdx + 1], 10) : 7
+const LIMIT       = _limitIdx !== -1 ? parseInt(process.argv[_limitIdx + 1], 10) : 200
+const CONCURRENCY = _concIdx !== -1 ? parseInt(process.argv[_concIdx + 1], 10) : 1
 
 const EXCEL_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 const WORD_MIME  = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
