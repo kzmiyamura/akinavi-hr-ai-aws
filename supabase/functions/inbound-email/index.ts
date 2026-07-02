@@ -378,7 +378,7 @@ function extractEmploymentType(bodyText: string, attachText: string): string | n
   if (/[（(]正社員[）)]|正社員として登録|正社員エンジニア/.test(t)) return '正社員'
   if (/フリーランス(エンジニア|技術者|の方|候補|案件)?|個人事業主/.test(t)) return 'フリーランス'
   if (/業務委託(契約|のみ|希望|での)?/.test(t)) return '業務委託'
-  if (/弊社SES|SES(エンジニア|技術者|正社員|社員)?/.test(t)) return 'SES'
+  if (/弊社SES|SES(?:エンジニア|技術者|正社員|社員)/.test(t)) return 'SES'
   if (/契約社員/.test(t)) return '契約社員'
   if (/派遣社員/.test(t)) return '派遣社員'
   return null
@@ -1385,6 +1385,16 @@ function extractCandidateFieldsRegex(
       // 4番目の要素が駅名であれば nearestStation にも設定（後でoverrideされる可能性あり）
       if (nlBracket[4]?.includes('駅')) bracketStation = nlBracket[4].trim()
     }
+    // ≪名前 (年齢歳) 性別≫ 形式（Dearism等の「≪≫」デリミタ形式）(#94)
+    if (!name || age === null || gender === null) {
+      const dearismPat = /≪([^≪≫（(\n]{1,20}?)[ 　]*[（(](\d{2})[才歳][）)][ 　]*(男性|女性|男|女)/
+      const nlD = allTextForName.match(dearismPat)
+      if (nlD) {
+        if (!name)           name   = nlD[1].trim() || null
+        if (age === null)    age    = parseInt(nlD[2], 10)
+        if (gender === null) gender = nlD[3]
+      }
+    }
   }
 
   // 国籍 — 名前括弧内: （中国籍）（外国籍）（日本）等を抽出・除去
@@ -1769,7 +1779,7 @@ function extractCandidateFieldsRegex(
   // 宛先側の会社名（〇〇御中・〇〇様）は除外。
   let fromCompany: string | null = null
   const allBodyText = bodyText + '\n' + attachText
-  const sigArea = allBodyText.slice(-1200)
+  const sigArea = allBodyText.slice(-2000)
 
   // 宛先行チェック: マッチ位置の直後に「様」「御中」「ご担当」が続く場合は宛先として除外
   function isSalutation(text: string, matchIndex: number, matchLen: number): boolean {
@@ -6046,12 +6056,19 @@ Deno.serve(async (req: Request) => {
         // agent_companies に会社名・ドメイン・許可番号を upsert（fire and forget）
         {
           const emailDomain = from ? from.split('@')[1]?.toLowerCase().trim() : null
-          const companyName = sanitizeFromCompany(results.length > 0 ? (results[0] as { name?: string }).name ?? undefined : undefined)
+          // 送信元会社名を末尾2000字から抽出（候補者名でなくエージェント会社名）(#96)
+          const sigAreaMulti = body.slice(-2000)
+          const preReMulti = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　\n（(、。！【】「」]{2,30})/g
+          let bestPreMulti: RegExpExecArray | null = null; let mMulti: RegExpExecArray | null
+          const afterMulti = (t: string, i: number, l: number) => /^[\r\n　 ]*(?:様|御中|ご担当|担当者様)/.test(t.slice(i + l, i + l + 40))
+          while ((mMulti = preReMulti.exec(sigAreaMulti)) !== null) { if (!afterMulti(sigAreaMulti, mMulti.index, mMulti[0].length)) bestPreMulti = mMulti }
+          const companyName = bestPreMulti ? sanitizeFromCompany(`${bestPreMulti[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${bestPreMulti[1]}`) : null
           const ownDomain = 'i-voice.co.jp'
           if (emailDomain && emailDomain !== ownDomain && !emailDomain.includes('gmail') && !emailDomain.includes('yahoo') && !emailDomain.includes('outlook') && !emailDomain.includes('demo.invalid')) {
             const { haken, shokai } = extractLicenseNumbers(body)
             const licenseStatus = haken && shokai ? 'both' : haken ? 'haken' : shokai ? 'shokai' : undefined
             const upsertPayload: Record<string, unknown> = { domain: emailDomain, source: 'email' }
+            if (companyName) upsertPayload.company_name = companyName
             if (haken) { upsertPayload.haken_number = haken; upsertPayload.verified_at = new Date().toISOString(); upsertPayload.verified_by = 'email' }
             if (shokai) { upsertPayload.shokai_number = shokai; upsertPayload.verified_at = new Date().toISOString(); upsertPayload.verified_by = 'email' }
             if (licenseStatus) upsertPayload.license_status = licenseStatus
