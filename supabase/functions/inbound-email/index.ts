@@ -3683,14 +3683,50 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
   }
   const count5 = Object.keys(sy5).filter(k => !k.startsWith('_')).length
 
+  // 方式6: 能力評価型（◎/○/△/☆形式のスキルシート）
+  // 例: "VBA ... 〇" → 12ヶ月（実務経験1年以上）、"事務 ... ◎" → 36ヶ月（3年以上）
+  const sy6: Record<string, number> = {}
+  {
+    const RATING_MARKS: Record<string, number> = { '◎': 36, '○': 12, '〇': 12, '△': 6, '▲': 6 }
+    const RATING_RE = /^[◎○〇△▲]$/
+    // ヘッダー行に「能力」が3回以上ある行 = 能力評価型スキルシート
+    const isRatingSheet = grid.some(row => row.filter(c => c === '能力').length >= 3)
+    if (isRatingSheet) {
+      const SKIP_CELLS = new Set(['能力', 'スキル', 'その他', '業務', '環境', '言語', 'ライブラリ', 'アピールポイント', '経歴', '資格', 'OS', 'DB', 'フリガナ', '氏名', '最寄駅', '最終学歴'])
+      for (const row of grid) {
+        for (let i = 0; i < row.length - 1; i++) {
+          const cell = row[i].trim()
+          if (!cell || RATING_RE.test(cell)) continue
+          if (cell.length > 25) continue
+          if (SKIP_CELLS.has(cell)) continue
+          if (/^[【≪\d（(]/.test(cell)) continue
+          // 後続セルにレーティングがある（途中は空白セルのみ）
+          for (let j = i + 1; j <= Math.min(i + 14, row.length - 1); j++) {
+            const nc = row[j].trim()
+            if (!nc) continue
+            if (RATING_RE.test(nc)) {
+              const months = RATING_MARKS[nc]
+              if (months) sy6[cell] = Math.max(sy6[cell] ?? 0, months)
+              break
+            } else {
+              break // 空白以外の非レーティングセル → 別ペアの開始
+            }
+          }
+        }
+      }
+    }
+  }
+  const count6 = Object.keys(sy6).filter(k => !k.startsWith('_')).length
+
   // 最も多く取れた方式を採用
   let best: Record<string, number> = {}
   let bestMethod = 'none'
-  if (count1 >= count2 && count1 >= count3 && count1 >= count4 && count1 >= count5 && count1 > 0) { best = sy1; bestMethod = 'column' }
-  else if (count2 >= count3 && count2 >= count4 && count2 >= count5 && count2 > 0)                 { best = sy2; bestMethod = 'array' }
-  else if (count5 >= count3 && count5 >= count4 && count5 > 0)                                      { best = sy5; bestMethod = 'career-sheet' }
-  else if (count4 >= count3 && count4 > 0)                                                          { best = sy4; bestMethod = 'word-narrative' }
-  else if (count3 > 0)                                                          { best = sy3; bestMethod = 'text' }
+  if (count1 >= count2 && count1 >= count3 && count1 >= count4 && count1 >= count5 && count1 >= count6 && count1 > 0) { best = sy1; bestMethod = 'column' }
+  else if (count2 >= count3 && count2 >= count4 && count2 >= count5 && count2 >= count6 && count2 > 0)                 { best = sy2; bestMethod = 'array' }
+  else if (count5 >= count3 && count5 >= count4 && count5 >= count6 && count5 > 0)                                      { best = sy5; bestMethod = 'career-sheet' }
+  else if (count6 >= count3 && count6 >= count4 && count6 > 0)                                                          { best = sy6; bestMethod = 'rating' }
+  else if (count4 >= count3 && count4 > 0)                                                                              { best = sy4; bestMethod = 'word-narrative' }
+  else if (count3 > 0)                                                                                                  { best = sy3; bestMethod = 'text' }
 
   if (bestMethod !== 'none') {
     const count = Object.keys(best).filter(k => !k.startsWith('_')).length

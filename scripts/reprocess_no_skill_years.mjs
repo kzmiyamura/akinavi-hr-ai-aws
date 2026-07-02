@@ -104,7 +104,10 @@ async function main() {
             : ext === 'docx' ? WORD_MIME
             : ext === 'doc' ? 'application/msword'
             : EXCEL_MIME
-          attachments = [{ data: fileBase64, mimeType: mime, name: `resume.${ext}` }]
+          // 候補者名をファイル名に含めることで matchAttachmentsToBlocks の名前マッチを通す
+          // （グループメール分割ケースで正しい候補者ブロックに添付が割り当てられる）
+          const safeName = (row.name ?? 'resume').replace(/[/\\:*?"<>|]/g, '_')
+          attachments = [{ data: fileBase64, mimeType: mime, name: `${safeName}_resume.${ext}` }]
         } else {
           console.log(`  WARN ${row.name} — ファイルダウンロード失敗、本文のみで再投入`)
         }
