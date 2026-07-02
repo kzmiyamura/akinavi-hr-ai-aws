@@ -1585,7 +1585,7 @@ function extractCandidateFieldsRegex(
       const c = v.replace(/（[^）]*）.*$/, '').trim()
       // セクション見出しと判定されるラベルは駅名として拒否（#58）
       if (/^(自己PR|PR|アピール|強み|備考|補足|資格|スキル|経験|氏名|年齢|性別|国籍|連絡先|住所|現住所|職歴|学歴|希望|稼働|単価|単金|ご担当|担当者|得意)/.test(c)) return false
-      return /[駅線]$/.test(c) || c.length <= 10
+      return /[駅線]$/.test(c) || (c.length <= 10 && /[^\x00-\x7F]/.test(c))
     },
     30,
     2,

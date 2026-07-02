@@ -389,7 +389,7 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   let nearestStation = extractFieldTwoPhase(
     ['最寄り?駅','最寄駅','最寄り?','沿線','通勤駅'],
     bodyText, attachText,
-    v => { const c = v.replace(/（[^）]*）.*$/, '').trim(); return /[駅線]$/.test(c) || c.length <= 10 },
+    v => { const c = v.replace(/（[^）]*）.*$/, '').trim(); return /[駅線]$/.test(c) || (c.length <= 10 && /[^\x00-\x7F]/.test(c)) },
     30, 2,
   )
   if (!nearestStation && bracketStation) nearestStation = bracketStation
