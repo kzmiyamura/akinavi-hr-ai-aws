@@ -513,12 +513,29 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   )
 
   let fromCompany = null
-  const sigArea = (bodyText + '\n' + attachText).slice(-1200)
+  const allBodyText2 = bodyText + '\n' + attachText
+  const sigArea = allBodyText2.slice(-2000)
   const mPre = sigArea.match(/(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)([\S]{2,20})/)
   if (mPre) fromCompany = sanitizeFromCompany(`${mPre[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${mPre[1]}`)
   if (!fromCompany) {
     const mPost = sigArea.match(/([\S]{2,20})(?:株式会社|有限会社|合同会社)/)
     if (mPost) fromCompany = sanitizeFromCompany(`${mPost[1]}${mPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
+  }
+  if (!fromCompany) {
+    const introArea = allBodyText2.slice(0, 600)
+    const introM = introArea.match(/\n([ァ-ヶーA-Za-z0-9&（）()．.]{2,20})の(?:[^\s　\n]{0,10})?(?:担当|営業|事業|部長|代表|スタッフ|コンサルタント|パートナー|アライアンス)/)
+    if (introM) {
+      const cand = introM[1].trim()
+      if (cand.length >= 2 && !/弊社|御社|各社|自社|貴社/.test(cand)) fromCompany = cand
+    }
+  }
+  if (!fromCompany) {
+    const subjectLine = allBodyText2.split('\n')[0]
+    const bracketM = subjectLine.match(/【([^】!！\/弊社]{2,20})】/)
+    if (bracketM) {
+      const cand = bracketM[1].trim().split(/[\s　]/)[0]
+      if (cand.length >= 2 && !/グループ|正社員|プロパ|常駐|可能|フリー|派遣|紹介|エンジニア|人材|要員|スキル|案件/.test(cand)) fromCompany = cand
+    }
   }
 
   return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }

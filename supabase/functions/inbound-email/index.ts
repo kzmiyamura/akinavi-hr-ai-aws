@@ -1806,6 +1806,30 @@ function extractCandidateFieldsRegex(
     if (bestPost) fromCompany = sanitizeFromCompany(`${bestPost[1]}${bestPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
   }
 
+  // ③ 本文冒頭の「XXXのXX担当です」パターン（法人格なしのカタカナ社名: フォスターネット等）
+  if (!fromCompany) {
+    const introArea = allBodyText.slice(0, 600)
+    const introM = introArea.match(/\n([ァ-ヶーA-Za-z0-9&（）()．.]{2,20})の(?:[^\s　\n]{0,10})?(?:担当|営業|事業|部長|代表|スタッフ|コンサルタント|パートナー|アライアンス)/)
+    if (introM) {
+      const cand = introM[1].trim()
+      if (cand.length >= 2 && !/弊社|御社|各社|自社|貴社/.test(cand)) {
+        fromCompany = cand
+      }
+    }
+  }
+
+  // ④ 件名の【会社名】パターン（例: 「のご紹介【フォスターネット】」「【サクヤ 保母】」）
+  if (!fromCompany) {
+    const subjectLine = allBodyText.split('\n')[0]
+    const bracketM = subjectLine.match(/【([^】!！\/弊社]{2,20})】/)
+    if (bracketM) {
+      const cand = bracketM[1].trim().split(/[\s　]/)[0] // スペース前が会社名（「サクヤ 保母」→「サクヤ」）
+      if (cand.length >= 2 && !/グループ|正社員|プロパ|常駐|可能|フリー|派遣|紹介|エンジニア|人材|要員|スキル|案件/.test(cand)) {
+        fromCompany = cand
+      }
+    }
+  }
+
   return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
 }
 
