@@ -5783,6 +5783,24 @@ Deno.serve(async (req: Request) => {
         console.log(`[multi-candidate] ${multiBlocks.length}人検出 from=${from} subject=${subject.slice(0, 80)}`)
         tracePhase = 'multi_candidate'
 
+        // グループメールの署名から送信元会社名を先に抽出（各ブロックのフォールバック用）
+        // ブロック分割後は各候補者の断片テキストのみになり署名が含まれないため
+        const multiBodyCompanyName: string | null = (() => {
+          const sig = body.slice(-2000)
+          const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　\n（(、。！【】「」]{2,30})/g
+          const afterSalutation = (t: string, i: number, l: number) => /^[\r\n　 ]*(?:様|御中|ご担当|担当者様)/.test(t.slice(i + l, i + l + 40))
+          // 署名エリアなので最初の非宛先マッチを使う（後続のカッコ内旧社名説明を拾わないように）
+          let m: RegExpExecArray | null
+          while ((m = PRE_RE.exec(sig)) !== null) {
+            if (afterSalutation(sig, m.index, m[0].length)) continue
+            const name = sanitizeFromCompany(`${m[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${m[1]}`)
+            // "から"/"変更" を含む場合は旧社名説明なのでスキップ
+            if (name && !/から|変更|になります/.test(name)) return name
+          }
+          return null
+        })()
+        if (multiBodyCompanyName) console.log(`[multi-candidate] 送信元会社名: ${multiBodyCompanyName}`)
+
         const attachmentNames = [
           ...allAttachments.map(a => a.name ?? ''),
           ...officeTextContents.map(t => t.label),
@@ -5986,7 +6004,8 @@ Deno.serve(async (req: Request) => {
               // ケースC: 名前取得失敗 → resumeUrl（フォールバック）
               resume_url: (matchedTextContent || !blockNameForMatch) ? resumeUrl : null,
               desired_rate: blockRegexFields.desiredRate ?? null,
-              from_company: sanitizeFromCompany(blockRegexFields.fromCompany),
+              // ブロック内に署名がない場合はメール全体の署名から抽出した会社名をフォールバック使用
+              from_company: sanitizeFromCompany(blockRegexFields.fromCompany) ?? multiBodyCompanyName,
             }
 
             // INSERT前に重複チェック（同一人物なら UPDATE してスキップ）
