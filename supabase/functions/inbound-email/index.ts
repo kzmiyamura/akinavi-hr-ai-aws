@@ -268,7 +268,7 @@ const SIGNATURE_START_RE = /(?:^|\n)[ 　]*(?:株式会社|有限会社|合同�
 
 function extractSectionsByLabels(text: string, labels: string[]): string | null {
   if (!text.trim()) return null
-  const prefix = '[【◆■●▼★◎※◇]?'
+  const prefix = '[【◆■●▼★◎※◇☆]?'
   const suffix = '[】：: 　\n]+'
   const labelPattern = labels.map(l => `(?:${prefix}${l}${suffix})`).join('|')
   const sectionRe = new RegExp(`(?:${labelPattern})([\\s\\S]{1,600})`, 'gi')
@@ -296,7 +296,7 @@ function extractSectionsByLabels(text: string, labels: string[]): string | null 
 function extractSelfPR(body: string, _attachText: string): string | null {
   // 'PR' 単体は短すぎてURL中・一般テキスト（PR会社等）に誤マッチするため除外
   return extractSectionsByLabels(body, [
-    '自己PR', 'アピールポイント', '特徴・強み', '強み', '紹介文',
+    '自己PR', 'アピールポイント', '特徴・強み', '強み', '紹介文', '本人PR',
   ])
 }
 
@@ -1513,6 +1513,9 @@ function extractCandidateFieldsRegex(
       name = name.substring(0, firstBracket).trim() || null
     }
   }
+  // ⑥ ☆フィールド区切り形式の残留を除去（例: "IA ☆最　寄：大村駅" → "IA"）
+  // 「☆名　前：IA ☆最　寄：駅名 ☆稼　働：...」のように全フィールドが1行に並ぶ書式対応
+  if (name) name = name.replace(/[ 　]*☆.*$/, '').trim() || null
 
   // ── イニシャルのみパターン フォールバック ─────────────────────
   // 「A.M」「K・S」「K.S（45歳/男性）」のようにラベルなしでイニシャルが記載されている場合
@@ -5514,6 +5517,11 @@ Deno.serve(async (req: Request) => {
         '下記案件を紹介させていただきたく',
         'ご対応いただける要員がいらっしゃいましたら',
         '案件紹介させていただきたく',
+        // 案件探しメール（要員を探している側が送るメール）
+        '下記案件にて要員を探しております',
+        '弊社に於きまして下記の案件がございます',
+        '下記の案件がございます。ご対応可能な方',
+        '弊社の案件にご対応いただける',
       ]
       // 営業・広告・メルマガメールのスキップ（研修販売・サービス紹介等）
       const COMMERCIAL_SOLICITATION_KEYWORDS = [
@@ -5552,6 +5560,18 @@ Deno.serve(async (req: Request) => {
         '日程調整のお願い', 'ご都合のよい日時', 'ご都合をお知らせ',
         '情報交換に伺わせていただ', '情報交換に伺わせてください',
         'ご挨拶に伺わせていただ', '弊社をご紹介させていただ',
+        // システム障害・業務連絡メール
+        'メールシステムに不具合が発生',
+        'メール送受信に影響が生じております',
+        // パスワード通知・添付ファイル分離通知
+        '添付ファイルダウンロードセンター',
+        '添付ファイル分離のお知らせ',
+        // フィッシング・詐欺メール
+        'メールアカウントは閉鎖予定',
+        // 研修・スクール案内メール
+        'オフィスの会議室が検証ラボに',
+        // 広告・サービス提案メール
+        '協業のご相談', '提携のご相談', '運用型広告',
       ]
       // 件名ベースのスキップキーワード（業務連絡・勤務表・発注書・打合せ等）
       const SUBJECT_SKIP_KEYWORDS = [

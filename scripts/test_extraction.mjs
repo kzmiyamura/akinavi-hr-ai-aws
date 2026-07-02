@@ -347,6 +347,9 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   }
   // ④ 名前末尾の孤立した括弧・区切り記号を除去（例:「国PF（」→「国PF」）
   if (name) name = name.replace(/[（(【,、\/／・\s　]+$/, '').trim() || null
+  // ⑥ ☆フィールド区切り形式の残留を除去（例: "IA ☆最　寄：大村駅" → "IA"）
+  // 「☆名　前：IA ☆最　寄：駅名 ☆稼　働：...」のように全フィールドが1行に並ぶ書式対応
+  if (name) name = name.replace(/[ 　]*☆.*$/, '').trim() || null
   if (!name) {
     const allTextForInitials = bodyText + '\n' + attachText
     const initialsPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Z][.．・,][A-Z])[ 　]?[（(](\d{2})[才歳][^)）]*[）)]/m
