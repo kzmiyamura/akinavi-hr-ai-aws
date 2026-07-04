@@ -324,15 +324,21 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
   }
   // 法人格の後ろに続く部署名・担当者名を除去
   // 例: 「株式会社GFDの本田でございます。」→「株式会社GFD」
-  //     「株式会社GFDビジネス推進本部の佐藤です。」→「株式会社GFD」
+  //     「株式会社GFDビジネス推進本部の佐藤です。」→「株式会社GFDビジネス推進本部」
+  // 「の」なし・漢字姓+丁寧表現: 「株式会社イチアール小島でございます」→「株式会社イチアール」
+  // ※ 法人格+会社名(2文字以上)の後に1〜4文字の漢字姓+丁寧表現が続くパターン
+  {
+    const politePersonM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人).{2,}?)[一-龯々]{1,4}(?:でございます|です|と申します|でした)/)
+    if (politePersonM) trimmed = politePersonM[1]
+  }
+  // 「の〇〇でございます」「の〇〇です」等が残っていれば除去（の付きのフォールバック）
+  trimmed = trimmed.replace(/の[^\s　]{1,15}(?:でございます|です|と申します|でした).*$/, '')
   // 前株パターン: 法人格 + 会社名（英語2単語名「Knowledge Technologies」にも対応）
   const preM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[^\sの　\n、。！（）【】「」]{2,30}(?:[ \t]+[A-Za-z][A-Za-z \t&.]{0,20})?)/)
   if (preM) { trimmed = preM[1].trim(); }
   // 後株パターン: 会社名 + 法人格 (以降を除去)
   const postM = trimmed.match(/^([^\sの　\n、。！（）【】「」]{2,20}(?:株式会社|有限会社|合同会社))/)
   if (postM) { trimmed = postM[1]; }
-  // 「の〇〇でございます」「の〇〇です」等が残っていれば除去
-  trimmed = trimmed.replace(/の[^\s　]{1,15}(?:でございます|です|と申します|でした).*$/, '')
   // 法人格のみ（識別名なし）は無効 — 例: 「株式会社の小川です」→「株式会社」→ null
   if (/^(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)$/.test(trimmed)) return null
   // 役職・肩書き略称がそのまま会社名になっているケースは無効
@@ -1132,7 +1138,8 @@ function extractFieldTwoPhase(
   }
 
   const rSameLine = (sep: string) =>
-    new RegExp(`(?:${esc})(?:（[^）]{1,20}）)?[　 ]?${sep}[　 ]?[：:]?[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
+    // (?:（...）|(...))? — 全角括弧（氏名（フリガナ））と半角括弧（氏名(ｲﾆｼｬﾙ)）の両方を許容
+    new RegExp(`(?:${esc})(?:[（(][^）)]{1,20}[）)])?[　 ]?${sep}[　 ]?[：:]?[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
 
   // ── Phase0: 本文ブロック絞り込み ──────────────────────────────
   // 空行2行以上でブロック分割し、ラベルを含む最初のブロック内で同行検索
@@ -2575,7 +2582,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
           if (spanMonths > 0) skillMonths['_dateSpanMonths'] = spanMonths
         }
       }
-      return skillMonths
+      return filterSkillYears(skillMonths)
     }
   }
   // ── Method 3: スキル一覧型（経験年数列が数値のみ） ──
@@ -2609,7 +2616,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
         const months = Math.round(yearsNum * 12)
         SM3[skillName] = Math.max(SM3[skillName] ?? 0, months)
       }
-      if (Object.keys(SM3).length > 0) return SM3
+      if (Object.keys(SM3).length > 0) return filterSkillYears(SM3)
     }
   }
 
@@ -2654,7 +2661,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       }
     }
   }
-  if (Object.keys(skillMonths2).length > 0) return skillMonths2
+  if (Object.keys(skillMonths2).length > 0) return filterSkillYears(skillMonths2)
 
   // ── 最終フォールバック: 日付の最小〜最大期間から総経験月数を算出 ──
   // シリアル日付（数値型）とテキスト日付（"2020/04"等）の両方を収集し、
@@ -3565,6 +3572,31 @@ function extractSkillYearsFromSheetJson(rows: Array<Record<string, string>>): Re
 }
 
 /**
+ * skillYears 抽出結果から非スキルエントリを除去するフィルター。
+ * 以下のようなエントリを除外する:
+ *   - セクションヘッダーラベル（言語/FW, OS／MW, クラウド, ライブラリ 等）
+ *   - 単価・金額表現（105万, 80万円 等）
+ *   - 業務・工程語（概要, 今年度, 業務経験年数 等）
+ *   - 過剰に長いキー（30文字超）
+ * 内部メタキー（_ プレフィックス）はそのまま保持。
+ */
+function filterSkillYears(sy: Record<string, number>): Record<string, number> {
+  // スキル名として不適切なヘッダーラベル・金額・業務語をフィルター
+  // 例: 「言語／FW」「OS／MW」「概要」「105万」等
+  const NON_SKILL_RE = /^(?:言語[/／・]?(?:FW|ツール|DB|技術|OS)?|OS[/／・]?M?W?|DB[/／・]?(?:DC|OS|MW)?|FW(?:[/／・]ツール)?|ライブラリ|クラウド(?:[/／・]NW)?|ツール(?:[/／・]技術)?|MW(?:[/／・]DB)?|NW(?:[/／・]クラウド)?|概要|今年度|業務経験(?:年数)?|業種|工程|フェーズ|役割|開発規模|使用言語|使用技術|技術スタック|開発環境|言語[・]FW|言語[/]技術|技術[/]環境)$/
+  const MONEY_RE = /\d+万(?:円)?|円$/
+  const result: Record<string, number> = {}
+  for (const [k, v] of Object.entries(sy)) {
+    if (k.startsWith('_')) { result[k] = v; continue }
+    if (k.length > 30) continue
+    if (NON_SKILL_RE.test(k.replace(/[　 ]/g, ''))) continue
+    if (MONEY_RE.test(k)) continue
+    result[k] = v
+  }
+  return result
+}
+
+/**
  * グリッド（2D 配列）からスキル別経験月数を統合抽出する。
  * Word・Excel 両形式に対応。3方式を試して最も取れた方を採用。
  *   方式1: 列名ベース（Excel スキル一覧型: 「経験年数」「使用言語」列を探す）
@@ -3738,7 +3770,7 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
     const count = Object.keys(best).filter(k => !k.startsWith('_')).length
     console.log(`[skillYears-unified] method=${bestMethod} count=${count}`)
   }
-  return best
+  return filterSkillYears(best)
 }
 
 /**
@@ -4559,7 +4591,7 @@ function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
   }
 
   console.log(`[skillYears-cells] projects=${blocks.length} skills=${Object.keys(skillMonths).filter(k => !k.startsWith('_')).length}`)
-  return skillMonths
+  return filterSkillYears(skillMonths)
 }
 
 /** スキル別経験月数を Excel ファイル（base64）から抽出 */

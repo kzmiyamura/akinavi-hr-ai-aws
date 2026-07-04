@@ -83,7 +83,7 @@ function extractFieldTwoPhase(labels, bodyText, attachText, validate, maxLen = 3
     return t
   }
   const rSameLine = (sep) =>
-    new RegExp(`(?:${esc})(?:（[^）]{1,20}）)?[　 ]?${sep}[　 ]?[：:]?[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
+    new RegExp(`(?:${esc})(?:[（(][^）)]{1,20}[）)])?[　 ]?${sep}[　 ]?[：:]?[　 ]?([^\\n,，]{1,${maxLen}})`, 'i')
   const bodyBlocks = normalBody.split(/\n{2,}/)
   if (bodyBlocks.length > 1) {
     const labelPresent = new RegExp(`(?:${esc})`, 'i')
@@ -192,8 +192,27 @@ function inferPrefectureFromStation(station) {
 
 function sanitizeFromCompany(s) {
   if (!s) return null
-  const cleaned = s.trim().replace(/[様御中殿]\s*$/, '').trim()
-  return cleaned.length >= 3 ? cleaned : null
+  let trimmed = s.trim()
+  if (!trimmed) return null
+  // 自社名は null に落とす
+  for (const own of ['アキナビ', 'AkiNavi', 'AKINAVI']) {
+    if (trimmed.toLowerCase().includes(own.toLowerCase())) return null
+  }
+  // 「の」なし・漢字姓+丁寧表現: 「株式会社イチアール小島でございます」→「株式会社イチアール」
+  {
+    const politePersonM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人).{2,}?)[一-龯々]{1,4}(?:でございます|です|と申します|でした)/)
+    if (politePersonM) trimmed = politePersonM[1]
+  }
+  // 「の〇〇でございます」等が残っていれば除去
+  trimmed = trimmed.replace(/の[^\s　]{1,15}(?:でございます|です|と申します|でした).*$/, '')
+  // 前株パターン
+  const preM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[^\sの　\n、。！（）【】「」]{2,30}(?:[ \t]+[A-Za-z][A-Za-z \t&.]{0,20})?)/)
+  if (preM) { trimmed = preM[1].trim() }
+  // 後株パターン
+  const postM = trimmed.match(/^([^\sの　\n、。！（）【】「」]{2,20}(?:株式会社|有限会社|合同会社))/)
+  if (postM) { trimmed = postM[1] }
+  if (/^(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)$/.test(trimmed)) return null
+  return trimmed.length >= 3 ? trimmed : null
 }
 
 function extractCandidateFieldsRegex(bodyText, attachText) {
