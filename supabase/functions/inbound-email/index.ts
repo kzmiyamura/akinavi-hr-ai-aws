@@ -2527,6 +2527,16 @@ function parseDurationToMonths(text: string): number | null {
     months += y * 12
   }
   if (monthMatch) months += parseInt(monthMatch[1])
+  if (months > 0) return months
+  // 漢数字・書き言葉の月数対応（O.Y型: 「六ヶ月」「一年九ヶ月」「二年六ヶ月」）
+  const KANJI_NUM: Record<string, number> = {
+    '零': 0, '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6,
+    '七': 7, '八': 8, '九': 9, '十': 10, '十一': 11, '十二': 12,
+  }
+  const kanjiYear = t.match(/([一二三四五六七八九十]+)\s*年/)
+  const kanjiMonth = t.match(/([一二三四五六七八九十]+)\s*[ヶかカ]月/)
+  if (kanjiYear && KANJI_NUM[kanjiYear[1]] !== undefined) months += KANJI_NUM[kanjiYear[1]] * 12
+  if (kanjiMonth && KANJI_NUM[kanjiMonth[1]] !== undefined) months += KANJI_NUM[kanjiMonth[1]]
   return months > 0 ? months : null
 }
 
@@ -2550,8 +2560,11 @@ function calcMonthsFromMultilineCell(cellValue: string): number | null {
 /** "2025/06" と "2026/03" のような開始・終了年月から月数を計算（Excelシリアル日付も対応） */
 function calcMonthsFromDates(start: string, end: string): number | null {
   const parseYM = (s: string) => {
-    const normalized = excelSerialToDateStr(s.trim())
-    const m = normalized.match(/(\d{2,4})[\/\-年](\d{1,2})/)
+    // 元号プレフィックス（g=Gregorian表記・昭和/平成/令和アルファベット）を除去
+    const cleaned = s.trim().replace(/^[gGhHrRsS]/, '')
+    const normalized = excelSerialToDateStr(cleaned)
+    // "/" "-" "年" に加えて "." も区切り文字として許容（例: "1991.10"）
+    const m = normalized.match(/(\d{2,4})[\/\-年.](\d{1,2})/)
     if (!m) return null
     let year = parseInt(m[1])
     if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
@@ -2599,6 +2612,9 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   let langColIdx = -1
   let fwColIdx = -1
   let headerRowIdx = -1
+  let durationColIdx = -1  // 「作業月数」等の純整数の月数列
+  let startDateColIdx = -1
+  let endDateColIdx = -1
   for (let i = 0; i < Math.min(60, data.length); i++) {
     const row = data[i]
     for (let j = 0; j < row.length; j++) {
@@ -2610,6 +2626,11 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
            || (v.includes('言語') && (v.includes('FW') || v.includes('ツール') || v.includes('技術')))
          ) && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
       if ((v.includes('FW') || v.includes('ツール') || v.includes('フレームワーク') || v.includes('ミドル')) && fwColIdx < 0 && j !== langColIdx) fwColIdx = j
+      // 純整数の月数列を検出（「作業月数」「月数」「期間（月）」等）
+      if (/^作業月数$|^月数$|^期間[\(（]月/.test(v) && durationColIdx < 0) durationColIdx = j
+      // 開始・終了日付列
+      if (/^開始年月$|^開始$/.test(v) && startDateColIdx < 0) startDateColIdx = j
+      if (/^終了年月$|^終了$/.test(v) && endDateColIdx < 0) endDateColIdx = j
     }
     if (langColIdx >= 0) break
   }
@@ -2625,14 +2646,28 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       const fwCell = fwColIdx >= 0 ? String(row[fwColIdx] ?? '').trim() : ''
       // 期間は次の行の "10年9ヶ月" テキストから取得（最大3行後まで・col[1]とcol[2]を確認）
       let months: number | null = null
-      for (let di = 1; di <= 3 && !months; di++) {
-        if (i + di < data.length) {
-          months = parseDurationToMonths(String(data[i + di][1] ?? ''))
-               ?? parseDurationToMonths(String(data[i + di][2] ?? ''))
+      // ★ 作業月数列（純整数）が検出済みの場合は優先使用
+      if (durationColIdx >= 0) {
+        const durRaw = String(row[durationColIdx] ?? '').trim()
+        const durNum = parseInt(durRaw, 10)
+        if (!isNaN(durNum) && durNum > 0 && durNum <= 600 && String(durNum) === durRaw) {
+          months = durNum
+        }
+      }
+      if (!months) {
+        for (let di = 1; di <= 3 && !months; di++) {
+          if (i + di < data.length) {
+            months = parseDurationToMonths(String(data[i + di][1] ?? ''))
+                 ?? parseDurationToMonths(String(data[i + di][2] ?? ''))
+          }
         }
       }
       // col[1] に "2025年3月\n～\n2026年2月" 形式で開始〜終了が入っている場合
       if (!months) months = calcMonthsFromMultilineCell(String(row[1] ?? ''))
+      // 明示的な開始・終了列がある場合
+      if (!months && startDateColIdx >= 0 && endDateColIdx >= 0) {
+        months = calcMonthsFromDates(String(row[startDateColIdx] ?? ''), String(row[endDateColIdx] ?? ''))
+      }
       // col[1]/col[3] が別々の日付の場合（またはExcelシリアル日付）
       if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), String(row[3] ?? ''))
       if (!months || months <= 0) continue
@@ -2774,8 +2809,9 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       return d.getUTCFullYear() * 12 + d.getUTCMonth()
     }
 
-    // テキスト日付パターン: "2020/04" "2020-04" "2020年4月" "2020年4"
-    const TEXT_DATE_RE = /(?<!\d)(\d{4})[\/\-年](\d{1,2})(?:[月]|(?!\d))/
+    // テキスト日付パターン: "2020/04" "2020-04" "2020.04" "2020年4月" "2020年4"
+    // g1991.10 のような元号プレフィックスも許容（g を除去）
+    const TEXT_DATE_RE = /(?<![g\d])([gGhHrR]?\d{4})[\/\-年.](\d{1,2})(?:[月]|(?!\d))/
 
     for (const row of data) {
       for (const cell of row) {
@@ -2786,10 +2822,10 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
           ymValues.push(serialToYM(num))
           continue
         }
-        // テキスト日付
+        // テキスト日付（g/h/r/s プレフィックスを除去してから年数をパース）
         const tm = String(raw).match(TEXT_DATE_RE)
         if (tm) {
-          const y = parseInt(tm[1]), mo = parseInt(tm[2])
+          const y = parseInt(tm[1].replace(/^[gGhHrRsS]/, ''), 10), mo = parseInt(tm[2])
           if (y >= 1990 && y <= 2035 && mo >= 1 && mo <= 12) {
             ymValues.push(y * 12 + mo)
           }
