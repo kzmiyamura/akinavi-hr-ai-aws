@@ -26,6 +26,7 @@ const EDGE_URL     = `${SUPABASE_URL}/functions/v1`
 const supabase     = createClient(SUPABASE_URL, ANON_KEY)
 
 const DRY_RUN     = process.argv.includes('--dry-run')
+const ALL_RECORDS = process.argv.includes('--all')  // skillYears フィルタをスキップして全件再解析
 const _daysIdx = process.argv.indexOf('--days')
 const _limitIdx = process.argv.indexOf('--limit')
 const _concIdx = process.argv.indexOf('--concurrency')
@@ -37,7 +38,7 @@ const EXCEL_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.
 const WORD_MIME  = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 
 async function main() {
-  console.log(`=== reprocess_no_skill_years ${DRY_RUN ? '[DRY-RUN]' : ''} days=${DAYS} limit=${LIMIT} ===`)
+  console.log(`=== reprocess_no_skill_years ${DRY_RUN ? '[DRY-RUN]' : ''}${ALL_RECORDS ? ' [ALL]' : ''} days=${DAYS} limit=${LIMIT} ===`)
 
   const since = new Date(Date.now() - DAYS * 86400 * 1000).toISOString()
 
@@ -51,12 +52,14 @@ async function main() {
 
   if (error) { console.error('取得失敗:', error.message); process.exit(1) }
 
-  // skillYears が空のもののみ対象
-  const rows = (all ?? []).filter(r => {
-    const sy = r.raw_profile?.skillYears ?? {}
-    const realKeys = Object.keys(sy).filter(k => !k.startsWith('_'))
-    return realKeys.length === 0
-  })
+  // --all 指定時は全件、それ以外は skillYears が空のもののみ対象
+  const rows = ALL_RECORDS
+    ? (all ?? [])
+    : (all ?? []).filter(r => {
+        const sy = r.raw_profile?.skillYears ?? {}
+        const realKeys = Object.keys(sy).filter(k => !k.startsWith('_'))
+        return realKeys.length === 0
+      })
 
   if (rows.length === 0) { console.log('対象者なし。終了。'); return }
   console.log(`対象: ${rows.length} 件\n`)
