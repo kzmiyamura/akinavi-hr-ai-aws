@@ -553,6 +553,50 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
     }
   }
 
+  // パターン7: 「参画期間: YYYY年M月 〜 YYYY年M月」+ 近傍の「使用技術: スキル1/スキル2」
+  // Word職務経歴書のプレーンテキスト形式（表なし）に対応
+  // 行単位で「参画期間」ラベル + 日付範囲を探し、前後10行の「使用技術」行からスキルを取得
+  {
+    const lines = text.split(/\n/)
+    const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
+    const parseYMBody = (s: string): number | null => {
+      const m3 = s.match(/(\d{4})年(\d{1,2})月/)
+      if (m3) return parseInt(m3[1]) * 12 + parseInt(m3[2])
+      const m4 = s.match(/(\d{4})[\/\-.](\d{1,2})/)
+      if (m4) return parseInt(m4[1]) * 12 + parseInt(m4[2])
+      if (/現在|今|継続|在籍中/i.test(s)) return nowYM
+      return null
+    }
+    const PERIOD_LABEL = /^(参画期間|在籍期間|稼働期間|作業期間|プロジェクト期間|PJ期間|期間)[：:]/
+    const SKILL_LABEL = /^(使用技術|使用言語|技術スタック|技術環境|開発環境|使用環境|言語|環境|スキル)[・・（(]?[^：:]*[：:]\s*(.+)/
+    for (let li = 0; li < lines.length; li++) {
+      const line = lines[li].trim()
+      if (!PERIOD_LABEL.test(line)) continue
+      // 期間を解析
+      const periodStr = line.replace(PERIOD_LABEL, '').trim()
+      const rangeM = periodStr.match(/(.+?)\s*[〜～~\-－]+\s*(.+)/)
+      if (!rangeM) continue
+      const startYM = parseYMBody(rangeM[1])
+      const endYM = parseYMBody(rangeM[2])
+      if (!startYM || !endYM) continue
+      const months = endYM - startYM + 1
+      if (months <= 0 || months > 600) continue
+      // 前後10行で使用技術行を探す
+      for (let di = -2; di <= 10; di++) {
+        const sline = lines[li + di]?.trim() ?? ''
+        const sm = sline.match(SKILL_LABEL)
+        if (!sm) continue
+        const skillStr = sm[2] ?? ''
+        const skills = skillStr.split(/[\s\/／、，,・]+/).map(s => s.replace(/[（(][^）)]*[）)]/g, '').trim()).filter(s => s.length >= 2 && s.length <= 40 && !/^\d+$/.test(s))
+        for (const skill of skills) {
+          if (!isNonSkill(skill)) {
+            result[skill] = (result[skill] ?? 0) + months
+          }
+        }
+      }
+    }
+  }
+
   if (Object.keys(result).length > 0) {
     console.log(`[skillYears-body] count=${Object.keys(result).length} keys=${Object.keys(result).join(',')}`)
   }
@@ -2575,10 +2619,20 @@ function calcMonthsFromDates(start: string, end: string): number | null {
     const normalized = excelSerialToDateStr(cleaned)
     // "/" "-" "年" に加えて "." も区切り文字として許容（例: "1991.10"）
     const m = normalized.match(/(\d{2,4})[\/\-年.](\d{1,2})/)
-    if (!m) return null
-    let year = parseInt(m[1])
-    if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
-    return { year, month: parseInt(m[2]) }
+    if (m) {
+      let year = parseInt(m[1])
+      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+      if (year >= 1970 && year <= 2100) return { year, month: parseInt(m[2]) }
+    }
+    // US 日付形式 M/D/YY or M/D/YYYY（Excel が日付セルを M/D/YY で出力するケース）
+    const usm = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+    if (usm) {
+      const month = parseInt(usm[1])
+      let year = parseInt(usm[3])
+      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+      if (month >= 1 && month <= 12 && year >= 1970 && year <= 2100) return { year, month }
+    }
+    return null
   }
   const s = parseYM(start)
   const e = parseYM(end)
@@ -2625,6 +2679,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   let durationColIdx = -1  // 「作業月数」等の純整数の月数列
   let startDateColIdx = -1
   let endDateColIdx = -1
+  let noColIdx = -1  // 行番号列（通常 col[0] だが "No." ヘッダーが別列にある場合）
   for (let i = 0; i < Math.min(60, data.length); i++) {
     const row = data[i]
     for (let j = 0; j < row.length; j++) {
@@ -2632,15 +2687,21 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       const v = String(row[j] ?? '').split(/[\r\n]/)[0].trim()
       if ((v.includes('使用言語') || v === '言語' || v.includes('使用技術') || v.includes('技術スタック') || v === '技術' || v === '言語/技術'
            || v.includes('開発言語')  // "OS・DB・開発言語" 等の複合ヘッダー対応
-           // 複合列ヘッダー対応: "言語　FW" / "言語/FW" / "言語・FW" / "言語 ツール" 等
-           || (v.includes('言語') && (v.includes('FW') || v.includes('ツール') || v.includes('技術')))
+           // 複合列ヘッダー対応: "言語　FW" / "言語/FW" / "言語・FW" / "言語 ツール" / "言語/DB" 等
+           || (v.includes('言語') && (v.includes('FW') || v.includes('ツール') || v.includes('技術') || v.includes('DB') || v.includes('OS')))
+           // "利用技術" / "機種/OS/DB等" / "OS/言語/DB" 等のヘッダー
+           || v.includes('利用技術') || /機種.*OS|OS.*言語|言語.*DB|言語.*OS/i.test(v)
          ) && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
       if ((v.includes('FW') || v.includes('ツール') || v.includes('フレームワーク') || v.includes('ミドル')) && fwColIdx < 0 && j !== langColIdx) fwColIdx = j
-      // 純整数の月数列を検出（「作業月数」「月数」「期間（月）」等）
-      if (/^作業月数$|^月数$|^期間[\(（]月/.test(v) && durationColIdx < 0) durationColIdx = j
+      // 純整数の月数列を検出（「作業月数」「月数」「期間（月）」「期間」等）
+      if (/^作業月数$|^月数$|^期間[\(（]月|^期間$/.test(v) && durationColIdx < 0) durationColIdx = j
+      // 作業期間列（"2017.04 ～ 2019.12" 形式の日付範囲を含む列）→ periodRangeColIdx として別途管理
+      if (/^作業期間$|^稼働期間$|^プロジェクト期間$|^PJ期間$|^参画期間$|^在籍期間$/.test(v) && durationColIdx < 0) durationColIdx = j
       // 開始・終了日付列
       if (/^開始年月$|^開始$/.test(v) && startDateColIdx < 0) startDateColIdx = j
       if (/^終了年月$|^終了$/.test(v) && endDateColIdx < 0) endDateColIdx = j
+      // 行番号列（"No." "No" "№" 等）
+      if (/^(No\.?|No|№|番号|項目番号)$/i.test(v) && noColIdx < 0) noColIdx = j
     }
     if (langColIdx >= 0) break
   }
@@ -2648,20 +2709,59 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
     const skillMonths: Record<string, number> = {}
     // プロジェクト期間の重複なし合計（経験年数推定用）
     const projectPeriods: Array<{ start: string; end: string; months: number }> = []
+    let prevProcessedNo = ''  // マージセル重複スキップ用
     for (let i = headerRowIdx + 1; i < data.length; i++) {
       const row = data[i]
       const noCell = String(row[0] ?? '').trim().replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-      if (!noCell || !/^\d+$/.test(noCell)) continue
+      // 通常: col[0] が行番号（数字）かどうか。
+      // 例外1: 開始年月列が col[0] の場合（「開始年月」ヘッダーが検出済み）は日付でもOK
+      // 例外2: "No." 列が col[0] 以外にある場合（noColIdx > 0）は該当列の値を確認
+      const altNoCell = noColIdx > 0 ? String(row[noColIdx] ?? '').trim().replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)) : ''
+      const isDataRow = /^\d+$/.test(noCell) ||
+        (startDateColIdx === 0 && /\d/.test(noCell)) || // 開始日付が col[0] の場合
+        (noColIdx > 0 && /^\d+$/.test(altNoCell)) // "No." 列が別にある場合
+      const effectiveNoCell = noCell || altNoCell
+      if (!effectiveNoCell || !isDataRow) continue
+      // マージセルで同じ行番号が複数行に展開されている場合の重複スキップ
+      // （A.I型: No.列が2,3列ともに"1"として展開される）
+      if (noColIdx > 0 && altNoCell === prevProcessedNo) continue
+      prevProcessedNo = altNoCell || noCell
       const langCell = String(row[langColIdx] ?? '').trim()
       const fwCell = fwColIdx >= 0 ? String(row[fwColIdx] ?? '').trim() : ''
       // 期間は次の行の "10年9ヶ月" テキストから取得（最大3行後まで・col[1]とcol[2]を確認）
       let months: number | null = null
-      // ★ 作業月数列（純整数）が検出済みの場合は優先使用
+      // ★ 作業月数列（純整数 or 日付範囲）が検出済みの場合は優先使用
       if (durationColIdx >= 0) {
         const durRaw = String(row[durationColIdx] ?? '').trim()
         const durNum = parseInt(durRaw, 10)
         if (!isNaN(durNum) && durNum > 0 && durNum <= 600 && String(durNum) === durRaw) {
           months = durNum
+        }
+        // 期間列が日付範囲 "2017.04 ～ 2019.12" / "2020/04〜2023/03" 形式の場合
+        if (!months) {
+          // マルチライン（"2017.04\n～\n2019.12"）にも対応
+          months = calcMonthsFromMultilineCell(durRaw)
+          if (!months) {
+            const rangeM = durRaw.match(/(.+?)\s*[〜～~\-－]+\s*(.+)/)
+            if (rangeM) {
+              const endVal = /現在|今|present|継続/i.test(rangeM[2]) ? new Date().getFullYear() + '/' + (new Date().getMonth() + 1) : rangeM[2]
+              months = calcMonthsFromDates(rangeM[1], endVal)
+            }
+          }
+          // parseDuration も試す（"1年6ヶ月" 等）
+          if (!months) months = parseDurationToMonths(durRaw)
+        }
+        // durationColIdx列が日付(>600)でmonthsがまだ未取得の場合、隣接列の純整数を月数として試用
+        if (!months) {
+          for (let adj = 1; adj <= 8 && !months; adj++) {
+            const adjIdx = durationColIdx + adj
+            if (adjIdx >= row.length) break
+            const adjRaw = String(row[adjIdx] ?? '').trim()
+            const adjNum = parseInt(adjRaw, 10)
+            if (!isNaN(adjNum) && adjNum > 0 && adjNum <= 600 && String(adjNum) === adjRaw) {
+              months = adjNum
+            }
+          }
         }
       }
       if (!months) {
@@ -2674,12 +2774,45 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       }
       // col[1] に "2025年3月\n～\n2026年2月" 形式で開始〜終了が入っている場合
       if (!months) months = calcMonthsFromMultilineCell(String(row[1] ?? ''))
+      // col[1] が日付範囲 "2017.04 ～ 2019.12" の場合（単一セル）
+      if (!months) {
+        const col1 = String(row[1] ?? '').trim()
+        const rangeM1 = col1.match(/(.+?)\s*[〜～~\-－]+\s*(.+)/)
+        if (rangeM1) {
+          const endVal1 = /現在|今|present|継続/i.test(rangeM1[2]) ? new Date().getFullYear() + '/' + (new Date().getMonth() + 1) : rangeM1[2]
+          months = calcMonthsFromDates(rangeM1[1], endVal1)
+        }
+      }
       // 明示的な開始・終了列がある場合
       if (!months && startDateColIdx >= 0 && endDateColIdx >= 0) {
         months = calcMonthsFromDates(String(row[startDateColIdx] ?? ''), String(row[endDateColIdx] ?? ''))
       }
+      // col[1]/col[2] が開始・終了日付（M/D/YY形式 等）の場合
+      if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), String(row[2] ?? ''))
       // col[1]/col[3] が別々の日付の場合（またはExcelシリアル日付）
       if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), String(row[3] ?? ''))
+      // ペア行型: 次行の col[0] or col[1] が "～" で始まる場合、次行の col[1] or col[2] が終了日 (SH型・K.U型)
+      if (!months && i + 1 < data.length) {
+        const nextRow = data[i + 1]
+        const nextCol0 = String(nextRow[0] ?? '').trim()
+        const nextCol1 = String(nextRow[1] ?? '').trim()
+        const nextCol2 = String(nextRow[2] ?? '').trim()
+        if (/^[〜～~]/.test(nextCol0)) {
+          // K.U型: nextRow[0]="～1996.3" or nextRow[0]="～", nextRow[1]="38657"
+          const endDate = nextCol0.replace(/^[〜～~：:]+/, '').trim()
+          if (endDate) months = calcMonthsFromDates(String(row[1] ?? ''), endDate)
+          if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), nextCol1)
+          if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), nextCol2)
+        } else if (/^[〜～~]/.test(nextCol1)) {
+          // SH型: nextRow[1]="～", nextRow[2]=endSerial
+          if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), nextCol2)
+        }
+        // K.U型2: nextRow[1] が "～YYYY.M" 形式
+        if (!months && /^[〜～~]/.test(nextCol1)) {
+          const endDate2 = nextCol1.replace(/^[〜～~：:]+/, '').trim()
+          if (endDate2) months = calcMonthsFromDates(String(row[1] ?? ''), endDate2)
+        }
+      }
       if (!months || months <= 0) continue
       projectPeriods.push({ start: String(row[1] ?? ''), end: String(row[3] ?? ''), months })
       const skillTexts = (langCell + '\n' + fwCell).split(/[\n\r、，,]+/).map(s => s.trim())
@@ -2713,6 +2846,92 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
         }
       }
       return filterSkillYears(skillMonths)
+    }
+  }
+  // ── Method 1.5: 項番ブロック型（KITAGAWA型）──
+  // 「項番」が col[0] に出現し、各プロジェクトが複数行ブロックで記述されるパターン
+  // 構造: 項番行 → 開始日行 → ～行 → 終了日行 → (N ） 行（月数）
+  {
+    const hasKoban = data.some(row => String(row[0] ?? '').trim() === '項番')
+    if (hasKoban) {
+      const SM15: Record<string, number> = {}
+      let langColIdx15 = -1
+      // lang列を検出: 項番行の直前にある「業務経歴」セクションヘッダー行で「言語」ヘッダーを探す
+      // col[0]="言語" はスキルマトリクスの行ラベルなのでj>=1のものを優先
+      const firstKobanRow = data.findIndex(row => String(row[0] ?? '').trim() === '項番')
+      for (let i = Math.max(0, firstKobanRow - 5); i < firstKobanRow; i++) {
+        for (let j = 1; j < data[i].length; j++) {
+          const v = String(data[i][j] ?? '').split(/[\r\n]/)[0].trim()
+          if ((v === '言語' || v.includes('使用言語') || v === '技術' || v === '言語/技術'
+            || (v.includes('言語') && (v.includes('FW') || v.includes('DB') || v.includes('OS')))) && langColIdx15 < 0) {
+            langColIdx15 = j
+          }
+        }
+      }
+      // セクションヘッダー行が見つからない場合は全体スキャン（j>=2のみ対象）
+      if (langColIdx15 < 0) {
+        for (let i = 0; i < Math.min(firstKobanRow < 0 ? 60 : firstKobanRow + 1, data.length); i++) {
+          for (let j = 2; j < data[i].length; j++) {
+            const v = String(data[i][j] ?? '').split(/[\r\n]/)[0].trim()
+            if ((v === '言語' || v.includes('使用言語')
+              || (v.includes('言語') && (v.includes('FW') || v.includes('DB') || v.includes('OS')))) && langColIdx15 < 0) {
+              langColIdx15 = j
+            }
+          }
+        }
+      }
+      for (let i = 0; i < data.length; i++) {
+        const col0 = String(data[i][0] ?? '').trim()
+        if (col0 !== '項番') continue
+        // 次のブロック：当行および直後数行から開始日・終了日・月数・lang を取得
+        let startDate = '', endDate = '', blockMonths: number | null = null
+        const blockLang: string[] = []
+        let inTilde = false
+        // 項番行自体（di=0）から lang を取得（KITAGAWA型: lang が項番行と同じ行の結合セルに存在）
+        if (langColIdx15 >= 0) {
+          const lv0 = String(data[i][langColIdx15] ?? '').trim()
+          if (lv0 && lv0 !== '-' && lv0 !== '－') blockLang.push(...lv0.split(/[\r\n、，,]+/).map(s => s.trim()).filter(s => s))
+        }
+        for (let di = 1; di <= 15 && i + di < data.length; di++) {
+          const nrow = data[i + di]
+          const nc0 = String(nrow[0] ?? '').trim()
+          const nc1 = String(nrow[1] ?? '').trim()
+          // 開始日（Excelシリアル or 日付形式 "4/1/06" / "2006/4" / "2006.4" 等）
+          const isDateVal = (s: string) => /^\d{4,6}$/.test(s) || /^\d{1,4}[\/\-．年.]\d{1,2}/.test(s)
+          if (!startDate && isDateVal(nc0)) startDate = nc0
+          // ～ 行（"～" 単独または "〜"）
+          if (/^[〜～~]$/.test(nc0)) { inTilde = true }
+          // 終了日
+          if (inTilde && !endDate && isDateVal(nc0) && nc0 !== startDate) endDate = nc0
+          // (N ）形式の月数 → col[0]="(" col[1]="48" or "48 ヶ月"
+          if (nc0 === '(') {
+            const mNum = parseInt(nc1)
+            if (!isNaN(mNum) && mNum > 0 && mNum <= 600) blockMonths = mNum
+          }
+          // lang列（マージセルで空になっている行は skip）
+          if (langColIdx15 >= 0) {
+            const lv = String(nrow[langColIdx15] ?? '').trim()
+            if (lv && lv !== '-' && lv !== '－') blockLang.push(...lv.split(/[\r\n、，,]+/).map(s => s.trim()).filter(s => s))
+          }
+          // 次の「項番」行が来たら終了
+          if (di > 1 && nc0 === '項番') break
+        }
+        if (!blockMonths && startDate && endDate) {
+          blockMonths = calcMonthsFromDates(startDate, endDate)
+        }
+        if (!blockMonths || blockMonths <= 0) continue
+        // 重複排除（マージセルにより同じスキルが複数行に現れるため）
+        const uniqueSkills = [...new Set(blockLang)]
+        for (const skill of uniqueSkills) {
+          if (skill && skill.length >= 2 && !/^\d+$/.test(skill)) {
+            SM15[skill] = (SM15[skill] ?? 0) + blockMonths
+          }
+        }
+      }
+      if (Object.keys(SM15).filter(k => !k.startsWith('_')).length > 0) {
+        if (headerTotalMonths && !SM15['_totalProjectMonths']) SM15['_totalProjectMonths'] = headerTotalMonths
+        return filterSkillYears(SM15)
+      }
     }
   }
   // ── Method 3: スキル一覧型（経験年数列が数値のみ） ──
@@ -2994,10 +3213,28 @@ function gridToFieldText(grid: string[][], maxChars = 6000): string {
 
 /** 2D グリッド → ヘッダー付き JSON 行配列（後方互換・extractSkillYearsUnified 内部から呼ばれる） */
 function gridToJsonRows(grid: string[][]): Array<Record<string, string>> {
-  const headerIdx = grid.findIndex(row => {
+  // 優先: プロジェクト表のヘッダー行（期間 / 開始 / 終了 / 言語 / OS / DB / FW を含む行）
+  const PROJECT_HDR = /^(期間|プロジェクト期間|PJ期間|参画期間|在籍期間|作業期間|稼働期間|開始|開始年月|終了|終了年月|FROM|TO|使用言語|使用技術|言語|OS|DB|FW|ツール|フレームワーク|ミドル|作業月数|月数)$/i
+  let headerIdx = -1
+  // スコア最大のヘッダー候補行を選択（プロジェクト表ヘッダーを個人情報行より優先）
+  let bestScore = -1
+  for (let i = 0; i < Math.min(80, grid.length); i++) {
+    const row = grid[i]
     const nonEmpty = row.map(v => v?.trim()).filter(v => v)
-    return nonEmpty.length >= 2 && new Set(nonEmpty).size >= 2
-  })
+    if (nonEmpty.length < 2 || new Set(nonEmpty).size < 2) continue
+    // プロジェクト表ヘッダースコア: PROJECT_HDR に一致するセル数
+    const score = nonEmpty.filter(v => PROJECT_HDR.test(v.replace(/[\s　]+/g, ''))).length
+    if (score > bestScore) { bestScore = score; headerIdx = i }
+    // スコアが高い行が見つかったら早期終了（スコア≥2で十分）
+    if (score >= 2) break
+  }
+  // フォールバック: 最初の2+ユニーク非空行
+  if (headerIdx < 0) {
+    headerIdx = grid.findIndex(row => {
+      const nonEmpty = row.map(v => v?.trim()).filter(v => v)
+      return nonEmpty.length >= 2 && new Set(nonEmpty).size >= 2
+    })
+  }
   if (headerIdx < 0) return []
   const headers = grid[headerIdx]
   const result: Array<Record<string, string>> = []
@@ -3638,6 +3875,13 @@ function extractSkillYearsFromSheetJson(rows: Array<Record<string, string>>): Re
   const endCol      = headers.find(h => END_COL.test(normalizeHeader(h)))
   const durationCol = headers.find(h => DURATION_COL.test(normalizeHeader(h)))
   const skillCols   = headers.filter(h => SKILL_COL.test(normalizeHeader(h)))
+  // 「期間」列が純整数値（月数）を持つかチェック（H.I 型: 「期間: 22」「期間: 6」等）
+  const rawPeriodColName = headers.find(h => normalizeHeader(h) === '期間')
+  const rawPeriodIsIntMonths = rawPeriodColName && rows.some(r => {
+    const v = String(r[rawPeriodColName] ?? '').trim()
+    const n = parseInt(v, 10)
+    return !isNaN(n) && n > 0 && n <= 600 && String(n) === v
+  })
 
   if (skillCols.length === 0) return {}
 
@@ -3646,11 +3890,19 @@ function extractSkillYearsFromSheetJson(rows: Array<Record<string, string>>): Re
   const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
 
   const parseYM = (s: string): number | null => {
-    const m = s.match(/(\d{2,4})[\/\-年](\d{1,2})/)
+    const m = s.match(/(\d{2,4})[\/\-年.](\d{1,2})/)
     if (m) {
       let year = parseInt(m[1])
       if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
-      return year * 12 + parseInt(m[2])
+      if (year >= 1970 && year <= 2100) return year * 12 + parseInt(m[2])
+    }
+    // US 日付形式 M/D/YY or M/D/YYYY
+    const usm = s.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+    if (usm) {
+      const month = parseInt(usm[1])
+      let year = parseInt(usm[3])
+      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+      if (month >= 1 && month <= 12 && year >= 1970 && year <= 2100) return year * 12 + month
     }
     return null
   }
@@ -3664,8 +3916,14 @@ function extractSkillYearsFromSheetJson(rows: Array<Record<string, string>>): Re
     let startYM: number | null = null
     let endYM: number | null = null
 
-    // 優先1: 月数列
+    // 優先1: 月数列（「作業月数」「月数」等の明示的な月数列）
     if (durationCol) months = parseDurationToMonths(row[durationCol] ?? '')
+    // 優先1b: 「期間」列が純整数月数の場合
+    if (!months && rawPeriodIsIntMonths && rawPeriodColName) {
+      const v = String(row[rawPeriodColName] ?? '').trim()
+      const n = parseInt(v, 10)
+      if (!isNaN(n) && n > 0 && n <= 600 && String(n) === v) months = n
+    }
 
     // 優先2: 期間列（"2020/04〜2023/03" 形式）
     if (!months && periodCol && row[periodCol]) {

@@ -677,6 +677,46 @@ function extractSkillYearsFromBodyText(text) {
     }
   }
 
+  // パターン7: 「参画期間: YYYY年M月 〜 YYYY年M月」+ 近傍の「使用技術: スキル1/スキル2」
+  {
+    const lines = text.split(/\n/)
+    const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
+    const parseYMBody = (s) => {
+      const m3 = s.match(/(\d{4})年(\d{1,2})月/)
+      if (m3) return parseInt(m3[1]) * 12 + parseInt(m3[2])
+      const m4 = s.match(/(\d{4})[\/\-.](\d{1,2})/)
+      if (m4) return parseInt(m4[1]) * 12 + parseInt(m4[2])
+      if (/現在|今|継続|在籍中/i.test(s)) return nowYM
+      return null
+    }
+    const PERIOD_LABEL = /^(参画期間|在籍期間|稼働期間|作業期間|プロジェクト期間|PJ期間|期間)[：:]/
+    const SKILL_LABEL = /^(使用技術|使用言語|技術スタック|技術環境|開発環境|使用環境|言語|環境|スキル)[・・（(]?[^：:]*[：:]\s*(.+)/
+    for (let li = 0; li < lines.length; li++) {
+      const line = lines[li].trim()
+      if (!PERIOD_LABEL.test(line)) continue
+      const periodStr = line.replace(PERIOD_LABEL, '').trim()
+      const rangeM = periodStr.match(/(.+?)\s*[〜～~\-－]+\s*(.+)/)
+      if (!rangeM) continue
+      const startYM = parseYMBody(rangeM[1])
+      const endYM = parseYMBody(rangeM[2])
+      if (!startYM || !endYM) continue
+      const months = endYM - startYM + 1
+      if (months <= 0 || months > 600) continue
+      for (let di = -2; di <= 10; di++) {
+        const sline = lines[li + di]?.trim() ?? ''
+        const sm = sline.match(SKILL_LABEL)
+        if (!sm) continue
+        const skillStr = sm[2] ?? ''
+        const skills = skillStr.split(/[\s\/／、，,・]+/).map(s => s.replace(/[（(][^）)]*[）)]/g, '').trim()).filter(s => s.length >= 2 && s.length <= 40 && !/^\d+$/.test(s))
+        for (const skill of skills) {
+          if (!isNonSkill(skill)) {
+            result[skill] = (result[skill] ?? 0) + months
+          }
+        }
+      }
+    }
+  }
+
   return result
 }
 
@@ -1208,6 +1248,19 @@ if (args.includes('--test')) {
   // パターン6: 総経験年数ラベル → _totalProjectMonths
   assertSY('経験年数：20年', '経験年数：20年以上のベテランエンジニア', '_totalProjectMonths', 240)
   assertSY('IT経験：15年', 'IT経験：15年のPMOです', '_totalProjectMonths', 180)
+
+  // パターン7: 参画期間 + 使用技術（Word非テーブル型）
+  // 現在の月は動的なので「0より大きい」だけチェック（正確な月数は実行時による）
+  {
+    const syP7 = extractSkillYearsFromBodyText('参画期間：2026年1月 〜 現在\n使用技術・ツール：React / JavaScript / HTML5')
+    assert('パターン7 React > 0', (syP7['React'] ?? 0) > 0, true)
+    assert('パターン7 JavaScript > 0', (syP7['JavaScript'] ?? 0) > 0, true)
+  }
+  assertSY(
+    'パターン7 期間ラベル',
+    '期間：2025年4月 〜 2025年12月\n使用言語：Java / Spring Boot',
+    'Java', 9 // 2025/4〜2025/12 = 9ヶ月
+  )
 
   // ── 出力 ──
   console.log('\n' + '='.repeat(60))
