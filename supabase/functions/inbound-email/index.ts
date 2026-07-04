@@ -5191,6 +5191,22 @@ function assignAttachmentsToBlocks(
     }
   })
 
+  // ── パス3: 1対1残余マッチング（未割当ブロック数 == 未使用添付数 == 1 の場合） ──
+  // ファイル名に誰の名前も駅名もない「職務経歴書.xlsx」等の汎用名でも
+  // 残り1件同士なら安全に割り当てられる（順序依存リスクを最小化）
+  const unmatchedBlockIdxs = blocks
+    .map((_, i) => i)
+    .filter(i => !result.has(i) && blocks[i].name)
+  const unusedAttachIdxs = attachments
+    .map((_, i) => i)
+    .filter(i => !used.has(i))
+  if (unmatchedBlockIdxs.length === 1 && unusedAttachIdxs.length === 1) {
+    const blockIdx = unmatchedBlockIdxs[0]
+    const attIdx = unusedAttachIdxs[0]
+    result.set(blockIdx, attachments[attIdx])
+    used.add(attIdx)
+  }
+
   return result
 }
 

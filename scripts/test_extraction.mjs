@@ -946,6 +946,13 @@ if (args.includes('--test')) {
         break
       }
     })
+    // パス3: 1対1残余マッチング（未割当ブロック数 == 未使用添付数 == 1 の場合）
+    const unmatchedBlockIdxs = blocks.map((_, i) => i).filter(i => !result.has(i) && blocks[i].name)
+    const unusedAttachIdxs = attachments.map((_, i) => i).filter(i => !used.has(i))
+    if (unmatchedBlockIdxs.length === 1 && unusedAttachIdxs.length === 1) {
+      result.set(unmatchedBlockIdxs[0], attachments[unusedAttachIdxs[0]])
+      used.add(unusedAttachIdxs[0])
+    }
     return result
   }
   function assertAssign(label, result, blockIdx, expectedLabel) {
@@ -1020,6 +1027,22 @@ if (args.includes('--test')) {
     const r = assignAttachmentsToBlocks(blocks, attachments)
     assertAssign('他人名防止: block0は鈴木ファイルを奪わない', r, 0, null)
     assertAssign('他人名防止: block1→鈴木ファイル割り当て', r, 1, '鈴木_resume.xlsx')
+  }
+
+  // パス3: 1対1残余マッチング（1ブロック名前マッチ → 残り1ブロック＋1ファイルが1:1）
+  // Brightstar型: 2人 / 山田はファイル名マッチ / 鈴木はファイル名不明 × 1 件のみ残余
+  {
+    const blocks = [
+      { name: '山田', station: '池袋' },
+      { name: '鈴木', station: '葛西' },
+    ]
+    const attachments = [
+      { label: '山田_スキルシート.xlsx', content: '山田のデータ', skillYears: { Java: 36 } },
+      { label: '職務経歴書.xlsx',        content: '鈴木のデータ', skillYears: { Java: 24 } },
+    ]
+    const r = assignAttachmentsToBlocks(blocks, attachments)
+    assertAssign('パス3: block0→山田ファイル（名前マッチ）', r, 0, '山田_スキルシート.xlsx')
+    assertAssign('パス3: block1→職務経歴書（1対1残余）', r, 1, '職務経歴書.xlsx')
   }
 
   // ── 出力 ──
