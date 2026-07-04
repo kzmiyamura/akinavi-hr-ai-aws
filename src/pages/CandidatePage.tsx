@@ -330,9 +330,10 @@ export function CandidateProfileFields({
           )}
           {(() => {
             const rws = (raw as Record<string, unknown>).remoteWorkStyle as string | null | undefined
-            const label = rws ?? (remoteAvailable ? ((raw as Record<string, unknown>).wantsFullRemote ? 'フルリモート希望' : 'リモート可') : null)
-            if (!label) return null
-            const isStrong = label === 'フルリモート希望' || label === 'リモート希望'
+            const label = rws ?? (remoteAvailable ? ((raw as Record<string, unknown>).wantsFullRemote ? 'フルリモート希望' : null) : null)
+            // 「リモート可」は当たり前なので表示しない。出社頻度・希望強度が明確なもののみ表示
+            if (!label || label === 'リモート可') return null
+            const isStrong = label === 'フルリモート希望' || label === 'リモート希望' || label === 'フルリモート'
             return (
               <span className={`flex items-center gap-1 text-xs rounded px-1.5 py-0.5 ${isStrong ? 'bg-indigo-50 text-indigo-600' : 'bg-blue-50 text-blue-600'}`}>
                 <Wifi size={10} />{label}

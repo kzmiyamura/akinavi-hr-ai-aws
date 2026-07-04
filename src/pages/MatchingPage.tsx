@@ -534,9 +534,7 @@ function ProjectModeRankCard({
                   {wantsFullRemote && (
                     <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">リモートのみ</span>
                   )}
-                  {!wantsFullRemote && remoteAvailable && (
-                    <span className="text-[10px] bg-green-100 text-green-700 rounded px-1.5 py-0.5">リモート可</span>
-                  )}
+                  {/* 「リモート可」は当たり前なので表示しない */}
                 </div>
                 {agentComment && (
                   <div className="mt-1.5 bg-amber-50 border border-amber-100 rounded px-2 py-1.5">
