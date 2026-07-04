@@ -1,0 +1,10 @@
+氏名：TK
+最寄駅：大国町（大阪メトロ）
+IT経験：20年以上
+
+言語：PHP, JavaScript, SQL, HTML, CSS
+FW：Laravel, CakePHP, CodeIgniter, jQuery
+DB：MySQL
+その他：Docker, Linux, AWS, Git
+
+Laravel歴7年以上、ECサイト・予約システム・人材系など多数の案件で要件定義から実装・テストまで担当。

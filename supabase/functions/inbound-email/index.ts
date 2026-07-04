@@ -466,9 +466,10 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
     }
   }
 
-  // パターン3: 「スキル：N年」「スキル（N年）」（明示的なコロン・括弧区切り必須）
+  // パターン3: 「スキル：N年」「スキル（N年）」「スキル（約N年）」（明示的なコロン・括弧区切り必須）
   // 「スキル 年」のようなスペース区切りは日付と誤爆しやすいため除外
-  const patternLabel = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15}|[一-龯々]{2,10})\s*[：:（(]\s*([0-9０-９]+年[0-9０-９]*ヶ?月?)/g
+  // 約・おおよそ等のプレフィックスも対応
+  const patternLabel = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15}|[一-龯々]{2,10})\s*[：:（(]\s*約?\s*([0-9０-９]+年[0-9０-９]*[ヶかカ]?月?)/g
   while ((m = patternLabel.exec(text)) !== null) {
     const name = cleanSkillName(m[1])
     const months = parseYearsToMonths(m[2])
@@ -478,10 +479,50 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
     }
   }
 
+  // パターン3b: 「スキル（Nヶ月）」（月数のみ・年なし）
+  // 例: Java(2年2ヶ月) は pattern3 で捕捉済み、Springboot(6ヶ月) はこちら
+  const patternMonthsOnly = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15})\s*[（(]\s*([0-9０-９]+)[ヶかカ]月\s*[）)]/g
+  while ((m = patternMonthsOnly.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const mo = parseInt(m[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+    if (!isNaN(mo) && mo >= 1 && mo <= 360 && !isNonSkill(name) && !(name in result)) {
+      result[name] = mo
+    }
+  }
+
+  // パターン3c: 「スキル歴N年」「スキル歴N年以上」
+  // 例: Laravel歴7年以上、Java歴10年
+  const patternRekiYear = /([A-Za-z][A-Za-z0-9+#. _/-]{1,19}|[ァ-ヶー]{2,15}|[一-龯々]{2,10})歴\s*([0-9０-９]+)\s*年/g
+  while ((m = patternRekiYear.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const yrs = parseInt(m[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+    if (!isNaN(yrs) && yrs >= 1 && yrs <= 40 && !isNonSkill(name) && !(name in result)) {
+      result[name] = yrs * 12
+    }
+  }
+
+  // パターン3d: 【スキル】セクション後のスラッシュ区切り「Java(約15年以上) / Kotlin(約8年)」
+  // 行内のスラッシュで区切られた「スキル名(約?N年)」形式を一括抽出
+  const slashSkillSection = text.match(/(?:【スキル】|スキル[：:]\n?)([^\n]{10,300})/)
+  if (slashSkillSection) {
+    const sectionLine = slashSkillSection[1]
+    const slashParts = sectionLine.split(/\s*[/／]\s*/)
+    for (const part of slashParts) {
+      const pm = part.trim().match(/^([A-Za-z][A-Za-z0-9+#. _-]{0,19}|[ァ-ヶー]{2,15})\s*[（(]\s*約?\s*([0-9０-９]+)\s*年/)
+      if (pm) {
+        const name = cleanSkillName(pm[1])
+        const yrs = parseInt(pm[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+        if (!isNaN(yrs) && yrs >= 1 && yrs <= 40 && !isNonSkill(name)) {
+          result[name] = Math.max(result[name] ?? 0, yrs * 12)
+        }
+      }
+    }
+  }
+
   // パターン4: Word文書の箇条書き形式「● Java　5年」「・Python　3年」「▪ AWS　2年」
   // 行頭に箇条書き記号 + スキル名 + スペース/タブ + N年  （コロン・括弧なし）
   // スペース区切り誤爆を防ぐため行頭記号必須とする
-  const patternBullet = /^[●•・▪▶◆■○◇►➤※→]\s*([A-Za-z][A-Za-z0-9+#. _/-]{0,29}|[ァ-ヶー]{2,15}|[一-龯々]{2,10}(?:[　 ][A-Za-z0-9+#.]{1,15})?)\s*[　 \t]+([0-9０-９]+年(?:[0-9０-９]+ヶ?月?)?)/gm
+  const patternBullet = /^[●•・▪▶◆■○◇►➤※→]\s*([A-Za-z][A-Za-z0-9+#. _/-]{0,29}|[ァ-ヶー]{2,15}|[一-龯々]{2,10}(?:[　 ][A-Za-z0-9+#.]{1,15})?)\s*[　 \t]+([0-9０-９]+年(?:[0-9０-９]+[ヶかカ]?月?)?)/gm
   while ((m = patternBullet.exec(text)) !== null) {
     const name = cleanSkillName(m[1])
     const months = parseYearsToMonths(m[2])
@@ -493,7 +534,7 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
   // パターン5: 「スキル名　N年」行（行末が年数・タブ/全角スペース区切り）
   // Word職務経歴書の表形式テキスト化で見られる「Java\t5年」「Python　3年以上」
   // 誤爆防止: 行頭がスキル名のみ（先行テキストなし）かつ後続に余分なテキストがない行に限定
-  const patternTabYear = /^([A-Za-z][A-Za-z0-9+#. _/()-]{1,29}|[ァ-ヶー]{2,15})\t([0-9０-９]+年[0-9０-９]*ヶ?月?(?:以上|程度|超)?)\s*$/gm
+  const patternTabYear = /^([A-Za-z][A-Za-z0-9+#. _/()-]{1,29}|[ァ-ヶー]{2,15})\t([0-9０-９]+年[0-9０-９]*[ヶかカ]?月?(?:以上|程度|超)?)\s*$/gm
   while ((m = patternTabYear.exec(text)) !== null) {
     const name = cleanSkillName(m[1])
     const months = parseYearsToMonths(m[2])
@@ -2530,6 +2571,9 @@ function calcMonthsFromDates(start: string, end: string): number | null {
 function extractSkillYearsFromSheetData(data: string[][]): Record<string, number> {
   // ── 事前スキャン: Excel上部の「IT経験」「経験年数」宣言セルを探す ──
   // 例: 「IT経験」「7年」が同行または隣接セルにある場合
+  // ★ 早期 return せず、値を記録してから Method 1〜3 を続行する
+  // （経験年数宣言があってもプロジェクト行からスキル別年数を取れる場合がある）
+  let headerTotalMonths: number | null = null
   const EXP_LABEL = /IT経験|開発経験|エンジニア歴|経験年数|総経験|業務経験/
   for (let i = 0; i < Math.min(30, data.length); i++) {
     const row = data[i]
@@ -2540,13 +2584,15 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       if (/凡例|◎＝|○＝|◇＝|△＝|▲＝/.test(v)) continue
       // 同セル内に年数が含まれる場合: "IT経験: 7年" など
       const inCell = parseDurationToMonths(v)
-      if (inCell) { return { _totalProjectMonths: inCell } }
+      if (inCell) { headerTotalMonths = inCell; break }
       // 隣接セル（右±3）に年数がある場合
       for (let k = j + 1; k <= Math.min(row.length - 1, j + 3); k++) {
         const adj = parseDurationToMonths(String(row[k] ?? ''))
-        if (adj) { return { _totalProjectMonths: adj } }
+        if (adj) { headerTotalMonths = adj; break }
       }
+      if (headerTotalMonths) break
     }
+    if (headerTotalMonths) break
   }
 
   // ── Method 1: プロジェクト経歴型 ──
@@ -2599,9 +2645,13 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
     }
     if (Object.keys(skillMonths).length > 0) {
       // プロジェクト合計月数を特殊キーとして付与（経験年数フォールバック用）
+      // headerTotalMonths（上部宣言）が取れていれば優先的に使用
+      if (headerTotalMonths && !skillMonths['_totalProjectMonths']) {
+        skillMonths['_totalProjectMonths'] = headerTotalMonths
+      }
       if (projectPeriods.length > 0) {
         const totalProjectMonths = projectPeriods.reduce((s, p) => s + p.months, 0)
-        skillMonths['_totalProjectMonths'] = totalProjectMonths
+        if (!skillMonths['_totalProjectMonths']) skillMonths['_totalProjectMonths'] = totalProjectMonths
         // max日付 − min日付 スパン（空白期間込みのキャリア全体幅）
         const parseYM = (s: string) => {
           const m = s.match(/(\d{2,4})[\/\-年](\d{1,2})/)
@@ -2651,7 +2701,10 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
         const months = Math.round(yearsNum * 12)
         SM3[skillName] = Math.max(SM3[skillName] ?? 0, months)
       }
-      if (Object.keys(SM3).length > 0) return filterSkillYears(SM3)
+      if (Object.keys(SM3).length > 0) {
+        if (headerTotalMonths && !SM3['_totalProjectMonths']) SM3['_totalProjectMonths'] = headerTotalMonths
+        return filterSkillYears(SM3)
+      }
     }
   }
 
@@ -2696,7 +2749,13 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       }
     }
   }
-  if (Object.keys(skillMonths2).length > 0) return filterSkillYears(skillMonths2)
+  if (Object.keys(skillMonths2).length > 0) {
+    if (headerTotalMonths && !skillMonths2['_totalProjectMonths']) skillMonths2['_totalProjectMonths'] = headerTotalMonths
+    return filterSkillYears(skillMonths2)
+  }
+
+  // ── headerTotalMonths のみ取れた場合（スキル別年数なし）は早期リターン ──
+  if (headerTotalMonths) return { _totalProjectMonths: headerTotalMonths }
 
   // ── 最終フォールバック: 日付の最小〜最大期間から総経験月数を算出 ──
   // シリアル日付（数値型）とテキスト日付（"2020/04"等）の両方を収集し、

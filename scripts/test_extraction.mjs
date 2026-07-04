@@ -570,6 +570,106 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
 }
 
+// ─── extractSkillYearsFromBodyText（index.ts と同期） ────────────────────────
+function extractSkillYearsFromBodyText(text) {
+  const result = {}
+
+  const parseYearsToMonths = (s) => {
+    const m = s.match(/([0-9０-９]+)年/)
+    if (!m) return null
+    const n = parseInt(m[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+    return isNaN(n) || n < 1 || n > 40 ? null : n * 12
+  }
+
+  const cleanSkillName = (s) => {
+    let r = s.replace(/\s*[（(][^）)]*[）)]/g, '').replace(/[・、,，\s　]+$/, '').trim()
+    const colonIdx = Math.max(r.lastIndexOf('：'), r.lastIndexOf(':'))
+    if (colonIdx >= 0) r = r.slice(colonIdx + 1).trim()
+    return r
+  }
+
+  const isNonSkill = (name) => {
+    if (name.length < 2 || name.length > 30) return true
+    return /経験|以上|程度|開発|業務|システム|設計|構築|基盤|インフラ|サービス|アプリ|エンジニア|実務|案件|プロジェクト|当社|弊社|担当|スキル/.test(name)
+  }
+
+  const patternEach = /([^\n。]{2,80})の経験がそれぞれ([0-9０-９]+年)/g
+  let m
+  while ((m = patternEach.exec(text)) !== null) {
+    const months = parseYearsToMonths(m[2])
+    if (!months) continue
+    const skills = m[1].split(/[、,，・とやおよび及び]/)
+    for (const raw of skills) {
+      const name = cleanSkillName(raw)
+      if (!isNonSkill(name)) result[name] = Math.max(result[name] ?? 0, months)
+    }
+  }
+
+  const patternSingle = /([^\s　、,，・（(）)\n]{2,20})の経験が(?!それぞれ)([0-9０-９]+年)/g
+  while ((m = patternSingle.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const months = parseYearsToMonths(m[2])
+    if (months && !isNonSkill(name)) result[name] = Math.max(result[name] ?? 0, months)
+  }
+
+  // パターン3: 「スキル：N年」「スキル（N年）」「スキル（約N年）」
+  const patternLabel = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15}|[一-龯々]{2,10})\s*[：:（(]\s*約?\s*([0-9０-９]+年[0-9０-９]*[ヶかカ]?月?)/g
+  while ((m = patternLabel.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const months = parseYearsToMonths(m[2])
+    if (months && !isNonSkill(name) && !(name in result)) result[name] = months
+  }
+
+  // パターン3b: 「スキル（Nヶ月）」（月数のみ）
+  const patternMonthsOnly = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15})\s*[（(]\s*([0-9０-９]+)[ヶかカ]月\s*[）)]/g
+  while ((m = patternMonthsOnly.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const mo = parseInt(m[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+    if (!isNaN(mo) && mo >= 1 && mo <= 360 && !isNonSkill(name) && !(name in result)) result[name] = mo
+  }
+
+  // パターン3c: 「スキル歴N年」
+  const patternRekiYear = /([A-Za-z][A-Za-z0-9+#. _/-]{1,19}|[ァ-ヶー]{2,15}|[一-龯々]{2,10})歴\s*([0-9０-９]+)\s*年/g
+  while ((m = patternRekiYear.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const yrs = parseInt(m[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+    if (!isNaN(yrs) && yrs >= 1 && yrs <= 40 && !isNonSkill(name) && !(name in result)) result[name] = yrs * 12
+  }
+
+  // パターン3d: 【スキル】セクション後のスラッシュ区切り「Java(約15年以上) / Kotlin(約8年)」
+  const slashSkillSection = text.match(/(?:【スキル】|スキル[：:]\n?)([^\n]{10,300})/)
+  if (slashSkillSection) {
+    const sectionLine = slashSkillSection[1]
+    const slashParts = sectionLine.split(/\s*[/／]\s*/)
+    for (const part of slashParts) {
+      const pm = part.trim().match(/^([A-Za-z][A-Za-z0-9+#. _-]{0,19}|[ァ-ヶー]{2,15})\s*[（(]\s*約?\s*([0-9０-９]+)\s*年/)
+      if (pm) {
+        const name = cleanSkillName(pm[1])
+        const yrs = parseInt(pm[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+        if (!isNaN(yrs) && yrs >= 1 && yrs <= 40 && !isNonSkill(name)) result[name] = Math.max(result[name] ?? 0, yrs * 12)
+      }
+    }
+  }
+
+  // パターン4: 箇条書き記号 + スキル名 + N年
+  const patternBullet = /^[●•・▪▶◆■○◇►➤※→]\s*([A-Za-z][A-Za-z0-9+#. _/-]{0,29}|[ァ-ヶー]{2,15}|[一-龯々]{2,10}(?:[　 ][A-Za-z0-9+#.]{1,15})?)\s*[　 \t]+([0-9０-９]+年(?:[0-9０-９]+[ヶかカ]?月?)?)/gm
+  while ((m = patternBullet.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const months = parseYearsToMonths(m[2])
+    if (months && !isNonSkill(name) && !(name in result)) result[name] = months
+  }
+
+  // パターン5: スキル名\tN年
+  const patternTabYear = /^([A-Za-z][A-Za-z0-9+#. _/()-]{1,29}|[ァ-ヶー]{2,15})\t([0-9０-９]+年[0-9０-９]*[ヶかカ]?月?(?:以上|程度|超)?)\s*$/gm
+  while ((m = patternTabYear.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const months = parseYearsToMonths(m[2])
+    if (months && !isNonSkill(name) && !(name in result)) result[name] = months
+  }
+
+  return result
+}
+
 function splitMultiCandidateBody(body) {
   // ■氏名：形式（■●▪▶ 等のビュレット付き）も認識
   const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]|[■●▪▶][ 　]*(?:最寄(?:り?駅?)|希望単価|スキル|業務経験|稼働開始|稼働時期|アピール)/
@@ -1058,6 +1158,42 @@ if (args.includes('--test')) {
     assertAssign('パス3: block0→山田ファイル（名前マッチ）', r, 0, '山田_スキルシート.xlsx')
     assertAssign('パス3: block1→職務経歴書（1対1残余）', r, 1, '職務経歴書.xlsx')
   }
+
+  // ── ⑰ extractSkillYearsFromBodyText テスト ──────────────────────────────────
+  console.log('\n【⑰ extractSkillYearsFromBodyText】')
+  function assertSY(label, text, expectedKey, expectedMonths) {
+    const sy = extractSkillYearsFromBodyText(text)
+    const got = sy[expectedKey] ?? null
+    assert(`${label} | ${expectedKey}`, got, expectedMonths)
+  }
+
+  // パターン3: スキル（N年）括弧形式
+  assertSY('Java(5年)', '氏名：K.T\n【スキル】Java(5年), Python(3年)', 'Java', 60)
+  assertSY('Python(3年)', '氏名：K.T\n【スキル】Java(5年), Python(3年)', 'Python', 36)
+
+  // パターン3: 約N年以上
+  assertSY('Java(約15年以上)', '【スキル】\nJava(約15年以上) / Kotlin(約8年)', 'Java', 180)
+  assertSY('Kotlin(約8年)', '【スキル】\nJava(約15年以上) / Kotlin(約8年)', 'Kotlin', 96)
+
+  // パターン3b: Nヶ月のみ（年なし）
+  assertSY('Springboot(6ヶ月)', '※Java(2年2ヶ月)Springboot(6ヶ月)※Spring(4ヶ月)', 'Springboot', 6)
+  assertSY('Spring(4ヶ月)', '※Java(2年2ヶ月)Springboot(6ヶ月)※Spring(4ヶ月)', 'Spring', 4)
+
+  // パターン3c: スキル歴N年
+  assertSY('Laravel歴7年', 'Laravel歴7年以上、ECサイト多数', 'Laravel', 84)
+  assertSY('Java歴10年', 'Java歴10年の経験があります', 'Java', 120)
+
+  // パターン3d: 【スキル】スラッシュ区切り
+  assertSY('スラッシュ区切りJava', '【スキル】\nJava(約15年以上) / Kotlin(約8年) / Android / PHP(Laravel)', 'Java', 180)
+  assertSY('スラッシュ区切りKotlin', '【スキル】\nJava(約15年以上) / Kotlin(約8年) / Android / PHP(Laravel)', 'Kotlin', 96)
+
+  // パターン2: 経験X年
+  assertSY('Javaの経験が5年', 'Javaの経験が5年以上あります', 'Java', 60)
+
+  // 既存パターンの回帰テスト
+  assertSY('● Java　5年（bullet）', '● Java　5年\n● Python　3年', 'Java', 60)
+  assertSY('Java\t5年（tab）', 'Java\t5年以上', 'Java', 60)
+  assertSY('Java：5年（colon）', 'Java：5年の経験', 'Java', 60)
 
   // ── 出力 ──
   console.log('\n' + '='.repeat(60))
