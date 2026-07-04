@@ -335,6 +335,9 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
   trimmed = trimmed.replace(/の[^\s　]{1,15}(?:でございます|です|と申します|でした).*$/, '')
   // 法人格のみ（識別名なし）は無効 — 例: 「株式会社の小川です」→「株式会社」→ null
   if (/^(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)$/.test(trimmed)) return null
+  // 役職・肩書き略称がそのまま会社名になっているケースは無効
+  // 例: 「株式会社CTO」「株式会社CEO」— スキルシートの役職行が誤マッチした場合
+  if (/^(?:株式会社|有限会社|合同会社)(?:CTO|CEO|COO|CFO|CMO|CXO|VP|SVP|EVP|PO|PM|PL|SE|SRE|TL)$/.test(trimmed)) return null
   return trimmed || null
 }
 
