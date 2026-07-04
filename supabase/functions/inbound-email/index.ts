@@ -823,7 +823,8 @@ export function inferPrefectureFromStation(station: string | null | undefined): 
  */
 async function lookupStationPrefectureFromDb(station: string | null | undefined): Promise<string | null> {
   if (!station) return null
-  const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim()
+  // ヶ（小文字）→ ケ（通常）に統一（保土ヶ谷→保土ケ谷 等、DB は通常ケで登録）
+  const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim().replace(/ヶ/g, 'ケ')
   if (!cleaned) return null
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
@@ -1801,7 +1802,7 @@ function extractCandidateFieldsRegex(
   }
 
   // 全マッチを収集して宛先以外の最後のマッチを採用（送信者署名は末尾に近いため）
-  const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　\n（(、。！【】「」]{2,30}(?:[ \t]+[A-Za-z][A-Za-z \t&.]{0,20})?)/g
+  const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　の\n（(、。！【】「」]{2,30}(?:[ \t]+[A-Za-z][A-Za-z \t&.]{0,20})?)/g
   let bestPre: RegExpExecArray | null = null
   let m: RegExpExecArray | null
   while ((m = PRE_RE.exec(sigArea)) !== null) {
@@ -5842,7 +5843,7 @@ Deno.serve(async (req: Request) => {
         // ブロック分割後は各候補者の断片テキストのみになり署名が含まれないため
         const multiBodyCompanyName: string | null = (() => {
           const sig = body.slice(-2000)
-          const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　\n（(、。！【】「」]{2,30})/g
+          const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　の\n（(、。！【】「」]{2,30})/g
           const afterSalutation = (t: string, i: number, l: number) => /^[\r\n　 ]*(?:様|御中|ご担当|担当者様)/.test(t.slice(i + l, i + l + 40))
           // 署名エリアなので最初の非宛先マッチを使う（後続のカッコ内旧社名説明を拾わないように）
           let m: RegExpExecArray | null
@@ -6225,7 +6226,7 @@ Deno.serve(async (req: Request) => {
           const emailDomain = from ? from.split('@')[1]?.toLowerCase().trim() : null
           // 送信元会社名を末尾2000字から抽出（候補者名でなくエージェント会社名）(#96)
           const sigAreaMulti = body.slice(-2000)
-          const preReMulti = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　\n（(、。！【】「」]{2,30})/g
+          const preReMulti = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　の\n（(、。！【】「」]{2,30})/g
           let bestPreMulti: RegExpExecArray | null = null; let mMulti: RegExpExecArray | null
           const afterMulti = (t: string, i: number, l: number) => /^[\r\n　 ]*(?:様|御中|ご担当|担当者様)/.test(t.slice(i + l, i + l + 40))
           while ((mMulti = preReMulti.exec(sigAreaMulti)) !== null) { if (!afterMulti(sigAreaMulti, mMulti.index, mMulti[0].length)) bestPreMulti = mMulti }
@@ -6382,11 +6383,17 @@ Deno.serve(async (req: Request) => {
       // リモート勤務スタイル（表示用文字列）
       const remoteWorkStyleRaw = (() => {
         const t = bodyText + ' ' + attachText
-        // 週X日パターンを優先抽出
+        // 週X日パターンを優先抽出（リモート日数 or 出社日数）
         const weekM = t.match(/週(\d)[〜~～]?(\d?)日[　 ]?(?:程度)?(?:[　 ]?以内)?[^\n]{0,10}(?:リモート|在宅|テレワーク)|(?:リモート|在宅|テレワーク)[^\n]{0,10}週(\d)[〜~～]?(\d?)日/)
         if (weekM) {
           const d1 = weekM[1] || weekM[3]
           return `週${d1}日リモート可`
+        }
+        // 週X日出社パターン（「大阪週1出社可能」「週2日出社可」等）
+        const syukkM = t.match(/(?:週(\d)[〜~～]?(\d?)日[　 ]?(?:程度)?出社|出社[　 ]?週(\d)[〜~～]?(\d?)日)/)
+        if (syukkM) {
+          const d1 = syukkM[1] || syukkM[3]
+          return `週${d1}日出社可`
         }
         if (proseFields.workStyle === 'フルリモート') return 'フルリモート希望'
         if (proseFields.workStyle === 'リモート希望') return 'リモート希望'

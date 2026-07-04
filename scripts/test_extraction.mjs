@@ -537,10 +537,10 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   let fromCompany = null
   const allBodyText2 = bodyText + '\n' + attachText
   const sigArea = allBodyText2.slice(-2000)
-  const mPre = sigArea.match(/(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)([\S]{2,20})/)
+  const mPre = sigArea.match(/(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)([^\s　の\n（(、。！【】「」]{2,20})/)
   if (mPre) fromCompany = sanitizeFromCompany(`${mPre[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${mPre[1]}`)
   if (!fromCompany) {
-    const mPost = sigArea.match(/([\S]{2,20})(?:株式会社|有限会社|合同会社)/)
+    const mPost = sigArea.match(/([^\s　\n（(、。！【】「」]{2,20})(?:株式会社|有限会社|合同会社)/)
     if (mPost) fromCompany = sanitizeFromCompany(`${mPost[1]}${mPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
   }
   if (!fromCompany) {
