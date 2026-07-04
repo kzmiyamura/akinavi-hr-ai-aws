@@ -543,6 +543,16 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
     }
   }
 
+  // パターン6: 総経験年数ラベル（「経験年数：N年」「IT経験：N年以上」「経験N年」）
+  // → スキルと対応しないため _totalProjectMonths に収める
+  const patternTotalExp = /(?:経験年数|IT経験|総経験|開発経験)[：:]\s*([0-9０-９]+)\s*年/g
+  while ((m = patternTotalExp.exec(text)) !== null) {
+    const yrs = parseInt(m[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+    if (!isNaN(yrs) && yrs >= 1 && yrs <= 50 && !result['_totalProjectMonths']) {
+      result['_totalProjectMonths'] = yrs * 12
+    }
+  }
+
   if (Object.keys(result).length > 0) {
     console.log(`[skillYears-body] count=${Object.keys(result).length} keys=${Object.keys(result).join(',')}`)
   }
@@ -3613,18 +3623,21 @@ function extractSkillYearsFromSheetJson(rows: Array<Record<string, string>>): Re
   if (rows.length === 0) return {}
   const headers = Object.keys(rows[0])
 
+  // 全角スペースを除去して列名を正規化（「言　語」→「言語」「O　S」→「OS」）
+  const normalizeHeader = (h: string): string => h.replace(/[\s　]+/g, '').trim()
+
   // 列名パターン
-  const PERIOD_COL  = /^(期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始.{0,4}終了)$/
+  const PERIOD_COL  = /^(期間|プロジェクト期間|PJ期間|参画期間|在籍期間|作業期間|開始.{0,4}終了)$/
   const START_COL   = /^(開始|開始年月|FROM|開始日)$/i
   const END_COL     = /^(終了|終了年月|TO|終了日)$/i
-  const DURATION_COL = /^(期間\(月\)|月数|期間月数|経験月数|在籍月数|Months?)$/i
+  const DURATION_COL = /^(期間\(月\)|月数|期間月数|経験月数|在籍月数|作業月数|Months?)$/i
   const SKILL_COL   = /使用言語|使用技術|技術スタック|技術(?!力|的)|言語(?!\s*能)|FW|フレームワーク|ミドル|ツール|DB(?!A)|OS(?!\s*名)|インフラ|skill/i
 
-  const periodCol   = headers.find(h => PERIOD_COL.test(h.trim()))
-  const startCol    = headers.find(h => START_COL.test(h.trim()))
-  const endCol      = headers.find(h => END_COL.test(h.trim()))
-  const durationCol = headers.find(h => DURATION_COL.test(h.trim()))
-  const skillCols   = headers.filter(h => SKILL_COL.test(h.trim()))
+  const periodCol   = headers.find(h => PERIOD_COL.test(normalizeHeader(h)))
+  const startCol    = headers.find(h => START_COL.test(normalizeHeader(h)))
+  const endCol      = headers.find(h => END_COL.test(normalizeHeader(h)))
+  const durationCol = headers.find(h => DURATION_COL.test(normalizeHeader(h)))
+  const skillCols   = headers.filter(h => SKILL_COL.test(normalizeHeader(h)))
 
   if (skillCols.length === 0) return {}
 
@@ -3715,12 +3728,19 @@ function filterSkillYears(sy: Record<string, number>): Record<string, number> {
   // 例: 「言語／FW」「OS／MW」「概要」「105万」等
   const NON_SKILL_RE = /^(?:言語[/／・]?(?:FW|ツール|DB|技術|OS)?|OS[/／・]?M?W?|DB[/／・]?(?:DC|OS|MW)?|FW(?:[/／・]ツール)?|ライブラリ|クラウド(?:[/／・]NW)?|ツール(?:[/／・]技術)?|MW(?:[/／・]DB)?|NW(?:[/／・]クラウド)?|概要|今年度|業務経験(?:年数)?|業種|工程|フェーズ|役割|開発規模|使用言語|使用技術|技術スタック|開発環境|言語[・]FW|言語[/]技術|技術[/]環境)$/
   const MONEY_RE = /\d+万(?:円)?|円$/
+  // 個人情報・履歴ラベルをスキル名として誤抽出しないためのブロックリスト
+  const PERSONAL_INFO_RE = /^(学歴|最終学歴|氏名|ふりがな|フリガナ|生年月日|年齢|性別|住所|国籍|最寄[駅]?|電話|メール|資格|自己PR|PR|所属|経験年数|合計|総計|計|小計|期間合計|担当工程|在籍期間|参画期間|携わ)$/
+  // 日付・期間範囲がキーになっている場合を除外（例: "2022/2～2022/9", "2019年〜現在"）
+  const DATE_RANGE_RE = /\d{4}[\/年]\d{1,2}/
   const result: Record<string, number> = {}
   for (const [k, v] of Object.entries(sy)) {
     if (k.startsWith('_')) { result[k] = v; continue }
     if (k.length > 30) continue
-    if (NON_SKILL_RE.test(k.replace(/[　 ]/g, ''))) continue
+    const kNoSpace = k.replace(/[　 ]/g, '')
+    if (NON_SKILL_RE.test(kNoSpace)) continue
     if (MONEY_RE.test(k)) continue
+    if (PERSONAL_INFO_RE.test(kNoSpace)) continue
+    if (DATE_RANGE_RE.test(k)) continue
     result[k] = v
   }
   return result

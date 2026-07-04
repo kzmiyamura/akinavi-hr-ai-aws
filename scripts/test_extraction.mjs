@@ -667,6 +667,16 @@ function extractSkillYearsFromBodyText(text) {
     if (months && !isNonSkill(name) && !(name in result)) result[name] = months
   }
 
+  // パターン6: 総経験年数ラベル（「経験年数：N年」「IT経験：N年以上」「経験N年」）
+  // → スキルと対応しないため _totalProjectMonths に収める
+  const patternTotalExp = /(?:経験年数|IT経験|総経験|開発経験)[：:]\s*([0-9０-９]+)\s*年/g
+  while ((m = patternTotalExp.exec(text)) !== null) {
+    const yrs = parseInt(m[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+    if (!isNaN(yrs) && yrs >= 1 && yrs <= 50 && !result['_totalProjectMonths']) {
+      result['_totalProjectMonths'] = yrs * 12
+    }
+  }
+
   return result
 }
 
@@ -1194,6 +1204,10 @@ if (args.includes('--test')) {
   assertSY('● Java　5年（bullet）', '● Java　5年\n● Python　3年', 'Java', 60)
   assertSY('Java\t5年（tab）', 'Java\t5年以上', 'Java', 60)
   assertSY('Java：5年（colon）', 'Java：5年の経験', 'Java', 60)
+
+  // パターン6: 総経験年数ラベル → _totalProjectMonths
+  assertSY('経験年数：20年', '経験年数：20年以上のベテランエンジニア', '_totalProjectMonths', 240)
+  assertSY('IT経験：15年', 'IT経験：15年のPMOです', '_totalProjectMonths', 180)
 
   // ── 出力 ──
   console.log('\n' + '='.repeat(60))

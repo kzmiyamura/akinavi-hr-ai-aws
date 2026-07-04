@@ -44,3 +44,18 @@
 - **会社名**: Excel 30.7% / Word 47.8%
 
 ---
+
+## 2026-07-04 イテレーション3
+- **発見パターン**:
+  - `言　語`（全角スペース入り列名）が `extractSkillYearsFromSheetJson` でマッチしない
+  - `学歴`・`氏名`・日付範囲がスキル名として誤抽出されている
+  - `経験年数：N年` が `_totalProjectMonths` に変換されていない
+- **追加ロジック**:
+  - `extractSkillYearsFromSheetJson`: 全角スペース除去で列名正規化（`normalizeHeader`）
+  - `filterSkillYears`: 個人情報ラベル（学歴・氏名等）と日付範囲をブロックリスト追加
+  - `extractSkillYearsFromBodyText`: パターン6（経験年数ラベル → `_totalProjectMonths`）追加
+- **テスト**: 151件（全パス）
+- **Excel skillYears**: 74.6% → 74.8% (+0.2%)
+- **Word skillYears**: 51.6% → 52.2% (+0.6%)
+
+---
