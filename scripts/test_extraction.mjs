@@ -553,11 +553,18 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   }
   if (!fromCompany) {
     const subjectLine = allBodyText2.split('\n')[0]
-    const bracketM = subjectLine.match(/【([^】!！\/弊社]{2,20})】/)
-    if (bracketM) {
-      const cand = bracketM[1].trim().split(/[\s　]/)[0]
-      if (cand.length >= 2 && !/グループ|正社員|プロパ|常駐|可能|フリー|派遣|紹介|エンジニア|人材|要員|スキル|案件/.test(cand)) fromCompany = cand
+    const BRACKET_NON_COMPANY = /グループ|正社員|プロパ|常駐|可能|フリー|派遣|紹介|エンジニア|人材|要員|スキル|案件|開発|設計|即日|リモート|テレワーク|在宅|経験|言語|Java|Python|PHP|Go|AWS|Azure|GCP|SQL|Vue|React|Angular|Spring|Kotlin|Swift|TypeScript|Ruby|COBOL|C\+\+|C#|Docker|Linux|Windows|月.*[〜~～]|[〜~～].*月|[0-9]+年/
+    const allBrackets = [...subjectLine.matchAll(/【([^】]{2,25})】/g)]
+    let bracketCand = null
+    for (let i = allBrackets.length - 1; i >= 0; i--) {
+      const inner = allBrackets[i][1].trim()
+      const companyPart = inner.split(/[\s　]/)[0]
+      if (companyPart.length >= 2 && !BRACKET_NON_COMPANY.test(inner)) {
+        bracketCand = companyPart
+        break
+      }
     }
+    if (bracketCand) fromCompany = bracketCand
   }
 
   return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
@@ -643,6 +650,7 @@ if (args.includes('--test')) {
       const expected = JSON.stringify(exp.nameSkillYears)
       assert(`${prefix} | nameSkillYears`, got, expected)
     }
+    if ('fromCompany' in exp) assert(`${prefix} | fromCompany`, f.fromCompany, exp.fromCompany)
   }
 
   function runProjectCase(desc, body, exp) {
@@ -706,6 +714,12 @@ if (args.includes('--test')) {
   runCase('【T・N】【豊岡】（男性/26歳/日本人）', '■氏名：【T・N】【豊岡】（男性/26歳/日本人）\n■最寄：東向島\n■単金：56万円+精算', '', { name: 'T・N', age: 26, gender: '男性', nationality: '日本人' })
   runCase('nameSkillYears: K.T（Java 5年 / Python 3年）', '氏名：K.T（Java 5年 / Python 3年）\n最寄駅：渋谷', '', { name: 'K.T', nameSkillYears: { Java: 60, Python: 36 } })
   runCase('nameSkillYears: Spring Boot 7年', '氏名：Y.M（Spring Boot 7年）\n最寄駅：新宿', '', { name: 'Y.M', nameSkillYears: { 'Spring Boot': 84 } })
+
+  // ── ⑯ 件名の末尾【会社名】ブラケット抽出 ────────────────────────────────
+  console.log('\n【⑯ 件名末尾ブラケットからの会社名抽出】')
+  runCase('末尾会社名ブラケット(サクヤ大嶽)', '【8月～/Java/Python】エンジニア紹介【サクヤ大嶽】\n氏名：T.K\n最寄駅：渋谷\n経験年数：5年', '', { fromCompany: 'サクヤ大嶽' })
+  runCase('末尾会社名ブラケット+氏名スペース', '要員ご紹介【フォスターネット 山田】\n氏名：N.T\n最寄駅：品川\n経験年数：3年', '', { fromCompany: 'フォスターネット' })
+  runCase('スキルブラケットは除外', '人材【C#エンジニア / 基本設計～】のご紹介です。\n氏名：S.H\n最寄駅：渋谷\n株式会社テスト\n経験年数：5年', '', { fromCompany: '株式会社テスト' })
 
   // ── 駅名後処理: スラッシュ区切り路線名・常駐可サフィックス ─────────────
   console.log('\n【駅名後処理パターン】')

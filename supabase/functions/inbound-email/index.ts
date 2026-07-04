@@ -478,6 +478,30 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
     }
   }
 
+  // パターン4: Word文書の箇条書き形式「● Java　5年」「・Python　3年」「▪ AWS　2年」
+  // 行頭に箇条書き記号 + スキル名 + スペース/タブ + N年  （コロン・括弧なし）
+  // スペース区切り誤爆を防ぐため行頭記号必須とする
+  const patternBullet = /^[●•・▪▶◆■○◇►➤※→]\s*([A-Za-z][A-Za-z0-9+#. _/-]{0,29}|[ァ-ヶー]{2,15}|[一-龯々]{2,10}(?:[　 ][A-Za-z0-9+#.]{1,15})?)\s*[　 \t]+([0-9０-９]+年(?:[0-9０-９]+ヶ?月?)?)/gm
+  while ((m = patternBullet.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const months = parseYearsToMonths(m[2])
+    if (months && !isNonSkill(name) && !(name in result)) {
+      result[name] = months
+    }
+  }
+
+  // パターン5: 「スキル名　N年」行（行末が年数・タブ/全角スペース区切り）
+  // Word職務経歴書の表形式テキスト化で見られる「Java\t5年」「Python　3年以上」
+  // 誤爆防止: 行頭がスキル名のみ（先行テキストなし）かつ後続に余分なテキストがない行に限定
+  const patternTabYear = /^([A-Za-z][A-Za-z0-9+#. _/()-]{1,29}|[ァ-ヶー]{2,15})\t([0-9０-９]+年[0-9０-９]*ヶ?月?(?:以上|程度|超)?)\s*$/gm
+  while ((m = patternTabYear.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const months = parseYearsToMonths(m[2])
+    if (months && !isNonSkill(name) && !(name in result)) {
+      result[name] = months
+    }
+  }
+
   if (Object.keys(result).length > 0) {
     console.log(`[skillYears-body] count=${Object.keys(result).length} keys=${Object.keys(result).join(',')}`)
   }
@@ -1833,15 +1857,25 @@ function extractCandidateFieldsRegex(
   }
 
   // ④ 件名の【会社名】パターン（例: 「のご紹介【フォスターネット】」「【サクヤ 保母】」）
+  // 会社名は件名の末尾ブラケットにあることが多い → 末尾（最後）の【...】を優先試行、
+  // ダメなら先頭へフォールバックする
   if (!fromCompany) {
     const subjectLine = allBodyText.split('\n')[0]
-    const bracketM = subjectLine.match(/【([^】!！\/弊社]{2,20})】/)
-    if (bracketM) {
-      const cand = bracketM[1].trim().split(/[\s　]/)[0] // スペース前が会社名（「サクヤ 保母」→「サクヤ」）
-      if (cand.length >= 2 && !/グループ|正社員|プロパ|常駐|可能|フリー|派遣|紹介|エンジニア|人材|要員|スキル|案件/.test(cand)) {
-        fromCompany = cand
+    // スキル・職種・条件キーワードを含むブラケットは除外
+    const BRACKET_NON_COMPANY = /グループ|正社員|プロパ|常駐|可能|フリー|派遣|紹介|エンジニア|人材|要員|スキル|案件|開発|設計|即日|リモート|テレワーク|在宅|経験|言語|Java|Python|PHP|Go|AWS|Azure|GCP|SQL|Vue|React|Angular|Spring|Kotlin|Swift|TypeScript|Ruby|COBOL|C\+\+|C#|Docker|Linux|Windows|月.*[〜~～]|[〜~～].*月|[0-9]+年/
+    // まず最後の【...】を試みる
+    const allBrackets = [...subjectLine.matchAll(/【([^】]{2,25})】/g)]
+    let bracketCand: string | null = null
+    // 後ろから順に適切な会社名候補を探す
+    for (let i = allBrackets.length - 1; i >= 0; i--) {
+      const inner = allBrackets[i][1].trim()
+      const companyPart = inner.split(/[\s　]/)[0] // スペース前が会社名（「サクヤ 保母」→「サクヤ」）
+      if (companyPart.length >= 2 && !BRACKET_NON_COMPANY.test(inner)) {
+        bracketCand = companyPart
+        break
       }
     }
+    if (bracketCand) fromCompany = bracketCand
   }
 
   return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
@@ -6405,11 +6439,24 @@ Deno.serve(async (req: Request) => {
           const d1 = weekM[1] || weekM[3]
           return `週${d1}日リモート可`
         }
-        // 週X日出社パターン（「大阪週1出社可能」「週2日出社可」等）
-        const syukkM = t.match(/(?:週(\d)[〜~～]?(\d?)日[　 ]?(?:程度)?出社|出社[　 ]?週(\d)[〜~～]?(\d?)日)/)
+        // 週X日出社パターン（「大阪週1出社可能」「週2日出社可」「出社頻度：週1回」等）
+        const syukkM = t.match(/(?:週(\d)[〜~～]?(\d?)日[　 ]?(?:程度)?(?:の)?出社|出社[　 ]?週(\d)[〜~～]?(\d?)日|出社(?:頻度)?[：:\s　]*週(\d+)[〜~～]?(\d*)回?|週(\d+)[〜~～]?(\d*)回?(?:程度)?(?:[　 ]?以内)?[^\n]{0,5}出社)/)
         if (syukkM) {
-          const d1 = syukkM[1] || syukkM[3]
-          return `週${d1}日出社可`
+          const d1 = syukkM[1] || syukkM[3] || syukkM[5] || syukkM[7]
+          if (d1) return `週${d1}日出社可`
+        }
+        // 月X回出社パターン（「月1〜2回出社」「原則リモート（月1回程度出社）」）
+        const tsukkiM = t.match(/月(\d)[〜~～]?(\d?)回?(?:程度)?(?:の)?出社|出社(?:頻度)?[：:\s　]*月(\d+)[〜~～]?(\d*)回?/)
+        if (tsukkiM) {
+          const d1 = tsukkiM[1] || tsukkiM[3]
+          if (d1) return `月${d1}日出社可`
+        }
+        // 基本リモートパターン（「基本リモート・週1〜2回出社」等）→ 既に上記で拾えなかった場合
+        if (/基本リモート|原則リモート|リモートベース|リモートメイン/.test(t)) {
+          // 週回数の追加抽出を試みる
+          const weekCount = t.match(/週(\d)[〜~～]?(\d?)回/)
+          if (weekCount) return `週${weekCount[1]}日出社可`
+          return 'リモート希望'
         }
         if (proseFields.workStyle === 'フルリモート') return 'フルリモート希望'
         if (proseFields.workStyle === 'リモート希望') return 'リモート希望'
