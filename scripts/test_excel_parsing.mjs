@@ -1,178 +1,197 @@
 /**
- * ローカルExcelファイルに対してskillYears抽出ロジックをテストする
- * inbound-email/index.ts の extractSkillYearsFromSheetData をJS移植して試す
+ * ローカルファイルに対してskillYears抽出ロジックをテストする
+ *
+ * 使い方:
+ *   node scripts/test_excel_parsing.mjs             # 詳細出力（デバッグ用）
+ *   node scripts/test_excel_parsing.mjs --compact   # メトリクス表のみ（Claude読み取り用）
+ *   node scripts/test_excel_parsing.mjs --log "改善メモ"  # compact + improvement_log.md 追記
+ *   node scripts/test_excel_parsing.mjs --new       # testData/*.xlsx（未分類）も検証
+ *
+ * 関数は _extractors.gen.mjs からインポート（index.ts と常に同期）
+ * 再同期: node scripts/sync_extractors.mjs
  */
-import { readdirSync } from 'fs'
+import { readdirSync, readFileSync, appendFileSync } from 'fs'
 import XLSX from 'xlsx'
 import { fileURLToPath } from 'url'
 import { join, dirname } from 'path'
+import {
+  extractSkillYearsFromSheetData,
+  extractSkillYearsFromBodyText,
+} from './_extractors.gen.mjs'
 
-const dir = join(dirname(fileURLToPath(import.meta.url)), 'testData/excel')
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const excelDir   = join(__dirname, 'testData/excel')
+const failureDir = join(__dirname, 'testData/failures')
+const newDir     = join(__dirname, 'testData')
+const logFile    = join(__dirname, 'testData/improvement_log.md')
 
-// ── 移植: inbound-email/index.ts から ──────────────────────────────
+const args = process.argv.slice(2)
+const COMPACT  = args.includes('--compact') || args.includes('-c') || args.some(a => a === '--log')
+const SHOW_NEW = args.includes('--new')
+const logNoteIdx = args.indexOf('--log')
+const LOG_NOTE = logNoteIdx >= 0 ? (args[logNoteIdx + 1] ?? '') : null
 
-function parseDurationToMonths(text) {
-  if (!text || typeof text !== 'string') return null
-  const t = text.trim()
-  let months = 0
-  const yearMatch = t.match(/(\d+)\s*年/)
-  const monthMatch = t.match(/(\d+)\s*[ヶか]月/)
-  if (yearMatch) {
-    const y = parseInt(yearMatch[1])
-    if (y > 50) return null
-    months += y * 12
+// compact モードでは [DBG] と gen.mjs の console.log を抑制
+const dbg = COMPACT ? () => {} : (s) => process.stdout.write(s)
+if (COMPACT) {
+  const _origLog = console.log.bind(console)
+  console.log = (...args) => {
+    const msg = String(args[0] ?? '')
+    if (msg.startsWith('[skillYears') || msg.startsWith('[DBG]') || msg.startsWith('[filterSkill')) return
+    _origLog(...args)
   }
-  if (monthMatch) months += parseInt(monthMatch[1])
-  return months > 0 ? months : null
 }
 
-function excelSerialToDateStr(s) {
-  const n = parseInt(s)
-  if (isNaN(n) || n < 36526 || n > 50000) return s
-  const d = new Date(Date.UTC(1899, 11, 30) + n * 86400000)
-  return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}`
-}
+// ── テスト実行ヘルパー ────────��────────────────────────────────────
 
-function calcMonthsFromDates(start, end) {
-  const parseYM = (s) => {
-    const normalized = excelSerialToDateStr(s.trim())
-    const m = normalized.match(/(\d{2,4})[\/\-年](\d{1,2})/)
-    if (!m) return null
-    let year = parseInt(m[1])
-    if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
-    return { year, month: parseInt(m[2]) }
+function scoreResult(result) {
+  const skills = Object.entries(result).filter(([k]) => !k.startsWith('_'))
+  if (skills.length > 0) return {
+    status: 'pass',
+    label: `${skills.length}スキル: ${skills.slice(0,3).map(([k,v])=>`${k}(${Math.round(v/12)}年)`).join(', ')}`,
   }
-  const s = parseYM(start)
-  const e = parseYM(end)
-  if (!s || !e) return null
-  const months = (e.year - s.year) * 12 + (e.month - s.month) + 1
-  return months > 0 ? months : null
+  if (result._totalProjectMonths) return {
+    status: 'warn',
+    label: `スキルなし/総月数=${result._totalProjectMonths}ヶ月`,
+  }
+  return { status: 'fail', label: '取得ゼロ' }
 }
 
-/** セル内に "2025年3月\n～\n2026年2月" 形式で開始〜終了が入っている場合に月数を抽出 */
-function calcMonthsFromMultilineCell(cellValue) {
-  const parts = cellValue.split(/[\r\n]+/).map(s => s.trim())
-    .filter(s => s && !/^[～~〜\-－]$/.test(s) && s !== '現在' && s !== '継続中')
-  if (parts.length < 2) return null
-  return calcMonthsFromDates(parts[0], parts[parts.length - 1])
-}
-
-function extractSkillYearsFromSheetData(data) {
-  const EXP_LABEL = /IT経験|開発経験|エンジニア歴|経験年数|総経験|業務経験/
-  for (let i = 0; i < Math.min(30, data.length); i++) {
-    const row = data[i]
-    for (let j = 0; j < row.length; j++) {
-      const v = String(row[j] ?? '').trim()
-      if (!EXP_LABEL.test(v)) continue
-      if (/凡例|◎＝|○＝|◇＝|△＝|▲＝/.test(v)) continue
-      const inCell = parseDurationToMonths(v)
-      if (inCell) return { _totalProjectMonths: inCell }
-      for (let k = j + 1; k <= Math.min(row.length - 1, j + 3); k++) {
-        const adj = parseDurationToMonths(String(row[k] ?? ''))
-        if (adj) return { _totalProjectMonths: adj }
+function runExcelFile(filePath, _fileName) {
+  try {
+    const wb = XLSX.readFile(filePath)
+    for (const sheetName of wb.SheetNames.slice(0, 2)) {
+      const ws = wb.Sheets[sheetName]
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+        .map(row => row.map(c => String(c ?? '')))
+      const result = extractSkillYearsFromSheetData(data)
+      const s = scoreResult(result)
+      if (!COMPACT) {
+        const icon = s.status === 'pass' ? '✅' : s.status === 'warn' ? '⚠️ ' : '❌'
+        console.log(`  ${icon} [${sheetName}] ${s.label}`)
       }
+      if (s.status !== 'fail') return s.status
     }
+    return 'fail'
+  } catch (e) {
+    dbg(`  [ERR] ${_fileName}: ${e.message}\n`)
+    return 'error'
   }
-
-  // Method 1
-  let langColIdx = -1, fwColIdx = -1, headerRowIdx = -1
-  for (let i = 0; i < Math.min(60, data.length); i++) {
-    const row = data[i]
-    for (let j = 0; j < row.length; j++) {
-      const v = String(row[j] ?? '').split(/[\r\n]/)[0].trim()
-      if ((v.includes('使用言語') || v === '言語' || v.includes('使用技術') || v.includes('技術スタック') || v === '技術' || v === '言語/技術'
-           || v.includes('開発言語')  // "OS・DB・開発言語" 等の複合ヘッダー対応
-           || (v.includes('言語') && (v.includes('FW') || v.includes('ツール') || v.includes('技術')))
-         ) && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
-      if ((v.includes('FW') || v.includes('ツール') || v.includes('フレームワーク') || v.includes('ミドル')) && fwColIdx < 0 && j !== langColIdx) fwColIdx = j
-    }
-    if (langColIdx >= 0) break
-  }
-  if (langColIdx >= 0) {
-    const skillMonths = {}
-    const projectPeriods = []
-    for (let i = headerRowIdx + 1; i < data.length; i++) {
-      const row = data[i]
-      const noCell = String(row[0] ?? '').trim().replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-      if (!noCell || !/^\d+$/.test(noCell)) continue
-      const langCell = String(row[langColIdx] ?? '').trim()
-      const fwCell = fwColIdx >= 0 ? String(row[fwColIdx] ?? '').trim() : ''
-      let months = null
-      for (let di = 1; di <= 3 && !months; di++) {
-        if (i + di < data.length) {
-          months = parseDurationToMonths(String(data[i + di][1] ?? ''))
-               ?? parseDurationToMonths(String(data[i + di][2] ?? ''))
-        }
-      }
-      // 開始〜終了が同一セル内（"2025年3月\n～\n2026年2月"）の場合
-      if (!months) months = calcMonthsFromMultilineCell(String(row[1] ?? ''))
-      // col[1]/col[3] が別々の日付の場合
-      if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), String(row[3] ?? ''))
-      if (!months || months <= 0) {
-        // デバッグ出力
-        process.stdout.write(`    [DBG] row${i} no=${noCell} lang="${langCell}" months=null (row1="${String(row[1]??'').trim().slice(0,15)}" row3="${String(row[3]??'').trim().slice(0,15)}")\n`)
-        continue
-      }
-      projectPeriods.push({ start: String(row[1] ?? ''), end: String(row[3] ?? ''), months })
-      const skillTexts = (langCell + '\n' + fwCell).split(/[\n\r、，,]+/).map(s => s.trim())
-        .filter(s => s && s !== '-' && s !== '－' && !/^[\s\-－]+$/.test(s))
-      for (const skill of skillTexts) skillMonths[skill] = (skillMonths[skill] ?? 0) + months
-    }
-    if (Object.keys(skillMonths).length > 0) return skillMonths
-    else process.stdout.write(`    [DBG] Method1: langColIdx=${langColIdx} but all skills empty\n`)
-  }
-
-  // Method 3
-  const EXP_YEAR_HEADER = /^(経験年数|経験年|経験\(年\)|年数|年|Years?|Exp\.?)$/i
-  const SKILL_COL_HEADER = /^(スキル名?|技術名?|使用技術|言語|技術スタック|item|技術項目)$/i
-  let expYrCol = -1, skillCol3 = -1, hdrRow3 = -1
-  for (let i = 0; i < Math.min(60, data.length); i++) {
-    const row = data[i]
-    for (let j = 0; j < row.length; j++) {
-      const v = String(row[j] ?? '').trim()
-      if (EXP_YEAR_HEADER.test(v) && expYrCol < 0) { expYrCol = j; hdrRow3 = i }
-      if (SKILL_COL_HEADER.test(v) && skillCol3 < 0) skillCol3 = j
-    }
-    if (expYrCol >= 0 && skillCol3 >= 0) break
-  }
-  if (expYrCol >= 0 && skillCol3 >= 0 && skillCol3 !== expYrCol) {
-    const SM3 = {}
-    const BLOCKLIST3 = /^(自己PR|PR|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|担当|役割|役職|ポジション|立場|評価|合計|スコア|レベル|プロジェクト名|企業名|規模|人数|期間|開始|終了|弊社社員|自社社員|社員|派遣|契約|フリー)$/
-    for (let i = hdrRow3 + 1; i < data.length; i++) {
-      const row = data[i]
-      const expRaw = String(row[expYrCol] ?? '').trim()
-      const yearsNum = parseFloat(expRaw)
-      if (isNaN(yearsNum) || yearsNum <= 0 || yearsNum > 50) continue
-      const skillName = String(row[skillCol3] ?? '').trim()
-      if (!skillName || skillName.length < 2 || /^\d+$/.test(skillName) || BLOCKLIST3.test(skillName)) continue
-      SM3[skillName] = Math.max(SM3[skillName] ?? 0, Math.round(yearsNum * 12))
-    }
-    if (Object.keys(SM3).length > 0) return SM3
-  }
-
-  return {}
 }
 
-// ── テスト実行 ──────────────────────────────────────────────────────
+// ── メイン ────────────────────────────────────────────────────────
 
-const files = readdirSync(dir).filter(f => /\.(xlsx?|xls)$/i.test(f))
+// 1. Excel テスト（testData/excel/*.xlsx）
+const excelFiles = readdirSync(excelDir).filter(f => /\.(xlsx?|xls)$/i.test(f)).sort()
+const excelResults = { pass: [], warn: [], fail: [], error: [] }
 
-for (const file of files) {
-  console.log(`\n${'='.repeat(50)}`)
-  console.log(`${file}`)
-  const wb = XLSX.readFile(join(dir, file))
-  for (const sheetName of wb.SheetNames.slice(0, 2)) {
-    const ws = wb.Sheets[sheetName]
-    const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-      .map(row => row.map(c => String(c ?? '')))
-    const result = extractSkillYearsFromSheetData(data)
-    const skills = Object.entries(result).filter(([k]) => !k.startsWith('_'))
-    if (skills.length > 0) {
-      console.log(`  ✅ ${skills.length}スキル取得: ${skills.slice(0,5).map(([k,v])=>`${k}(${Math.round(v/12)}年)`).join(', ')}`)
-    } else if (result._totalProjectMonths) {
-      console.log(`  ⚠️  スキルなし / 総月数=${result._totalProjectMonths}ヶ月`)
-    } else {
-      console.log(`  ❌ 取得ゼロ`)
-    }
+if (!COMPACT) console.log('\n=== Excel skillYears テスト (testData/excel/) ===')
+for (const file of excelFiles) {
+  if (!COMPACT) console.log(`\n${'─'.repeat(50)}\n${file}`)
+  const status = runExcelFile(join(excelDir, file), file)
+  excelResults[status].push(file)
+}
+
+// 2. Body text テスト（testData/failures/*.txt）
+const txtFiles = readdirSync(failureDir).filter(f => f.endsWith('.txt')).sort()
+const txtResults = { pass: [], warn: [], fail: [], error: [] }
+
+if (!COMPACT && txtFiles.length > 0) console.log('\n=== Body text skillYears テスト (testData/failures/*.txt) ===')
+for (const file of txtFiles) {
+  const text = readFileSync(join(failureDir, file), 'utf-8')
+  const result = extractSkillYearsFromBodyText(text)
+  const s = scoreResult(result)
+  if (!COMPACT) {
+    const icon = s.status === 'pass' ? '✅' : s.status === 'warn' ? '⚠️ ' : '❌'
+    console.log(`  ${icon} ${file}: ${s.label}`)
   }
+  txtResults[s.status].push(file)
+}
+
+// 3. New xlsx テ���ト（testData/*.xlsx）
+const newFiles = SHOW_NEW
+  ? readdirSync(newDir).filter(f => /\.(xlsx?|xls)$/i.test(f)).sort()
+  : []
+const newResults = { pass: [], warn: [], fail: [], error: [] }
+
+if (SHOW_NEW && !COMPACT && newFiles.length > 0) console.log('\n=== New xlsx テスト (testData/*.xlsx) ===')
+for (const file of newFiles) {
+  if (!COMPACT) console.log(`\n${'─'.repeat(50)}\n${file}`)
+  const status = runExcelFile(join(newDir, file), file)
+  newResults[status].push(file)
+}
+
+// ── メトリクス表 ──────────���───────────────────────────────────────
+
+const today = new Date().toISOString().slice(0, 10)
+
+function pct(pass, warn, total) {
+  if (total === 0) return 'N/A'
+  return ((pass + warn) / total * 100).toFixed(1) + '%'
+}
+
+function metricsTable() {
+  const excelTotal = excelFiles.length
+  const excelPass  = excelResults.pass.length
+  const excelWarn  = excelResults.warn.length
+  const excelFail  = excelResults.fail.length + excelResults.error.length
+
+  const txtTotal = txtFiles.length
+  const txtPass  = txtResults.pass.length
+  const txtWarn  = txtResults.warn.length
+  const txtFail  = txtResults.fail.length + txtResults.error.length
+
+  const newTotal = newFiles.length
+  const newPass  = newResults.pass.length
+  const newWarn  = newResults.warn.length
+  const newFail  = newResults.fail.length + newResults.error.length
+
+  const lines = [
+    `=== Parse Quality Metrics (${today}) ===`,
+    `種別                 Pass  Warn  Fail  Total  Rate`,
+    `Excel skillYears     ${String(excelPass).padStart(4)}  ${String(excelWarn).padStart(4)}  ${String(excelFail).padStart(4)}  ${String(excelTotal).padStart(5)}  ${pct(excelPass, excelWarn, excelTotal)}`,
+    `Body  skillYears     ${String(txtPass).padStart(4)}  ${String(txtWarn).padStart(4)}  ${String(txtFail).padStart(4)}  ${String(txtTotal).padStart(5)}  ${pct(txtPass, txtWarn, txtTotal)}`,
+  ]
+  if (SHOW_NEW && newTotal > 0) {
+    lines.push(`New   xlsx           ${String(newPass).padStart(4)}  ${String(newWarn).padStart(4)}  ${String(newFail).padStart(4)}  ${String(newTotal).padStart(5)}  ${pct(newPass, newWarn, newTotal)}`)
+  }
+
+  const failingExcel = [...excelResults.fail, ...excelResults.error]
+  const failingTxt   = [...txtResults.fail, ...txtResults.error]
+  const failingNew   = [...newResults.fail, ...newResults.error]
+
+  if (failingExcel.length > 0) lines.push(`\nFAILING Excel: ${failingExcel.join(', ')}`)
+  if (excelResults.warn.length > 0) lines.push(`WARN    Excel: ${excelResults.warn.join(', ')}`)
+  if (failingTxt.length > 0) lines.push(`FAILING Body:  ${failingTxt.join(', ')}`)
+  if (failingNew.length > 0) lines.push(`FAILING New:   ${failingNew.slice(0,5).join(', ')}${failingNew.length > 5 ? ` (他${failingNew.length-5}件)` : ''}`)
+
+  return lines.join('\n')
+}
+
+const table = metricsTable()
+if (COMPACT) {
+  console.log(table)
+} else {
+  console.log('\n' + table)
+}
+
+// ── improvement_log.md 追記 ──────────────────────���─────────────────
+
+if (LOG_NOTE !== null) {
+  const excelRate = pct(excelResults.pass.length, excelResults.warn.length, excelFiles.length)
+  const txtRate   = pct(txtResults.pass.length,   txtResults.warn.length,   txtFiles.length)
+
+  const entry = [
+    ``,
+    `## ${today} イテレーション（自動記録）`,
+    `- **Excel skillYears**: ${excelRate}（Pass:${excelResults.pass.length} Warn:${excelResults.warn.length} Fail:${excelResults.fail.length + excelResults.error.length}/${excelFiles.length}）`,
+    `- **Body skillYears**: ${txtRate}（Pass:${txtResults.pass.length} Warn:${txtResults.warn.length} Fail:${txtResults.fail.length + txtResults.error.length}/${txtFiles.length}）`,
+    LOG_NOTE ? `- **メモ**: ${LOG_NOTE}` : null,
+    ``,
+    `---`,
+    ``,
+  ].filter(l => l !== null).join('\n')
+
+  appendFileSync(logFile, entry, 'utf-8')
+  console.log(`\n✅ improvement_log.md に追記しました`)
 }
