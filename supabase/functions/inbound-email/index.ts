@@ -6665,7 +6665,15 @@ Deno.serve(async (req: Request) => {
             }
             const blockProseFields = extractFromProse(blockRegexBodyText, blockAttachText)
 
-            const blockResolvedName = blockRegexFields.name
+            // 名前解決の優先順位:
+            // 1. blockMetas 事前パス（添付テキストなし・ブロック本文のみ）: 兄弟ブロックの添付が混入しない
+            // 2. blockRegexFields（添付テキストあり）: 添付に氏名ラベルがある場合に有効
+            // 3. extractNameFallback（イニシャル検索）
+            // 4. extractCandidateCode（件名コード）
+            // ※ blockMetas を優先する理由: ケースBで兄弟ブロックの Excel が blockAttachText に混入すると
+            //   Phase2a が他人の名前を抽出して上書きする誤りが発生するため（例: M.M ブロックが Y.M と登録される）
+            const blockResolvedName = blockMetas[blockIdx].name
+              ?? blockRegexFields.name
               ?? extractNameFallback([blockRegexBodyText, blockAttachText].join('\n'))
               ?? extractCandidateCode(subject)
               ?? '不明'
