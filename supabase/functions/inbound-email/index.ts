@@ -6591,6 +6591,12 @@ Deno.serve(async (req: Request) => {
       const sanitizeForPgJson = (s: string) =>
         s.replace(/\u0000/g, '').replace(/[\uD800-\uDFFF]/g, '')
       const effectiveBody = sanitizeForPgJson(decodeHtmlEntities(body.trim() ? body : subject))
+      // reprocess_no_skill_years.mjs の Strategy B が body 末尾に埋め込む疑似添付テキストを
+      // DB保存用本文からは除去する（パース処理には effectiveBody をそのまま使う）
+      const EMBED_ATTACH_SEP = '\n\n--- 添付テキスト ---\n'
+      const storedBodyText = effectiveBody.includes(EMBED_ATTACH_SEP)
+        ? effectiveBody.slice(0, effectiveBody.indexOf(EMBED_ATTACH_SEP))
+        : effectiveBody
 
       // ── 複数人材検出（*****や-----の区切り線） ─────────────────────────────
       // earlyMultiCheck は body で事前計算済み（effectiveBody と同一の場合は再利用）
@@ -6789,7 +6795,7 @@ Deno.serve(async (req: Request) => {
                 return toExperienceYears(expYears)
               })(),
               raw_profile: {
-                text: effectiveBody,
+                text: storedBodyText,
                 summary: '',
                 skillsByCategory: blockDbMatchedSkills.reduce((acc, s) => {
                   if (!acc[s.category]) acc[s.category] = []
