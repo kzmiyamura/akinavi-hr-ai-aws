@@ -5881,6 +5881,27 @@ function assignAttachmentsToBlocks(
     }
   })
 
+  // ── パス2.5: ファイル内容にイニシャルが含まれる（ファイル名がランダムな場合の対策） ──
+  // ファイル名で判別できなかった場合、Excel/Wordのテキスト内容からイニシャルを探す。
+  // 他のブロックのイニシャルも含む場合は曖昧なため除外する。
+  blocks.forEach((b, blockIdx) => {
+    if (result.has(blockIdx)) return
+    if (!b.name) return
+    const myNormName = b.name.replace(/[.\s　]/g, '').toLowerCase()
+    if (myNormName.length < 2) return
+    for (let i = 0; i < attachments.length; i++) {
+      if (used.has(i)) continue
+      const content = (attachments[i].content ?? '').toLowerCase().replace(/[.\s　]/g, '')
+      if (!content.includes(myNormName)) continue
+      // 他のブロックのイニシャルも含まれる → 曖昧なので除外
+      const ambiguous = allNormNames.some(n => n !== myNormName && n.length >= 2 && content.includes(n))
+      if (ambiguous) continue
+      result.set(blockIdx, attachments[i])
+      used.add(i)
+      break
+    }
+  })
+
   // ── パス3: 1対1残余マッチング（未割当ブロック数 == 未使用添付数 == 1 の場合） ──
   // ファイル名に誰の名前も駅名もない「職務経歴書.xlsx」等の汎用名でも
   // 残り1件同士なら安全に割り当てられる（順序依存リスクを最小化）
