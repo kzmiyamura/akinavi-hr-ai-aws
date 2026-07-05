@@ -6516,6 +6516,18 @@ Deno.serve(async (req: Request) => {
     // Drive取得テキスト + Officeテキストを統合（スキルマスター照合に使用）
     const allTextContents = [...driveTexts, ...officeTextContents]
 
+    // officeTextContents のラベル → 元の添付データ の逆引きマップ
+    // multi-candidate の per-block アップロード（候補者名でファイル名付け）で使用
+    const labelToAttachment = new Map<string, { name: string | undefined; mimeType: string; data: string }>()
+    for (const att of attachments) {
+      if (!att.data) continue
+      const isOffice = EXCEL_MIME.includes(att.mimeType) || WORD_MIME.includes(att.mimeType)
+        || /\.(xlsx?|xls|docx?|ods|csv)$/i.test(att.name ?? '')
+      if (!isOffice) continue
+      labelToAttachment.set(`Excelファイル(${att.name ?? 'spreadsheet'})`, att)
+      labelToAttachment.set(`Word文書(${att.name ?? 'document'})`, att)
+    }
+
     // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
     // 本文と添付を分けて照合し、精度を向上させる。
     //
@@ -6708,6 +6720,27 @@ Deno.serve(async (req: Request) => {
             const blockBoxUrls = extractBoxUrls(block)
             if (blockBoxUrls.length > 0) allBlockBoxUrls.push(...blockBoxUrls)
 
+            // ── per-block Storage アップロード（候補者名・駅名でファイル名付け） ──
+            // matchedTextContent が確定した後に実行することで「誰のExcelか」が確定してからアップロードできる
+            // ケースA（マッチあり）: 候補者名_駅名.xlsx で保存 → resume_url に設定
+            // ケースB（マッチなし・名前あり）: アップロードしない（誰のファイルか不明）
+            // ケースC（名前不明）: 従来通り resumeUrl（Googleドライブ等）を流用
+            let blockResumeUrl: string | null = null
+            if (matchedTextContent) {
+              const origAtt = labelToAttachment.get(matchedTextContent.label)
+              if (origAtt?.data) {
+                const ext = (origAtt.name ?? 'xlsx').split('.').pop() ?? 'xlsx'
+                const safeStation = (blockStationForMatch ?? '').replace(/[^\w\u3040-\u9FFF]/g, '').slice(0, 15)
+                const safeCandName = blockResolvedName.replace(/[.\s　]/g, '_')
+                const uploadName = `${safeCandName}_${safeStation}.${ext}`
+                blockResumeUrl = await uploadToStorage(uploadName, origAtt.mimeType, origAtt.data)
+                if (blockResumeUrl) console.log(`[multi] Storage upload: ${uploadName} → ${blockResumeUrl}`)
+              }
+            } else if (!blockNameForMatch) {
+              // ケースC: 名前不明 → Google Drive URL 等の resumeUrl をフォールバック使用
+              blockResumeUrl = resumeUrl
+            }
+
             const blockPayload = {
               data_env: inboundDataEnv,
               name: blockResolvedName,
@@ -6807,10 +6840,10 @@ Deno.serve(async (req: Request) => {
               created_by: 'make-inbound',
               box_url: blockBoxUrls[0] ?? null,
               box_status: blockBoxUrls.length > 0 ? 'pending' : null,
-              // ケースA: 名前マッチあり → resumeUrl（そのメールの添付 = その人のファイル）
-              // ケースB: 名前あり・マッチなし → null（共有経歴書を全員に付けない）
-              // ケースC: 名前取得失敗 → resumeUrl（フォールバック）
-              resume_url: (matchedTextContent || !blockNameForMatch) ? resumeUrl : null,
+              // ケースA: matchedTextContent あり → 候補者名でアップロード済みの blockResumeUrl
+              // ケースB: 名前あり・マッチなし → null（誰のファイルか不明なのでセットしない）
+              // ケースC: 名前不明 → resumeUrl フォールバック（= blockResumeUrl に設定済み）
+              resume_url: blockResumeUrl,
               desired_rate: blockRegexFields.desiredRate ?? null,
               // ブロック内に署名がない場合はメール全体の署名から抽出した会社名をフォールバック使用
               from_company: sanitizeFromCompany(blockRegexFields.fromCompany) ?? multiBodyCompanyName,
@@ -6908,7 +6941,7 @@ Deno.serve(async (req: Request) => {
                 created_at: new Date().toISOString(),
               }
               // ケースA・C のみ resume_url を更新（ケースBは null のまま）
-              if ((matchedTextContent || !blockNameForMatch) && resumeUrl) blockUpdatePayload.resume_url = resumeUrl
+              if (blockResumeUrl) blockUpdatePayload.resume_url = blockResumeUrl
               if (blockPayload.from_company) blockUpdatePayload.from_company = blockPayload.from_company
               const { error: blockUpdateError } = await supabase
                 .from('candidates').update(blockUpdatePayload)
