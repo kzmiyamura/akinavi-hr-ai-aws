@@ -6647,6 +6647,10 @@ Deno.serve(async (req: Request) => {
         })
         const blockAttachAssignment = assignAttachmentsToBlocks(blockMetas, allTextContents)
 
+        // ケースB共有URL: 誰のExcelか特定できなかった場合に全ブロックで共有するStorage URL
+        // undefined = まだ計算していない / null = アップロード失敗 / string = URL
+        let caseBSharedResumeUrl: string | null | undefined = undefined
+
         for (const [blockIdx, block] of multiBlocks.entries()) {
           try {
             // ── Step1: 本文のみから名前・駅名を先行抽出（フィールド抽出側で利用） ──
@@ -6740,7 +6744,8 @@ Deno.serve(async (req: Request) => {
             // ── per-block Storage アップロード（候補者名・駅名でファイル名付け） ──
             // matchedTextContent が確定した後に実行することで「誰のExcelか」が確定してからアップロードできる
             // ケースA（マッチあり）: 候補者名_駅名.xlsx で保存 → resume_url に設定
-            // ケースB（マッチなし・名前あり）: アップロードしない（誰のファイルか不明）
+            // ケースA（マッチあり）: 候補者名_駅名.xlsx で保存 → resume_url に設定
+            // ケースB（マッチなし・名前あり）: 未割当Excelを共有URLとしてアップロード（初回のみ）
             // ケースC（名前不明）: 従来通り resumeUrl（Googleドライブ等）を流用
             let blockResumeUrl: string | null = null
             if (matchedTextContent) {
@@ -6753,7 +6758,23 @@ Deno.serve(async (req: Request) => {
                 blockResumeUrl = await uploadToStorage(uploadName, origAtt.mimeType, origAtt.data)
                 if (blockResumeUrl) console.log(`[multi] Storage upload: ${uploadName} → ${blockResumeUrl}`)
               }
-            } else if (!blockNameForMatch) {
+            } else if (blockNameForMatch) {
+              // ケースB: 誰のExcelか特定できないが、未割当Excelを共有URLとして全ブロックに設定
+              if (caseBSharedResumeUrl === undefined) {
+                const assignedLabels = new Set([...blockAttachAssignment.values()].map(v => v.label))
+                const unassignedEntry = [...labelToAttachment.entries()].find(([label]) => !assignedLabels.has(label))
+                if (unassignedEntry) {
+                  const [, origAtt] = unassignedEntry
+                  const ext = (origAtt.name ?? 'xlsx').split('.').pop() ?? 'xlsx'
+                  const sharedName = `shared_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
+                  caseBSharedResumeUrl = await uploadToStorage(sharedName, origAtt.mimeType, origAtt.data) ?? null
+                  if (caseBSharedResumeUrl) console.log(`[multi] Case B shared upload: ${sharedName} → ${caseBSharedResumeUrl}`)
+                } else {
+                  caseBSharedResumeUrl = null
+                }
+              }
+              blockResumeUrl = caseBSharedResumeUrl
+            } else {
               // ケースC: 名前不明 → Google Drive URL 等の resumeUrl をフォールバック使用
               blockResumeUrl = resumeUrl
             }
