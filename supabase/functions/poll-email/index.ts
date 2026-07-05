@@ -851,8 +851,9 @@ async function pollAccount(
             // 2件目以降は Groq/Gemini のレート制限を避けるため 5 秒待機
             if (si > 0) await new Promise(r => setTimeout(r, 5000))
             // 本文(email body) + 非Officeファイル（画像等）は全件に共通して渡す
-            // dedup_salt にファイル名を入れて各呼び出しのハッシュを区別する
-            await callInboundEmail(email, [...nonOfficeAtts, officeAtt], finalType, config.dataEnv, officeAtt.name ?? '')
+            // dedup_salt に "メッセージID_添付ファイル名" を使用
+            // email.id (Outlook メッセージID) を含めることで添付名が変わっても同一メールをdedup可能
+            await callInboundEmail(email, [...nonOfficeAtts, officeAtt], finalType, config.dataEnv, `${email.id}_${officeAtt.name ?? si}`)
             console.log(`[poll] 添付分割: "${officeAtt.name}" 登録完了`)
           }
         } else {
