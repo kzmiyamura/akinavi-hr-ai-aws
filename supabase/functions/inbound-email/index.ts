@@ -1544,7 +1544,18 @@ function extractCandidateFieldsRegex(
   // テンプレートプレースホルダー「イニシャル（性別、年齢）」等を名前として採用しない (#92)
   if (rawName && /^イニシャル/.test(rawName.trim())) rawName = null
   // 先頭の区切り文字（：: 等）を除去（「：T.B（27）」→「T.B（27）」）
-  const cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
+  let cleanedName = rawName ? rawName.replace(/^[：:\s　]+/, '').trim() || null : null
+  // イニシャル後の余分な説明文を除去:
+  //   "N.S顧客折衝～ベンダー調整可能なエンジニア！" → "N.S"
+  //   "NK（長野に引っ越し予定）" → "NK"
+  //   "K.Y　サブリーダーあり" → "K.Y"
+  // 条件: イニシャルパターン（X.Y / XX）が先頭にあり、全体がイニシャルより明らかに長い場合のみ
+  if (cleanedName) {
+    const initM = cleanedName.match(/^([A-Za-zＡ-Ｚａ-ｚ][.\s　・]*[A-Za-zＡ-Ｚａ-ｚ](?:[.\s　・]*[A-Za-zＡ-Ｚａ-ｚ])?)/)
+    if (initM && cleanedName.length > initM[1].length + 2) {
+      cleanedName = initM[1]
+    }
+  }
   // 名前から年齢・性別を抽出して除去
   // パターン1: (34歳/男性) (34才/女性) - スラッシュ区切り一体型
   // パターン2: 56才(男性) - 分離型
