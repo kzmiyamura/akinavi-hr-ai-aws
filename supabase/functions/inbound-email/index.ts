@@ -5840,8 +5840,8 @@ async function unmarkEmailProcessed(
  */
 function assignAttachmentsToBlocks(
   blocks: Array<{ name: string | null; station: string | null }>,
-  attachments: Array<{ label: string; content?: string; skillYears?: Record<string, number> }>,
-): Map<number, { label: string; content?: string; skillYears?: Record<string, number> }> {
+  attachments: Array<{ label: string; content?: string; skillYears?: Record<string, number>; attachment?: Attachment }>,
+): Map<number, { label: string; content?: string; skillYears?: Record<string, number>; attachment?: Attachment }> {
   const result = new Map<number, { label: string; content?: string; skillYears?: Record<string, number> }>()
   if (attachments.length === 0 || blocks.length === 0) return result
 
@@ -6168,7 +6168,7 @@ Deno.serve(async (req: Request) => {
     const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
 
     // Word/Excelのテキスト抽出（MIMEタイプ + 拡張子の両方で判定）
-    const officeTextContents: { label: string; content: string; skillYears?: Record<string, number> }[] = []
+    const officeTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment }[] = []
     let excelSkillYears: Record<string, number> = {}
     let wordSkillYearsForDisplay: Record<string, number> = {}  // 表示用のみ・経験年数推定には使わない
     let excelSkillSummary: string | undefined  // Excel スキルシートの「スキルサマリ」セル
@@ -6184,7 +6184,7 @@ Deno.serve(async (req: Request) => {
         const { text: rawText, totalProjectMonths: wordMonths, skillYears: wordSkillYears, grid: wordGrid } = await extractWordText(att.data)
         if (rawText.trim()) {
           const text = cleanseWordText(rawText)
-          officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text })
+          officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text, attachment: att })
         } else console.warn(`[Word] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
         // Word スキル別経験年数は表示用のみ（経験年数推定には使わない）
         if (wordSkillYears && Object.keys(wordSkillYearsForDisplay).length === 0) {
@@ -6206,6 +6206,7 @@ Deno.serve(async (req: Request) => {
           label: `Excelファイル(${att.name ?? 'spreadsheet'})`,
           content: text,
           skillYears: Object.keys(years).length > 0 ? years : undefined,
+          attachment: att,
         })
         else console.warn(`[Excel] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
         // 単体候補者パス用: 最初の非空 Excel の skillYears を excelSkillYears に保存
@@ -6525,19 +6526,9 @@ Deno.serve(async (req: Request) => {
     }
 
     // Drive取得テキスト + Officeテキストを統合（スキルマスター照合に使用）
-    const allTextContents = [...driveTexts, ...officeTextContents]
-
-    // officeTextContents のラベル → 元の添付データ の逆引きマップ
-    // multi-candidate の per-block アップロード（候補者名でファイル名付け）で使用
-    const labelToAttachment = new Map<string, { name: string | undefined; mimeType: string; data: string }>()
-    for (const att of attachments) {
-      if (!att.data) continue
-      const isOffice = EXCEL_MIME.includes(att.mimeType) || WORD_MIME.includes(att.mimeType)
-        || /\.(xlsx?|xls|docx?|ods|csv)$/i.test(att.name ?? '')
-      if (!isOffice) continue
-      labelToAttachment.set(`Excelファイル(${att.name ?? 'spreadsheet'})`, att)
-      labelToAttachment.set(`Word文書(${att.name ?? 'document'})`, att)
-    }
+    // Drive由来には元添付データが無いため attachment は常に undefined
+    const allTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment }[] =
+      [...driveTexts, ...officeTextContents]
 
     // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
     // 本文と添付を分けて照合し、精度を向上させる。
@@ -6744,12 +6735,11 @@ Deno.serve(async (req: Request) => {
             // ── per-block Storage アップロード（候補者名・駅名でファイル名付け） ──
             // matchedTextContent が確定した後に実行することで「誰のExcelか」が確定してからアップロードできる
             // ケースA（マッチあり）: 候補者名_駅名.xlsx で保存 → resume_url に設定
-            // ケースA（マッチあり）: 候補者名_駅名.xlsx で保存 → resume_url に設定
             // ケースB（マッチなし・名前あり）: 未割当Excelを共有URLとしてアップロード（初回のみ）
             // ケースC（名前不明）: 従来通り resumeUrl（Googleドライブ等）を流用
             let blockResumeUrl: string | null = null
             if (matchedTextContent) {
-              const origAtt = labelToAttachment.get(matchedTextContent.label)
+              const origAtt = matchedTextContent.attachment
               if (origAtt?.data) {
                 const ext = (origAtt.name ?? 'xlsx').split('.').pop() ?? 'xlsx'
                 const safeStation = (blockStationForMatch ?? '').replace(/[^\w\u3040-\u9FFF]/g, '').slice(0, 15)
@@ -6761,10 +6751,10 @@ Deno.serve(async (req: Request) => {
             } else if (blockNameForMatch) {
               // ケースB: 誰のExcelか特定できないが、未割当Excelを共有URLとして全ブロックに設定
               if (caseBSharedResumeUrl === undefined) {
-                const assignedLabels = new Set([...blockAttachAssignment.values()].map(v => v.label))
-                const unassignedEntry = [...labelToAttachment.entries()].find(([label]) => !assignedLabels.has(label))
-                if (unassignedEntry) {
-                  const [, origAtt] = unassignedEntry
+                const assignedEntries = new Set(blockAttachAssignment.values())
+                const unassignedEntry = allTextContents.find(t => !assignedEntries.has(t) && t.attachment?.data)
+                const origAtt = unassignedEntry?.attachment
+                if (origAtt?.data) {
                   const ext = (origAtt.name ?? 'xlsx').split('.').pop() ?? 'xlsx'
                   const sharedName = `shared_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
                   caseBSharedResumeUrl = await uploadToStorage(sharedName, origAtt.mimeType, origAtt.data) ?? null

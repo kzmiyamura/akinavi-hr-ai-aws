@@ -74,3 +74,24 @@
 - **Word skillYears**: 52.2% → 52.9% (+0.7%)
 
 ---
+
+## 2026-07-06 バグ修正: multi-candidate 添付ファイル誤割当（labelToAttachment ラベル衝突）
+- **発見経緯**: ユーザー報告「A.SにT.Tの経歴書がついてる」（株式会社ai・more の5名複数人メール）。
+  DB確認で K.S/T.I/Y.F/A.S の4名が同じ `shared_*.xlsx` を指し、その中身は実際には T.T の経歴書だった。
+- **根本原因**: `labelToAttachment`（旧: `Map<label文字列, 元添付データ>`）が `att.name` 由来の
+  ラベル文字列（例: `Excelファイル(スキルシート.xlsx)`）をキーにしていたため、同一メール内に
+  同名の添付ファイル（代理店の汎用テンプレ名等）が複数あると `Map.set` の後勝ちで上書きされ、
+  ケースA（マッチ確定ブロック）のアップロードやケースB（未割当共有）の探索が
+  別人の生添付データを参照してしまっていた。
+- **修正内容**:
+  - `officeTextContents` の各エントリ（Word/Excel）に元添付データそのもの (`attachment: att`) を直接保持させ、
+    ラベル文字列を介した間接参照 (`labelToAttachment.get(label)`) を廃止
+  - ケースA: `matchedTextContent.attachment` を直接参照
+  - ケースB: `blockAttachAssignment.values()` をオブジェクト参照の `Set` として保持し、
+    `allTextContents.find(t => !assignedEntries.has(t) && t.attachment?.data)` で
+    参照同一性ベースに未割当添付を検索（ラベル衝突の影響を受けない）
+  - `labelToAttachment` Map 自体を削除
+- **テスト**: `test_excel_parsing.mjs --compact`（回帰17件）・`verify_email_extraction.mjs` 全パス
+- **デプロイ**: `check-and-deploy-edge.sh inbound-email` 実施済み
+
+---
