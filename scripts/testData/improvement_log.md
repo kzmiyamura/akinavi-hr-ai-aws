@@ -59,3 +59,18 @@
 - **Word skillYears**: 51.6% → 52.2% (+0.6%)
 
 ---
+
+## 2026-07-04 イテレーション4
+- **発見パターン**:
+  - `製品/OS/言語／DB\nツール` 型複合列が `言語` 検出に失敗（DBとOSの複合ヘッダー）
+  - `期間: 22` のような純整数月数列を持つH.I型Excel
+  - `extractSkillYearsFromSheetJson` で `期間` 列の純整数を使えていなかった
+- **追加ロジック**:
+  - Method 1: `言語/DB` や `言語/OS` を含む複合ヘッダーも `langColIdx` として検出
+  - Method 1: `^期間$` を `durationColIdx` 検出対象に追加（純整数ガード付き）
+  - `extractSkillYearsFromSheetJson`: `rawPeriodIsIntMonths` で `期間` 列の純整数対応
+- **テスト**: 151件（全パス）
+- **Excel skillYears**: 74.8% → 74.8% (変化なし)
+- **Word skillYears**: 52.2% → 52.9% (+0.7%)
+
+---
