@@ -2024,6 +2024,8 @@ function extractCandidateFieldsRegex(
     // 「経験\r\n年数」のようにラベル自体が改行で分断されるケースがあるため、
     // 「経験」と「年数」の間に任意の空白（改行含む）を許容する
     { re: /(?:経験[\s　]*年数|開発経験|実務経験)[：:\s]*[約]?\s*(\d+)年/, dedicated: true },
+    // 自然文中の「経験年数は約2年と若手ですが」のように助詞（は/が/も）を挟む言い回し
+    { re: /経験[\s　]*年数[はがも]\s*[約]?\s*(\d+)\s*年/, dedicated: true },
     { re: /(?:社会人歴|就労歴|通算|合計|累計|キャリア)[：:\s　]*[約]?\s*(\d+)\s*年/, dedicated: true },
   ]
   let experienceYearsIsDedicated = false
@@ -6983,8 +6985,9 @@ Deno.serve(async (req: Request) => {
                 }
                 // サニティチェック: 年齢が判明している場合、経験年数が「年齢-15」を超える異常値
                 // （結合セル崩れ等で日付範囲を誤解析したケース）を検知し、年齢フォールバックに任せる。
-                // 0（セル分断で断片的な数値を誤って拾ったケース）も同様に信頼できないため対象に含める。
-                if (expYears != null && (expYears === 0 || (blockRegexFields.age != null && expYears > blockRegexFields.age - 15))) {
+                // 1年未満（セル分断で断片的な数値を誤って拾い、Math.round後に0年になるケースを含む）も
+                // 同様に信頼できないため対象に含める（例: 0.3年 → 厳密な===0では素通りしてしまう）
+                if (expYears != null && (expYears < 1 || (blockRegexFields.age != null && expYears > blockRegexFields.age - 15))) {
                   expYears = null
                 }
                 // 年齢フォールバック: 経験年数が取れない場合、年齢から22を引いて推定（新卒22歳基準）
@@ -7374,10 +7377,11 @@ Deno.serve(async (req: Request) => {
       // サニティチェック: 年齢が判明している場合、経験年数が「年齢-15」を超える異常値
       // （結合セル崩れ等で日付範囲を誤解析し、実年齢よりずっと長い経験年数になってしまうケース）
       // を検知し、一旦クリアして下の年齢フォールバックに任せる。
-      // 0（セル分断で断片的な数値を誤って拾ったケース）も同様に信頼できないため対象に含める。
+      // 1年未満（セル分断で断片的な数値を誤って拾い、Math.round後に0年になるケースを含む）も
+      // 同様に信頼できないため対象に含める（例: 0.3年 → 厳密な===0では素通りしてしまう）
       {
         const resolvedAgeForSanity = analyzed.age ?? regexFields.age
-        if (resolvedExperienceYears != null && (resolvedExperienceYears === 0 || (resolvedAgeForSanity != null && resolvedExperienceYears > resolvedAgeForSanity - 15))) {
+        if (resolvedExperienceYears != null && (resolvedExperienceYears < 1 || (resolvedAgeForSanity != null && resolvedExperienceYears > resolvedAgeForSanity - 15))) {
           resolvedExperienceYears = null
         }
       }
