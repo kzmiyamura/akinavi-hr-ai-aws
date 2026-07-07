@@ -7159,9 +7159,12 @@ Deno.serve(async (req: Request) => {
                 experience_years: blockPayload.experience_years,
                 desired_rate: blockRegexFields.desiredRate ?? null,
                 created_at: new Date().toISOString(),
+                // resume_url は常に上書きする（INSERT側の resume_url: blockResumeUrl と同じ挙動に統一）。
+                // 以前は match したときだけ条件付きで含めていたため、ケースB（添付マッチなし→null）で
+                // 更新すべきなのにキー自体が payload から欠落し、古い誤った resume_url が
+                // 残り続けるバグがあった（Issue #121: 他人の経歴書が紐付いたまま消えない）
+                resume_url: blockResumeUrl,
               }
-              // ケースA・C のみ resume_url を更新（ケースBは null のまま）
-              if (blockResumeUrl) blockUpdatePayload.resume_url = blockResumeUrl
               if (blockPayload.from_company) blockUpdatePayload.from_company = blockPayload.from_company
               const { error: blockUpdateError } = await supabase
                 .from('candidates').update(blockUpdatePayload)
