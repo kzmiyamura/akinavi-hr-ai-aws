@@ -190,7 +190,8 @@ function AppInner() {
         </div>
         <TabErrorBoundary>
           <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
-            {tabPage === 'candidates' && (
+            {/* タブ切替でアンマウントすると絞り込み等のローカル状態が消えるため、常にマウントしつつ表示だけ切り替える */}
+            <div className={tabPage === 'candidates' ? 'block' : 'hidden'}>
               <CandidatePage
                 nickname={nickname}
                 dataEnv={dataEnv}
@@ -198,7 +199,7 @@ function AppInner() {
                 onOpenCandidateDetail={openCandidateDetail}
                 onOpenHeatmap={() => handleNavigate('heatmap')}
               />
-            )}
+            </div>
             {tabPage === 'projects' && (
               <ProjectPage nickname={nickname} dataEnv={dataEnv} demoUiEnabled={demoUiEnabled} onOpenProjectDetail={openProjectDetail} />
             )}
