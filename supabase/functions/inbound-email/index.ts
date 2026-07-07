@@ -4404,8 +4404,13 @@ function filterSkillYears(sy: Record<string, number>): Record<string, number> {
   const MONEY_RE = /\d+万(?:円)?|円$/
   // 個人情報・履歴ラベルをスキル名として誤抽出しないためのブロックリスト
   const PERSONAL_INFO_RE = /^(学歴|最終学歴|氏名|ふりがな|フリガナ|生年月日|年齢|性別|住所|国籍|最寄[駅]?|電話|メール|資格|自己PR|PR|所属|経験年数|合計|総計|計|小計|期間合計|担当工程|在籍期間|参画期間|携わ)$/
+  // 業務経歴テーブルの「工程」列見出し（要件定義/基本設計/...）・期間セクションのラベルは
+  // スキル名ではなく、Excel添付テキストからの本文パターン誤マッチで拾われることがある
+  const PHASE_LABEL_RE = /^(要件|定義|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|受入試験|運用保守|期間|稼働月数|担当範囲|体制|担当)$/
   // 日付・期間範囲がキーになっている場合を除外（例: "2022/2～2022/9", "2019年〜現在"）
   const DATE_RANGE_RE = /\d{4}[\/年]\d{1,2}/
+  // キー自体が「8ヶ月」等の期間表記そのものになっている自己参照的な誤マッチを除外
+  const SELF_DURATION_RE = /^\d+\s*[年ヶかカ]?[月]?$/
   // Excelの壊れた数式参照（削除されたセル・シートを指す数式が残っている場合）はスキル名として無効
   const FORMULA_ERROR_RE = /^#(?:REF!|VALUE!|NAME\?|DIV\/0!|N\/A|NULL!|NUM!)$/
   // 「【言語】」「【DB】」「【FW】」等、隅付き括弧で囲まれたセクション見出しはスキル名として無効
@@ -4425,6 +4430,8 @@ function filterSkillYears(sy: Record<string, number>): Record<string, number> {
     if (NON_SKILL_RE.test(kNoSpace)) continue
     if (MONEY_RE.test(k)) continue
     if (PERSONAL_INFO_RE.test(kNoSpace)) continue
+    if (PHASE_LABEL_RE.test(kNoSpace)) continue
+    if (SELF_DURATION_RE.test(k.trim())) continue
     if (DATE_RANGE_RE.test(k)) continue
     if (FORMULA_ERROR_RE.test(k.trim())) continue
     if (BRACKET_HEADER_RE.test(k.trim())) continue
