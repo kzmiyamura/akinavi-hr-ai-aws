@@ -302,6 +302,24 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
       if (gender === null) gender = nlBracket[3]
       bracketStation = nlBracket[4]?.includes('駅') ? nlBracket[4].trim() : null
     }
+    if (!name || age === null || gender === null) {
+      const dearismPat = /≪([^≪≫（(\n]{1,20}?)[ 　]*[（(](\d{2})[才歳][）)][ 　]*(男性|女性|男|女)/
+      const nlD = allTextForName.match(dearismPat)
+      if (nlD) {
+        if (!name)           name   = nlD[1].trim() || null
+        if (age === null)    age    = parseInt(nlD[2], 10)
+        if (gender === null) gender = nlD[3]
+      }
+    }
+    if (age === null || gender === null) {
+      const bareAgeGenderPat = /(?:^|\n)[ 　]*([^\d\s　\n]{1,20})[　 ]+(\d{2})[才歳][　 ]?(男性|女性|男|女)/m
+      const nlBare = allTextForName.match(bareAgeGenderPat)
+      if (nlBare && !NAME_FIELD_LABELS.test(nlBare[1].trim())) {
+        if (!name)           name   = nlBare[1].trim() || null
+        if (age === null)    age    = parseInt(nlBare[2], 10)
+        if (gender === null) gender = nlBare[3]
+      }
+    }
   }
   if (!nationality) {
     const natInName = nameStripped.match(/[\s　]?[\(（]([^)）\d]{1,15}[籍人国])[\)）]/)

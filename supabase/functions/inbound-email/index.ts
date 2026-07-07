@@ -1737,6 +1737,17 @@ function extractCandidateFieldsRegex(
         if (gender === null) gender = nlD[3]
       }
     }
+    // 括弧なし「名前　N歳性別」形式（例: "MK_S　48歳男"）— 区切り文字が空白のみで
+    // 括弧・記号を一切伴わない場合。行頭の非空白トークンを名前候補として採用する
+    if (age === null || gender === null) {
+      const bareAgeGenderPat = /(?:^|\n)[ 　]*([^\d\s　\n]{1,20})[　 ]+(\d{2})[才歳][　 ]?(男性|女性|男|女)/m
+      const nlBare = allTextForName.match(bareAgeGenderPat)
+      if (nlBare && !NAME_FIELD_LABELS.test(nlBare[1].trim())) {
+        if (!name)           name   = nlBare[1].trim() || null
+        if (age === null)    age    = parseInt(nlBare[2], 10)
+        if (gender === null) gender = nlBare[3]
+      }
+    }
   }
 
   // 国籍 — 名前括弧内: （中国籍）（外国籍）（日本）等を抽出・除去
