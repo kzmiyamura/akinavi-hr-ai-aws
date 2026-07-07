@@ -4414,6 +4414,10 @@ function filterSkillYears(sy: Record<string, number>): Record<string, number> {
   const result: Record<string, number> = {}
   for (const [k, v] of Object.entries(sy)) {
     if (k.startsWith('_')) { result[k] = v; continue }
+    // 単一スキルの経験月数が40年(480ヶ月)を超えるのは非現実的。
+    // 「工程」列見出しや期間セルの取り違えでブロック内の全ラベルに同じ
+    // 巨大な月数が誤って割り当てられるケース（SQL:518ヶ月＝43年等）を弾く
+    if (v > 480) continue
     if (k.length > 30) continue
     // 純粋な数字（行番号・案件番号等）はスキルとして無効
     if (/^\d+$/.test(k.trim())) continue
