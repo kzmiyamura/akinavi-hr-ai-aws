@@ -31,22 +31,45 @@ DB上の抽出結果と突き合わせ → 不一致があれば `supabase/funct
   MK_Sの年齢抽出バグ修正を先に完了させてから次バッチに進むこと）
 
 ## 直近の未完了作業（要再開・最優先）
-**MK_S候補者（id: `621c7cec-05b5-446e-bcec-4f09eab68fbd`）の年齢抽出バグ**
-- 本文: `MK_S　48歳男\n希望単価　56万　140-180` （全角スペース区切り、氏名の直後に
-  「48歳男」と年齢・性別がスペースなしで連結）
-- 現状: `raw_profile.age` が **null**（本文に明記されているのに抽出できていない）
-- 影響: `experience_years` が異常値 **38年**（Excel添付の日付スパン推定によるもの）
-  のまま登録されている。年齢が正しく48と取れていれば、既存のサニティチェック
-  （`resolvedExperienceYears > age - 15` → 48-15=33 を 38 が超過）が発動し、
-  年齢フォールバック（48-22=26）に是正されていたはず。
-- 対応要: `supabase/functions/inbound-email/index.ts` の年齢抽出regex
-  （`extractCandidateFieldsRegex` 内、氏名直後に「N歳性別」が続くパターン）を調査し、
-  「氏名　N歳性別」（区切り文字なし・全角スペースのみ）形式に対応させる。
-  同様のパターンが他の候補者にもある可能性があるため、修正後は
-  `node scripts/test_extraction.mjs "MK_S　48歳男"` 等でローカル確認してから
-  デプロイ・再解析すること。
-- 修正後: `node scripts/reanalyze_candidate.mjs 621c7cec-05b5-446e-bcec-4f09eab68fbd`
-  で再解析し、`experience_years` が26前後（またはより適切な値）になったか確認。
+**MK_S候補者の年齢抽出バグ → 修正済み（2026-07-08）**
+- 修正内容: `extractCandidateFieldsRegex`（ラベルなしフォールバック）に
+  `bareAgeGenderPat` を追加。「氏名　N歳性別」（括弧・区切り記号なし、全角スペース
+  のみ）形式に対応。`supabase/functions/inbound-email/index.ts` と
+  `scripts/test_extraction.mjs` の両方に同一パターンを追加済み（後者は
+  index.tsとの手動同期が必要な旧式コピーのため要注意）。
+- 検証結果: `node scripts/test_extraction.mjs --test` 154 passed, 0 failed。
+  MK_S再解析後 `age=48` `gender=男` `experience_years=38→26` に是正確認済み。
+- デプロイ・コミット・push 済み（commit 72c65d4）。
+- 既知の課題（未対応・要フォロー）:
+  - `scripts/testData/excel/` ディレクトリがローカルから消失している
+    （.gitignore対象＝候補者PIIのため元々git管理外。過去セッションでダウンロード
+    した実データがディスク上からも無くなっている）。`node scripts/test_excel_parsing.mjs`
+    がこのディレクトリ前提でクラッシュするため、skillYears系の14件リグレッションが
+    今は実行不可。次回セッションで気づいたら、過去バッチで検証した候補者の
+    resume_urlから再ダウンロードして復元するか、対応方針をユーザーに確認すること。
+
+## バッチ14（2026-07-08）で発見・修正した重大バグ
+**複数人材メールの「未割当添付の安全共有」チェックが短いイニシャル名で素通りする不具合**
+- 対象: S・F候補者（id: `08f52733-1437-485a-a8a2-e3d210fb870b`）。1通のメールに
+  6名（C・Y, K・T, M・M森, M・T松田, H・M原田, S・F）が記載され、添付Excelは
+  C・Y本人の経歴書1件のみ。ブロック分割は成功していたが、C・Yの添付が
+  「ケースB（残り1件を安全に共有）」の安全チェックをすり抜けてS・Fに誤って
+  紐付いていた。
+- 原因: 安全チェックが添付内容の全空白（`\s`・全角スペース）を除去してから
+  候補者名の正規化文字列（2文字程度のイニシャル）を`includes()`で検索していたため、
+  Excel内の無関係な隣接セル「JBOSS」+「FrameWork」が連結されて偶然
+  「…ossf…」となり、「S・F」→`sf`が偶然一致 → 安全チェックが機能しなかった。
+- 修正: `supabase/functions/inbound-email/index.ts` の該当2箇所
+  （ケースB安全チェック・`assignAttachmentsToBlocks`パス2.5）で、添付内容側の
+  文字列正規化から空白除去をやめ、名前内部の区切り文字（`.`・`・`）のみ除去する
+  ように変更。セル・行の境界を跨いだ偶然の文字列連結を防止。
+- 検証: `node scripts/test_extraction.mjs --test` 154 passed 0 failed。
+  デプロイ後 `reanalyze_candidate.mjs` でS・Fを再解析し、`resume_url`が
+  誤ったC・Yの経歴書から `null`（安全側フォールバック）に是正されたことを確認。
+- なお、この修正とは別に「C・Y」名義の重複候補者レコードが2件存在する
+  （`C・Y` と `C・Y【小林】`）ことが判明。異なるメールで氏名の姓カッコ書き
+  有無が揺れて別レコード化した可能性があり、重複管理の観点で要フォローだが
+  今回は未対応（スコープ外・別途調査推奨）。
 
 ## このセッションで修正した主なバグ（Issue #117〜#121 + Excel検証ループ発見分）
 すべてコミット・push・デプロイ済み。

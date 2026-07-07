@@ -6096,7 +6096,9 @@ function assignAttachmentsToBlocks<T extends { label: string; content?: string }
     if (myNormName.length < 2) return
     for (let i = 0; i < attachments.length; i++) {
       if (used.has(i)) continue
-      const content = (attachments[i].content ?? '').toLowerCase().replace(/[.\s　]/g, '')
+      // 空白（\s）は除去しない: 添付内の別セル・別行の値を跨いで連結されると、短いイニシャル
+      // （2文字）が偶然一致してしまう事故になるため（例: "JBOSS"+"FrameWork" → "…ossf…"）。
+      const content = (attachments[i].content ?? '').toLowerCase().replace(/[.]/g, '')
       if (!content.includes(myNormName)) continue
       // 他のブロックのイニシャルも含まれる → 曖昧なので除外
       const ambiguous = allNormNames.some(n => n !== myNormName && n.length >= 2 && content.includes(n))
@@ -6952,7 +6954,10 @@ Deno.serve(async (req: Request) => {
               // resume_url なしのままにする（誤った経歴書を見せるより無しの方が安全）。
               if (caseBSharedResumeUrl === undefined) {
                 const origAtt = singleSafeUnassignedEntry?.attachment
-                const entryContent = (singleSafeUnassignedEntry?.content ?? '').toLowerCase().replace(/[.\s　・]/g, '')
+                // 空白文字（\s）は除去しない: Excelの別セル・別行の値を跨いで連結してしまうと
+                // 偶然2文字が一致するだけで安全チェックを素通りする（例: "JBOSS"+"FrameWork" → "…ossf…"
+                // に「S・F」の正規化名 "sf" が偶然含まれてしまう）。名前内部の区切り文字（. ・）のみ除去する。
+                const entryContent = (singleSafeUnassignedEntry?.content ?? '').toLowerCase().replace(/[.・]/g, '')
                 const myNormNameForSafety = blockResolvedName.replace(/[.\s　・]/g, '').toLowerCase()
                 const contentMentionsOther = myNormNameForSafety.length >= 2 && !entryContent.includes(myNormNameForSafety)
                 if (origAtt?.data && !contentMentionsOther) {
