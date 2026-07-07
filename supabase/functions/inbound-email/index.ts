@@ -1376,6 +1376,10 @@ function flexLabel(label: string): string {
   return result
 }
 
+// Phase2bで「ラベルのみ行の直後行」を値として拾う際、直後行がこれら他フィールドの
+// ラベル行（例:「年齢：31」）だった場合に誤ってその値を採用しないためのガード
+const OTHER_LABEL_LINE_RE = /^[　 ]*(?:フリガナ|ふりがな|氏名|名前|お名前|年齢|性別|最寄駅|最寄り駅|最終学歴|学歴|現住所|住所|居住地|経験年数|経験|希望単価|希望月額|単価|希望稼働|稼働希望|参画時期|稼働時期|開始時期|自己PR|保有資格|資格|国籍)[　 ]?[：:]/
+
 function extractFieldTwoPhase(
   labels: string[],
   bodyText: string,
@@ -1476,8 +1480,13 @@ function extractFieldTwoPhase(
       }
 
       // 非テーブル: ラベルのみ行の直後行
+      // ※ Excelの結合セル崩れ等で本来の値が失われ「ラベルのみ行」になった場合、
+      //   直後行が「別の既知ラベル：値」（例:「年齢：31」）だと誤って自分の値として
+      //   拾ってしまう（実例: 氏名の値が「年齢：31」になる）。次行が他フィールドの
+      //   ラベル行なら、このラベルの値は取得不可として諦める。
       if (labelOnly.test(line)) {
         for (let j = i + 1; j < Math.min(i + 3, lines.length); j++) {
+          if (OTHER_LABEL_LINE_RE.test(lines[j])) break
           const v = check(lines[j])
           if (v) return v
         }
