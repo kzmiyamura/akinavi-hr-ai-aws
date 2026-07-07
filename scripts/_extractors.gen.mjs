@@ -87,6 +87,11 @@ function filterSkillYears(sy){
   const PERSONAL_INFO_RE = /^(学歴|最終学歴|氏名|ふりがな|フリガナ|生年月日|年齢|性別|住所|国籍|最寄[駅]?|電話|メール|資格|自己PR|PR|所属|経験年数|合計|総計|計|小計|期間合計|担当工程|在籍期間|参画期間|携わ)$/
   // 日付・期間範囲がキーになっている場合を除外（例: "2022/2～2022/9", "2019年〜現在"）
   const DATE_RANGE_RE = /\d{4}[\/年]\d{1,2}/
+  // Excelの壊れた数式参照（削除されたセル・シートを指す数式が残っている場合）はスキル名として無効
+  const FORMULA_ERROR_RE = /^#(?:REF|VALUE|NAME\?|DIV\/0|N\/A|NULL|NUM)$/
+  // 「【言語】」「【DB】」「【FW】」等、隅付き括弧で囲まれたセクション見出しはスキル名として無効
+  // （経歴書の「担当業務」自由記述欄によくある環境見出しパターン）
+  const BRACKET_HEADER_RE = /^【[^】]{1,10}】$/
   const result= {}
   for (const [k, v] of Object.entries(sy)) {
     if (k.startsWith('_')) { result[k] = v; continue }
@@ -98,6 +103,13 @@ function filterSkillYears(sy){
     if (MONEY_RE.test(k)) continue
     if (PERSONAL_INFO_RE.test(kNoSpace)) continue
     if (DATE_RANGE_RE.test(k)) continue
+    if (FORMULA_ERROR_RE.test(k.trim())) continue
+    if (BRACKET_HEADER_RE.test(k.trim())) continue
+    // 括弧の対応が崩れている断片（自由記述の途中で改行/スペース分割された残骸。
+    // 例: "(Big" "Sur)" "(CentOS"）はスキル名として無効
+    const openParens = (k.match(/[（(]/g) ?? []).length
+    const closeParens = (k.match(/[）)]/g) ?? []).length
+    if (openParens !== closeParens) continue
     result[k] = v
   }
   return result
@@ -428,7 +440,7 @@ function extractSkillYearsFromBodyText(text){
   if (Object.keys(result).length > 0) {
     console.log(`[skillYears-body] count=${Object.keys(result).length} keys=${Object.keys(result).join(',')}`)
   }
-  return result
+  return filterSkillYears(result)
 }
 
 // ── extractSkillYearsFromSheetData ──

@@ -740,7 +740,7 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
   if (Object.keys(result).length > 0) {
     console.log(`[skillYears-body] count=${Object.keys(result).length} keys=${Object.keys(result).join(',')}`)
   }
-  return result
+  return filterSkillYears(result)
 }
 
 function dedupeTrimmedSkills(skills: unknown): string[] {
@@ -1325,8 +1325,15 @@ function extractNameFallback(text: string): string | null {
 
   // ② イニシャル: 大文字2文字の間にスペース・・.のいずれか（例: T・Y / T Y / K.M）
   // 直後が英数字でなければマッチ（】 _ スペース 末尾 等）
-  const initialMatch = text.match(/\b([A-Z][　 ・.][A-Z])(?![a-zA-Z0-9])/)
-  if (initialMatch) return initialMatch[1]
+  // 地名・国名略称（例: 「アメリカC.A.」＝カリフォルニア州）を候補者名として誤認識しないよう除外
+  const KNOWN_PLACE_ABBR = new Set(['CA', 'NY', 'UK', 'US', 'DC', 'LA', 'UAE', 'EU'])
+  const initialRe = /\b([A-Z][　 ・.][A-Z])(?![a-zA-Z0-9])/g
+  let initialMatch: RegExpExecArray | null
+  while ((initialMatch = initialRe.exec(text)) !== null) {
+    const normalized = initialMatch[1].replace(/[　 ・.]/g, '')
+    if (KNOWN_PLACE_ABBR.has(normalized)) continue
+    return initialMatch[1]
+  }
 
   return null
 }
@@ -1419,7 +1426,8 @@ function extractFieldTwoPhase(
 
   // ── Phase1b: 本文 次行（◆氏名◆\n値 等のデコレータ付きラベル対応） ──
   {
-    const labelOnly1b = new RegExp(`^[　 ]*[■●▪▶【]?[　 ]?(?:${esc})[　 ]?[】：:,，]?[　 ]*$`, 'i')
+    // ラベル直後の括弧書き注釈（「氏 名（ﾌﾘｶﾞﾅ）」等）も許容してからラベル単独行と判定する
+    const labelOnly1b = new RegExp(`^[　 ]*[■●▪▶【]?[　 ]?(?:${esc})(?:[（(][^）)]{1,20}[）)])?[　 ]?[】：:,，]?[　 ]*$`, 'i')
     const bodyLines = normalBody.split(/\r?\n/)
     for (let i = 0; i < bodyLines.length - 1; i++) {
       if (!labelOnly1b.test(bodyLines[i])) continue
@@ -1438,7 +1446,8 @@ function extractFieldTwoPhase(
     // ── Phase2b: 添付 次行 / テーブル構造 ────────────────────
     const lines = normalAttach.split(/\r?\n/)
     const labelExact = new RegExp(`^(?:${esc})$`, 'i')   // 完全一致（テーブルヘッダ用）
-    const labelOnly  = new RegExp(`^[　 ]*(?:${esc})[　 ]?[：:,，]?[　 ]*$`, 'i') // ラベルのみ行
+    // ラベル直後の括弧書き注釈（「氏 名（ﾌﾘｶﾞﾅ）」等）も許容
+    const labelOnly  = new RegExp(`^[　 ]*(?:${esc})(?:[（(][^）)]{1,20}[）)])?[　 ]?[：:,，]?[　 ]*$`, 'i') // ラベルのみ行
 
     for (let i = 0; i < lines.length - 1; i++) {
       const line = lines[i]
@@ -1510,6 +1519,10 @@ function extractCandidateFieldsRegex(
   nearestStation: string | null
   prefecture: string | null
   experienceYears: number | null
+  // 「経験年数：」「実務経験：」等の専用ラベルからの明示的な自己申告値かどうか。
+  // trueの場合、Excel添付の日付スパン推定（前職期間等を含み過大評価しやすい）で
+  // 安易に上書きしないための判定に使う。
+  experienceYearsIsDedicated: boolean
   desiredRate: string | null
   availableFrom: string | null
   desiredProject: string | null
@@ -1522,7 +1535,7 @@ function extractCandidateFieldsRegex(
   // フィールドラベル名として一般的な語は名前として採用しない
   const NAME_FIELD_LABELS = /^(年齢|性別|住所|スキル|経験|希望|単価|国籍|備考|資格|学歴|連絡先|電話|メール|生年|誕生|担当|会社|企業|所属|役職|部署|稼働|稼動|勤務|現住所|最寄|最寄り|駅名|沿線|フリガナ|ふりがな|読み|備考欄|コメント|評価|合計|レベル|スコア|期間|開始|終了|工程|規模|人数|契約|派遣|フリー|正社員|アルバイト|パート)$/
   let rawName = extractFieldTwoPhase(
-    ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
+    ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名','技術者名','技術者氏名','イニシャル'],
     bodyText, attachText,
     v => v.length >= 2 && !/^\d+$/.test(v) && !NAME_FIELD_LABELS.test(v),
     40,
@@ -1541,6 +1554,12 @@ function extractCandidateFieldsRegex(
     const strippedColon = rawName.replace(/[：:　\s]+$/, '').trim()
     if (NAME_FIELD_LABELS.test(strippedColon)) rawName = null
   }
+  // 値全体が「ラベル：値」形式で、ラベル部分が個人情報ラベルの場合も除外
+  // （例: 隣接する別ラベル行を氏名の値として誤って拾った「性別：男」等）
+  if (rawName) {
+    const labelPrefixMatch = rawName.match(/^([^\s　：:]{1,10})[：:]/)
+    if (labelPrefixMatch && NAME_FIELD_LABELS.test(labelPrefixMatch[1])) rawName = null
+  }
   // テンプレートプレースホルダー「イニシャル（性別、年齢）」等を名前として採用しない (#92)
   if (rawName && /^イニシャル/.test(rawName.trim())) rawName = null
   // 先頭の区切り文字（：: 等）を除去（「：T.B（27）」→「T.B（27）」）
@@ -1550,10 +1569,17 @@ function extractCandidateFieldsRegex(
   //   "NK（長野に引っ越し予定）" → "NK"
   //   "K.Y　サブリーダーあり" → "K.Y"
   // 条件: イニシャルパターン（X.Y / XX）が先頭にあり、全体がイニシャルより明らかに長い場合のみ
+  // ただし「A.S（25）男性」のような年齢・性別の構造化情報は「余分な説明文」ではないため
+  // 除去対象から除外する（除去すると直後の年齢・性別抽出が丸ごと失敗し、経験年数の
+  // 年齢フォールバックも効かなくなる致命的な事故になる）
   if (cleanedName) {
     const initM = cleanedName.match(/^([A-Za-zＡ-Ｚａ-ｚ][.\s　・]*[A-Za-zＡ-Ｚａ-ｚ](?:[.\s　・]*[A-Za-zＡ-Ｚａ-ｚ])?)/)
     if (initM && cleanedName.length > initM[1].length + 2) {
-      cleanedName = initM[1]
+      const remainder = cleanedName.slice(initM[1].length)
+      const looksLikeAgeSuffix = /^[\s　]*[\(（]\d{2}[才歳]?[\)）]?/.test(remainder)
+      if (!looksLikeAgeSuffix) {
+        cleanedName = initM[1]
+      }
     }
   }
   // 名前から年齢・性別を抽出して除去
@@ -1606,6 +1632,32 @@ function extractCandidateFieldsRegex(
         nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[\)）]/, '').trim()
       }
     }
+  }
+
+  // ── 独立した「年齢：」「性別：」ラベルからのフォールバック ──────────
+  // 名前欄に年齢・性別が併記されず、別フィールドとして分離している経歴書
+  // （例: 「氏名：IH」「年齢：24歳」「性別：女」が別々のラベルにある形式）向け。
+  // 上記の名前直後括弧パターンで取得できなかった場合のみ試みる。
+  if (age === null) {
+    const ageFieldRaw = extractFieldTwoPhase(
+      ['年齢', '年令', '満年齢'],
+      bodyText, attachText,
+      v => /^\d{2,3}[\s　]*[歳才]?$/.test(v.trim()),
+      10, 1,
+    )
+    if (ageFieldRaw) {
+      const ageNum = parseInt(ageFieldRaw.replace(/[歳才\s　]/g, '').trim(), 10)
+      if (!isNaN(ageNum) && ageNum >= 15 && ageNum <= 90) age = ageNum
+    }
+  }
+  if (gender === null) {
+    const genderFieldRaw = extractFieldTwoPhase(
+      ['性別'],
+      bodyText, attachText,
+      v => /^(男性|女性|男|女)$/.test(v.trim()),
+      6, 1,
+    )
+    if (genderFieldRaw) gender = genderFieldRaw.trim()
   }
 
   // ── 名前後ろのスキル経験年数 (#79) ──────────────────────────────
@@ -1958,23 +2010,39 @@ function extractCandidateFieldsRegex(
   let experienceYears: number | null = null
   // 全角数字→半角数字に正規化してからマッチ
   const normalizeDigits = (s: string) => s.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
-  const expPatterns = [
+  // dedicated: 「経験年数：」等の専用ラベルからの明示的な自己申告値。候補者本人の意図的な
+  //   申告なので、Excel添付の日付スパン推定（前職期間等も含みがちで過大評価しやすい）で
+  //   安易に上書きしてはいけない。
+  // !dedicated（汎用）: 「〇〇経験\nN年」のような自由文中の役割別内訳等に誤マッチしうるため、
+  //   Excel実データの方が大きければそちらを優先してよい。
+  const expPatterns: Array<{ re: RegExp; dedicated: boolean }> = [
     // 「エンジニア歴：10年」「SE歴：8年」「技術歴7年」など 職種/技術 + 歴 形式（セパレータ任意）
-    /(?:IT|エンジニア|SE|PG|開発|プログラム|システム|設計|インフラ|クラウド|技術|現場)(?:開発)?歴[：:\s　]*[約]?\s*(\d+)\s*年/,
+    { re: /(?:IT|エンジニア|SE|PG|開発|プログラム|システム|設計|インフラ|クラウド|技術|現場)(?:開発)?歴[：:\s　]*[約]?\s*(\d+)\s*年/, dedicated: true },
     // セパレータ必須にして「業務経験1年以上」等の凡例テキストへの誤マッチを防ぐ
-    /経験[：:\s　]+[約]?\s*(\d+)\s*年/,
-    /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
-    /(?:経験年数|開発経験)[：:\s]*[約]?\s*(\d+)年/,
-    /(?:社会人歴|就労歴|通算|合計|累計|キャリア)[：:\s　]*[約]?\s*(\d+)\s*年/,
+    { re: /経験[：:\s　]+[約]?\s*(\d+)\s*年/, dedicated: false },
+    { re: /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/, dedicated: false },
+    // 「経験\r\n年数」のようにラベル自体が改行で分断されるケースがあるため、
+    // 「経験」と「年数」の間に任意の空白（改行含む）を許容する
+    { re: /(?:経験[\s　]*年数|開発経験|実務経験)[：:\s]*[約]?\s*(\d+)年/, dedicated: true },
+    { re: /(?:社会人歴|就労歴|通算|合計|累計|キャリア)[：:\s　]*[約]?\s*(\d+)\s*年/, dedicated: true },
   ]
+  let experienceYearsIsDedicated = false
   const allText = normalizeDigits(bodyText + '\n' + attachText)
-  for (const p of expPatterns) {
-    const m = allText.match(p)
-    if (m) {
+  for (const { re: p, dedicated } of expPatterns) {
+    // 同一パターンで複数箇所にマッチすることがある（例:「プログラマー経験\n2年7か月」
+    // 「プランナー経験\n10年1ヶ月」のような役割別内訳の並記）。最初に見つかった箇所が
+    // 必ずしも本来の主経験年数とは限らないため、そのパターン内での最大値を採用する。
+    const globalP = new RegExp(p.source, p.flags.includes('g') ? p.flags : `${p.flags}g`)
+    let maxY: number | null = null
+    let m: RegExpExecArray | null
+    while ((m = globalP.exec(allText)) !== null) {
       const y = parseInt(m[1], 10)
       // 4桁は西暦年（2020年等）の誤マッチの可能性が高いため除外
-      if (y > 0 && y <= 50 && String(y).length < 4) { experienceYears = y; break }
+      if (y > 0 && y <= 50 && String(y).length < 4 && (maxY === null || y > maxY)) {
+        maxY = y
+      }
     }
+    if (maxY !== null) { experienceYears = maxY; experienceYearsIsDedicated = dedicated; break }
   }
   // フォールバック: 「経験年数」を明言せず「・項目：期間」の箇条書き内訳のみのケース
   // （例: ・ヘルプデスク：10ヶ月 / ・テスト実施：5ヶ月）→ 合算して概算の経験年数とする
@@ -2124,7 +2192,7 @@ function extractCandidateFieldsRegex(
     if (bracketCand) fromCompany = bracketCand
   }
 
-  return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
+  return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, experienceYearsIsDedicated, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
 }
 
 /**
@@ -2420,15 +2488,18 @@ async function htmlToWordJson(html: string): Promise<WordHtmlJson> {
  */
 function wordJsonToText(json: WordHtmlJson): string {
   const lines: string[] = []
+  // 段落（氏名・自己PR等の基本情報は通常テーブルより前に書かれている）を先に出力する。
+  // テーブルを先にすると、案件履歴テーブルが長い経歴書で文字数上限
+  // （cleanseWordTextのmaxChars等）に達し、末尾の基本情報が丸ごと切り捨てられる事故になる。
+  for (const p of json.paragraphs) {
+    lines.push(p)
+  }
   for (const rows of json.tables) {
     for (const cells of rows) {
       for (const line of splitRowIntoLines(cells)) {
         lines.push(line)
       }
     }
-  }
-  for (const p of json.paragraphs) {
-    lines.push(p)
   }
   return lines.join('\n')
 }
@@ -2744,6 +2815,59 @@ function parseDurationToMonths(text: string): number | null {
   if (kanjiYear && KANJI_NUM[kanjiYear[1]] !== undefined) months += KANJI_NUM[kanjiYear[1]] * 12
   if (kanjiMonth && KANJI_NUM[kanjiMonth[1]] !== undefined) months += KANJI_NUM[kanjiMonth[1]]
   return months > 0 ? months : null
+}
+
+/**
+ * 列構造が崩れて期間列・スキル列を検出できないExcel（ゲーム業界の自由記述型経歴書等）向けの
+ * 最終フォールバック。セル値が「N年」「N年Mヶ月」等の期間表記だけで構成されている箇所を
+ * 全セルから拾い集めて合算する。長文中の年数表記（誤爆防止のため）は対象にせず、
+ * セル全体が期間表記のみの場合に限定する。
+ */
+function sumStandaloneDurationValues(rows: Array<Record<string, string>>): number {
+  const STANDALONE_DURATION_RE = /^\d+年(?:\d+[ヶかカ]月)?$|^\d+[ヶかカ]月$/
+  let total = 0
+  const seen = new Set<string>()
+  for (const row of rows) {
+    for (const [key, rawValue] of Object.entries(row)) {
+      const v = String(rawValue ?? '').trim()
+      if (!STANDALONE_DURATION_RE.test(v)) continue
+      const months = parseDurationToMonths(v)
+      if (!months || months <= 0 || months > 600) continue
+      const dedupeKey = `${key} ${v}`
+      if (seen.has(dedupeKey)) continue
+      seen.add(dedupeKey)
+      total += months
+    }
+  }
+  return total
+}
+
+/**
+ * 上記と同じく列構造が崩れた自由記述型経歴書向けのフォールバック。
+ * 「2016年5月〜2022年10月」のような日付範囲や単発の「YYYY年M月」表記を全セルから集め、
+ * 最も古い年月から最も新しい年月（または「現在」）までのスパンを概算の総経験月数とする。
+ * ※ 個々の案件期間を合算する方式（sumStandaloneDurationValues）は、同一在籍期間中の
+ *   複数案件が重複してカウントされ過大評価になるリスクがあるため、これは併用しない。
+ */
+function estimateDateSpanMonthsFromRows(rows: Array<Record<string, string>>): number | null {
+  const allText = rows.map(r => Object.values(r).join('\n')).join('\n')
+  const yms: number[] = []
+  const re = /(\d{4})年(\d{1,2})月/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(allText)) !== null) {
+    const year = parseInt(m[1], 10)
+    const month = parseInt(m[2], 10)
+    if (year >= 1970 && year <= 2100 && month >= 1 && month <= 12) {
+      yms.push(year * 12 + month)
+    }
+  }
+  if (/現在|継続中/.test(allText)) {
+    const now = new Date()
+    yms.push(now.getFullYear() * 12 + (now.getMonth() + 1))
+  }
+  if (yms.length < 2) return null
+  const span = Math.max(...yms) - Math.min(...yms)
+  return span > 0 && span <= 600 ? span : null
 }
 
 /** Excelシリアル日付（整数）を "YYYY/M" 形式に変換 */
@@ -4282,6 +4406,11 @@ function filterSkillYears(sy: Record<string, number>): Record<string, number> {
   const PERSONAL_INFO_RE = /^(学歴|最終学歴|氏名|ふりがな|フリガナ|生年月日|年齢|性別|住所|国籍|最寄[駅]?|電話|メール|資格|自己PR|PR|所属|経験年数|合計|総計|計|小計|期間合計|担当工程|在籍期間|参画期間|携わ)$/
   // 日付・期間範囲がキーになっている場合を除外（例: "2022/2～2022/9", "2019年〜現在"）
   const DATE_RANGE_RE = /\d{4}[\/年]\d{1,2}/
+  // Excelの壊れた数式参照（削除されたセル・シートを指す数式が残っている場合）はスキル名として無効
+  const FORMULA_ERROR_RE = /^#(?:REF!|VALUE!|NAME\?|DIV\/0!|N\/A|NULL!|NUM!)$/
+  // 「【言語】」「【DB】」「【FW】」等、隅付き括弧で囲まれたセクション見出しはスキル名として無効
+  // （経歴書の「担当業務」自由記述欄によくある環境見出しパターン）
+  const BRACKET_HEADER_RE = /^【[^】]{1,10}】$/
   const result: Record<string, number> = {}
   for (const [k, v] of Object.entries(sy)) {
     if (k.startsWith('_')) { result[k] = v; continue }
@@ -4293,6 +4422,13 @@ function filterSkillYears(sy: Record<string, number>): Record<string, number> {
     if (MONEY_RE.test(k)) continue
     if (PERSONAL_INFO_RE.test(kNoSpace)) continue
     if (DATE_RANGE_RE.test(k)) continue
+    if (FORMULA_ERROR_RE.test(k.trim())) continue
+    if (BRACKET_HEADER_RE.test(k.trim())) continue
+    // 括弧の対応が崩れている断片（自由記述の途中で改行/スペース分割された残骸。
+    // 例: "(Big" "Sur)" "(CentOS"）はスキル名として無効
+    const openParens = (k.match(/[（(]/g) ?? []).length
+    const closeParens = (k.match(/[）)]/g) ?? []).length
+    if (openParens !== closeParens) continue
     result[k] = v
   }
   return result
@@ -5316,11 +5452,17 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
     const bytes = base64ToUint8Array(base64)
     const workbook = XLSX.read(bytes, { type: 'array' })
     const PRIORITY_KEYWORDS = ['スキル', '経歴', '職務', 'スキルシート', 'skill', 'career', 'profile', '人材']
-    const sortedNames = [...workbook.SheetNames].sort((a, b) => {
-      const ap = PRIORITY_KEYWORDS.some(kw => a.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
-      const bp = PRIORITY_KEYWORDS.some(kw => b.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
-      return ap - bp
-    })
+    // 「〜（入力後に非表示）」「チェックリスト」等、作成者向けの記入補助・確認用シートは
+    // 候補者の実データを含まない（テンプレートの選択肢例や別人の記入例が残っていることがある）ため除外する。
+    // これらのシート名はテンプレート製作者名に依存せず概ね共通のパターンで出現する。
+    const EXCLUDE_SHEET_RE = /入力後.{0,2}非表示|非表示|チェックリスト|記入例|Sample|テンプレート/i
+    const sortedNames = [...workbook.SheetNames]
+      .filter(name => !EXCLUDE_SHEET_RE.test(name))
+      .sort((a, b) => {
+        const ap = PRIORITY_KEYWORDS.some(kw => a.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
+        const bp = PRIORITY_KEYWORDS.some(kw => b.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
+        return ap - bp
+      })
     const texts: string[] = []
     let skillYears: Record<string, number> = {}
     let firstJsonRows: Array<Record<string, string>> | undefined
@@ -5370,6 +5512,24 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
         } else {
           console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
           if (!firstJsonRows) firstJsonRows = jsonRows
+          // フォールバック: 列構造が崩れてスキル列・期間列を検出できない自由記述型の
+          // 経歴書（ゲーム業界のプロジェクト単位の記述等）でも、案件ごとの「期間」セル単体
+          // （例: "0年11ヶ月"）が jsonRows に残っていることがあるため、それらを合算する
+          const fallbackMonths = sumStandaloneDurationValues(jsonRows)
+          if (fallbackMonths > 0) {
+            skillYears = { _totalProjectMonths: fallbackMonths }
+            firstJsonRows = jsonRows
+            console.log(`[skillYears-fallback] sheet="${sheetName}" totalProjectMonths=${fallbackMonths}（単体期間セル合算）`)
+          } else {
+            // さらなるフォールバック: 「2016年5月〜2022年10月」のような日付範囲表記から
+            // 在籍全体のスパンを概算する（外資コンサル系の職務経歴書等で使用）
+            const spanMonths = estimateDateSpanMonthsFromRows(jsonRows)
+            if (spanMonths && spanMonths > 0) {
+              skillYears = { _dateSpanMonths: spanMonths }
+              firstJsonRows = jsonRows
+              console.log(`[skillYears-fallback] sheet="${sheetName}" dateSpanMonths=${spanMonths}（日付スパン概算）`)
+            }
+          }
         }
       }
     }
@@ -5838,10 +5998,10 @@ async function unmarkEmailProcessed(
  *
  * @returns Map<blockIdx, attachment>
  */
-function assignAttachmentsToBlocks(
+function assignAttachmentsToBlocks<T extends { label: string; content?: string }>(
   blocks: Array<{ name: string | null; station: string | null }>,
-  attachments: Array<{ label: string; content?: string; skillYears?: Record<string, number>; attachment?: Attachment }>,
-): Map<number, { label: string; content?: string; skillYears?: Record<string, number>; attachment?: Attachment }> {
+  attachments: T[],
+): Map<number, T> {
   const result = new Map<number, { label: string; content?: string; skillYears?: Record<string, number> }>()
   if (attachments.length === 0 || blocks.length === 0) return result
 
@@ -6168,7 +6328,7 @@ Deno.serve(async (req: Request) => {
     const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
 
     // Word/Excelのテキスト抽出（MIMEタイプ + 拡張子の両方で判定）
-    const officeTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment }[] = []
+    const officeTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment; jsonRows?: Array<Record<string, string>>; skillSummary?: string }[] = []
     let excelSkillYears: Record<string, number> = {}
     let wordSkillYearsForDisplay: Record<string, number> = {}  // 表示用のみ・経験年数推定には使わない
     let excelSkillSummary: string | undefined  // Excel スキルシートの「スキルサマリ」セル
@@ -6207,6 +6367,8 @@ Deno.serve(async (req: Request) => {
           content: text,
           skillYears: Object.keys(years).length > 0 ? years : undefined,
           attachment: att,
+          jsonRows: excelJsonRows && excelJsonRows.length > 0 ? excelJsonRows : undefined,
+          skillSummary: excelSS,
         })
         else console.warn(`[Excel] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
         // 単体候補者パス用: 最初の非空 Excel の skillYears を excelSkillYears に保存
@@ -6526,8 +6688,8 @@ Deno.serve(async (req: Request) => {
     }
 
     // Drive取得テキスト + Officeテキストを統合（スキルマスター照合に使用）
-    // Drive由来には元添付データが無いため attachment は常に undefined
-    const allTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment }[] =
+    // Drive由来には元添付データが無いため attachment/jsonRows/skillSummary は常に undefined
+    const allTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment; jsonRows?: Array<Record<string, string>>; skillSummary?: string }[] =
       [...driveTexts, ...officeTextContents]
 
     // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
@@ -6638,8 +6800,17 @@ Deno.serve(async (req: Request) => {
         })
         const blockAttachAssignment = assignAttachmentsToBlocks(blockMetas, allTextContents)
 
-        // ケースB共有URL: 誰のExcelか特定できなかった場合に全ブロックで共有するStorage URL
-        // undefined = まだ計算していない / null = アップロード失敗 / string = URL
+        // ケースB共有URL: 名前はあるが添付が割当てられなかったブロックが「ちょうど1人」の場合のみ、
+        // 残り1件の未割当添付を安全に割り当てる（実質1対1の残余マッチング）。
+        // 2人以上が未確定の場合、どちらか1人の本物の経歴書を無関係な他人にも見せてしまう事故になるため
+        // 共有はせず resume_url は設定しない（誤った経歴書を見せるより無しの方が安全）。
+        const assignedEntriesPre = new Set(blockAttachAssignment.values())
+        const unmatchedNameBlockCount = blockMetas.filter((m, i) => m.name && !blockAttachAssignment.has(i)).length
+        const singleSafeUnassignedEntry = unmatchedNameBlockCount === 1
+          ? allTextContents.find(t => !assignedEntriesPre.has(t) && t.attachment?.data)
+          : undefined
+
+        // undefined = まだ計算していない / null = アップロード失敗または対象外 / string = URL
         let caseBSharedResumeUrl: string | null | undefined = undefined
 
         for (const [blockIdx, block] of multiBlocks.entries()) {
@@ -6650,9 +6821,9 @@ Deno.serve(async (req: Request) => {
 
             // ── Step2: 事前計算した添付割当を参照（複数人材限定・2 パス済み） ────────
             // ケースA: 名前または駅名で割り当てられた添付がある → その人の経歴書
-            // ケースB: 名前はあるが添付が割当てられない
-            //   → 未使用添付のうち他人の名前を含まないものを渡す（職務経歴書.xlsx等の汎用名対策）
-            //   → 未使用添付が 0 件なら空文字（全部他人に割当済み）
+            // ケースB: 名前はあるが添付が割当てられない → 未確定なのが自分1人だけの場合に限り
+            //   残り1件の未割当添付を渡す（singleSafeUnassignedEntry、resume_url割当と同じ判定基準）。
+            //   2人以上が未確定の場合、他人の実データ（スキル年数等）が混入する事故になるため空文字にする。
             // ケースC: 本ブロックの名前が取れていない → フォールバックで全添付共有（従来動作）
             const matchedTextContent = blockAttachAssignment.get(blockIdx) ?? null
             let blockAttachText: string
@@ -6662,22 +6833,9 @@ Deno.serve(async (req: Request) => {
               blockAttachText = matchedTextContent.content ?? ''
               blockAttachLabel = matchedTextContent.label
             } else if (blockNameForMatch && allTextContents.length > 0) {
-              // ケースB: 割り当て済み添付インデックスを除外し、他人名を含まない未使用添付を渡す
-              const assignedAttachments = new Set(
-                [...blockAttachAssignment.values()].map(v => v.label)
-              )
-              const allNormBlockNames = blockMetas
-                .map(b => (b.name ? b.name.replace(/[.\s　]/g, '').toLowerCase() : ''))
-                .filter(n => n.length >= 2)
-              const myNormName = blockNameForMatch.replace(/[.\s　]/g, '').toLowerCase()
-              const unassigned = allTextContents.filter(t => {
-                if (assignedAttachments.has(t.label)) return false
-                const normFile = t.label.toLowerCase().replace(/[.\s　]/g, '')
-                // 他人の名前がファイル名に含まれるものは除外
-                return !allNormBlockNames.some(n => n !== myNormName && normFile.includes(n))
-              })
-              blockAttachText = unassigned.map(t => t.content ?? '').join('\n')
-              blockAttachLabel = unassigned.map(t => t.label).join('\n')
+              // ケースB: 未確定ブロックが自分1人だけの場合のみ、残り1件の未割当添付を使う
+              blockAttachText = singleSafeUnassignedEntry?.content ?? ''
+              blockAttachLabel = singleSafeUnassignedEntry?.label ?? ''
             } else {
               // ケースC
               blockAttachText = attachText
@@ -6749,17 +6907,29 @@ Deno.serve(async (req: Request) => {
                 if (blockResumeUrl) console.log(`[multi] Storage upload: ${uploadName} → ${blockResumeUrl}`)
               }
             } else if (blockNameForMatch) {
-              // ケースB: 誰のExcelか特定できないが、未割当Excelを共有URLとして全ブロックに設定
+              // ケースB: 未確定ブロックが自分1人だけの場合のみ、残り1件の未割当添付を安全に割当。
+              // 2人以上が未確定の場合は singleSafeUnassignedEntry が undefined になるため、
+              // 誤って他人の経歴書を共有せず resume_url なしのままにする。
+              //
+              // 追加の安全確認: 送信側が無関係なファイルを誤って多く添付したケース等では
+              // 「未割当ブロック1件・未割当添付1件」が偶然一致してしまい、全く他人の経歴書を
+              // 誤って共有する事故になりうる（実例: 添付内容にブロック名が一切含まれない）。
+              // 残った添付の内容に自分の名前（イニシャル）が含まれない場合は共有せず
+              // resume_url なしのままにする（誤った経歴書を見せるより無しの方が安全）。
               if (caseBSharedResumeUrl === undefined) {
-                const assignedEntries = new Set(blockAttachAssignment.values())
-                const unassignedEntry = allTextContents.find(t => !assignedEntries.has(t) && t.attachment?.data)
-                const origAtt = unassignedEntry?.attachment
-                if (origAtt?.data) {
+                const origAtt = singleSafeUnassignedEntry?.attachment
+                const entryContent = (singleSafeUnassignedEntry?.content ?? '').toLowerCase().replace(/[.\s　・]/g, '')
+                const myNormNameForSafety = blockResolvedName.replace(/[.\s　・]/g, '').toLowerCase()
+                const contentMentionsOther = myNormNameForSafety.length >= 2 && !entryContent.includes(myNormNameForSafety)
+                if (origAtt?.data && !contentMentionsOther) {
                   const ext = (origAtt.name ?? 'xlsx').split('.').pop() ?? 'xlsx'
                   const sharedName = `shared_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
                   caseBSharedResumeUrl = await uploadToStorage(sharedName, origAtt.mimeType, origAtt.data) ?? null
-                  if (caseBSharedResumeUrl) console.log(`[multi] Case B shared upload: ${sharedName} → ${caseBSharedResumeUrl}`)
+                  if (caseBSharedResumeUrl) console.log(`[multi] Case B single-safe upload: ${sharedName} → ${caseBSharedResumeUrl}`)
                 } else {
+                  if (origAtt?.data && contentMentionsOther) {
+                    console.log(`[multi] Case B skip: 残り添付の内容に「${blockResolvedName}」が含まれないため共有せず`)
+                  }
                   caseBSharedResumeUrl = null
                 }
               }
@@ -6790,11 +6960,20 @@ Deno.serve(async (req: Request) => {
                   const estimatedMonths = dateSpanMonths ?? totalMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
                   if (estimatedMonths && estimatedMonths > 0) {
                     const excelYears = estimatedMonths / 12
-                    // Excel の方が大きければ Excel を採用（実プロジェクト期間ベースで正確）
-                    if (expYears == null || excelYears > expYears) {
+                    // Excel の方が大きければ Excel を採用（実プロジェクト期間ベースで正確）。
+                    // ただし本文に「経験年数：」等の専用ラベルからの明示的な自己申告値がある場合は、
+                    // 候補者本人の意図的な申告を優先し、Excel日付スパン（前職期間等を含み
+                    // 過大評価しやすい）で上書きしない
+                    if (expYears == null || (!blockRegexFields.experienceYearsIsDedicated && excelYears > expYears)) {
                       expYears = excelYears
                     }
                   }
+                }
+                // サニティチェック: 年齢が判明している場合、経験年数が「年齢-15」を超える異常値
+                // （結合セル崩れ等で日付範囲を誤解析したケース）を検知し、年齢フォールバックに任せる。
+                // 0（セル分断で断片的な数値を誤って拾ったケース）も同様に信頼できないため対象に含める。
+                if (expYears != null && (expYears === 0 || (blockRegexFields.age != null && expYears > blockRegexFields.age - 15))) {
+                  expYears = null
                 }
                 // 年齢フォールバック: 経験年数が取れない場合、年齢から22を引いて推定（新卒22歳基準）
                 if (expYears == null) {
@@ -6860,9 +7039,10 @@ Deno.serve(async (req: Request) => {
                   return Object.keys(merged).length > 0 ? merged : undefined
                 })(),
                 // Excel スキルシートの「スキルサマリ」セル（selfPR・agentComment と並列の独自フィールド）
-                skillSummary: excelSkillSummary ?? undefined,
-                // Excel スキルシートの JSON 化データ（HF Spaces 品質チェック用）
-                jsonRows: attachmentParsedGrid?.source === 'excel' ? attachmentParsedGrid.rows : undefined,
+                // ※ ケースB/C（未確定添付）では他人のExcelデータが混入するため matchedTextContent 限定にする
+                skillSummary: matchedTextContent?.skillSummary,
+                // Excel スキルシートの JSON 化データ（HF Spaces 品質チェック用・同上の理由で matchedTextContent 限定）
+                jsonRows: matchedTextContent?.jsonRows,
               },
               duplicate_flag: false,
               created_by: 'make-inbound',
@@ -7154,9 +7334,12 @@ Deno.serve(async (req: Request) => {
         }
       }
       let resolvedExperienceYears = analyzed.experienceYears ?? regexFields.experienceYears
-      // skillYearsフォールバック: メール本文に経験年数が書かれていない場合、Excelから推定
+      // skillYearsフォールバック: Excel由来の実プロジェクト期間の方が正確なため、
+      // 本文の記述（regex/AI）より大きい場合は常にExcel側を採用する
+      // （本文に「〇〇経験N年」という一部内訳しか書かれておらず、Excel添付の実際の
+      // プロジェクト履歴の方が長い、というケースが実在するため）
       // 優先順位: max-min日付スパン → _totalProjectMonths合計 → スキル最大月数
-      if (resolvedExperienceYears == null && Object.keys(excelSkillYears).length > 0) {
+      if (Object.keys(excelSkillYears).length > 0) {
         const dateSpanMonths = excelSkillYears['_dateSpanMonths'] ?? null
         const totalProjectMonths = excelSkillYears['_totalProjectMonths'] ?? null
         const skillValues = Object.entries(excelSkillYears)
@@ -7165,7 +7348,22 @@ Deno.serve(async (req: Request) => {
         const maxSkillMonths = skillValues.length > 0 ? Math.max(...skillValues) : 0
         const estimatedMonths = dateSpanMonths ?? totalProjectMonths ?? (maxSkillMonths > 0 ? maxSkillMonths : null)
         if (estimatedMonths && estimatedMonths > 0) {
-          resolvedExperienceYears = estimatedMonths / 12
+          const excelYears = estimatedMonths / 12
+          // 本文に「経験年数：」等の専用ラベルからの明示的な自己申告値がある場合は、
+          // 候補者本人の意図的な申告を優先し、Excel日付スパンで上書きしない
+          if (resolvedExperienceYears == null || (!regexFields.experienceYearsIsDedicated && excelYears > resolvedExperienceYears)) {
+            resolvedExperienceYears = excelYears
+          }
+        }
+      }
+      // サニティチェック: 年齢が判明している場合、経験年数が「年齢-15」を超える異常値
+      // （結合セル崩れ等で日付範囲を誤解析し、実年齢よりずっと長い経験年数になってしまうケース）
+      // を検知し、一旦クリアして下の年齢フォールバックに任せる。
+      // 0（セル分断で断片的な数値を誤って拾ったケース）も同様に信頼できないため対象に含める。
+      {
+        const resolvedAgeForSanity = analyzed.age ?? regexFields.age
+        if (resolvedExperienceYears != null && (resolvedExperienceYears === 0 || (resolvedAgeForSanity != null && resolvedExperienceYears > resolvedAgeForSanity - 15))) {
+          resolvedExperienceYears = null
         }
       }
       // 年齢フォールバック: 経験年数が取れない場合、年齢から22を引いて推定（新卒22歳基準）
