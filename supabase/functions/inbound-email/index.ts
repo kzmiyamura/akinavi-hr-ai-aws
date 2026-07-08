@@ -336,7 +336,9 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
   // 「の〇〇でございます」「の〇〇です」等が残っていれば除去（の付きのフォールバック）
   trimmed = trimmed.replace(/の[^\s　]{1,15}(?:でございます|です|と申します|でした).*$/, '')
   // 前株パターン: 法人格 + 会社名（英語2単語名「Knowledge Technologies」にも対応）
-  const preM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[^\sの　\n、。！（）【】「」]{2,30}(?:[ \t]+[A-Za-z][A-Za-z \t&.]{0,20})?)/)
+  // ただし「株式会社ヘルスベイシス https://...」のように直後にURLが続く場合、
+  // urlの先頭語（https等）を会社名の一部として誤って取り込まないよう除外する
+  const preM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[^\sの　\n、。！（）【】「」]{2,30}(?:[ \t]+(?!https?:)[A-Za-z][A-Za-z \t&.]{0,20})?)/)
   if (preM) { trimmed = preM[1].trim(); }
   // 後株パターン: 会社名 + 法人格 (以降を除去)
   const postM = trimmed.match(/^([^\sの　\n、。！（）【】「」]{2,20}(?:株式会社|有限会社|合同会社))/)
@@ -2182,7 +2184,7 @@ function extractCandidateFieldsRegex(
   }
 
   // 全マッチを収集して宛先以外の最後のマッチを採用（送信者署名は末尾に近いため）
-  const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　の\n（(、。！【】「」]{2,30}(?:[ \t]+[A-Za-z][A-Za-z \t&.]{0,20})?)/g
+  const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　の\n（(、。！【】「」]{2,30}(?:[ \t]+(?!https?:)[A-Za-z][A-Za-z \t&.]{0,20})?)/g
   let bestPre: RegExpExecArray | null = null
   let m: RegExpExecArray | null
   while ((m = PRE_RE.exec(sigArea)) !== null) {
