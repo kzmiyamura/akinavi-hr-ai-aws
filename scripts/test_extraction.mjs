@@ -311,6 +311,15 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
         if (gender === null) gender = nlD[3]
       }
     }
+    if (!name || age === null || gender === null) {
+      const stationParenPat = /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→]?[ 　]?([A-Za-zＡ-Ｚａ-ｚ]{1,10})[　 ]?[（(][^)）\d]{1,15}[）)][　 ]*(男性|女性|男|女)[・･][　 ]*(\d{2})[才歳]/m
+      const nlSP = allTextForName.match(stationParenPat)
+      if (nlSP) {
+        if (!name)           name   = nlSP[1].trim() || null
+        if (gender === null) gender = nlSP[2]
+        if (age === null)    age    = parseInt(nlSP[3], 10)
+      }
+    }
     if (age === null || gender === null) {
       const bareAgeGenderPat = /(?:^|\n)[ 　]*([^\d\s　\n]{1,20})[　 ]+(\d{2})[才歳][　 ]?(男性|女性|男|女)/m
       const nlBare = allTextForName.match(bareAgeGenderPat)
@@ -742,9 +751,9 @@ function extractSkillYearsFromBodyText(text) {
 
 function splitMultiCandidateBody(body) {
   // ■氏名：形式（■●▪▶ 等のビュレット付き）も認識
-  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]|[■●▪▶][ 　]*(?:最寄(?:り?駅?)|希望単価|スキル|業務経験|稼働開始|稼働時期|アピール)/
+  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]|[■●▪▶]?[ 　]*(?:最寄(?:り?駅?)|希望単価|希望単金|スキル|業務経験|稼働開始|稼働時期|アピール)/
   // 【 氏 名 】（半角スペース区切り形式）・■氏名：形式にも対応
-  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳/m
+  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
   const lines = body.split(/\r?\n/)
 
   function trySplit(delimRe) {
