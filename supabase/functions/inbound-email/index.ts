@@ -6428,6 +6428,11 @@ Deno.serve(async (req: Request) => {
     // 「添付はあるのにスキル年数が入っていない」を後から切り分けられるようにするための診断メモ。
     // パース自体が例外で失敗したのか、パースは成功したがスキル年数が0件だったのかを区別して記録する。
     const excelParseNotes: string[] = []
+    // Word/Excel/PDFのいずれの判定にも一致せず完全に無視された添付を記録する診断情報。
+    // 従来はこのケースがログにすら残らず、「メールに実際は複数添付があったのに1件しか
+    // 処理されなかった」という事故（曖昧な複数人材への誤共有の疑いと誤認しやすい）を
+    // 事後的に切り分けられなかったため追加した。
+    const unrecognizedAttachments: string[] = []
     for (const att of attachments) {
       const attNameLower = (att.name ?? '').toLowerCase()
       const isWordByMime = WORD_MIME.includes(att.mimeType)
@@ -6495,6 +6500,13 @@ Deno.serve(async (req: Request) => {
         } else {
           console.log(`[PDF] テキスト層なし（スキャンPDF）: ${att.name ?? 'document.pdf'}`)
         }
+      } else if (!SUPPORTED_MIME.includes(att.mimeType)) {
+        // Word/Excel/PDFのいずれとも判定されなかった添付（画像等を除く未対応形式）。
+        // 従来はここで何もせず黙って無視していたため、メールに実際は複数添付が
+        // あったのに一部だけ処理された、という事故を後から検知できなかった。
+        const note = `${att.name ?? '(名前なし)'} mimeType=${att.mimeType || '(空)'}`
+        unrecognizedAttachments.push(note)
+        console.log(`[attachment] 未対応形式のため無視: ${note}`)
       }
     }
     tracePhase = 'step3_office_done'
@@ -7127,7 +7139,10 @@ Deno.serve(async (req: Request) => {
                 // 元メールに実際に含まれていた添付の総数（Excel/Word等のoffice文書も含む）。
                 // attachmentCount は画像/PDF等のみをカウントしatxlsx/docxを含まないため、
                 // 「このメールに添付が本当になかったか」を判定する際は必ずこちらを参照すること。
-                sourceAttachmentCount: allAttachments.length + officeTextContents.length,
+                sourceAttachmentCount: allAttachments.length + officeTextContents.length + unrecognizedAttachments.length,
+                // Word/Excel/PDFのいずれとも判定されず無視された添付（未対応形式）の一覧。
+                // 空なら undefined にして raw_profile を肥大化させない。
+                unrecognizedAttachments: unrecognizedAttachments.length > 0 ? unrecognizedAttachments : undefined,
                 // 添付はあるのにスキル年数が0件のケースで、パース失敗なのか本当に0件だったのかを
                 // 切り分けるための診断メモ（問題がなければ undefined）
                 excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
@@ -7635,7 +7650,10 @@ Deno.serve(async (req: Request) => {
           emailReceivedAt,
           attachmentCount: allAttachments.length,
           // 元メールに実際に含まれていた添付の総数（画像/PDFに加えExcel/Word等も含む）
-          sourceAttachmentCount: allAttachments.length + officeTextContents.length,
+          sourceAttachmentCount: allAttachments.length + officeTextContents.length + unrecognizedAttachments.length,
+                // Word/Excel/PDFのいずれとも判定されず無視された添付（未対応形式）の一覧。
+                // 空なら undefined にして raw_profile を肥大化させない。
+                unrecognizedAttachments: unrecognizedAttachments.length > 0 ? unrecognizedAttachments : undefined,
           excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
           attachmentNames: [
             ...allAttachments.map(a => a.name ?? a.mimeType),
@@ -8329,7 +8347,10 @@ Deno.serve(async (req: Request) => {
         emailReceivedAt,
         attachmentCount: allAttachments.length,
         // 元メールに実際に含まれていた添付の総数（画像/PDFに加えExcel/Word等も含む）
-        sourceAttachmentCount: allAttachments.length + officeTextContents.length,
+        sourceAttachmentCount: allAttachments.length + officeTextContents.length + unrecognizedAttachments.length,
+                // Word/Excel/PDFのいずれとも判定されず無視された添付（未対応形式）の一覧。
+                // 空なら undefined にして raw_profile を肥大化させない。
+                unrecognizedAttachments: unrecognizedAttachments.length > 0 ? unrecognizedAttachments : undefined,
         excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
         attachmentNames: [
           ...allAttachments.map((a) => a.name ?? a.mimeType),
