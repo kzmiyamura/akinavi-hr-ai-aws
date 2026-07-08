@@ -2164,11 +2164,16 @@ function extractCandidateFieldsRegex(
   )
 
   // ── 送信元会社名（from_company） ──────────────────────────────
-  // メール署名エリア（末尾1200文字）から会社名を抽出。
+  // メール署名エリア（末尾2000文字）から会社名を抽出。
   // 宛先側の会社名（〇〇御中・〇〇様）は除外。
+  // 署名は常に本文（bodyText）側にあり添付ファイル（候補者の経歴書等）には通常含まれない。
+  // allBodyText（本文+添付テキスト）の末尾から取ると、添付が長い場合（Excelの職務経歴が
+  // 数千文字に及ぶ等）に本文末尾の署名が範囲外に押し出されてしまい、会社名抽出が丸ごと
+  // 失敗して件名の壊れたブラケット等に誤ってフォールバックする事故になるため、
+  // bodyText 単独から取得する。
   let fromCompany: string | null = null
   const allBodyText = bodyText + '\n' + attachText
-  const sigArea = allBodyText.slice(-2000)
+  const sigArea = bodyText.slice(-2000)
 
   // 宛先行チェック: マッチ位置の直後に「様」「御中」「ご担当」が続く場合は宛先として除外
   function isSalutation(text: string, matchIndex: number, matchLen: number): boolean {
