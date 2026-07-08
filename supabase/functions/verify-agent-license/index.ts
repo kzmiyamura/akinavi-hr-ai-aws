@@ -37,7 +37,7 @@ interface AgentCompany {
 const MHLW_INIT_URL = 'https://jinzai.hellowork.mhlw.go.jp/JinzaiWeb/GICB102010.do'
 
 /** 厚労省サイトでセッション確立 → 会社名検索 → 許可番号抽出 */
-async function searchMHLW(companyName: string): Promise<{ haken: string[]; shokai: string[] }> {
+async function searchMHLW(companyName: string): Promise<{ haken: string[]; shokai: string[]; hakenDetailUrl: string | null }> {
   const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 
   // Step1: initDisp でセッション確立
@@ -97,7 +97,7 @@ async function searchMHLW(companyName: string): Promise<{ haken: string[]; shoka
 
   // 検索結果0件判定（「検索結果に表示されない場合」のメッセージが出ていたら 0 件）
   if (html.includes('検索結果に表示されない場合') && !html.includes('lbKyokatodokedeNo')) {
-    return { haken: [], shokai: [] }
+    return { haken: [], shokai: [], hakenDetailUrl: null }
   }
 
   // HTML から許可番号を抽出（例: 派13-303936）
@@ -116,9 +116,18 @@ async function searchMHLW(companyName: string): Promise<{ haken: string[]; shoka
   const shokaiAll = shokaiFromSpan.length > 0 ? shokaiFromSpan :
     [...html.matchAll(SHOKAI_RE)].map(m => m[0])
 
+  // 詳細ページへの完全なリンク（<a id="ID_linkKyokatodokedeNo" href="...detkey_Detail=...">）を抽出。
+  // 末尾の事業所インデックス（,0 / ,1 等）は同一許可番号を持つ複数事業所のどれを表示するかを
+  // 示す値でサイト側が生成した値でないと不定のため、推測せずサイトのHTMLからそのまま取得する。
+  const detailLinkMatch = html.match(/id="ID_linkKyokatodokedeNo"[^>]*href="([^"]+)"/)
+  const hakenDetailUrl = detailLinkMatch
+    ? new URL(detailLinkMatch[1].replace(/&amp;/g, '&'), MHLW_SEARCH_URL).toString()
+    : null
+
   return {
     haken: [...new Set(hakenFallback)],
     shokai: [...new Set(shokaiAll)],
+    hakenDetailUrl,
   }
 }
 
@@ -200,12 +209,14 @@ Deno.serve(async (req) => {
 
     let haken: string[] = []
     let shokai: string[] = []
+    let hakenDetailUrl: string | null = null
     let errMsg: string | undefined
 
     try {
       const result1 = await searchMHLW(searchName)
       haken = result1.haken
       shokai = result1.shokai
+      hakenDetailUrl = result1.hakenDetailUrl
 
       // ヒットなしかつ法人格なし版が違う場合は再検索
       if (haken.length === 0 && shokai.length === 0 && shortName !== searchName && shortName.length >= 2) {
@@ -213,6 +224,7 @@ Deno.serve(async (req) => {
         const result2 = await searchMHLW(shortName)
         haken = result2.haken
         shokai = result2.shokai
+        hakenDetailUrl = result2.hakenDetailUrl
       }
     } catch (e) {
       errMsg = String(e)
@@ -229,6 +241,7 @@ Deno.serve(async (req) => {
     }
     if (haken.length > 0) updateData.haken_number = haken[0]
     if (shokai.length > 0) updateData.shokai_number = shokai[0]
+    if (hakenDetailUrl) updateData.haken_detail_url = hakenDetailUrl
 
     const { error: updateErr } = await supabase
       .from('agent_companies')

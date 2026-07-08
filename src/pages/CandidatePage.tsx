@@ -290,7 +290,12 @@ export function CandidateProfileFields({
           )}
           {agentInfo?.haken_number && (
             <a
-              href={`https://jinzai.hellowork.mhlw.go.jp/JinzaiWeb/GICB102010.do?screenId=GICB102010&action=detail&detkey_Detail=${encodeURIComponent(agentInfo.haken_number + ',1     ')}`}
+              // 同一許可番号でも複数事業所（本店・支店等）があり、詳細ページURL末尾の
+              // 事業所インデックスは番号ごとに異なる（固定値では推測できない）。
+              // haken_detail_url は verify-agent-license が検索結果ページから正しい
+              // リンクを取得済みの場合に入る。未取得の場合のみ推測値（インデックス1）で
+              // フォールバックする（外れる可能性がある）。
+              href={agentInfo.haken_detail_url ?? `https://jinzai.hellowork.mhlw.go.jp/JinzaiWeb/GICB102010.do?screenId=GICB102010&action=detail&detkey_Detail=${encodeURIComponent(agentInfo.haken_number + ',1     ')}`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs bg-green-50 text-green-700 rounded px-1.5 py-0.5 hover:bg-green-100 transition-colors"

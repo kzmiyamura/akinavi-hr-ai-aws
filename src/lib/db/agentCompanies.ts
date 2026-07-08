@@ -6,6 +6,11 @@ export interface AgentCompany {
   domain: string
   company_name: string | null
   haken_number: string | null
+  // 厚労省「人材サービス総合サイト」の許可番号詳細ページへの完全なURL。
+  // 末尾の事業所インデックス（同一許可番号内のどの事業所か）は番号ごとに異なり
+  // 固定値では推測できないため、verify-agent-license が検索結果HTMLから
+  // サイト自身が生成した正しいリンクをそのまま抽出して保存したもの。
+  haken_detail_url: string | null
   shokai_number: string | null
   license_status: LicenseStatus
   verified_at: string | null
@@ -30,7 +35,7 @@ export async function fetchAllAgentCompanies(): Promise<AgentCompany[]> {
 export async function fetchAgentDomainMap(): Promise<Map<string, AgentCompany>> {
   const { data, error } = await supabase
     .from('agent_companies')
-    .select('domain, company_name, license_status, haken_number, shokai_number, verified_at')
+    .select('domain, company_name, license_status, haken_number, haken_detail_url, shokai_number, verified_at')
   if (error) throw new Error(`agent_companies取得失敗: ${error.message}`)
   const map = new Map<string, AgentCompany>()
   for (const row of data ?? []) {
