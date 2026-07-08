@@ -1546,7 +1546,9 @@ function extractCandidateFieldsRegex(
   let rawName = extractFieldTwoPhase(
     ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名','技術者名','技術者氏名','イニシャル'],
     bodyText, attachText,
-    v => v.length >= 2 && !/^\d+$/.test(v) && !NAME_FIELD_LABELS.test(v),
+    // 「性　別」「氏　名」のように全角スペースを挟んで表記されたラベル語も除外対象にする
+    // （Excel結合セル崩れで隣の「性別」ラベル自体を氏名の値として誤って拾うケース）
+    v => v.length >= 2 && !/^\d+$/.test(v) && !NAME_FIELD_LABELS.test(v.replace(/[\s　]/g, '')),
     40,
     2,
   )
@@ -1561,7 +1563,7 @@ function extractCandidateFieldsRegex(
   // 末尾コロン除去後に NAME_FIELD_LABELS に該当するものを除外（例: 「性別：」→ null）(#92)
   if (rawName) {
     const strippedColon = rawName.replace(/[：:　\s]+$/, '').trim()
-    if (NAME_FIELD_LABELS.test(strippedColon)) rawName = null
+    if (NAME_FIELD_LABELS.test(strippedColon.replace(/[\s　]/g, ''))) rawName = null
   }
   // 値全体が「ラベル：値」形式で、ラベル部分が個人情報ラベルの場合も除外
   // （例: 隣接する別ラベル行を氏名の値として誤って拾った「性別：男」等）
@@ -2050,11 +2052,13 @@ function extractCandidateFieldsRegex(
     // 「エンジニア歴：10年」「SE歴：8年」「技術歴7年」など 職種/技術 + 歴 形式（セパレータ任意）
     { re: /(?:IT|エンジニア|SE|PG|開発|プログラム|システム|設計|インフラ|クラウド|技術|現場)(?:開発)?歴[：:\s　]*[約]?\s*(\d+)\s*年/, dedicated: true },
     // セパレータ必須にして「業務経験1年以上」等の凡例テキストへの誤マッチを防ぐ
-    { re: /経験[：:\s　]+[約]?\s*(\d+)\s*年/, dedicated: false },
+    // 「【経験】：3年9カ月」のようにラベルが【】で囲まれ、閉じ括弧がセパレータの前に来る
+    // 形式にも対応するため「】」を許容する
+    { re: /経験[】]?[：:\s　]+[約]?\s*(\d+)\s*年/, dedicated: false },
     { re: /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/, dedicated: false },
     // 「経験\r\n年数」のようにラベル自体が改行で分断されるケースがあるため、
     // 「経験」と「年数」の間に任意の空白（改行含む）を許容する
-    { re: /(?:経験[\s　]*年数|開発経験|実務経験)[：:\s]*[約]?\s*(\d+)年/, dedicated: true },
+    { re: /(?:経験[\s　]*年数|開発経験|実務経験)[】]?[：:\s]*[約]?\s*(\d+)年/, dedicated: true },
     // 自然文中の「経験年数は約2年と若手ですが」のように助詞（は/が/も）を挟む言い回し
     { re: /経験[\s　]*年数[はがも]\s*[約]?\s*(\d+)\s*年/, dedicated: true },
     { re: /(?:社会人歴|就労歴|通算|合計|累計|キャリア)[：:\s　]*[約]?\s*(\d+)\s*年/, dedicated: true },
@@ -6186,6 +6190,18 @@ function splitMultiCandidateBody(body: string): string[] | null {
     // フッター・法的免責文・「以上になります」ブロックを候補者として処理しない
     const FOOTER_BLOCK_RE = /^(?:以上になります|以上です|よろしくお願いいたします|本メールに記載された|【重要[：:])/
     const blocks: string[] = []
+    // allParts[0]（先頭区切り線より前）は通常「挨拶文等の前置きのみ」だが、先頭の候補者の
+    // 直前に区切り線を置かず挨拶文にそのまま続けて書くテンプレートでは、allParts[0] 自体に
+    // 1人目の候補者情報が紛れ込む（区切り線が2人目以降にしか無いため）。NAME_FIELD_RE の
+    // マッチ位置以降を切り出せば、その候補者ブロックだけを回収できる。
+    const preamble = allParts[0] ?? ''
+    const preambleNameMatch = preamble.match(NAME_FIELD_RE)
+    if (preambleNameMatch && preambleNameMatch.index !== undefined) {
+      const leadingBlock = preamble.slice(preambleNameMatch.index).trim()
+      if (leadingBlock.length >= 50 && CANDIDATE_FIELD_RE.test(leadingBlock)) {
+        blocks.push(leadingBlock)
+      }
+    }
     for (let i = 1; i < allParts.length; i++) {
       const content = allParts[i].trim()
       if (!content || content.length < 50) continue
@@ -7067,6 +7083,10 @@ Deno.serve(async (req: Request) => {
                 from, subject,
                 emailReceivedAt,
                 attachmentCount: allAttachments.length,
+                // 元メールに実際に含まれていた添付の総数（Excel/Word等のoffice文書も含む）。
+                // attachmentCount は画像/PDF等のみをカウントしatxlsx/docxを含まないため、
+                // 「このメールに添付が本当になかったか」を判定する際は必ずこちらを参照すること。
+                sourceAttachmentCount: allAttachments.length + officeTextContents.length,
                 // ケースA: マッチした添付のラベルのみ / ケースB: [] / ケースC: 全添付（フォールバック）
                 attachmentNames: matchedTextContent
                   ? [matchedTextContent.label]
@@ -7570,6 +7590,8 @@ Deno.serve(async (req: Request) => {
           from, subject,
           emailReceivedAt,
           attachmentCount: allAttachments.length,
+          // 元メールに実際に含まれていた添付の総数（画像/PDFに加えExcel/Word等も含む）
+          sourceAttachmentCount: allAttachments.length + officeTextContents.length,
           attachmentNames: [
             ...allAttachments.map(a => a.name ?? a.mimeType),
             ...officeTextContents.map(t => t.label),
@@ -8261,6 +8283,8 @@ Deno.serve(async (req: Request) => {
         subject,
         emailReceivedAt,
         attachmentCount: allAttachments.length,
+        // 元メールに実際に含まれていた添付の総数（画像/PDFに加えExcel/Word等も含む）
+        sourceAttachmentCount: allAttachments.length + officeTextContents.length,
         attachmentNames: [
           ...allAttachments.map((a) => a.name ?? a.mimeType),
           ...officeTextContents.map((t) => t.label),

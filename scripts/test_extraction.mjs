@@ -220,7 +220,7 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   let rawName = extractFieldTwoPhase(
     ['氏名等','氏名','名前','候補者名','お名前','フルネーム','ご氏名','氏　名'],
     bodyText, attachText,
-    v => v.length >= 2 && !/^\d+$/.test(v) && !NAME_FIELD_LABELS.test(v), 40, 2,
+    v => v.length >= 2 && !/^\d+$/.test(v) && !NAME_FIELD_LABELS.test(v.replace(/[\s　]/g, '')), 40, 2,
   )
   // カンマ区切りイニシャル補完: 「名前：M,T（23）」→ rawName=null になる場合に復元
   if (!rawName) {
@@ -493,9 +493,9 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   for (const p of [
     // 「エンジニア歴：10年」「SE歴：8年」「技術歴7年」など 職種/技術 + 歴 形式（セパレータ任意）
     /(?:IT|エンジニア|SE|PG|開発|プログラム|システム|設計|インフラ|クラウド|技術|現場)(?:開発)?歴[：:\s　]*[約]?\s*(\d+)\s*年/,
-    /経験[：:\s　]+[約]?\s*(\d+)\s*年/,
+    /経験[】]?[：:\s　]+[約]?\s*(\d+)\s*年/,
     /(\d+)\s*年[以上間程度]*(?:の)?(?:経験|実務|開発|IT|エンジニア)/,
-    /(?:経験年数|開発経験)[：:\s]*[約]?\s*(\d+)年/,
+    /(?:経験年数|開発経験)[】]?[：:\s]*[約]?\s*(\d+)年/,
     // 自然文中の「経験年数は約2年と若手ですが」のように助詞（は/が/も）を挟む言い回し
     /経験[\s　]*年数[はがも]\s*[約]?\s*(\d+)\s*年/,
     /(?:社会人歴|就労歴|通算|合計|累計|キャリア)[：:\s　]*[約]?\s*(\d+)\s*年/,
@@ -773,6 +773,14 @@ function splitMultiCandidateBody(body) {
     // フッター・法的免責文・「以上になります」ブロックを候補者として処理しない
     const FOOTER_BLOCK_RE = /^(?:以上になります|以上です|よろしくお願いいたします|本メールに記載された|【重要[：:])/
     const blocks = []
+    const preamble = allParts[0] ?? ''
+    const preambleNameMatch = preamble.match(NAME_FIELD_RE)
+    if (preambleNameMatch && preambleNameMatch.index !== undefined) {
+      const leadingBlock = preamble.slice(preambleNameMatch.index).trim()
+      if (leadingBlock.length >= 50 && CANDIDATE_FIELD_RE.test(leadingBlock)) {
+        blocks.push(leadingBlock)
+      }
+    }
     for (let i = 1; i < allParts.length; i++) {
       const content = allParts[i].trim()
       if (!content || content.length < 50) continue
