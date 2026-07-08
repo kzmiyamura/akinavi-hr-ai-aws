@@ -7143,6 +7143,11 @@ Deno.serve(async (req: Request) => {
                 // Word/Excel/PDFのいずれとも判定されず無視された添付（未対応形式）の一覧。
                 // 空なら undefined にして raw_profile を肥大化させない。
                 unrecognizedAttachments: unrecognizedAttachments.length > 0 ? unrecognizedAttachments : undefined,
+                // メール全体で正常にパース出来た添付の全ラベル一覧（候補者ごとの割当結果とは無関係）。
+                // attachmentNames は「この候補者に割り当てられたものだけ」しか残らないため、
+                // 「メールに実際何個添付があり、それぞれ何というファイル名だったか」を
+                // 特定の1候補者レコードからでも確認できるようにするための共通診断情報。
+                allParsedAttachmentLabels: officeTextContents.length > 0 ? officeTextContents.map(t => t.label) : undefined,
                 // 添付はあるのにスキル年数が0件のケースで、パース失敗なのか本当に0件だったのかを
                 // 切り分けるための診断メモ（問題がなければ undefined）
                 excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
@@ -7654,6 +7659,11 @@ Deno.serve(async (req: Request) => {
                 // Word/Excel/PDFのいずれとも判定されず無視された添付（未対応形式）の一覧。
                 // 空なら undefined にして raw_profile を肥大化させない。
                 unrecognizedAttachments: unrecognizedAttachments.length > 0 ? unrecognizedAttachments : undefined,
+                // メール全体で正常にパース出来た添付の全ラベル一覧（候補者ごとの割当結果とは無関係）。
+                // attachmentNames は「この候補者に割り当てられたものだけ」しか残らないため、
+                // 「メールに実際何個添付があり、それぞれ何というファイル名だったか」を
+                // 特定の1候補者レコードからでも確認できるようにするための共通診断情報。
+                allParsedAttachmentLabels: officeTextContents.length > 0 ? officeTextContents.map(t => t.label) : undefined,
           excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
           attachmentNames: [
             ...allAttachments.map(a => a.name ?? a.mimeType),
@@ -8351,6 +8361,11 @@ Deno.serve(async (req: Request) => {
                 // Word/Excel/PDFのいずれとも判定されず無視された添付（未対応形式）の一覧。
                 // 空なら undefined にして raw_profile を肥大化させない。
                 unrecognizedAttachments: unrecognizedAttachments.length > 0 ? unrecognizedAttachments : undefined,
+                // メール全体で正常にパース出来た添付の全ラベル一覧（候補者ごとの割当結果とは無関係）。
+                // attachmentNames は「この候補者に割り当てられたものだけ」しか残らないため、
+                // 「メールに実際何個添付があり、それぞれ何というファイル名だったか」を
+                // 特定の1候補者レコードからでも確認できるようにするための共通診断情報。
+                allParsedAttachmentLabels: officeTextContents.length > 0 ? officeTextContents.map(t => t.label) : undefined,
         excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
         attachmentNames: [
           ...allAttachments.map((a) => a.name ?? a.mimeType),
