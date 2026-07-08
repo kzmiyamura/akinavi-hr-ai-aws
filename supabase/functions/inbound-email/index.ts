@@ -5493,7 +5493,7 @@ async function extractSkillYearsFromExcel(base64: string): Promise<Record<string
  * sheet_to_html を廃止して中間変換ノイズ（空セル混入・文字列変換ズレ）を除去。
  * sheet_to_json では結合セルが __EMPTY_N になり構造が破壊されるため使用しない。
  */
-async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number>; jsonRows?: Array<Record<string, string>>; skillSummary?: string }> {
+async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number>; jsonRows?: Array<Record<string, string>>; skillSummary?: string; parseError?: string }> {
   try {
     const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
@@ -5599,7 +5599,7 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
     return { text, skillYears, jsonRows: firstJsonRows, skillSummary }
   } catch (e) {
     console.warn('[Excel] 抽出失敗', e)
-    return { text: '', skillYears: {} }
+    return { text: '', skillYears: {}, parseError: e instanceof Error ? e.message : String(e) }
   }
 }
 
@@ -6404,6 +6404,9 @@ Deno.serve(async (req: Request) => {
     let excelSkillSummary: string | undefined  // Excel スキルシートの「スキルサマリ」セル
     // HF Spaces 品質チェック用: 添付から抽出した生グリッド（Excel優先、なければWord）
     let attachmentParsedGrid: { source: 'excel'; rows: Array<Record<string, string>> } | { source: 'word'; rows: string[][] } | null = null
+    // 「添付はあるのにスキル年数が入っていない」を後から切り分けられるようにするための診断メモ。
+    // パース自体が例外で失敗したのか、パースは成功したがスキル年数が0件だったのかを区別して記録する。
+    const excelParseNotes: string[] = []
     for (const att of attachments) {
       const attNameLower = (att.name ?? '').toLowerCase()
       const isWordByMime = WORD_MIME.includes(att.mimeType)
@@ -6430,10 +6433,11 @@ Deno.serve(async (req: Request) => {
         }
       } else if (isExcelByMime || isExcelByExt) {
         // 1 回のパースで text と skillYears を同時取得（二重パース防止）
-        const { text, skillYears: years, jsonRows: excelJsonRows, skillSummary: excelSS } = await extractExcelAll(att.data)
+        const { text, skillYears: years, jsonRows: excelJsonRows, skillSummary: excelSS, parseError } = await extractExcelAll(att.data)
         if (excelSS && !excelSkillSummary) excelSkillSummary = excelSS
+        const attLabel = att.name ?? 'spreadsheet'
         if (text.trim()) officeTextContents.push({
-          label: `Excelファイル(${att.name ?? 'spreadsheet'})`,
+          label: `Excelファイル(${attLabel})`,
           content: text,
           skillYears: Object.keys(years).length > 0 ? years : undefined,
           attachment: att,
@@ -6441,6 +6445,17 @@ Deno.serve(async (req: Request) => {
           skillSummary: excelSS,
         })
         else console.warn(`[Excel] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
+        // _totalProjectMonths / _dateSpanMonths は経験年数推定専用の内部キーで、
+        // スキル別年数としては表示されない。「表示用のスキル年数が実質0件」を正しく
+        // 判定するため、内部キーを除いた実スキル名の有無で判定する。
+        const realSkillYearKeys = Object.keys(years).filter(k => k !== '_totalProjectMonths' && k !== '_dateSpanMonths')
+        if (parseError) {
+          excelParseNotes.push(`${attLabel}: パース失敗 (${parseError})`)
+        } else if (!text.trim()) {
+          excelParseNotes.push(`${attLabel}: 抽出結果が空`)
+        } else if (realSkillYearKeys.length === 0) {
+          excelParseNotes.push(`${attLabel}: パース成功だがスキル年数0件`)
+        }
         // 単体候補者パス用: 最初の非空 Excel の skillYears を excelSkillYears に保存
         if (Object.keys(excelSkillYears).length === 0 && Object.keys(years).length > 0) {
           excelSkillYears = years
@@ -7087,6 +7102,9 @@ Deno.serve(async (req: Request) => {
                 // attachmentCount は画像/PDF等のみをカウントしatxlsx/docxを含まないため、
                 // 「このメールに添付が本当になかったか」を判定する際は必ずこちらを参照すること。
                 sourceAttachmentCount: allAttachments.length + officeTextContents.length,
+                // 添付はあるのにスキル年数が0件のケースで、パース失敗なのか本当に0件だったのかを
+                // 切り分けるための診断メモ（問題がなければ undefined）
+                excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
                 // ケースA: マッチした添付のラベルのみ / ケースB: [] / ケースC: 全添付（フォールバック）
                 attachmentNames: matchedTextContent
                   ? [matchedTextContent.label]
@@ -7592,6 +7610,7 @@ Deno.serve(async (req: Request) => {
           attachmentCount: allAttachments.length,
           // 元メールに実際に含まれていた添付の総数（画像/PDFに加えExcel/Word等も含む）
           sourceAttachmentCount: allAttachments.length + officeTextContents.length,
+          excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
           attachmentNames: [
             ...allAttachments.map(a => a.name ?? a.mimeType),
             ...officeTextContents.map(t => t.label),
@@ -8285,6 +8304,7 @@ Deno.serve(async (req: Request) => {
         attachmentCount: allAttachments.length,
         // 元メールに実際に含まれていた添付の総数（画像/PDFに加えExcel/Word等も含む）
         sourceAttachmentCount: allAttachments.length + officeTextContents.length,
+        excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
         attachmentNames: [
           ...allAttachments.map((a) => a.name ?? a.mimeType),
           ...officeTextContents.map((t) => t.label),
