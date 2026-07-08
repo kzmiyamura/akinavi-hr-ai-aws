@@ -5489,7 +5489,11 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
     // 「〜（入力後に非表示）」「チェックリスト」等、作成者向けの記入補助・確認用シートは
     // 候補者の実データを含まない（テンプレートの選択肢例や別人の記入例が残っていることがある）ため除外する。
     // これらのシート名はテンプレート製作者名に依存せず概ね共通のパターンで出現する。
-    const EXCLUDE_SHEET_RE = /入力後.{0,2}非表示|非表示|チェックリスト|記入例|Sample|テンプレート/i
+    // 「〜（比較用）」は、旧テンプレートを流用した際に残った全く無関係な別人の経歴書が
+    // 比較参考として同梱されているケースがあり、混入すると経験年数・スキル年数が
+    // 誤って計算される（実例: IT.xlsx に「現行経歴書(比較用)」として無関係な別候補者の
+    // 経歴書が同梱され、その短い前職バイト歴が本人の経験年数として誤って採用された）。
+    const EXCLUDE_SHEET_RE = /入力後.{0,2}非表示|非表示|チェックリスト|記入例|Sample|テンプレート|比較用/i
     const sortedNames = [...workbook.SheetNames]
       .filter(name => !EXCLUDE_SHEET_RE.test(name))
       .sort((a, b) => {
@@ -6938,7 +6942,14 @@ Deno.serve(async (req: Request) => {
                 const ext = (origAtt.name ?? 'xlsx').split('.').pop() ?? 'xlsx'
                 const safeStation = (blockStationForMatch ?? '').replace(/[^\w\u3040-\u9FFF]/g, '').slice(0, 15)
                 const safeCandName = blockResolvedName.replace(/[.\s　]/g, '_')
-                const uploadName = `${safeCandName}_${safeStation}.${ext}`
+                // uploadToStorage は upsert:true のため、ファイル名が衝突すると既存ファイルが
+                // 無条件に上書きされる。同姓同名の別候補者（同じ名前・同じ駅）が別々の
+                // メールで登録されると同じファイル名になり、後からアップロードした人の
+                // ファイルが先の人のファイルを完全に置き換えてしまう実害が確認された
+                // （複数の別人が同一URLを共有し、Storage上の実体は最後にアップロードされた
+                // 1名分のみが残っている状態）。タイムスタンプ＋ランダム文字列を必ず付与し、
+                // 一意性を保証する。
+                const uploadName = `${safeCandName}_${safeStation}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
                 blockResumeUrl = await uploadToStorage(uploadName, origAtt.mimeType, origAtt.data)
                 if (blockResumeUrl) console.log(`[multi] Storage upload: ${uploadName} → ${blockResumeUrl}`)
               }
