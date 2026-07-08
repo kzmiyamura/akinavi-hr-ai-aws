@@ -290,11 +290,11 @@ export function CandidateProfileFields({
           )}
           {agentInfo?.haken_number && (
             <a
-              href={`https://www.google.com/search?q=${encodeURIComponent(agentInfo.haken_number + ' 労働者派遣事業')}`}
+              href={`https://jinzai.hellowork.mhlw.go.jp/JinzaiWeb/GICB102010.do?screenId=GICB102010&action=detail&detkey_Detail=${encodeURIComponent(agentInfo.haken_number + ',1     ')}`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs bg-green-50 text-green-700 rounded px-1.5 py-0.5 hover:bg-green-100 transition-colors"
-              title="労働者派遣許可番号を検索"
+              title="ハローワーク許可番号照会"
             >
               {agentInfo.haken_number}
             </a>
