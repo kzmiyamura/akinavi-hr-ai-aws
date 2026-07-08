@@ -2233,6 +2233,18 @@ function extractCandidateFieldsRegex(
         break
       }
     }
+    // スペースなしで「会社名+担当者姓」が結合しているケース（例:「サクヤ新山」＝会社名
+    // 「サクヤ」+ 担当者姓「新山」）に対応する。本文署名に担当者の氏名が「姓　名」形式
+    // （新山　あみ 等）で実在し、その姓が bracketCand の末尾と一致する場合は姓部分を除去する。
+    if (bracketCand) {
+      const staffNameMatch = sigArea.match(/(?:^|\n)[　 ]*([一-龯ぁ-んァ-ヶ]{1,4})[　 ]+[ぁ-んァ-ヶA-Za-z]/)
+      if (staffNameMatch) {
+        const staffSurname = staffNameMatch[1]
+        if (staffSurname.length < bracketCand.length && bracketCand.endsWith(staffSurname)) {
+          bracketCand = bracketCand.slice(0, -staffSurname.length)
+        }
+      }
+    }
     if (bracketCand) fromCompany = bracketCand
   }
 
