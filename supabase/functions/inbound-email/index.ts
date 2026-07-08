@@ -4379,11 +4379,12 @@ function extractSkillYearsFromSheetJson(rows: Array<Record<string, string>>): Re
       if (!isNaN(n) && n > 0 && n <= 600 && String(n) === v) months = n
     }
 
-    // 優先2: 期間列（"2020/04〜2023/03" 形式。「2026年2月〜2026年7月」のように
-    // 開始側の年月直後に「月」が付く自然な表記（区切り記号の前）にも対応する）
+    // 優先2: 期間列（"2020/04〜2023/03" 形式。「2026年2月〜2026年7月」「2026年2月1日〜
+    // 2026年7月31日」のように開始側の年月（＋日）直後に「月」「日」が付く自然な表記
+    // （区切り記号の前）にも対応する）
     if (!months && periodCol && row[periodCol]) {
       const ptext = row[periodCol]
-      const m = ptext.match(/(\d{4}[\/年]\d{1,2})月?\s*[〜～\-〜]\s*(\S+)/)
+      const m = ptext.match(/(\d{4}[\/年]\d{1,2})月?(?:\d{1,2}日)?\s*[〜～\-〜]\s*(\S+)/)
       if (m) {
         startYM = parseYM(m[1])
         endYM   = resolveEndYM(m[2])
