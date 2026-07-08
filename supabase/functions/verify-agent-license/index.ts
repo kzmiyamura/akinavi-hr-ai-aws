@@ -30,17 +30,16 @@ const SHOKAI_RE = /\d{2}-ユ\d{6}/g
 interface AgentCompany {
   domain: string
   company_name: string | null
+  haken_number: string | null
   license_status: string
   verified_at: string | null
 }
 
 const MHLW_INIT_URL = 'https://jinzai.hellowork.mhlw.go.jp/JinzaiWeb/GICB102010.do'
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 
-/** 厚労省サイトでセッション確立 → 会社名検索 → 許可番号抽出 */
-async function searchMHLW(companyName: string): Promise<{ haken: string[]; shokai: string[]; hakenDetailUrl: string | null }> {
-  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-
-  // Step1: initDisp でセッション確立
+/** initDisp でセッション（JSESSIONID）を確立する。会社名検索・番号検索の両方で共通利用 */
+async function establishMHLWSession(): Promise<string> {
   const initRes = await fetch(MHLW_INIT_URL, {
     method: 'POST',
     headers: {
@@ -52,11 +51,60 @@ async function searchMHLW(companyName: string): Promise<{ haken: string[]; shoka
     redirect: 'follow',
   })
   if (!initRes.ok) throw new Error(`MHLW init HTTP ${initRes.status}`)
-
-  // Cookieを取得
   const setCookie = initRes.headers.get('set-cookie') ?? ''
   const jsessionMatch = setCookie.match(/JSESSIONID=([^;]+)/)
-  const jsessionId = jsessionMatch ? jsessionMatch[1] : ''
+  return jsessionMatch ? jsessionMatch[1] : ''
+}
+
+/**
+ * 許可番号（例: 派13-318631）で直接検索し、正式な事業主名称と詳細ページURLを取得する。
+ * メール署名から抽出した会社名は抽出バグ・表記ゆれで検索にヒットしないことがあるが、
+ * 番号自体は独立した別ロジック（extractLicenseNumbers）で正しく取れているケースが多いため、
+ * 番号がある場合は会社名検索より先にこちらを優先して試すべき。
+ */
+async function searchMHLWByNumber(hakenNumber: string): Promise<{ companyName: string | null; hakenDetailUrl: string | null }> {
+  const m = hakenNumber.match(/^派(\d{2})-(\d{6})$/)
+  if (!m) return { companyName: null, hakenDetailUrl: null }
+  const jsessionId = await establishMHLWSession()
+
+  const searchParams = new URLSearchParams({
+    screenId: 'GICB102010',
+    action: 'search',
+    cbZenkoku: '1',
+    ucKyokatodokedeNo1: '1', // 「派」区分
+    txtKyokatodokedeNo2: m[1],
+    txtKyokatodokedeNo3: m[2],
+    'nm_btnSearch.x': '1',
+    'nm_btnSearch.y': '1',
+  })
+  const searchRes = await fetch(MHLW_SEARCH_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': UA,
+      'Referer': MHLW_INIT_URL,
+      ...(jsessionId ? { 'Cookie': `JSESSIONID=${jsessionId}` } : {}),
+    },
+    body: searchParams.toString(),
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!searchRes.ok) throw new Error(`MHLW number search HTTP ${searchRes.status}`)
+  const html = await searchRes.text()
+
+  const nameMatch = html.match(/id="ID_lbJigyonushiName"[^>]*>([^<]+)</)
+  const companyName = nameMatch ? nameMatch[1].trim() : null
+
+  const detailLinkMatch = html.match(/id="ID_linkKyokatodokedeNo"[^>]*href="([^"]+)"/)
+  const hakenDetailUrl = detailLinkMatch
+    ? new URL(detailLinkMatch[1].replace(/&amp;/g, '&'), MHLW_SEARCH_URL).toString()
+    : null
+
+  return { companyName, hakenDetailUrl }
+}
+
+/** 厚労省サイトでセッション確立 → 会社名検索 → 許可番号抽出 */
+async function searchMHLW(companyName: string): Promise<{ haken: string[]; shokai: string[]; hakenDetailUrl: string | null }> {
+  const jsessionId = await establishMHLWSession()
 
   // Step2: 全国・会社名で検索
   const searchParams = new URLSearchParams({
@@ -161,7 +209,7 @@ Deno.serve(async (req) => {
   // 対象会社を取得
   let query = supabase
     .from('agent_companies')
-    .select('domain, company_name, license_status, verified_at')
+    .select('domain, company_name, haken_number, license_status, verified_at')
     .not('company_name', 'is', null)
     .order('first_seen_at', { ascending: true })
     .limit(batchSize)
@@ -169,14 +217,14 @@ Deno.serve(async (req) => {
   if (targetDomain) {
     query = supabase
       .from('agent_companies')
-      .select('domain, company_name, license_status, verified_at')
+      .select('domain, company_name, haken_number, license_status, verified_at')
       .eq('domain', targetDomain)
       .limit(1)
   } else {
     // verified_at が NULL（未確認）の会社を優先
     query = supabase
       .from('agent_companies')
-      .select('domain, company_name, license_status, verified_at')
+      .select('domain, company_name, haken_number, license_status, verified_at')
       .is('verified_at', null)
       .not('company_name', 'is', null)
       .order('first_seen_at', { ascending: true })
@@ -207,24 +255,37 @@ Deno.serve(async (req) => {
       .replace(/\s*(?:株式会社|合同会社|有限会社)$/, '')
       .trim()
 
-    let haken: string[] = []
+    let haken: string[] = company.haken_number ? [company.haken_number] : []
     let shokai: string[] = []
     let hakenDetailUrl: string | null = null
+    let correctedCompanyName: string | null = null
     let errMsg: string | undefined
 
     try {
-      const result1 = await searchMHLW(searchName)
-      haken = result1.haken
-      shokai = result1.shokai
-      hakenDetailUrl = result1.hakenDetailUrl
+      // 既に許可番号がある場合は番号検索を最優先で試す。会社名抽出の誤り・表記ゆれの
+      // 影響を受けず、番号自体が正しければ確実にヒットする（同時に正式な会社名も取得でき、
+      // 会社名抽出バグの補正にもなる）。
+      if (company.haken_number) {
+        const byNumber = await searchMHLWByNumber(company.haken_number)
+        hakenDetailUrl = byNumber.hakenDetailUrl
+        if (byNumber.companyName) correctedCompanyName = byNumber.companyName
+        if (byNumber.hakenDetailUrl) await new Promise((r) => setTimeout(r, 500)) // レートリミット対策
+      }
 
-      // ヒットなしかつ法人格なし版が違う場合は再検索
-      if (haken.length === 0 && shokai.length === 0 && shortName !== searchName && shortName.length >= 2) {
-        await new Promise((r) => setTimeout(r, 500)) // レートリミット対策
-        const result2 = await searchMHLW(shortName)
-        haken = result2.haken
-        shokai = result2.shokai
-        hakenDetailUrl = result2.hakenDetailUrl
+      if (!hakenDetailUrl) {
+        const result1 = await searchMHLW(searchName)
+        haken = result1.haken
+        shokai = result1.shokai
+        hakenDetailUrl = result1.hakenDetailUrl
+
+        // ヒットなしかつ法人格なし版が違う場合は再検索
+        if (haken.length === 0 && shokai.length === 0 && shortName !== searchName && shortName.length >= 2) {
+          await new Promise((r) => setTimeout(r, 500)) // レートリミット対策
+          const result2 = await searchMHLW(shortName)
+          haken = result2.haken
+          shokai = result2.shokai
+          hakenDetailUrl = result2.hakenDetailUrl
+        }
       }
     } catch (e) {
       errMsg = String(e)
@@ -242,6 +303,8 @@ Deno.serve(async (req) => {
     if (haken.length > 0) updateData.haken_number = haken[0]
     if (shokai.length > 0) updateData.shokai_number = shokai[0]
     if (hakenDetailUrl) updateData.haken_detail_url = hakenDetailUrl
+    // 番号検索で正式な事業主名称が取れた場合、メール抽出由来の壊れた会社名を補正する
+    if (correctedCompanyName) updateData.company_name = correctedCompanyName
 
     const { error: updateErr } = await supabase
       .from('agent_companies')
