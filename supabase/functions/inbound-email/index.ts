@@ -6474,10 +6474,12 @@ Deno.serve(async (req: Request) => {
           attachmentParsedGrid = { source: 'excel', rows: excelJsonRows }
         }
       } else if (att.mimeType === 'application/pdf' || /\.pdf$/i.test(attNameLower)) {
-        // PDF テキスト抽出（スキャンPDFの場合は空文字になりStorage保存のみ）
+        // PDF テキスト抽出。attachment を設定しないと複数人材パスの Storage
+        // アップロード判定（matchedTextContent.attachment）で弾かれ、PDF経歴書だけ
+        // resume_url が設定されない実害があったため、Excel/Word同様に att を保持する
         const pdfText = await extractPdfText(att.data)
         if (pdfText.trim()) {
-          officeTextContents.push({ label: `PDF(${att.name ?? 'document.pdf'})`, content: pdfText.slice(0, 8000) })
+          officeTextContents.push({ label: `PDF(${att.name ?? 'document.pdf'})`, content: pdfText.slice(0, 8000), attachment: att })
         } else {
           console.log(`[PDF] テキスト層なし（スキャンPDF）: ${att.name ?? 'document.pdf'}`)
         }
@@ -6766,13 +6768,16 @@ Deno.serve(async (req: Request) => {
         resumeUrl = picked
       }
 
-      // Excel/Word 添付を Storage にアップロード（再解析用・7日アーカイブで容量管理済み）
-      // ※ allAttachments は PDF/画像のみなので raw attachments から直接フィルタする
+      // Excel/Word/PDF 添付を Storage にアップロード（再解析用・7日アーカイブで容量管理済み）
+      // ※ allAttachments は PDF/画像を除外済みなので raw attachments から直接フィルタする
+      // （PDFは6736行目でallAttachmentsから除外されテキスト抽出のみ行われるが、
+      //   従来はStorageアップロードが未実装で「経歴書」ボタンが表示されない実害があった）
       if (!resumeUrl) {
         for (const att of attachments) {
           const isOffice = EXCEL_MIME.includes(att.mimeType) || WORD_MIME.includes(att.mimeType)
             || /\.(xlsx?|xls|docx?|ods|csv)$/i.test(att.name ?? '')
-          if (!isOffice || !att.data) continue
+          const isPdf = att.mimeType === 'application/pdf' || /\.pdf$/i.test(att.name ?? '')
+          if ((!isOffice && !isPdf) || !att.data) continue
           const ext = att.name ? att.name.split('.').pop() ?? 'bin' : 'bin'
           const safeName = `${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`
           const url = await uploadToStorage(safeName, att.mimeType, att.data)
