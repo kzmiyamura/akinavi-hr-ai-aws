@@ -5660,8 +5660,13 @@ async function fetchGoogleLinks(body: string): Promise<{
   const sheetsMatches = sheetsMatchesPreview
   for (const match of sheetsMatches) {
     const id = match[1]
-    const gidMatch = match[0].match(/[?&]gid=(\d+)/)
-    const gid = gidMatch ? gidMatch[1] : null
+    // URLの gid は「?gid=」「&gid=」形式のクエリだけでなく、Googleスプレッドシートの
+    // 通常のシートタブURL「#gid=」（ハッシュ形式）でも指定される。従来はクエリ形式しか
+    // 検出できず、ハッシュ形式のリンクでは gid が null のまま export URL に埋め込まれ
+    // （"...&gid=null"）、Google側がこれを不正なリクエストとしてHTTP 400を返し
+    // CSV取得が丸ごと失敗していた（実データで再現確認済み）。
+    const gidMatch = match[0].match(/[?&#]gid=(\d+)/)
+    const gid = gidMatch ? gidMatch[1] : '0'
     const exportUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`
     try {
       const res = await fetchWithTimeout(exportUrl)
