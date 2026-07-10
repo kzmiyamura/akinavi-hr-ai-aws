@@ -2660,7 +2660,7 @@ async function extractPdfText(base64: string): Promise<string> {
   }
 }
 
-async function extractWordText(base64: string): Promise<{ text: string; totalProjectMonths?: number; skillYears?: Record<string, number>; grid?: string[][] }> {
+async function extractWordText(base64: string): Promise<{ text: string; totalProjectMonths?: number; skillYears?: Record<string, number>; grid?: string[][]; links?: { cell: string; url: string }[] }> {
   try {
     const mammothMod = npmDefault(await import('npm:mammoth@1.8.0'))
     const mammoth = mammothMod as {
@@ -2709,7 +2709,9 @@ async function extractWordText(base64: string): Promise<{ text: string; totalPro
             }
             console.log(`[Word-skillYears-pick] grid=${countGrid} cells=${countCells} winner=${countCells >= countGrid ? 'cells' : 'grid'}`)
           }
-          return { text, totalProjectMonths, skillYears: Object.keys(skillYears).length > 0 ? skillYears : undefined, grid: wordGrid }
+          // Word内のハイパーリンク（Excelのrels解析相当・名簿リンク型検出用）
+          const wordLinks = [...html.matchAll(/href="(https?:\/\/[^"]+)"/g)].map((m, i) => ({ cell: `a${i + 1}`, url: m[1] }))
+          return { text, totalProjectMonths, skillYears: Object.keys(skillYears).length > 0 ? skillYears : undefined, grid: wordGrid, links: wordLinks.length > 0 ? wordLinks : undefined }
         }
       } catch (e) {
         console.warn('[Word] convertToHtml 失敗、extractRawText へフォールバック', e)
@@ -5514,7 +5516,7 @@ async function extractSkillYearsFromExcel(base64: string): Promise<Record<string
  * sheet_to_html を廃止して中間変換ノイズ（空セル混入・文字列変換ズレ）を除去。
  * sheet_to_json では結合セルが __EMPTY_N になり構造が破壊されるため使用しない。
  */
-async function extractExcelAll(base64: string): Promise<{ text: string; skillYears: Record<string, number>; jsonRows?: Array<Record<string, string>>; skillSummary?: string; parseError?: string }> {
+async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] }): Promise<{ text: string; skillYears: Record<string, number>; jsonRows?: Array<Record<string, string>>; skillSummary?: string; parseError?: string; grid?: string[][]; links?: { cell: string; url: string }[]; sheetPickedBy?: 'gid' | 'keyword' }> {
   try {
     const XLSX = npmDefault(await import('npm:xlsx@0.18.5')) as {
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
@@ -5537,9 +5539,31 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
         const bp = PRIORITY_KEYWORDS.some(kw => b.toLowerCase().includes(kw.toLowerCase())) ? 0 : 1
         return ap - bp
       })
+    // ゾーンB: gidフィンガープリント照合（設計書v4・穴①対策）
+    // Sheetsリンク経由でgid指定CSVが取れている場合、その中身と一致するシートを最優先にする。
+    // 送信者が明示的に指したタブという添付には無い強いシグナルを活かし、キーワードソートより
+    // 確実に対象シートを特定する。照合不能ならキーワードソートに落ちるだけで後退はしない。
+    let sheetPickedBy: 'gid' | 'keyword' | undefined
+    if (opts?.gidCsvRows && opts.gidCsvRows.length > 0 && sortedNames.length > 1) {
+      const heads = sortedNames.slice(0, 8).map(name => {
+        const sh = workbook.Sheets[name] as Record<string, unknown> | undefined
+        if (!sh || !sh['!ref']) return { name, head: [] as string[][] }
+        return { name, head: worksheetToGrid(sh).slice(0, 6) }
+      })
+      const matched = matchSheetByFingerprint(heads, opts.gidCsvRows)
+      if (matched) {
+        sortedNames.splice(sortedNames.indexOf(matched), 1)
+        sortedNames.unshift(matched)
+        sheetPickedBy = 'gid'
+      }
+    }
+    if (!sheetPickedBy && sortedNames.length > 0) sheetPickedBy = 'keyword'
     const texts: string[] = []
     let skillYears: Record<string, number> = {}
     let firstJsonRows: Array<Record<string, string>> | undefined
+    let firstGrid: string[][] | undefined
+    // セル単位ハイパーリンク（rels相当・SheetJSのlプロパティ）— 名簿リンク型検出の基盤
+    const allLinks: { cell: string; url: string }[] = []
     for (const sheetName of sortedNames.slice(0, 3)) {
       const sheet = workbook.Sheets[sheetName]
       if (!sheet || !(sheet as Record<string, unknown>)['!ref']) {
@@ -5553,6 +5577,12 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
       const grid = worksheetToGrid(sheetObj)
       const cells = worksheetToCells(sheetObj)
       console.log(`[Excel-parse] sheet="${sheetName}" merges=${mergeCount} cells=${cells.length} gridRows=${grid.length}`)
+      if (!firstGrid && grid.length > 0) firstGrid = grid
+      for (const [addr, cellVal] of Object.entries(sheetObj)) {
+        if (addr.startsWith('!')) continue
+        const linkTarget = (cellVal as { l?: { Target?: string } }).l?.Target
+        if (linkTarget && /^https?:\/\//.test(linkTarget)) allLinks.push({ cell: addr, url: linkTarget })
+      }
 
       // フィールド抽出用テキスト（gridToText 経由）
       const gridText = gridToFieldText(grid)
@@ -5617,7 +5647,7 @@ async function extractExcelAll(base64: string): Promise<{ text: string; skillYea
         if (key && row[key]) { skillSummary = row[key]; break }
       }
     }
-    return { text, skillYears, jsonRows: firstJsonRows, skillSummary }
+    return { text, skillYears, jsonRows: firstJsonRows, skillSummary, grid: firstGrid, links: allLinks.length > 0 ? allLinks : undefined, sheetPickedBy }
   } catch (e) {
     console.warn('[Excel] 抽出失敗', e)
     return { text: '', skillYears: {}, parseError: e instanceof Error ? e.message : String(e) }
@@ -5641,183 +5671,617 @@ async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Respons
   }
 }
 
-/** 本文中の Google Drive / Sheets / Docs リンクを検出してコンテンツを取得 */
-async function fetchGoogleLinks(body: string): Promise<{
-  textContents: { label: string; content: string }[]
-  pdfAttachments: Attachment[]
-  driveWordProjectMonths: number | null
-  driveSheetSkillYears: Record<string, number>
-}> {
-  const textContents: { label: string; content: string }[] = []
-  const pdfAttachments: Attachment[] = []
-  let driveWordProjectMonths: number | null = null
-  let driveSheetSkillYears: Record<string, number> = {}
+// ═══════════════════════════════════════════════════════════════════════════
+// 統一入力パイプライン（設計書v4: ゾーンA〜E・T）
+// メール添付・Drive単体ファイル・Sheetsリンク・Docsリンクの4系統を SourceEntry に
+// 正規化し、これより下流には入力ソース別の分岐を置かない。
+// ═══════════════════════════════════════════════════════════════════════════
 
-  const sheetsMatchesPreview = [...body.matchAll(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]{25,})[^\s]*/g)]
-  const docsMatchesPreview = [...body.matchAll(/https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{25,})/g)]
-  const driveMatchesPreview = [...body.matchAll(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)([a-zA-Z0-9_-]{25,})/g)]
-  // Google Sheets → CSV
-  const sheetsMatches = sheetsMatchesPreview
-  for (const match of sheetsMatches) {
-    const id = match[1]
-    // URLの gid は「?gid=」「&gid=」形式のクエリだけでなく、Googleスプレッドシートの
-    // 通常のシートタブURL「#gid=」（ハッシュ形式）でも指定される。従来はクエリ形式しか
-    // 検出できず、ハッシュ形式のリンクでは gid が null のまま export URL に埋め込まれ
-    // （"...&gid=null"）、Google側がこれを不正なリクエストとしてHTTP 400を返し
-    // CSV取得が丸ごと失敗していた（実データで再現確認済み）。
-    const gidMatch = match[0].match(/[?&#]gid=(\d+)/)
-    const gid = gidMatch ? gidMatch[1] : '0'
-    const exportUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`
-    try {
-      const res = await fetchWithTimeout(exportUrl)
-      if (res.ok) {
-        const csvText = await res.text()
-        textContents.push({ label: `Googleスプレッドシート(${id})`, content: csvText })
-        // CSV → 2D配列に変換して skillYears を抽出（まだ未取得の場合）
-        if (Object.keys(driveSheetSkillYears).length === 0) {
-          const csvRows = csvText.split(/\r?\n/).map(row => {
-            const cells: string[] = []
-            let cur = ''
-            let inQuote = false
-            for (let i = 0; i < row.length; i++) {
-              const ch = row[i]
-              if (ch === '"') { inQuote = !inQuote }
-              else if (ch === ',' && !inQuote) { cells.push(cur); cur = '' }
-              else { cur += ch }
-            }
-            cells.push(cur)
-            return cells
-          })
-          const sy = extractSkillYearsFromSheetData(csvRows)
-          if (Object.keys(sy).length > 0) {
-            driveSheetSkillYears = sy
-          }
-        }
-        // CSV で skillYears が取れなかった場合、XLSX バイナリで再試行（Excel パイプラインの方が精度高い）
-        if (Object.keys(driveSheetSkillYears).length === 0) {
-          const xlsxUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx`
-          try {
-            const xlsxRes = await fetchWithTimeout(xlsxUrl, 15000)
-            if (xlsxRes.ok) {
-              const buf = await xlsxRes.arrayBuffer()
-              const bytes = new Uint8Array(buf)
-              let b64 = ''
-              const chunk = 8192
-              for (let i = 0; i < bytes.length; i += chunk) {
-                b64 += String.fromCharCode(...bytes.subarray(i, i + chunk))
-              }
-              const base64 = btoa(b64)
-              const sy2 = await extractSkillYearsFromExcel(base64)
-              if (Object.keys(sy2).length > 0) {
-                driveSheetSkillYears = sy2
-                console.log(`[DriveLink] Sheets XLSX skillYears取得: ${Object.keys(sy2).length}件 id=${id}`)
-              }
-            }
-          } catch (e2) { console.warn(`[DriveLink] Sheets XLSX fetch error: ${id}`, e2) }
-        }
-      } else {
-        // CSVが失敗した場合も XLSX を試みる
-        console.warn(`[DriveLink] Sheets CSV失敗(${res.status}): ${id} - XLSXで再試行`)
-        const xlsxUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=xlsx`
-        try {
-          const xlsxRes = await fetchWithTimeout(xlsxUrl, 15000)
-          if (xlsxRes.ok) {
-            const buf = await xlsxRes.arrayBuffer()
-            const bytes = new Uint8Array(buf)
-            let b64 = ''
-            const chunk = 8192
-            for (let i = 0; i < bytes.length; i += chunk) {
-              b64 += String.fromCharCode(...bytes.subarray(i, i + chunk))
-            }
-            const base64 = btoa(b64)
-            const sy2 = await extractSkillYearsFromExcel(base64)
-            if (Object.keys(sy2).length > 0) {
-              driveSheetSkillYears = sy2
-              console.log(`[DriveLink] Sheets XLSX skillYears取得（CSVフォールバック）: ${Object.keys(sy2).length}件 id=${id}`)
-            }
-          }
-        } catch (e2) { console.warn(`[DriveLink] Sheets XLSX fetch error: ${id}`, e2) }
+/** ゾーンA: 正規化済み入力エントリ（全ソース共通・officeTextContents互換の上位集合） */
+interface SourceEntry {
+  entryId: number
+  label: string
+  content: string
+  filename: string
+  kind: 'excel' | 'word' | 'pdf' | 'text'
+  origin: 'attachment' | 'drive' | 'sheets' | 'docs'
+  skillYears?: Record<string, number>
+  attachment?: Attachment
+  jsonRows?: Array<Record<string, string>>
+  skillSummary?: string
+  grid?: string[][]
+  links?: { cell: string; url: string }[]
+  totalProjectMonths?: number
+  gidHint?: { gid: string; csvRows?: string[][] }
+  sourceUrl?: string
+  /** 名簿行エントリの場合のみ: 親エントリID */
+  parentId?: number
+  /** 名簿行エントリの場合のみ: 行の氏名（氏名照合ゲート・新規候補者化で使用） */
+  rosterRowName?: string
+}
+
+/**
+ * ゾーンT: エントリ台帳。各エントリのステージコード列と不変条件違反を記録する。
+ * 台帳の最終コードが「どこでこけたか」を示す。全ログに [trace:rid] を統一装着し、
+ * Supabaseログで1通の全行程をgrep一発で追えるようにする。
+ */
+function createLedger(rid: string) {
+  const rows: { entryId: number | null; code: string; detail?: string }[] = []
+  const violations: string[] = []
+  let seq = 0
+  return {
+    rid,
+    nextEntryId(): number { seq += 1; return seq },
+    log(entryId: number | null, code: string, detail?: string) {
+      rows.push({ entryId, code, detail })
+      console.log(`[trace:${rid}] [${code}]${entryId != null ? ` entry=${entryId}` : ''}${detail ? ` ${detail}` : ''}`)
+    },
+    /** 不変条件違反（サイレント失敗の検出器）。処理は止めず記録のみ */
+    violate(code: string, detail?: string) {
+      violations.push(detail ? `${code}(${detail.slice(0, 120)})` : code)
+      console.warn(`[trace:${rid}] [${code}] INVARIANT VIOLATION ${detail ?? ''}`)
+    },
+    /** 候補者割当エントリの台帳＋メール全体サマリーを raw_profile.pipeline_trace 用に直列化（8KB上限） */
+    serializeTrace(assignedEntryIds: number[]): Record<string, unknown> | undefined {
+      const byEntry = new Map<number, string[]>()
+      for (const r of rows) {
+        if (r.entryId == null) continue
+        const list = byEntry.get(r.entryId) ?? []
+        list.push(r.detail ? `${r.code}(${r.detail.slice(0, 60)})` : r.code)
+        byEntry.set(r.entryId, list)
       }
-    } catch (e) { console.warn(`[DriveLink] Sheets fetch error: ${id}`, e) }
-  }
-
-  // Google Docs → plain text
-  const docsMatches = docsMatchesPreview
-  for (const match of docsMatches) {
-    const id = match[1]
-    const exportUrl = `https://docs.google.com/document/d/${id}/export?format=txt`
-    try {
-      const res = await fetchWithTimeout(exportUrl)
-      if (res.ok) {
-        textContents.push({ label: `Googleドキュメント(${id})`, content: await res.text() })
-      } else {
-        console.warn(`[DriveLink] Docs取得失敗(${res.status}): ${id}`)
+      const emailCodes = rows.filter(r => r.entryId == null)
+        .map(r => (r.detail ? `${r.code}(${r.detail.slice(0, 60)})` : r.code))
+      const trace: Record<string, unknown> = {
+        assigned: Object.fromEntries(
+          assignedEntryIds.filter(id => byEntry.has(id)).map(id => [id, byEntry.get(id)]),
+        ),
+        summary: Object.fromEntries(
+          [...byEntry.entries()].map(([id, codes]) => [id, codes[codes.length - 1]]),
+        ),
+        emailCodes,
+        invariantViolations: violations,
       }
-    } catch (e) { console.warn(`[DriveLink] Docs fetch error: ${id}`, e) }
+      if (rows.length === 0 && violations.length === 0) return undefined
+      const json = JSON.stringify(trace)
+      if (json.length <= 8192) return trace
+      const compact = { summary: trace.summary, emailCodes: emailCodes.slice(-40), invariantViolations: violations, truncated: true }
+      return JSON.stringify(compact).length <= 8192 ? compact : { invariantViolations: violations, truncated: true }
+    },
+    get invariantViolations(): string[] { return violations },
   }
+}
+type Ledger = ReturnType<typeof createLedger>
 
-  // Google Drive ファイル → PDF / テキスト / Excel / Word
-  // ポートフォリオ等、経歴書以外のファイルはスキップ
-  const DRIVE_SKIP_KEYWORDS = ['ポートフォリオ', '作品集', 'portfolio', 'Portfolio']
-  const driveMatches = driveMatchesPreview
-  for (const match of driveMatches) {
-    const id = match[1]
-    const urlIndex = match.index ?? 0
-    const preceding = body.slice(Math.max(0, urlIndex - 150), urlIndex)
-    const shouldSkip = DRIVE_SKIP_KEYWORDS.some(kw => preceding.includes(kw))
-    if (shouldSkip) {
+/** content-disposition ヘッダから実ファイル名を取得（Drive経路の既存手法を全ソースへ共通化） */
+function filenameFromDisposition(res: Response): string | null {
+  const cd = res.headers.get('content-disposition') ?? ''
+  const m = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';\n]+)["']?/i)
+  if (!m) return null
+  try { return decodeURIComponent(m[1].trim()) } catch { return m[1].trim() }
+}
+
+/** ゾーンA: 本文から Google 系リンクを3種類、独立に検出（ID単位で重複排除） */
+function detectGoogleLinks(body: string): {
+  sheets: { id: string; gid: string }[]
+  docs: { id: string }[]
+  drive: { id: string; index: number }[]
+} {
+  const sheets: { id: string; gid: string }[] = []
+  const seenSheets = new Set<string>()
+  for (const m of body.matchAll(/https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]{25,})[^\s]*/g)) {
+    if (seenSheets.has(m[1])) continue
+    seenSheets.add(m[1])
+    // gid は「?gid=」「&gid=」だけでなくシートタブURLの「#gid=」（ハッシュ形式）でも指定される
+    const gidMatch = m[0].match(/[?&#]gid=(\d+)/)
+    sheets.push({ id: m[1], gid: gidMatch ? gidMatch[1] : '0' })
+  }
+  const docs: { id: string }[] = []
+  const seenDocs = new Set<string>()
+  for (const m of body.matchAll(/https:\/\/docs\.google\.com\/document\/d\/([a-zA-Z0-9_-]{25,})/g)) {
+    if (seenDocs.has(m[1])) continue
+    seenDocs.add(m[1])
+    docs.push({ id: m[1] })
+  }
+  const drive: { id: string; index: number }[] = []
+  const seenDrive = new Set<string>()
+  for (const m of body.matchAll(/https:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)([a-zA-Z0-9_-]{25,})/g)) {
+    if (seenDrive.has(m[1])) continue
+    seenDrive.add(m[1])
+    drive.push({ id: m[1], index: m.index ?? 0 })
+  }
+  return { sheets, docs, drive }
+}
+
+/**
+ * gid照合用フィンガープリント: gid指定CSVを取得して2D配列化する。
+ * エクスポートXLSXにはGoogleのgidが含まれないため、このCSV（=送信者が指したタブの中身）を
+ * XLSX内の各シートと突き合わせて対象シートを特定する。XLSX失敗時の保険テキストも兼ねる。
+ */
+async function fetchCsvFingerprint(id: string, gid: string): Promise<{ rows: string[][]; raw: string } | null> {
+  try {
+    const res = await fetchWithTimeout(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`)
+    if (!res.ok) return null
+    const raw = await res.text()
+    const rows = raw.split(/\r?\n/).slice(0, 200).map(row => {
+      const cells: string[] = []
+      let cur = ''
+      let inQuote = false
+      for (let i = 0; i < row.length; i++) {
+        const ch = row[i]
+        if (ch === '"') { inQuote = !inQuote }
+        else if (ch === ',' && !inQuote) { cells.push(cur); cur = '' }
+        else { cur += ch }
+      }
+      cells.push(cur)
+      return cells
+    })
+    return { rows, raw }
+  } catch { return null }
+}
+
+const XLSX_EXPORT_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+const DOCX_EXPORT_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+const DRIVE_SKIP_KEYWORDS = ['ポートフォリオ', '作品集', 'portfolio', 'Portfolio']
+
+/** ゾーンA①: Sheetsリンク → XLSX本流（bytes保持）・CSVは照合用フィンガープリント＋保険 */
+async function fetchSheetsEntry(link: { id: string; gid: string }, ledger: Ledger): Promise<SourceEntry | null> {
+  const entryId = ledger.nextEntryId()
+  const fp = await fetchCsvFingerprint(link.id, link.gid)
+  const sourceUrl = `https://docs.google.com/spreadsheets/d/${link.id}/edit#gid=${link.gid}`
+  try {
+    const res = await fetchWithTimeout(`https://docs.google.com/spreadsheets/d/${link.id}/export?format=xlsx`, 20000)
+    if (res.ok) {
+      const b64 = arrayBufferToBase64(await res.arrayBuffer())
+      const filename = filenameFromDisposition(res) ?? `GoogleSheet_${link.id}.xlsx`
+      ledger.log(entryId, 'A-XLSX-OK', `${filename} ${Math.round(b64.length * 3 / 4 / 1024)}KB`)
+      return {
+        entryId, label: `Googleスプレッドシート(${filename})`, content: '', filename,
+        kind: 'excel', origin: 'sheets',
+        attachment: { data: b64, mimeType: XLSX_EXPORT_MIME, name: filename.endsWith('.xlsx') ? filename : `${filename}.xlsx` },
+        gidHint: { gid: link.gid, csvRows: fp?.rows },
+        sourceUrl,
+      }
+    }
+    ledger.log(entryId, 'A-FETCH-FAIL', `sheets xlsx status=${res.status}`)
+  } catch (e) { ledger.log(entryId, 'A-FETCH-FAIL', `sheets xlsx ${e instanceof Error ? e.message : String(e)}`) }
+  // 保険: CSVテキスト（旧本流・bytesなしのためStorage候補にはならない）
+  if (fp && fp.raw.trim()) {
+    ledger.log(entryId, 'A-CSV-FB', `sheets ${link.id}`)
+    const sy = extractSkillYearsFromSheetData(fp.rows)
+    return {
+      entryId, label: `Googleスプレッドシート(${link.id})`, content: fp.raw,
+      filename: `GoogleSheet_${link.id}.csv`, kind: 'text', origin: 'sheets',
+      skillYears: Object.keys(sy).length > 0 ? sy : undefined,
+      sourceUrl,
+    }
+  }
+  return null
+}
+
+/** ゾーンA②: Docsリンク → DOCX本流（bytes保持）・txtは保険 */
+async function fetchDocsEntry(link: { id: string }, ledger: Ledger): Promise<SourceEntry | null> {
+  const entryId = ledger.nextEntryId()
+  const sourceUrl = `https://docs.google.com/document/d/${link.id}/edit`
+  try {
+    const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=docx`, 20000)
+    if (res.ok) {
+      const b64 = arrayBufferToBase64(await res.arrayBuffer())
+      const filename = filenameFromDisposition(res) ?? `GoogleDoc_${link.id}.docx`
+      ledger.log(entryId, 'A-DOCX-OK', filename)
+      return {
+        entryId, label: `Googleドキュメント(${filename})`, content: '', filename,
+        kind: 'word', origin: 'docs',
+        attachment: { data: b64, mimeType: DOCX_EXPORT_MIME, name: filename.endsWith('.docx') ? filename : `${filename}.docx` },
+        sourceUrl,
+      }
+    }
+    ledger.log(entryId, 'A-FETCH-FAIL', `docs docx status=${res.status}`)
+  } catch (e) { ledger.log(entryId, 'A-FETCH-FAIL', `docs docx ${e instanceof Error ? e.message : String(e)}`) }
+  // 保険: txtエクスポート（旧本流）
+  try {
+    const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=txt`, 20000)
+    if (res.ok) {
+      ledger.log(entryId, 'A-TXT-FB', `docs ${link.id}`)
+      return {
+        entryId, label: `Googleドキュメント(${link.id})`, content: await res.text(),
+        filename: `GoogleDoc_${link.id}.txt`, kind: 'text', origin: 'docs', sourceUrl,
+      }
+    }
+    ledger.log(entryId, 'A-FETCH-FAIL', `docs txt status=${res.status}`)
+  } catch (e) { ledger.log(entryId, 'A-FETCH-FAIL', `docs txt ${e instanceof Error ? e.message : String(e)}`) }
+  return null
+}
+
+/** ゾーンA③: Drive単体ファイルリンク（旧fetchGoogleLinksのDrive経路を移植・bytesを保持） */
+async function fetchDriveEntry(link: { id: string; index: number }, body: string, ledger: Ledger): Promise<SourceEntry | null> {
+  // ポートフォリオ等、経歴書以外のファイルはスキップ（リンク直前150文字で判定・既存動作）
+  const preceding = body.slice(Math.max(0, link.index - 150), link.index)
+  if (DRIVE_SKIP_KEYWORDS.some(kw => preceding.includes(kw))) {
+    ledger.log(null, 'A-SKIP-PORTFOLIO', `drive ${link.id}`)
+    return null
+  }
+  const entryId = ledger.nextEntryId()
+  const sourceUrl = `https://drive.google.com/file/d/${link.id}/view`
+  try {
+    const res = await fetchWithTimeout(`https://drive.google.com/uc?export=download&id=${link.id}`, 20000)
+    if (!res.ok) { ledger.log(entryId, 'A-FETCH-FAIL', `drive status=${res.status}`); return null }
+    const ct = (res.headers.get('content-type') ?? '').split(';')[0].trim()
+    const filename = filenameFromDisposition(res) ?? `drive_${link.id}`
+    const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xlsx?|ods)$/i.test(filename)
+    const isWord = WORD_MIME.includes(ct) || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(docx?)$/i.test(filename)
+    const isPdf = ct.includes('pdf') || /\.pdf$/i.test(filename)
+    if (isPdf) {
+      const b64 = arrayBufferToBase64(await res.arrayBuffer())
+      ledger.log(entryId, 'A-DRIVE-OK', `pdf ${filename}`)
+      return { entryId, label: `Drive PDF(${filename})`, content: '', filename, kind: 'pdf', origin: 'drive', attachment: { data: b64, mimeType: 'application/pdf', name: filename }, sourceUrl }
+    }
+    if (ct.includes('text') || ct.includes('csv')) {
+      ledger.log(entryId, 'A-DRIVE-OK', `text ${filename}`)
+      return { entryId, label: `Driveファイル(${filename})`, content: await res.text(), filename, kind: 'text', origin: 'drive', sourceUrl }
+    }
+    if (isExcel || isWord) {
+      const b64 = arrayBufferToBase64(await res.arrayBuffer())
+      ledger.log(entryId, 'A-DRIVE-OK', `${isExcel ? 'excel' : 'word'} ${filename}`)
+      return {
+        entryId, label: `Drive ${isExcel ? 'Excel' : 'Word'}(${filename})`, content: '', filename,
+        kind: isExcel ? 'excel' : 'word', origin: 'drive',
+        attachment: { data: b64, mimeType: ct || (isExcel ? XLSX_EXPORT_MIME : DOCX_EXPORT_MIME), name: filename },
+        sourceUrl,
+      }
+    }
+    ledger.log(entryId, 'A-FETCH-FAIL', `drive 未対応タイプ(${ct}) ${filename}`)
+    return null
+  } catch (e) {
+    ledger.log(entryId, 'A-FETCH-FAIL', `drive ${e instanceof Error ? e.message : String(e)}`)
+    return null
+  }
+}
+
+/**
+ * ゾーンB: gidフィンガープリント照合 — CSV（送信者が指したタブ）の先頭セル群と
+ * XLSX各シートの先頭グリッドを突き合わせ、一致したシート名を返す。
+ * 8割以上一致した場合のみ認定（偶然一致の誤爆防止）。照合不能なら null（キーワードソートに落ちる）。
+ */
+function matchSheetByFingerprint(
+  sheetHeads: { name: string; head: string[][] }[],
+  csvRows: string[][],
+): string | null {
+  const fpCells = csvRows.slice(0, 5).flat().map(c => c.trim()).filter(c => c.length >= 2).slice(0, 20)
+  if (fpCells.length < 3) return null
+  let best: { name: string; score: number } | null = null
+  for (const sheet of sheetHeads) {
+    const sheetCells = new Set(sheet.head.flat().map(c => (c ?? '').trim()).filter(Boolean))
+    const score = fpCells.filter(c => sheetCells.has(c)).length
+    if (score > (best?.score ?? 0)) best = { name: sheet.name, score }
+  }
+  return best && best.score >= Math.ceil(fpCells.length * 0.8) ? best.name : null
+}
+
+/** ゾーンB: kind別ディスパッチ — bytesを持つエントリを2関数（extractExcelAll/extractWordText）で抽出 */
+async function extractEntry(entry: SourceEntry, ledger: Ledger): Promise<SourceEntry> {
+  if (!entry.attachment?.data) return entry
+  if (entry.kind === 'excel') {
+    const { text, skillYears, jsonRows, skillSummary, parseError, grid, links, sheetPickedBy } =
+      await extractExcelAll(entry.attachment.data, { gidCsvRows: entry.gidHint?.csvRows })
+    if (sheetPickedBy === 'gid') ledger.log(entry.entryId, 'B-SHEET-GID')
+    if (parseError) ledger.log(entry.entryId, 'B-PARSE-ERR', parseError.slice(0, 80))
+    else ledger.log(entry.entryId, text.trim() ? 'B-EXTRACT-OK' : 'B-EXTRACT-EMPTY', `t=${text.length} sy=${Object.keys(skillYears).filter(k => !k.startsWith('_')).length}`)
+    if (links && links.length > 0) ledger.log(entry.entryId, 'B-LINKS', `${links.length}件`)
+    return {
+      ...entry, content: text,
+      skillYears: Object.keys(skillYears).length > 0 ? skillYears : undefined,
+      jsonRows: jsonRows && jsonRows.length > 0 ? jsonRows : undefined,
+      skillSummary, grid, links,
+    }
+  }
+  if (entry.kind === 'word') {
+    const { text: rawText, totalProjectMonths, skillYears, grid, links } = await extractWordText(entry.attachment.data)
+    const text = rawText.trim() ? cleanseWordText(rawText) : ''
+    ledger.log(entry.entryId, text ? 'B-EXTRACT-OK' : 'B-EXTRACT-EMPTY', `t=${text.length}`)
+    if (links && links.length > 0) ledger.log(entry.entryId, 'B-LINKS', `${links.length}件`)
+    return { ...entry, content: text, totalProjectMonths, skillYears, grid, links }
+  }
+  if (entry.kind === 'pdf') {
+    const pdfText = await extractPdfText(entry.attachment.data)
+    ledger.log(entry.entryId, pdfText.trim() ? 'B-EXTRACT-OK' : 'B-EXTRACT-EMPTY', `pdf t=${pdfText.length}`)
+    return { ...entry, content: pdfText.slice(0, 8000) }
+  }
+  return entry
+}
+
+/** ゾーンA+B: 本文中のGoogle系リンクを統一エントリとして取得・抽出するオーケストレータ */
+async function collectGoogleEntries(body: string, ledger: Ledger): Promise<SourceEntry[]> {
+  const links = detectGoogleLinks(body)
+  const out: SourceEntry[] = []
+  for (const s of links.sheets) {
+    const e = await fetchSheetsEntry(s, ledger)
+    if (e) out.push(await extractEntry(e, ledger))
+  }
+  for (const d of links.docs) {
+    const e = await fetchDocsEntry(d, ledger)
+    if (e) out.push(await extractEntry(e, ledger))
+  }
+  for (const dr of links.drive) {
+    const e = await fetchDriveEntry(dr, body, ledger)
+    if (e) out.push(await extractEntry(e, ledger))
+  }
+  return out
+}
+
+/**
+ * ゾーンC: 名簿判定 — このエントリは複数人分の名簿か。
+ * 1) グリッド型: ヘッダ行に氏名系列があり、氏名+他2セル以上の行が2行以上（Excel名簿）。
+ *    セル参照の行番号からその行のハイパーリンクも対応付ける（リンク型名簿の基盤）。
+ * 2) テキスト型: 【氏名】等のラベル組が2セット以上。
+ */
+function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: string; rowText: string; links: { cell: string; url: string }[] }[] } {
+  if (entry.grid && entry.grid.length >= 3) {
+    const NAME_COL_RE = /^(?:氏\s*名|名\s*前|イニシャル|お名前|姓名)$/
+    for (let h = 0; h < Math.min(5, entry.grid.length); h++) {
+      const headerRow = entry.grid[h]
+      const nameCol = headerRow.findIndex(c => NAME_COL_RE.test((c ?? '').trim()))
+      if (nameCol === -1) continue
+      const dataRows: { name: string; rowText: string; links: { cell: string; url: string }[] }[] = []
+      for (let r = h + 1; r < entry.grid.length; r++) {
+        const row = entry.grid[r]
+        const name = (row[nameCol] ?? '').trim()
+        if (!name || name.length > 30) continue
+        const otherCells = row.filter((c, i) => i !== nameCol && (c ?? '').trim().length > 0)
+        if (otherCells.length < 2) continue
+        const rowText = headerRow.map((hc, i) => {
+          const v = (row[i] ?? '').trim()
+          return (hc ?? '').trim() && v ? `【${hc.trim().slice(0, 12)}】${v}` : null
+        }).filter(Boolean).join('\n')
+        // セル参照 "G8" の行番号（1-based）= グリッドindex+1 でリンクを行に対応付け
+        const rowLinks = (entry.links ?? []).filter(l => {
+          const m = l.cell.match(/(\d+)$/)
+          return m ? Number(m[1]) === r + 1 : false
+        })
+        dataRows.push({ name, rowText, links: rowLinks })
+      }
+      if (dataRows.length >= 2) return { isRoster: true, rows: dataRows }
+    }
+  }
+  // テキスト型（splitMultiCandidateBody と同じ氏名・フィールド判定を流用）
+  const globalNameRe = new RegExp(MULTI_NAME_FIELD_RE.source, 'gm')
+  const nameMatches = [...entry.content.matchAll(globalNameRe)]
+  if (nameMatches.length >= 2) {
+    const rows: { name: string; rowText: string; links: { cell: string; url: string }[] }[] = []
+    for (let i = 0; i < nameMatches.length; i++) {
+      const start = nameMatches[i].index ?? 0
+      const end = i + 1 < nameMatches.length ? (nameMatches[i + 1].index ?? entry.content.length) : entry.content.length
+      const seg = entry.content.slice(start, end).trim()
+      if (seg.length < 30 || !MULTI_CANDIDATE_FIELD_RE.test(seg)) continue
+      const name = extractNameFallback(seg)
+      if (!name) continue
+      rows.push({ name, rowText: seg, links: [] })
+    }
+    if (rows.length >= 2) return { isRoster: true, rows }
+  }
+  return { isRoster: false, rows: [] }
+}
+
+/** ゾーンC: 名簿行内のリンク先を再取得する。深さ1で打ち切り（名簿の名簿は展開しない） */
+async function fetchLinkedResume(url: string, ledger: Ledger, depth: number): Promise<SourceEntry | null> {
+  if (depth >= 1) {
+    ledger.log(null, 'C-DEPTH-CUT', url.slice(0, 60))
+    return null
+  }
+  const links = detectGoogleLinks(url)
+  let fetched: SourceEntry | null = null
+  if (links.sheets[0]) fetched = await fetchSheetsEntry(links.sheets[0], ledger)
+  else if (links.docs[0]) fetched = await fetchDocsEntry(links.docs[0], ledger)
+  else if (links.drive[0]) fetched = await fetchDriveEntry({ id: links.drive[0].id, index: 0 }, '', ledger)
+  if (!fetched) return null
+  return await extractEntry(fetched, ledger)
+}
+
+/** 名簿1個から展開する行数の上限（異常に大きい名簿による処理爆発の防止） */
+const ROSTER_MAX_ROWS = 15
+
+/**
+ * ゾーンC: 名簿判定・行展開のオーケストレータ。
+ * 名簿は行ごとに独立エントリへ展開してから返す（「1エントリ=1人」を下流に保証する）。
+ * リンク型の行はリンク先を再取得して本人エントリに差し替える（Google系のみ・深さ1）。
+ */
+async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger): Promise<SourceEntry[]> {
+  const out: SourceEntry[] = []
+  for (const entry of entries) {
+    const roster = detectRoster(entry)
+    if (!roster.isRoster) {
+      out.push(entry)
       continue
     }
-    const downloadUrl = `https://drive.google.com/uc?export=download&id=${id}`
-    try {
-      // ファイルサイズが大きい場合があるので 20 秒に延長
-      const res = await fetchWithTimeout(downloadUrl, 20000)
-      if (res.ok) {
-        const ct = (res.headers.get('content-type') ?? '').split(';')[0].trim()
-        // content-disposition からファイル名を取得（ログ・ラベル用）
-        const cd = res.headers.get('content-disposition') ?? ''
-        const filenameMatch = cd.match(/filename[^;=\n]*=\s*["']?([^"';\n]+)["']?/)
-        const filename = filenameMatch ? decodeURIComponent(filenameMatch[1].trim()) : `drive_${id}`
-
-        const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xlsx?|ods)$/i.test(filename)
-        const isWord  = WORD_MIME.includes(ct)  || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(docx?)$/i.test(filename)
-
-        const isPdf = ct.includes('pdf') || /\.pdf$/i.test(filename)
-        if (isPdf) {
-          // PDF は解析しない。URLは本文から resumeUrl として保存済み
-        } else if (ct.includes('text') || ct.includes('csv')) {
-          textContents.push({ label: `Driveファイル(${filename})`, content: await res.text() })
-        } else if (isExcel) {
-          const b64 = arrayBufferToBase64(await res.arrayBuffer())
-          const { text, skillYears: excelSY } = await extractExcelAll(b64)
-          if (text.trim()) {
-            textContents.push({ label: `Drive Excel(${filename})`, content: text })
-          } else {
-            console.warn(`[DriveLink] Drive Excel テキスト抽出結果が空: ${id}`)
+    ledger.log(entry.entryId, 'C-ROSTER', `${roster.rows.length}行に展開`)
+    if (roster.rows.length > ROSTER_MAX_ROWS) ledger.log(entry.entryId, 'C-ROSTER-CAP', `${roster.rows.length}→${ROSTER_MAX_ROWS}`)
+    for (const row of roster.rows.slice(0, ROSTER_MAX_ROWS)) {
+      const rowEntryId = ledger.nextEntryId()
+      let rowEntry: SourceEntry = {
+        entryId: rowEntryId, parentId: entry.entryId,
+        label: `${entry.label}#${row.name}`, content: row.rowText,
+        filename: entry.filename, kind: 'text', origin: entry.origin,
+        rosterRowName: row.name, sourceUrl: entry.sourceUrl,
+      }
+      const googleLink = row.links.find(l => /docs\.google\.com|drive\.google\.com/.test(l.url))
+      if (googleLink) {
+        const linked = await fetchLinkedResume(googleLink.url, ledger, 0)
+        if (linked) {
+          ledger.log(rowEntryId, 'C-ROW-LINK-OK', googleLink.url.slice(0, 60))
+          rowEntry = {
+            ...linked,
+            entryId: rowEntryId, parentId: entry.entryId,
+            label: `${entry.label}#${row.name}`,
+            content: `${row.rowText}\n${linked.content}`,
+            rosterRowName: row.name,
           }
-          if (Object.keys(excelSY).length > 0 && Object.keys(driveSheetSkillYears).length === 0) {
-            driveSheetSkillYears = excelSY
-          }
-        } else if (isWord) {
-          const b64 = arrayBufferToBase64(await res.arrayBuffer())
-          const { text: rawText, totalProjectMonths: wm } = await extractWordText(b64)
-          if (rawText.trim()) {
-            const text = cleanseWordText(rawText)
-            textContents.push({ label: `Drive Word(${filename})`, content: text })
-          } else {
-            console.warn(`[DriveLink] Drive Word テキスト抽出結果が空: ${id}`)
-          }
-          if (wm && !driveWordProjectMonths) driveWordProjectMonths = wm
+          // リンク先自体が名簿でも展開しない（深さ1・1人分として扱う）
+          if (detectRoster(rowEntry).isRoster) ledger.log(rowEntryId, 'C-DEPTH-CUT', 'リンク先も名簿構造だが展開しない')
         } else {
-          console.warn(`[DriveLink] Drive 未対応タイプ(${ct}) ファイル名(${filename}): ${id}`)
+          ledger.log(rowEntryId, 'C-ROW-LINK-FAIL', googleLink.url.slice(0, 60))
         }
       } else {
-        console.warn(`[DriveLink] Drive取得失敗(${res.status}): ${id}`)
+        // Box等の認証必須リンクはダウンロードせず、行テキストに残して既存のextractBoxUrlsに拾わせる
+        const nonGoogle = row.links[0]
+        if (nonGoogle) rowEntry.content += `\n${nonGoogle.url}`
+        ledger.log(rowEntryId, 'C-ROW-EMBED', row.name)
       }
-    } catch (e) { console.warn(`[DriveLink] Drive fetch error: ${id}`, e) }
+      out.push(rowEntry)
+    }
   }
+  return out
+}
 
-  return { textContents, pdfAttachments, driveWordProjectMonths, driveSheetSkillYears }
+/**
+ * ゾーンD: 単一人材メール用の氏名照合ゲート。
+ * 現行は単一人材だと検証なしで全エントリが本人に紐づいていた（F.Kさん事故の構造的原因）。
+ * 誤った紐づけをするより紐づけ無しの方が安全、の方針で選別する。
+ */
+function gateSingleCandidate(
+  meta: { name: string | null },
+  entries: SourceEntry[],
+  ledger: Ledger,
+): { assigned: SourceEntry[]; rejected: SourceEntry[] } {
+  const myNorm = (meta.name ?? '').replace(/[.\s　・]/g, '').toLowerCase()
+  if (myNorm.length < 2) {
+    if (entries.length > 0) ledger.log(null, 'D-GATE-NONAME', '本文から氏名が取れないため全エントリを許可（従来動作）')
+    return { assigned: entries, rejected: [] }
+  }
+  const assigned: SourceEntry[] = []
+  const neutral: SourceEntry[] = []
+  const rejected: SourceEntry[] = []
+  for (const e of entries) {
+    const hay = `${e.filename}\n${e.content}`.toLowerCase().replace(/[.・]/g, '')
+    if (hay.includes(myNorm)) {
+      assigned.push(e)
+      ledger.log(e.entryId, 'D-GATE-OK')
+      continue
+    }
+    // 名簿行由来で行の氏名が別人 → 明確に他人のデータなので本人に紐づけない
+    if (e.rosterRowName) {
+      const rowNorm = e.rosterRowName.replace(/[.\s　・]/g, '').toLowerCase()
+      if (rowNorm.length >= 2 && rowNorm !== myNorm) {
+        rejected.push(e)
+        ledger.log(e.entryId, 'D-GATE-REJ', `他人の名簿行:${e.rosterRowName}`)
+        continue
+      }
+    }
+    neutral.push(e)
+  }
+  // 氏名シグナルの無いエントリ（汎用ファイル名・氏名レス経歴書）は従来動作を維持して許可する。
+  // 明確に他人と判定されたもの（rejected）だけを除外する安全側の縮小。
+  if (neutral.length > 0) {
+    assigned.push(...neutral)
+    ledger.log(null, 'D-GATE-ALL', `氏名シグナルなし${neutral.length}件を許可`)
+  }
+  return { assigned, rejected }
+}
+
+/**
+ * ゾーンD: 名簿にしか載っていない人材を新規候補者ブロックとして起こす。
+ * 既存ブロックの氏名と一致しない名簿行エントリの行テキストを返す（本文ブロックと同じ検証・dedupを通す）。
+ */
+function promoteUnassignedRosterEntries(
+  rosterEntries: SourceEntry[],
+  existingBlockNames: (string | null)[],
+  ledger: Ledger,
+): { name: string; rowText: string }[] {
+  const norm = (s: string) => s.replace(/[.\s　・]/g, '').toLowerCase()
+  const known = new Set(existingBlockNames.filter((n): n is string => !!n).map(norm))
+  const out: { name: string; rowText: string }[] = []
+  for (const e of rosterEntries) {
+    if (!e.rosterRowName) continue
+    const n = norm(e.rosterRowName)
+    if (n.length < 2 || known.has(n)) continue
+    known.add(n)
+    ledger.log(e.entryId, 'D-NEWBLOCK', e.rosterRowName)
+    out.push({ name: e.rosterRowName, rowText: e.content })
+  }
+  return out
+}
+
+/** 本文中の Google URL から経歴書リンク候補を1つ選ぶ（ゾーンEでは保険に降格・旧ロジック移植） */
+function pickBodyResumeLink(body: string): string | null {
+  const GOOGLE_URL_RE = /https:\/\/(?:drive\.google\.com\/(?:file\/d\/|open\?id=)|docs\.google\.com\/(?:spreadsheets|document)\/d\/)[^\s<>"'）\]]+/gi
+  const allGoogleUrls = [...body.matchAll(GOOGLE_URL_RE)].map(m => ({ url: m[0], index: m.index ?? 0 }))
+  if (allGoogleUrls.length === 0) return null
+  const RESUME_KEYWORDS = ['スキルシート', '職務経歴書', '経歴書', 'レジュメ', 'resume', 'スキル']
+  for (const kw of RESUME_KEYWORDS) {
+    const kwIdx = body.toLowerCase().indexOf(kw.toLowerCase())
+    if (kwIdx === -1) continue
+    const nearby = allGoogleUrls.find(u => u.index >= kwIdx && u.index <= kwIdx + 200)
+    if (nearby) return nearby.url
+  }
+  return allGoogleUrls.find(u => u.url.includes('spreadsheets'))?.url ?? allGoogleUrls[0].url
+}
+
+/**
+ * ゾーンE: resume_url の決定（優先順位を反転）。
+ * 本人に割り当てられた解析済みファイルの Storage URL が最優先。本文リンクは何も無い場合の保険。
+ * 旧実装は本文リンクがあると正しくパースされた添付のアップロード自体をスキップしていた（F.Kさん実害）。
+ */
+async function resolveResumeUrl(
+  assigned: SourceEntry[],
+  rawAttachments: Attachment[],
+  bodyResumeLink: string | null,
+  candName: string | null,
+  ledger: Ledger,
+): Promise<string | null> {
+  const uploadOne = async (name: string | undefined, mimeType: string, data: string, entryId: number | null): Promise<string | null> => {
+    const ext = (name ?? 'bin').split('.').pop() ?? 'bin'
+    const safeName = `${(candName ?? 'cand').replace(/[.\s　]/g, '_')}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
+    const url = await uploadToStorage(safeName, mimeType, data)
+    if (url) ledger.log(entryId, 'E-STO-OK', safeName)
+    else ledger.log(entryId, 'E-STO-FAIL', name ?? '')
+    return url
+  }
+  for (const e of assigned) {
+    if (!e.attachment?.data) continue
+    const url = await uploadOne(e.attachment.name ?? e.filename, e.attachment.mimeType, e.attachment.data, e.entryId)
+    if (url) { ledger.log(e.entryId, 'E-URL-STORAGE'); return url }
+  }
+  // 保険: 解析対象にならなかった添付（テキスト層なしのスキャンPDF等）も旧動作どおりStorage候補にする
+  for (const att of rawAttachments) {
+    const isOffice = EXCEL_MIME.includes(att.mimeType) || WORD_MIME.includes(att.mimeType)
+      || /\.(xlsx?|xls|docx?|ods|csv)$/i.test(att.name ?? '')
+    const isPdf = att.mimeType === 'application/pdf' || /\.pdf$/i.test(att.name ?? '')
+    if ((!isOffice && !isPdf) || !att.data) continue
+    const url = await uploadOne(att.name, att.mimeType, att.data, null)
+    if (url) { ledger.log(null, 'E-URL-STORAGE', '未解析添付フォールバック'); return url }
+  }
+  if (bodyResumeLink) {
+    // 解析済みファイルがあるのに本文リンクへ落ちるのは Storage 失敗時のみ（設計上の不変条件）
+    if (assigned.some(e => e.attachment?.data)) ledger.violate('INV-E-BODYLINK-SKIP', 'Storage失敗により本文リンクへフォールバック')
+    ledger.log(null, 'E-URL-BODYLINK', bodyResumeLink.slice(0, 60))
+    return bodyResumeLink
+  }
+  ledger.log(null, 'E-URL-NONE')
+  return null
+}
+
+/** ゾーンE: skillYears を本人に割り当てられたエントリからのみ採用（旧driveSheetSkillYears無条件上書きの廃止） */
+function pickSkillYears(assigned: SourceEntry[], ledger: Ledger): Record<string, number> {
+  for (const e of assigned) {
+    const sy = e.skillYears ?? {}
+    if (Object.keys(sy).filter(k => !k.startsWith('_')).length > 0) {
+      ledger.log(e.entryId, 'E-SY-FROM')
+      return { ...sy }
+    }
+  }
+  for (const e of assigned) {
+    const sy = e.skillYears ?? {}
+    if (Object.keys(sy).length > 0) {
+      ledger.log(e.entryId, 'E-SY-FROM', '内部キーのみ')
+      return { ...sy }
+    }
+  }
+  for (const e of assigned) {
+    if (e.totalProjectMonths && e.totalProjectMonths > 0) {
+      ledger.log(e.entryId, 'E-SY-FROM', 'word月数')
+      return { _totalProjectMonths: e.totalProjectMonths }
+    }
+  }
+  return {}
 }
 
 /** HTMLタグを除去してプレーンテキストに変換 */
@@ -6188,15 +6652,19 @@ function assignAttachmentsToBlocks<T extends { label: string; content?: string }
  *
  * 戻り値: ブロックが2件以上あれば string[] を返す。1件以下なら null。
  */
+// 構造化フィールドを含む判定（【氏名】/ ◇◆ ラベル / 名前：ラベルなし形式）
+// ■氏名：形式（■●▪▶ 等のビュレット付き）も認識
+// 「■MM（石川町）男性・57歳」のように括弧内が駅名で■が付かず「最寄駅：」「希望単金：」等の
+// フィールド行が続く形式もあるため、ビュレット文字は必須にせず・「単金」表記も許容する
+// ※ splitMultiCandidateBody と detectRoster（名簿判定）で共用するためモジュールスコープに置く
+const MULTI_CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]|[■●▪▶]?[ 　]*(?:最寄(?:り?駅?)|希望単価|希望単金|スキル|業務経験|稼働開始|稼働時期|アピール)/
+// 【 氏 名 】（半角スペース区切り形式）・■氏名：形式・■SI（28歳／男性）形式にも対応
+// 「■MM（石川町）男性・57歳」（括弧内は駅名、性別・年齢は括弧の外に「・」区切りで続く）にも対応
+const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
+
 function splitMultiCandidateBody(body: string): string[] | null {
-  // 構造化フィールドを含む判定（【氏名】/ ◇◆ ラベル / 名前：ラベルなし形式）
-  // ■氏名：形式（■●▪▶ 等のビュレット付き）も認識
-  // 「■MM（石川町）男性・57歳」のように括弧内が駅名で■が付かず「最寄駅：」「希望単金：」等の
-  // フィールド行が続く形式もあるため、ビュレット文字は必須にせず・「単金」表記も許容する
-  const CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]|[■●▪▶]?[ 　]*(?:最寄(?:り?駅?)|希望単価|希望単金|スキル|業務経験|稼働開始|稼働時期|アピール)/
-  // 【 氏 名 】（半角スペース区切り形式）・■氏名：形式・■SI（28歳／男性）形式にも対応
-  // 「■MM（石川町）男性・57歳」（括弧内は駅名、性別・年齢は括弧の外に「・」区切りで続く）にも対応
-  const NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
+  const CANDIDATE_FIELD_RE = MULTI_CANDIDATE_FIELD_RE
+  const NAME_FIELD_RE = MULTI_NAME_FIELD_RE
   const lines = body.split(/\r?\n/)
 
   function trySplit(delimRe: RegExp): string[] | null {
@@ -6265,6 +6733,8 @@ Deno.serve(async (req: Request) => {
 
   try {
     traceRid = crypto.randomUUID().slice(0, 8)
+    // ゾーンT: エントリ台帳（全ゾーンのステージコード・不変条件違反を記録）
+    const ledger = createLedger(traceRid)
     tracePhase = 'parse_raw'
     // form-urlencoded と JSON 両対応
     const contentType = req.headers.get('content-type') ?? ''
@@ -6424,7 +6894,7 @@ Deno.serve(async (req: Request) => {
     const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
 
     // Word/Excelのテキスト抽出（MIMEタイプ + 拡張子の両方で判定）
-    const officeTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment; jsonRows?: Array<Record<string, string>>; skillSummary?: string }[] = []
+    const officeTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment; jsonRows?: Array<Record<string, string>>; skillSummary?: string; grid?: string[][]; links?: { cell: string; url: string }[]; totalProjectMonths?: number }[] = []
     let excelSkillYears: Record<string, number> = {}
     let wordSkillYearsForDisplay: Record<string, number> = {}  // 表示用のみ・経験年数推定には使わない
     let excelSkillSummary: string | undefined  // Excel スキルシートの「スキルサマリ」セル
@@ -6445,10 +6915,10 @@ Deno.serve(async (req: Request) => {
       const isWordByExt = /\.(docx?|doc)$/.test(attNameLower) && !isExcelByMime
       const isExcelByExt = /\.(xlsx?|xls|ods|csv)$/.test(attNameLower) && !isWordByMime
       if (isWordByMime || isWordByExt) {
-        const { text: rawText, totalProjectMonths: wordMonths, skillYears: wordSkillYears, grid: wordGrid } = await extractWordText(att.data)
+        const { text: rawText, totalProjectMonths: wordMonths, skillYears: wordSkillYears, grid: wordGrid, links: wordAttLinks } = await extractWordText(att.data)
         if (rawText.trim()) {
           const text = cleanseWordText(rawText)
-          officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text, attachment: att })
+          officeTextContents.push({ label: `Word文書(${att.name ?? 'document'})`, content: text, attachment: att, grid: wordGrid, links: wordAttLinks, totalProjectMonths: wordMonths })
         } else console.warn(`[Word] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
         // Word スキル別経験年数は表示用のみ（経験年数推定には使わない）
         if (wordSkillYears && Object.keys(wordSkillYearsForDisplay).length === 0) {
@@ -6464,7 +6934,7 @@ Deno.serve(async (req: Request) => {
         }
       } else if (isExcelByMime || isExcelByExt) {
         // 1 回のパースで text と skillYears を同時取得（二重パース防止）
-        const { text, skillYears: years, jsonRows: excelJsonRows, skillSummary: excelSS, parseError } = await extractExcelAll(att.data)
+        const { text, skillYears: years, jsonRows: excelJsonRows, skillSummary: excelSS, parseError, grid: excelGrid, links: excelLinks } = await extractExcelAll(att.data)
         if (excelSS && !excelSkillSummary) excelSkillSummary = excelSS
         const attLabel = att.name ?? 'spreadsheet'
         if (text.trim()) officeTextContents.push({
@@ -6474,6 +6944,8 @@ Deno.serve(async (req: Request) => {
           attachment: att,
           jsonRows: excelJsonRows && excelJsonRows.length > 0 ? excelJsonRows : undefined,
           skillSummary: excelSS,
+          grid: excelGrid,
+          links: excelLinks,
         })
         else console.warn(`[Excel] 抽出結果が空: ${att.name} mimeType=${att.mimeType}`)
         // _totalProjectMonths / _dateSpanMonths は経験年数推定専用の内部キーで、
@@ -6750,17 +7222,11 @@ Deno.serve(async (req: Request) => {
     }
 
     tracePhase = 'drive_links_fetch'
-    // Google Drive / Sheets / Docs リンクの取得
-    const { textContents: driveTexts, pdfAttachments: drivePdfs, driveWordProjectMonths, driveSheetSkillYears } = await fetchGoogleLinks(body)
-    // Drive Word のプロジェクト期間も Excel 未取得時のフォールバックとして使用
-    if (driveWordProjectMonths && Object.keys(excelSkillYears).length === 0) {
-      excelSkillYears['_totalProjectMonths'] = driveWordProjectMonths
-    }
-    // Drive Excel / Google Sheets の skillYears（添付 Excel が取れなかった場合のフォールバック）
-    if (Object.keys(excelSkillYears).length === 0 && Object.keys(driveSheetSkillYears).length > 0) {
-      excelSkillYears = { ...driveSheetSkillYears }
-    }
-    const rawAllAttachments = [...supportedAttachments, ...drivePdfs]
+    // ゾーンA+B: Google Drive / Sheets / Docs リンクを統一エントリとして取得・抽出（設計書v4）
+    // 旧fetchGoogleLinksのdriveSheetSkillYears無条件上書きは廃止 — skillYearsは
+    // 候補者に割り当てられたエントリからのみ採用する（ゾーンE pickSkillYears）
+    const googleEntries = await collectGoogleEntries(body, ledger)
+    const rawAllAttachments = [...supportedAttachments]
     tracePhase = 'drive_links_done'
 
     // PDFはテキスト抽出済み（officeTextContents に追加済み）。allAttachments からは除外（Storage upload は別途実施）
@@ -6772,53 +7238,44 @@ Deno.serve(async (req: Request) => {
       console.log('[Box] Box URL検出:', boxUrls)
     }
 
-    // 人材メールの添付ファイルを Google Drive にアップロード
-    // （PDF/Word/Excel。アップロード失敗してもメイン処理は継続）
+    // ゾーンE設計: resume_url の優先順位を反転（本人割当ファイルのStorage URL > 本文リンク）。
+    // 単一人材パスでは後段の resolveResumeUrl がゲート通過エントリから決定する。
+    // ここでは複数人材パスのケースC（名前不明ブロック）用フォールバックとして本文リンクのみ保持する。
+    // 旧実装の「本文リンクがあれば添付のStorageアップロード自体をスキップ」（F.Kさん実害）は廃止。
     let resumeUrl: string | null = null
+    let bodyResumeLink: string | null = null
     if (type === 'candidate' || type === 'human') {
-      // メール本文中の Google URL を経歴書リンクとして抽出
-      // 優先度: ①経歴書/スキルシート関連キーワード直後のURL > ②Sheetsリンク > ③Drive fileリンク
-      const GOOGLE_URL_RE = /https:\/\/(?:drive\.google\.com\/(?:file\/d\/|open\?id=)|docs\.google\.com\/(?:spreadsheets|document)\/d\/)[^\s<>"'）\]]+/gi
-      const allGoogleUrls = [...body.matchAll(GOOGLE_URL_RE)].map(m => ({ url: m[0], index: m.index! }))
-      if (allGoogleUrls.length > 0) {
-        const RESUME_KEYWORDS = ['スキルシート', '職務経歴書', '経歴書', 'レジュメ', 'resume', 'スキル']
-        let picked: string | null = null
-        // キーワード直後200文字以内のURLを優先
-        for (const kw of RESUME_KEYWORDS) {
-          const kwIdx = body.toLowerCase().indexOf(kw.toLowerCase())
-          if (kwIdx === -1) continue
-          const nearby = allGoogleUrls.find(u => u.index >= kwIdx && u.index <= kwIdx + 200)
-          if (nearby) { picked = nearby.url; break }
-        }
-        // キーワードがなければSheetsを優先（スキルシートの可能性が高い）
-        if (!picked) {
-          picked = allGoogleUrls.find(u => u.url.includes('spreadsheets'))?.url ?? allGoogleUrls[0].url
-        }
-        resumeUrl = picked
-      }
-
-      // Excel/Word/PDF 添付を Storage にアップロード（再解析用・7日アーカイブで容量管理済み）
-      // ※ allAttachments は PDF/画像を除外済みなので raw attachments から直接フィルタする
-      // （PDFは6736行目でallAttachmentsから除外されテキスト抽出のみ行われるが、
-      //   従来はStorageアップロードが未実装で「経歴書」ボタンが表示されない実害があった）
-      if (!resumeUrl) {
-        for (const att of attachments) {
-          const isOffice = EXCEL_MIME.includes(att.mimeType) || WORD_MIME.includes(att.mimeType)
-            || /\.(xlsx?|xls|docx?|ods|csv)$/i.test(att.name ?? '')
-          const isPdf = att.mimeType === 'application/pdf' || /\.pdf$/i.test(att.name ?? '')
-          if ((!isOffice && !isPdf) || !att.data) continue
-          const ext = att.name ? att.name.split('.').pop() ?? 'bin' : 'bin'
-          const safeName = `${Date.now()}_${Math.random().toString(36).slice(2,8)}.${ext}`
-          const url = await uploadToStorage(safeName, att.mimeType, att.data)
-          if (url) { resumeUrl = url; break }
-        }
-      }
+      bodyResumeLink = pickBodyResumeLink(body)
+      resumeUrl = bodyResumeLink
     }
 
-    // Drive取得テキスト + Officeテキストを統合（スキルマスター照合に使用）
-    // Drive由来には元添付データが無いため attachment/jsonRows/skillSummary は常に undefined
-    const allTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment; jsonRows?: Array<Record<string, string>>; skillSummary?: string }[] =
-      [...driveTexts, ...officeTextContents]
+    // ゾーンA: メール添付も統一エントリへ正規化（normalizeAttachment 相当）。
+    // これで4系統すべてが SourceEntry になり、以降はソース別の分岐を持たない。
+    const officeEntries: SourceEntry[] = officeTextContents.map((t) => {
+      const entryId = ledger.nextEntryId()
+      const kind: SourceEntry['kind'] = t.label.startsWith('Word') ? 'word' : t.label.startsWith('PDF') ? 'pdf' : 'excel'
+      ledger.log(entryId, 'B-EXTRACT-OK', `attachment ${t.label} t=${t.content.length}`)
+      return {
+        entryId,
+        label: t.label,
+        content: t.content,
+        filename: t.attachment?.name ?? t.label,
+        kind,
+        origin: 'attachment' as const,
+        skillYears: t.skillYears,
+        attachment: t.attachment,
+        jsonRows: t.jsonRows,
+        skillSummary: t.skillSummary,
+        grid: t.grid,
+        links: t.links,
+        totalProjectMonths: t.totalProjectMonths,
+      }
+    })
+
+    // ゾーンC: 名簿判定・行展開（全エントリ・候補者割当より前）。
+    // 名簿は行ごとに独立エントリへ展開され、「1エントリ=1人」が下流に保証される。
+    tracePhase = 'roster_expand'
+    const allTextContents: SourceEntry[] = await expandRosterEntries([...googleEntries, ...officeEntries], ledger)
 
     // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
     // 本文と添付を分けて照合し、精度を向上させる。
@@ -6881,7 +7338,30 @@ Deno.serve(async (req: Request) => {
 
       // ── 複数人材検出（*****や-----の区切り線） ─────────────────────────────
       // earlyMultiCheck は body で事前計算済み（effectiveBody と同一の場合は再利用）
-      const multiBlocks = earlyMultiCheck ?? splitMultiCandidateBody(effectiveBody)
+      let multiBlocks = earlyMultiCheck ?? splitMultiCandidateBody(effectiveBody)
+
+      // ゾーンD: 名簿にしか載っていない人材を新規候補者ブロックとして起こす（設計書v4）。
+      // 名簿行エントリの氏名が本文ブロックの誰とも一致しない場合、行テキストを候補者ブロックに
+      // 昇格させ、本文由来の候補者と同じ検証・dedup処理を通す。
+      const rosterRowEntries = allTextContents.filter(e => e.rosterRowName)
+      if (rosterRowEntries.length > 0) {
+        const baseBlocks = multiBlocks && multiBlocks.length >= 2 ? multiBlocks : [effectiveBody]
+        const baseNames = baseBlocks.map(b => {
+          const t = decodeHtmlEntities([subject, b].join('\n'))
+          return extractCandidateFieldsRegex(t, '').name ?? extractNameFallback(t)
+        })
+        const promoted = promoteUnassignedRosterEntries(rosterRowEntries, baseNames, ledger)
+        if (promoted.length > 0) {
+          if (multiBlocks && multiBlocks.length >= 2) {
+            multiBlocks = [...multiBlocks, ...promoted.map(p => p.rowText)]
+          } else {
+            // 単一人材メール + 名簿: 本文に氏名があれば本文ブロックも残し、名簿行と並べて複数人材として処理
+            const bodyHasName = baseNames[0] != null
+            const synthesized = [...(bodyHasName ? [effectiveBody] : []), ...promoted.map(p => p.rowText)]
+            if (synthesized.length >= 2) multiBlocks = synthesized
+          }
+        }
+      }
       if (multiBlocks && multiBlocks.length >= 2) {
         console.log(`[multi-candidate] ${multiBlocks.length}人検出 from=${from} subject=${subject.slice(0, 80)}`)
         tracePhase = 'multi_candidate'
@@ -6927,6 +7407,20 @@ Deno.serve(async (req: Request) => {
           }
         })
         const blockAttachAssignment = assignAttachmentsToBlocks(blockMetas, allTextContents)
+
+        // ゾーンT: 不変条件チェック（サイレント失敗の検出器）
+        {
+          const assignedVals = [...blockAttachAssignment.values()]
+          if (new Set(assignedVals).size !== assignedVals.length) ledger.violate('INV-D-DUP', '同一エントリが複数ブロックに割当')
+          for (const [bIdx, ent] of blockAttachAssignment.entries()) {
+            ledger.log((ent as SourceEntry).entryId, 'D-ASSIGNED', `block=${bIdx} ${blockMetas[bIdx]?.name ?? ''}`)
+          }
+          for (const e of allTextContents) {
+            if (!assignedVals.includes(e) && e.attachment?.data && !e.rosterRowName) {
+              ledger.log(e.entryId, 'D-UNASSIGNED')
+            }
+          }
+        }
 
         // ケースB共有URL: 名前はあるが添付が割当てられなかったブロックが「ちょうど1人」の場合のみ、
         // 残り1件の未割当添付を安全に割り当てる（実質1対1の残余マッチング）。
@@ -7162,7 +7656,9 @@ Deno.serve(async (req: Request) => {
                   : blockNameForMatch
                     ? []
                     : [...allAttachments.map(a => a.name ?? a.mimeType), ...officeTextContents.map(t => t.label)],
-                driveLinks: driveTexts.map(t => t.label),
+                driveLinks: googleEntries.map(t => t.label),
+                // ゾーンT: この候補者に割り当てられたエントリの台帳＋メール全体サマリー
+                pipeline_trace: ledger.serializeTrace(matchedTextContent ? [(matchedTextContent as SourceEntry).entryId] : []),
                 availableFrom: blockRegexFields.availableFrom,
                 desiredProject: blockRegexFields.desiredProject,
                 age: blockRegexFields.age,
@@ -7401,6 +7897,21 @@ Deno.serve(async (req: Request) => {
         )
       }
       // ── 単一人材（通常モード）────────────────────────────────────────────
+
+      // ゾーンD/E: 氏名照合ゲート → skillYears / resume_url を本人割当エントリから決定（設計書v4）。
+      // 旧実装は単一人材だと検証なしで全エントリ・本文リンクを無条件に本人へ紐づけていた。
+      tracePhase = 'single_gate'
+      const singleEarlyText = decodeHtmlEntities([subject, effectiveBody].join('\n'))
+      const singleMeta = { name: extractCandidateFieldsRegex(singleEarlyText, '').name ?? extractNameFallback(singleEarlyText) }
+      const { assigned: gateAssigned } = gateSingleCandidate(singleMeta, allTextContents, ledger)
+      const gatePickedSkillYears = pickSkillYears(gateAssigned, ledger)
+      if (Object.keys(gatePickedSkillYears).length > 0) {
+        excelSkillYears = gatePickedSkillYears
+      } else if (gateAssigned.length < allTextContents.length) {
+        // ゲートで除外されたエントリ由来の skillYears を使わない（他人データ汚染の防止）
+        excelSkillYears = {}
+      }
+      resumeUrl = await resolveResumeUrl(gateAssigned, attachments, bodyResumeLink, singleMeta.name, ledger)
 
       const durationMs = 0
       const parseFallback: 'none' | 'body_only_after_attachment_timeout' = 'none'
@@ -7674,7 +8185,9 @@ Deno.serve(async (req: Request) => {
             ...allAttachments.map(a => a.name ?? a.mimeType),
             ...officeTextContents.map(t => t.label),
           ],
-          driveLinks: driveTexts.map(t => t.label),
+          driveLinks: googleEntries.map(t => t.label),
+          // ゾーンT: 本人割当エントリの台帳＋メール全体サマリー（invariantViolationsが空でなければどこかでこけている）
+          pipeline_trace: ledger.serializeTrace(gateAssigned.map(e => e.entryId)),
           availableFrom: resolvedAvailableFrom,
           desiredProject: regexFields.desiredProject,
           age: regexFields.age,
@@ -8376,7 +8889,7 @@ Deno.serve(async (req: Request) => {
           ...allAttachments.map((a) => a.name ?? a.mimeType),
           ...officeTextContents.map((t) => t.label),
         ],
-        driveLinks: driveTexts.map((t) => t.label),
+        driveLinks: googleEntries.map((t) => t.label),
         batchSize: projectObjects.length,
       }
 

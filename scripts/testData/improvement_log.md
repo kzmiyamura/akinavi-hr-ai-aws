@@ -95,3 +95,10 @@
 - **デプロイ**: `check-and-deploy-edge.sh inbound-email` 実施済み
 
 ---
+
+## 2026-07-10 イテレーション（自動記録）
+- **Excel skillYears**: 100.0%（Pass:10 Warn:4 Fail:0/14）
+- **Body skillYears**: 100.0%（Pass:3 Warn:0 Fail:0/3）
+- **メモ**: 設計書v4準拠の統一入力パイプライン実装: 4系統入力(添付/Drive/Sheets/Docs)をSourceEntryに正規化。Sheets=XLSX本流+CSVgidフィンガープリント照合/保険、Docs=DOCX本流+txt保険、タイムアウト20秒統一。名簿判定・行展開(detectRoster/expandRosterEntries、リンク型は深さ1で再取得)。単一人材の氏名照合ゲート(gateSingleCandidate)。resume_url優先順位反転(Storage>本文リンク、resolveResumeUrl)。skillYears本人割当のみ(pickSkillYears、driveSheetSkillYears廃止)。ゾーンT台帳(createLedger/pipeline_trace/不変条件チェック)+scripts/trace_email.mjs新設。回帰: regex154/154・Excel 10P/4W/0F(0件劣化)
+
+---
