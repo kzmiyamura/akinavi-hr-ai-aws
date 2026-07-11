@@ -4124,9 +4124,9 @@ const enum Sm { START = 0, KEY_H = 1, KEY_V = 2, END = 3 }
  * 子が単一セルのみの場合はその value を直接返す。
  */
 // deno-lint-ignore no-explicit-any
-function _scanContainer(cells: SpanCell[]): Record<string, any> | string {
+function _scanContainer(cells: SpanCell[], deadline = 0): Record<string, any> | string {
   if (cells.length === 1) return cells[0].value.trim()
-  const rows = spanCellsToJson(cells)
+  const rows = spanCellsToJson(cells, deadline)
   // deno-lint-ignore no-explicit-any
   const merged: Record<string, any> = {}
   for (const r of rows) Object.assign(merged, r)
@@ -4144,9 +4144,17 @@ function _scanContainer(cells: SpanCell[]): Record<string, any> | string {
  * 入力: cells (SpanCell[])
  * 出力: Array<Record<string, any>> (各行ごとの record を push)
  */
+/**
+ * deadline: Date.now() 基準の締切ミリ秒（0 = 無制限）。
+ * _scanContainer 経由の再帰が結合セルの多い経歴書で組合せ爆発し、457セルのシートで
+ * 1回のパースに30分以上かかる実害があった（本番Edgeではワーカー強制終了= メールsilent drop）。
+ * 締切超過時はそこまでの結果を返して打ち切る（jsonRowsはHF品質チェック用の補助データであり、
+ * テキスト抽出・skillYears grid抽出は別経路なので主要機能は影響を受けない）。
+ */
 // deno-lint-ignore no-explicit-any
-function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
+function spanCellsToJson(cells: SpanCell[], deadline = 0): Array<Record<string, any>> {
   if (cells.length === 0) return []
+  if (deadline > 0 && Date.now() > deadline) return []
 
   const sorted = [...cells].sort((a, b) =>
     a.row !== b.row ? a.row - b.row : a.col - b.col
@@ -4162,6 +4170,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
   const results: Array<Record<string, any>> = []
 
   for (const rowNum of rowNums) {
+    if (deadline > 0 && Date.now() > deadline) break
     const rowCells = byRow.get(rowNum) ?? []
     if (rowCells.filter(c => c.value.trim()).length === 0) continue
 
@@ -4208,7 +4217,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
       // コンテナ判定（TAG_DICT かつ rowSpan < key.rowSpan）→ 子ステートマシン実行
       if (TAG_DICT.test(right.value.trim()) && _rs(right) < _rs(key)) {
         const ch = _childCells(sorted, right)
-        record[key.value.trim()] = _scanContainer(ch)
+        record[key.value.trim()] = _scanContainer(ch, deadline)
         smI += 2
         return Sm.START
       }
@@ -4259,7 +4268,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
       // コンテナ判定（TAG_DICT かつ colSpan < key.colSpan）→ 子ステートマシン実行
       if (TAG_DICT.test(below.value.trim()) && _cs(below) < _cs(key)) {
         const ch = _childCells(sorted, key)
-        record[key.value.trim()] = _scanContainer(ch)
+        record[key.value.trim()] = _scanContainer(ch, deadline)
         smI++
         return Sm.START
       }
@@ -4315,6 +4324,7 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     }
 
     while (sm !== Sm.END) {
+      if (deadline > 0 && Date.now() > deadline) break
       switch (sm) {
         case Sm.START:  sm = smStart(); break
         case Sm.KEY_H:  sm = smKeyH(); break
@@ -4326,7 +4336,9 @@ function spanCellsToJson(cells: SpanCell[]): Array<Record<string, any>> {
     if (Object.keys(record).length > 0) results.push(record)
   }
 
-  console.log(`[spanCells:sm] rows=${results.length} sample=${results.slice(0, 2).map(r => Object.keys(r).slice(0, 4).join(',')).join(' | ')}`)
+  // NOTE: ここでの console.log は禁止。_scanContainer 経由で再帰呼び出しされるため、
+  // 結合セルの多い経歴書（実例: 315KBのOH.xlsx）では1パースあたり数百万回実行され、
+  // ログ出力だけで1リクエスト145秒かかる実害があった。ログは呼び出し元（extractExcelAll）で出す
   return results
 }
 
@@ -5595,7 +5607,10 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
 
       // skillYears 抽出: grid ベースと SpanCell ベースの両方を試し、スキル数が多い方を採用
       if (Object.keys(skillYears).length === 0) {
-        const jsonRows = spanCellsToJson(cells)
+        // 5秒の時間予算付き。結合セルの多い経歴書で組合せ爆発し1シート30分以上かかる実害があった
+        const jsonDeadline = Date.now() + 5000
+        const jsonRows = spanCellsToJson(cells, jsonDeadline)
+        if (Date.now() > jsonDeadline) console.warn(`[Excel-json] TIMEOUT sheet="${sheetName}" 5秒予算超過のため部分結果で打ち切り rows=${jsonRows.length}`)
         console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
         const syGrid = extractSkillYearsUnified(grid)
         const syCells = extractSkillYearsFromCells(cells)
@@ -6010,25 +6025,58 @@ async function collectGoogleEntries(body: string, ledger: Ledger): Promise<Sourc
 }
 
 /**
+ * 名簿の氏名列の値として妥当か。
+ * 縦型経歴書ではラベル列（生年月日/学歴/期間/作業概要…）や日付・技術用語が
+ * 「氏名」と同じ列に並ぶため、これらを人名と誤認すると経歴書1枚を名簿と誤検出し、
+ * ゴミ候補者（「要件定義」「1989年4月」等）を大量登録する実害があった（ローカルテストで検出）。
+ */
+function looksLikeRosterName(s: string): boolean {
+  const t = s.trim()
+  if (t.length < 1 || t.length > 25) return false
+  // 経歴書・スキルシートの見出し語/セクション語は人名ではない
+  if (/生年月日|年月日|学歴|学　*歴|住所|住　*所|期間|概要|案件|要件|作業|工程|役割|人数|規模|環境|備考|資格|スキル|言語|OS\b|フレームワーク|ツール|自己PR|経験|年数|性別|年齢|最寄|駅|単価|金額|稼働|開始|終了|合計|小計|通勤|沿線|会社|所属|部署|電話|メール|mail|TEL|FAX|プロジェクト|システム|開発|設計|テスト|運用|保守|担当|内容|詳細|日付|時期|現在|以上|以下|合否|評価|№|No\.?/i.test(t)) return false
+  // 日付・数字始まり（1989年4月、2026/05 等）は人名ではない
+  if (/^[\d０-９(（]/.test(t)) return false
+  // 英字1単語3文字以上（Unix/PHP/Mysql/Apa等の技術用語）は除外。
+  // イニシャル（A.M / K.T / OH）とスペース区切りローマ字（Tanaka Taro）は許容
+  if (/^[A-Za-z]{3,}$/.test(t)) return false
+  return true
+}
+
+/**
  * ゾーンC: 名簿判定 — このエントリは複数人分の名簿か。
- * 1) グリッド型: ヘッダ行に氏名系列があり、氏名+他2セル以上の行が2行以上（Excel名簿）。
+ * 1) グリッド型: 名簿ヘッダ行（氏名列+年齢/駅/単価等のヘッダ語）があり、人名らしい行が2行以上。
  *    セル参照の行番号からその行のハイパーリンクも対応付ける（リンク型名簿の基盤）。
  * 2) テキスト型: 【氏名】等のラベル組が2セット以上。
  */
 function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: string; rowText: string; links: { cell: string; url: string }[] }[] } {
   if (entry.grid && entry.grid.length >= 3) {
     const NAME_COL_RE = /^(?:氏\s*名|名\s*前|イニシャル|お名前|姓名)$/
+    // 名簿のヘッダ行に氏名と並んで現れる典型的な列名。
+    // 縦型経歴書では「氏名」セルの右隣は本人の氏名の値（人名）なのでこれに一致せず、
+    // 経歴書のラベル列を名簿ヘッダと誤認するのを防ぐ
+    const ROSTER_HEADER_HINT_RE = /年齢|性別|最寄|駅|単価|金額|希望|経験|年数|スキル|稼働|時期|所属|国籍|勤務|備考|リンク|URL|経歴書|レジュメ|エリア|地域|区分|状況|ステータス/
     for (let h = 0; h < Math.min(5, entry.grid.length); h++) {
       const headerRow = entry.grid[h]
       const nameCol = headerRow.findIndex(c => NAME_COL_RE.test((c ?? '').trim()))
       if (nameCol === -1) continue
+      // ヘッダ行検証: 氏名セルと同じ行に名簿ヘッダらしい列名が1つ以上無ければ名簿ではない
+      const headerHints = headerRow.filter((c, i) => i !== nameCol && ROSTER_HEADER_HINT_RE.test(c ?? ''))
+      if (headerHints.length < 1) continue
       const dataRows: { name: string; rowText: string; links: { cell: string; url: string }[] }[] = []
+      // 名簿の人材行はヘッダ直下に連続して並ぶ。空行・無効行が3行続いたら表の終わりとみなす。
+      // 1人用プロフィール表（氏名+年齢+駅ヘッダ）の列のはるか下にある無関係セル
+      // （実例: OH.xlsxのイニシャルセル）を別の人材行として拾う誤検出を防ぐ
+      let gapRows = 0
       for (let r = h + 1; r < entry.grid.length; r++) {
+        if (gapRows >= 3 && dataRows.length > 0) break
         const row = entry.grid[r]
         const name = (row[nameCol] ?? '').trim()
-        if (!name || name.length > 30) continue
+        if (!name || name.length > 30) { gapRows++; continue }
+        if (!looksLikeRosterName(name)) { gapRows++; continue }
         const otherCells = row.filter((c, i) => i !== nameCol && (c ?? '').trim().length > 0)
-        if (otherCells.length < 2) continue
+        if (otherCells.length < 2) { gapRows++; continue }
+        gapRows = 0
         const rowText = headerRow.map((hc, i) => {
           const v = (row[i] ?? '').trim()
           return (hc ?? '').trim() && v ? `【${hc.trim().slice(0, 12)}】${v}` : null
@@ -6043,18 +6091,23 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
       if (dataRows.length >= 2) return { isRoster: true, rows: dataRows }
     }
   }
-  // テキスト型（splitMultiCandidateBody と同じ氏名・フィールド判定を流用）
+  // テキスト型（splitMultiCandidateBody と同じ氏名・フィールド判定を流用）。
+  // 判定は「同一シート内」で行う: 1人分の経歴書ワークブックは履歴書シートと経歴書シートの
+  // 両方に氏名が書かれており、シートを跨いで数えると同一人物を2人の名簿と誤認して
+  // 重複登録する実害があった（実例: OH.xlsx = 氏名:OH + 氏名:小日向 秀樹 は同一人物）
   const globalNameRe = new RegExp(MULTI_NAME_FIELD_RE.source, 'gm')
-  const nameMatches = [...entry.content.matchAll(globalNameRe)]
-  if (nameMatches.length >= 2) {
+  const sections = entry.content.split(/^--- シート: [^\n]+ ---$/m)
+  for (const section of sections) {
+    const nameMatches = [...section.matchAll(globalNameRe)]
+    if (nameMatches.length < 2) continue
     const rows: { name: string; rowText: string; links: { cell: string; url: string }[] }[] = []
     for (let i = 0; i < nameMatches.length; i++) {
       const start = nameMatches[i].index ?? 0
-      const end = i + 1 < nameMatches.length ? (nameMatches[i + 1].index ?? entry.content.length) : entry.content.length
-      const seg = entry.content.slice(start, end).trim()
+      const end = i + 1 < nameMatches.length ? (nameMatches[i + 1].index ?? section.length) : section.length
+      const seg = section.slice(start, end).trim()
       if (seg.length < 30 || !MULTI_CANDIDATE_FIELD_RE.test(seg)) continue
       const name = extractNameFallback(seg)
-      if (!name) continue
+      if (!name || !looksLikeRosterName(name)) continue
       rows.push({ name, rowText: seg, links: [] })
     }
     if (rows.length >= 2) return { isRoster: true, rows }

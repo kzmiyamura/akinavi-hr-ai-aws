@@ -1,3 +1,26 @@
+# ローカルテスト用設定: 別プロジェクト（mood-song-share が 54321-54327 使用中）と
+# ポート衝突しないよう 5433x に退避。studio 等の不要サービスは無効化して軽量起動
+project_id = "akinavi-hr-ai-aws"
+
+[api]
+port = 54331
+
+[db]
+port = 54332
+shadow_port = 54330
+
+[studio]
+enabled = false
+
+[analytics]
+enabled = false
+
+[realtime]
+enabled = false
+
+[inbucket]
+enabled = false
+port = 54334
 
 [functions.inbound-email]
 enabled = true

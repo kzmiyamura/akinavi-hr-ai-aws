@@ -102,3 +102,10 @@
 - **メモ**: 設計書v4準拠の統一入力パイプライン実装: 4系統入力(添付/Drive/Sheets/Docs)をSourceEntryに正規化。Sheets=XLSX本流+CSVgidフィンガープリント照合/保険、Docs=DOCX本流+txt保険、タイムアウト20秒統一。名簿判定・行展開(detectRoster/expandRosterEntries、リンク型は深さ1で再取得)。単一人材の氏名照合ゲート(gateSingleCandidate)。resume_url優先順位反転(Storage>本文リンク、resolveResumeUrl)。skillYears本人割当のみ(pickSkillYears、driveSheetSkillYears廃止)。ゾーンT台帳(createLedger/pipeline_trace/不変条件チェック)+scripts/trace_email.mjs新設。回帰: regex154/154・Excel 10P/4W/0F(0件劣化)
 
 ---
+
+## 2026-07-11 イテレーション（自動記録）
+- **Excel skillYears**: 100.0%（Pass:10 Warn:4 Fail:0/14）
+- **Body skillYears**: 100.0%（Pass:3 Warn:0 Fail:0/3）
+- **メモ**: ローカル完全テスト環境構築で重大バグ2件を発見・修正: ①detectRoster誤検出（縦型経歴書のラベル列/複数シート跨ぎ氏名を名簿と誤認→ゴミ候補者・同一人物重複登録。修正: 名簿ヘッダ行検証+氏名値妥当性チェックlooksLikeRosterName+行連続性+同一シート内判定）②spanCellsToJson組合せ爆発（459結合セルの経歴書で1シート30-60分→本番Edgeはワーカー強制終了=silent drop。修正: 5秒時間予算+再帰内console.log削除）。検証: ローカルSupabase(ポート5433x)+実ファイル21テスト(Excel13+Word3+名簿1+複合4)で21/21パス。本物の名簿(117人・F.K含む)の行展開・D-NEWBLOCK昇格も動作確認。回帰: regex154/154・Excel10P/4W/0F(0劣化)
+
+---
