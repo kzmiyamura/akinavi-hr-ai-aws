@@ -91,6 +91,7 @@ const targets = [
   [/^function detectRoster\(/, 'detectRoster'],
   [/^async function fetchLinkedResume\(/, 'fetchLinkedResume'],
   [/^const ROSTER_MAX_ROWS = /, null],
+  [/^const ROSTER_LINK_FETCH_BUDGET_MS = /, null],
   [/^async function expandRosterEntries\(/, 'expandRosterEntries'],
   [/^function gateSingleCandidate\(/, 'gateSingleCandidate'],
   [/^function promoteUnassignedRosterEntries\(/, 'promoteUnassignedRosterEntries'],

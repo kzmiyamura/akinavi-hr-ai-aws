@@ -6115,6 +6115,51 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
       }
       if (dataRows.length >= 2) return { isRoster: true, rows: dataRows }
     }
+
+    // グリッド型②: サマリー列名簿 — 「氏名」ヘッダ列が無く、1つの列に【氏名】：I.S 形式の
+    // サマリーセルが縦に並ぶ形式（実例: アイスタンダード注力フリーランス一覧・117人）。
+    // グリッドはテキストと違い文字数上限で切り詰められないため全行を検出でき、
+    // 行番号からスキルシート列のハイパーリンクとも対応付けられる（リンク型名簿の基盤）
+    {
+      const globalNameReG = new RegExp(MULTI_NAME_FIELD_RE.source, 'm')
+      const colCount = Math.max(...entry.grid.map(r => r.length), 0)
+      let best: { col: number; rows: number[] } | null = null
+      for (let c = 0; c < colCount; c++) {
+        const rowIdxs: number[] = []
+        for (let r = 0; r < entry.grid.length; r++) {
+          const cell = (entry.grid[r][c] ?? '').trim()
+          if (cell.length >= 30 && globalNameReG.test(cell) && MULTI_CANDIDATE_FIELD_RE.test(cell)) rowIdxs.push(r)
+        }
+        if (rowIdxs.length >= 2 && rowIdxs.length > (best?.rows.length ?? 0)) best = { col: c, rows: rowIdxs }
+      }
+      if (best) {
+        // ヘッダ行（先頭行に短い列名が2つ以上並ぶ場合）を行テキストのラベルに使う
+        const headerRow = entry.grid[0] ?? []
+        const hasHeader = headerRow.filter(c => { const t = (c ?? '').trim(); return t.length > 0 && t.length <= 15 }).length >= 2
+          && !best.rows.includes(0)
+        const dataRows: { name: string; rowText: string; links: { cell: string; url: string }[] }[] = []
+        for (const r of best.rows) {
+          const summaryCell = (entry.grid[r][best.col] ?? '').trim()
+          // 「【氏名】：I.S」形式ではラベル後の「：」まで名前として拾われるため先頭の区切りを除去
+          const name = (extractNameFallback(summaryCell) ?? '').replace(/^[：:\s　]+/, '')
+          if (!name || !looksLikeRosterName(name)) continue
+          const otherFields = entry.grid[r].map((v, i) => {
+            if (i === best!.col) return null
+            const val = (v ?? '').trim()
+            if (!val) return null
+            const label = hasHeader ? (headerRow[i] ?? '').trim().slice(0, 12) : ''
+            return label ? `【${label}】${val}` : val
+          }).filter(Boolean).join('\n')
+          const rowLinks = (entry.links ?? []).filter(l => {
+            const m = l.cell.match(/(\d+)$/)
+            return m ? Number(m[1]) === r + 1 : false
+          })
+          dataRows.push({ name, rowText: [otherFields, summaryCell].filter(Boolean).join('\n'), links: rowLinks })
+        }
+        const distinct = new Set(dataRows.map(x => x.name.replace(/[.\s　・]/g, '').toLowerCase()))
+        if (dataRows.length >= 2 && distinct.size >= 2) return { isRoster: true, rows: dataRows }
+      }
+    }
   }
   // テキスト型（splitMultiCandidateBody と同じ氏名・フィールド判定を流用）。
   // 判定は「同一シート内」で行う: 1人分の経歴書ワークブックは履歴書シートと経歴書シートの
@@ -6131,7 +6176,7 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
       const end = i + 1 < nameMatches.length ? (nameMatches[i + 1].index ?? section.length) : section.length
       const seg = section.slice(start, end).trim()
       if (seg.length < 30 || !MULTI_CANDIDATE_FIELD_RE.test(seg)) continue
-      const name = extractNameFallback(seg)
+      const name = (extractNameFallback(seg) ?? '').replace(/^[：:\s　]+/, '')
       if (!name || !looksLikeRosterName(name)) continue
       rows.push({ name, rowText: seg, links: [] })
     }
@@ -6166,7 +6211,11 @@ const ROSTER_MAX_ROWS = 15
  * 名簿は行ごとに独立エントリへ展開してから返す（「1エントリ=1人」を下流に保証する）。
  * リンク型の行はリンク先を再取得して本人エントリに差し替える（Google系のみ・深さ1）。
  */
-async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger): Promise<SourceEntry[]> {
+/** 名簿1通あたりのリンク先取得に使える時間予算（ms）。超過後の行は埋め込み型に降格して継続 */
+const ROSTER_LINK_FETCH_BUDGET_MS = 60_000
+
+async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger, linkBudgetMs = ROSTER_LINK_FETCH_BUDGET_MS): Promise<SourceEntry[]> {
+  const linkFetchStart = Date.now()
   const out: SourceEntry[] = []
   for (const entry of entries) {
     const roster = detectRoster(entry)
@@ -6185,6 +6234,14 @@ async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger): Prom
         rosterRowName: row.name, sourceUrl: entry.sourceUrl,
       }
       const googleLink = row.links.find(l => /docs\.google\.com|drive\.google\.com/.test(l.url))
+      if (googleLink && Date.now() - linkFetchStart >= linkBudgetMs) {
+        // Edge Functionのワーカー時間制限対策: 予算超過後の行はリンク先を取得せず
+        // 行テキストの埋め込みで登録を継続する（登録漏れよりリンク先情報の欠落を選ぶ）
+        ledger.log(rowEntryId, 'C-ROW-LINK-SKIP', `リンク取得予算(${Math.round(linkBudgetMs / 1000)}s)超過`)
+        rowEntry.content += `\n${googleLink.url}`
+        out.push(rowEntry)
+        continue
+      }
       if (googleLink) {
         const linked = await fetchLinkedResume(googleLink.url, ledger, 0)
         if (linked) {
@@ -7488,6 +7545,23 @@ Deno.serve(async (req: Request) => {
           }
         })
         const blockAttachAssignment = assignAttachmentsToBlocks(blockMetas, allTextContents)
+
+        // ゾーンD: 名簿昇格ブロックは由来の行エントリと1:1が確定しているため、曖昧マッチに
+        // 頼らず内容一致で確定割当する。名簿行のラベルは全行とも親ファイル名になり（パス1不発）、
+        // リンク先本文の英語技術語に他人のイニシャルが偶然含まれてパス2.5も全滅する実害があった
+        // （実例: 実名簿E2Eで14ブロック全て未割当 → resume_url全滅）
+        {
+          const assignedVals = new Set(blockAttachAssignment.values())
+          for (let bi = 0; bi < multiBlocks.length; bi++) {
+            if (blockAttachAssignment.has(bi)) continue
+            const rowEntry = allTextContents.find(t =>
+              t.rosterRowName && t.content === multiBlocks[bi] && !assignedVals.has(t))
+            if (rowEntry) {
+              blockAttachAssignment.set(bi, rowEntry)
+              assignedVals.add(rowEntry)
+            }
+          }
+        }
 
         // ゾーンT: 不変条件チェック（サイレント失敗の検出器）
         {

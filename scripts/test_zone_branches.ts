@@ -383,6 +383,34 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
     check('DG-09', 'detectRoster', '人材行1行のみ → 非名簿（1人用プロフィール表）', '1人だけ', !r.isRoster) }
 }
 
+// ═══ ゾーンC: detectRoster（グリッド型②: サマリー列名簿） ═════════════════
+{
+  resetDeps()
+  const summary = (name: string, sta: string) => `【氏名】：${name}\n【年齢】：45歳\n【性別】：男性\n【最寄】：${sta}\n【スキル】：Java、AWS`
+  const header = ['メインスキル', '開始', '単価', 'サマリー', 'スキルシート']
+  { const grid = [header,
+      ['Java', '7月', '85万', summary('I.S', '上総一ノ宮駅'), 'リンク'],
+      ['PHP', '8月', '70万', summary('F.K', '都賀駅'), 'リンク']]
+    const links = [{ cell: 'E2', url: 'https://docs.google.com/spreadsheets/d/' + 'Z'.repeat(30) }, { cell: 'E3', url: 'https://docs.google.com/document/d/' + 'Z'.repeat(30) }]
+    const r = detectRoster(e({ grid, links, content: '' }))
+    check('DS-01', 'detectRoster', 'サマリー列名簿（氏名ヘッダ列なし・【氏名】入りセル縦並び） → 名簿・行リンク対応付け', 'アイスタンダード形式2人+リンク',
+      r.isRoster && r.rows.length === 2 && r.rows[0].name === 'I.S' && r.rows[1].name === 'F.K'
+      && r.rows[0].links[0]?.cell === 'E2' && r.rows[1].links[0]?.cell === 'E3'
+      && r.rows[0].rowText.includes('【メインスキル】Java') && r.rows[0].rowText.includes('【氏名】：I.S')) }
+  { const grid = [header, ['Java', '7月', '85万', summary('I.S', '上総一ノ宮駅'), '']]
+    const r = detectRoster(e({ grid, content: '' }))
+    check('DS-02', 'detectRoster', 'サマリーセルが1個のみ → 非名簿', '1人だけの一覧', !r.isRoster) }
+  { const grid = [header,
+      ['Java', '7月', '85万', summary('I.S', '上総一ノ宮駅'), ''],
+      ['PHP', '8月', '70万', summary('I.S', '都賀駅'), '']]
+    const r = detectRoster(e({ grid, content: '' }))
+    check('DS-03', 'detectRoster', 'サマリー列の氏名が同一人物のみ → 非名簿', '同名I.S×2行', !r.isRoster) }
+  { const grid = [['自由記述メモ'], [summary('I.S', 'A駅')], [summary('F.K', 'B駅')]]
+    const r = detectRoster(e({ grid, content: '' }))
+    check('DS-04', 'detectRoster', 'ヘッダ行なしでも検出（ラベルなし行テキスト）', 'ヘッダなし2人',
+      r.isRoster && r.rows.length === 2 && !r.rows[0].rowText.includes('【自由記述メモ】')) }
+}
+
 // ═══ ゾーンC: detectRoster（テキスト型） ═══════════════════════════════════
 {
   resetDeps()
@@ -475,6 +503,11 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
     const l = L(); const r = await expandRosterEntries([e({ grid, links, content: '' })], l)
     check('ER-05', 'expandRosterEntries', 'リンク取得失敗 → 行テキストの埋め込みで継続（C-ROW-LINK-FAIL）', '行リンク先が全滅',
       r.length === 2 && r[0].content.includes('【氏名】山田 太郎') && codes(l).includes('C-ROW-LINK-FAIL')) }
+  { const grid = [header, ['山田 太郎', '30', '渋谷', 'リンク'], ['佐藤 花子', '40', '横浜', '']]
+    const links = [{ cell: 'D2', url: 'https://docs.google.com/spreadsheets/d/' + 'R'.repeat(30) + '/edit' }]
+    const l = L(); const r = await expandRosterEntries([e({ grid, links, content: '' })], l, 0)
+    check('ER-06', 'expandRosterEntries', 'リンク取得の時間予算超過 → 取得せず埋め込みに降格（C-ROW-LINK-SKIP）', '予算0msで実行',
+      r.length === 2 && codes(l).includes('C-ROW-LINK-SKIP') && r[0].content.includes('docs.google.com')) }
 }
 
 // ═══ ゾーンD: gateSingleCandidate ══════════════════════════════════════════

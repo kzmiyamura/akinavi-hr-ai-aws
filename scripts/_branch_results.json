@@ -560,6 +560,38 @@
   "detail": ""
  },
  {
+  "id": "DS-01",
+  "fn": "detectRoster",
+  "branch": "サマリー列名簿（氏名ヘッダ列なし・【氏名】入りセル縦並び） → 名簿・行リンク対応付け",
+  "data": "アイスタンダード形式2人+リンク",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DS-02",
+  "fn": "detectRoster",
+  "branch": "サマリーセルが1個のみ → 非名簿",
+  "data": "1人だけの一覧",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DS-03",
+  "fn": "detectRoster",
+  "branch": "サマリー列の氏名が同一人物のみ → 非名簿",
+  "data": "同名I.S×2行",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DS-04",
+  "fn": "detectRoster",
+  "branch": "ヘッダ行なしでも検出（ラベルなし行テキスト）",
+  "data": "ヘッダなし2人",
+  "ok": true,
+  "detail": ""
+ },
+ {
   "id": "DT-01",
   "fn": "detectRoster",
   "branch": "シート跨ぎの氏名2出現 → 非名簿（同一人物の重複登録防止）",
@@ -700,6 +732,14 @@
   "fn": "expandRosterEntries",
   "branch": "リンク取得失敗 → 行テキストの埋め込みで継続（C-ROW-LINK-FAIL）",
   "data": "行リンク先が全滅",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "ER-06",
+  "fn": "expandRosterEntries",
+  "branch": "リンク取得の時間予算超過 → 取得せず埋め込みに降格（C-ROW-LINK-SKIP）",
+  "data": "予算0msで実行",
   "ok": true,
   "detail": ""
  },
