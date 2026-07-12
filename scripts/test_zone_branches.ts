@@ -342,6 +342,8 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
     T('A.M') && T('OH') && T('K.T'))
   check('LN-07', 'looksLikeRosterName', '漢字姓名・スペース区切りローマ字 → true', '山田 太郎 / Tanaka Taro',
     T('山田 太郎') && T('Tanaka Taro'))
+  check('LN-08', 'looksLikeRosterName', '抽出誤ペアリング由来のラベル語 → false（実A.M.xlsxでゴミ候補者化した実例）', '保有技術/得意分野/職務要約',
+    !T('保有技術') && !T('得意分野') && !T('職務要約'))
 }
 
 // ═══ ゾーンC: detectRoster（グリッド型） ═══════════════════════════════════

@@ -488,6 +488,14 @@
   "detail": ""
  },
  {
+  "id": "LN-08",
+  "fn": "looksLikeRosterName",
+  "branch": "抽出誤ペアリング由来のラベル語 → false（実A.M.xlsxでゴミ候補者化した実例）",
+  "data": "保有技術/得意分野/職務要約",
+  "ok": true,
+  "detail": ""
+ },
+ {
   "id": "DG-01",
   "fn": "detectRoster",
   "branch": "gridなし → グリッド判定スキップ（非名簿）",
