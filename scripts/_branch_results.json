@@ -72,6 +72,22 @@
   "detail": ""
  },
  {
+  "id": "FD-05",
+  "fn": "filenameFromDisposition",
+  "branch": "生UTF-8バイトの文字化け → 再デコードで日本語復元",
+  "data": "latin1化けした「経歴書_TS.pdf」",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FD-06",
+  "fn": "filenameFromDisposition",
+  "branch": "化けていない通常名は再デコードしない",
+  "data": "plain.pdf",
+  "ok": true,
+  "detail": ""
+ },
+ {
   "id": "GL-01",
   "fn": "detectGoogleLinks",
   "branch": "Sheets + #gid= → gid抽出",
@@ -132,6 +148,22 @@
   "fn": "fetchCsvFingerprint",
   "branch": "取得成功 + クォート内カンマの保持",
   "data": "\"a,b\",c / d,e",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "CF-04",
+  "fn": "fetchCsvFingerprint",
+  "branch": "引用符内の改行 → 1セルとして保持（gid照合を壊さない）",
+  "data": "\"シメイ\\n氏　名\" 複数行セル",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "CF-05",
+  "fn": "fetchCsvFingerprint",
+  "branch": "\"\"エスケープ → 引用符1個に復元",
+  "data": "\"He said \"\"hi\"\"\"",
   "ok": true,
   "detail": ""
  },
@@ -572,6 +604,14 @@
   "fn": "detectRoster",
   "branch": "氏名1セットのみ → 非名簿",
   "data": "1名分のテキスト",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DT-07",
+  "fn": "detectRoster",
+  "branch": "同一人物の氏名2回（表紙+本文等） → 非名簿（相異なる氏名2人以上が条件）",
+  "data": "同名（表記ゆれ）×2セット",
   "ok": true,
   "detail": ""
  },

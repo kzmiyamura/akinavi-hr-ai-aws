@@ -100,6 +100,13 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
   const r4 = resp(null, 200, { 'content-disposition': 'attachment; filename=100%zzz.pdf' })
   check('FD-04', 'filenameFromDisposition', 'デコード失敗（不正%） → 生の値', 'filename=100%zzz.pdf',
     filenameFromDisposition(r4) === '100%zzz.pdf')
+  // Google Driveが生UTF-8バイトをヘッダに載せるケース（latin1化け→再デコード）。実リンク検証で発見
+  const mojibake = [...new TextEncoder().encode('経歴書_TS.pdf')].map(b => String.fromCharCode(b)).join('')
+  const r5 = resp(null, 200, { 'content-disposition': `attachment; filename="${mojibake}"` })
+  check('FD-05', 'filenameFromDisposition', '生UTF-8バイトの文字化け → 再デコードで日本語復元', 'latin1化けした「経歴書_TS.pdf」',
+    filenameFromDisposition(r5) === '経歴書_TS.pdf')
+  check('FD-06', 'filenameFromDisposition', '化けていない通常名は再デコードしない', 'plain.pdf',
+    filenameFromDisposition(resp(null, 200, { 'content-disposition': 'attachment; filename="plain.pdf"' })) === 'plain.pdf')
 }
 
 // ═══ ゾーンA: detectGoogleLinks ════════════════════════════════════════════
@@ -135,6 +142,14 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
   const r = await fetchCsvFingerprint('ID', '0')
   check('CF-01', 'fetchCsvFingerprint', '取得成功 + クォート内カンマの保持', '"a,b",c / d,e',
     r !== null && r.rows[0][0] === 'a,b' && r.rows[0][1] === 'c' && r.rows[1][0] === 'd')
+  route([[/format=csv/, () => resp(',"シメイ\n氏　名",\n,,x')]])
+  { const r = await fetchCsvFingerprint('ID', '0')
+    check('CF-04', 'fetchCsvFingerprint', '引用符内の改行 → 1セルとして保持（gid照合を壊さない）', '"シメイ\\n氏　名" 複数行セル',
+      r !== null && r.rows[0][1] === 'シメイ\n氏　名' && r.rows.length === 2) }
+  route([[/format=csv/, () => resp('"He said ""hi""",b')]])
+  { const r = await fetchCsvFingerprint('ID', '0')
+    check('CF-05', 'fetchCsvFingerprint', '""エスケープ → 引用符1個に復元', '"He said ""hi"""',
+      r !== null && r.rows[0][0] === 'He said "hi"') }
   route([[/format=csv/, () => resp('x', 403)]])
   check('CF-02', 'fetchCsvFingerprint', 'HTTPエラー → null', 'status 403',
     (await fetchCsvFingerprint('ID', '0')) === null)
@@ -391,6 +406,10 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
     check('DT-05', 'detectRoster', '氏名抽出がnull → 行として不採用', 'extractNameFallback=null', !r.isRoster) }
   { const r = detectRoster(e({ content: `${person('山田 太郎')}だけ` }))
     check('DT-06', 'detectRoster', '氏名1セットのみ → 非名簿', '1名分のテキスト', !r.isRoster) }
+  { const c = `${person('山田 太郎')}\n${person('山田太郎')}`
+    const r = detectRoster(e({ content: c }))
+    check('DT-07', 'detectRoster', '同一人物の氏名2回（表紙+本文等） → 非名簿（相異なる氏名2人以上が条件）', '同名（表記ゆれ）×2セット',
+      !r.isRoster) }
 }
 
 // ═══ ゾーンC: fetchLinkedResume ════════════════════════════════════════════

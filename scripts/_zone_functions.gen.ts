@@ -100,7 +100,20 @@ function filenameFromDisposition(res: Response): string | null {
   const cd = res.headers.get('content-disposition') ?? ''
   const m = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';\n]+)["']?/i)
   if (!m) return null
-  try { return decodeURIComponent(m[1].trim()) } catch { return m[1].trim() }
+  let name: string
+  try { name = decodeURIComponent(m[1].trim()) } catch { name = m[1].trim() }
+  // Google Driveは日本語ファイル名を生のUTF-8バイト列のままヘッダに載せることがあり、
+  // fetchのヘッダ読み出し（latin1解釈）で「ã‚¢ã‚¤ã‚¹…」型の文字化けになる（実リンク検証で発見）。
+  // latin1域の文字を含み日本語を含まない場合のみ latin1→UTF-8 再デコードを試し、
+  // 正当なUTF-8として日本語が復元できた場合に限り置き換える
+  if (/[\u0080-\u00ff]/.test(name) && !/[\u3000-\u9fff\uff00-\uffef]/.test(name)) {
+    try {
+      const redecoded = new TextDecoder('utf-8', { fatal: true })
+        .decode(Uint8Array.from(name, c => c.charCodeAt(0) & 0xff))
+      if (/[\u3000-\u9fff\uff00-\uffef]/.test(redecoded)) name = redecoded
+    } catch { /* 正当なUTF-8でなければ化けていない通常のlatin1名としてそのまま */ }
+  }
+  return name
 }
 
 function detectGoogleLinks(body: string): {
@@ -139,19 +152,31 @@ async function fetchCsvFingerprint(id: string, gid: string): Promise<{ rows: str
     const res = await fetchWithTimeout(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`)
     if (!res.ok) return null
     const raw = await res.text()
-    const rows = raw.split(/\r?\n/).slice(0, 200).map(row => {
-      const cells: string[] = []
-      let cur = ''
-      let inQuote = false
-      for (let i = 0; i < row.length; i++) {
-        const ch = row[i]
-        if (ch === '"') { inQuote = !inQuote }
-        else if (ch === ',' && !inQuote) { cells.push(cur); cur = '' }
-        else { cur += ch }
-      }
-      cells.push(cur)
-      return cells
-    })
+    // 引用符内の改行・カンマ・""エスケープに対応した1パスCSVパース。
+    // 行分割を先にやると「"シメイ\n氏名"」のような複数行セルが壊れてゴミセルになり、
+    // gidフィンガープリント照合のスコアが実データで届かない実害があった（実リンク検証で発見）
+    const rows: string[][] = []
+    let cells: string[] = []
+    let cur = ''
+    let inQuote = false
+    for (let i = 0; i < raw.length && rows.length < 200; i++) {
+      const ch = raw[i]
+      if (inQuote) {
+        if (ch === '"') {
+          if (raw[i + 1] === '"') { cur += '"'; i++ }  // "" は引用符1個
+          else inQuote = false
+        } else cur += ch
+      } else if (ch === '"') {
+        inQuote = true
+      } else if (ch === ',') {
+        cells.push(cur); cur = ''
+      } else if (ch === '\n' || ch === '\r') {
+        if (ch === '\r' && raw[i + 1] === '\n') i++
+        cells.push(cur); cur = ''
+        rows.push(cells); cells = []
+      } else cur += ch
+    }
+    if (cur !== '' || cells.length > 0) { cells.push(cur); rows.push(cells) }
     return { rows, raw }
   } catch { return null }
 }
@@ -407,7 +432,10 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
       if (!name || !looksLikeRosterName(name)) continue
       rows.push({ name, rowText: seg, links: [] })
     }
-    if (rows.length >= 2) return { isRoster: true, rows }
+    // 相異なる氏名が2人以上いて初めて名簿。1人の経歴書は表紙と本文などで同じ氏名ラベルが
+    // 2回出ることが多く（実例: 実DOCXで同一人物が2候補者に分裂した）、同名のみなら単票扱い
+    const distinctNames = new Set(rows.map(r => r.name.replace(/[.\s　・]/g, '').toLowerCase()))
+    if (rows.length >= 2 && distinctNames.size >= 2) return { isRoster: true, rows }
   }
   return { isRoster: false, rows: [] }
 }

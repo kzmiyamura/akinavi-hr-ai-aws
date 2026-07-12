@@ -109,3 +109,10 @@
 - **メモ**: ローカル完全テスト環境構築で重大バグ2件を発見・修正: ①detectRoster誤検出（縦型経歴書のラベル列/複数シート跨ぎ氏名を名簿と誤認→ゴミ候補者・同一人物重複登録。修正: 名簿ヘッダ行検証+氏名値妥当性チェックlooksLikeRosterName+行連続性+同一シート内判定）②spanCellsToJson組合せ爆発（459結合セルの経歴書で1シート30-60分→本番Edgeはワーカー強制終了=silent drop。修正: 5秒時間予算+再帰内console.log削除）。検証: ローカルSupabase(ポート5433x)+実ファイル21テスト(Excel13+Word3+名簿1+複合4)で21/21パス。本物の名簿(117人・F.K含む)の行展開・D-NEWBLOCK昇格も動作確認。回帰: regex154/154・Excel10P/4W/0F(0劣化)
 
 ---
+
+## 2026-07-12 イテレーション（自動記録）
+- **Excel skillYears**: 100.0%（Pass:10 Warn:4 Fail:0/14）
+- **Body skillYears**: 100.0%（Pass:3 Warn:0 Fail:0/3）
+- **メモ**: 実Googleリンク結合テスト（名簿内の実リンク4本・ローカルE2E）で3件の実環境バグを発見・修正: ①fetchCsvFingerprintのCSVパースが引用符内改行で壊れgidフィンガープリント照合が実データで不発（1パス実装に修正→実ファイルで19/20一致・B-SHEET-GID動作確認） ②実DOCXで氏名ラベル2回→同名を名簿と誤認し1人が2候補者に分裂（相異なる氏名2人以上を名簿条件に） ③Google Driveのdisposition生UTF-8でファイル名文字化け（latin1→UTF-8再デコード）。実リンクでSheets XLSX本流→スキル年数43件→Storage→resume_urlの一気通貫、Drive実PDF経路も実証。分岐網羅114/114・E2E 21/21・回帰0劣化
+
+---
