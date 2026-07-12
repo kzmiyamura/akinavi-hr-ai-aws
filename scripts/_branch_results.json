@@ -1,0 +1,874 @@
+[
+ {
+  "id": "T-01",
+  "fn": "serializeTrace",
+  "branch": "ログ0件+違反0件 → undefined",
+  "data": "log/violate呼び出しなし",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "T-02",
+  "fn": "serializeTrace",
+  "branch": "通常サイズ → assigned/summary/emailCodes/violations",
+  "data": "entryログ2+emailログ1",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "T-03",
+  "fn": "violate",
+  "branch": "detailが120字に切り詰められる",
+  "data": "200字detail",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "T-04",
+  "fn": "serializeTrace",
+  "branch": "8KB超 → emailCodes末尾40件のcompactへ縮退（truncated:true）",
+  "data": "emailログ600件",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "T-05",
+  "fn": "serializeTrace",
+  "branch": "compactも8KB超 → violationsのみの最終縮退",
+  "data": "entryログ400件（summary肥大）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FD-01",
+  "fn": "filenameFromDisposition",
+  "branch": "filename=\"...\" → ファイル名",
+  "data": "attachment; filename=\"resume.xlsx\"",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FD-02",
+  "fn": "filenameFromDisposition",
+  "branch": "filename*=UTF-8'' → URLデコード",
+  "data": "%E7%B5%8C%E6%AD%B4.xlsx",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FD-03",
+  "fn": "filenameFromDisposition",
+  "branch": "ヘッダなし → null",
+  "data": "content-dispositionなし",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FD-04",
+  "fn": "filenameFromDisposition",
+  "branch": "デコード失敗（不正%） → 生の値",
+  "data": "filename=100%zzz.pdf",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GL-01",
+  "fn": "detectGoogleLinks",
+  "branch": "Sheets + #gid= → gid抽出",
+  "data": "#gid=5",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GL-02",
+  "fn": "detectGoogleLinks",
+  "branch": "Sheets + ?gid= → gid抽出",
+  "data": "?gid=7",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GL-03",
+  "fn": "detectGoogleLinks",
+  "branch": "gidなし → 既定 0",
+  "data": "gid指定なし",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GL-04",
+  "fn": "detectGoogleLinks",
+  "branch": "同一SheetsのID重複 → 1件（初出優先）",
+  "data": "同一ID×2",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GL-05",
+  "fn": "detectGoogleLinks",
+  "branch": "Docs検出 + ID重複排除",
+  "data": "Docs同一ID×2",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GL-06",
+  "fn": "detectGoogleLinks",
+  "branch": "Drive file/d/ と open?id= 両形式 + 重複排除",
+  "data": "Drive 2形式×同一ID",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GL-07",
+  "fn": "detectGoogleLinks",
+  "branch": "リンクなし → 全て空",
+  "data": "Google URLなし",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "CF-01",
+  "fn": "fetchCsvFingerprint",
+  "branch": "取得成功 + クォート内カンマの保持",
+  "data": "\"a,b\",c / d,e",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "CF-02",
+  "fn": "fetchCsvFingerprint",
+  "branch": "HTTPエラー → null",
+  "data": "status 403",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "CF-03",
+  "fn": "fetchCsvFingerprint",
+  "branch": "fetch例外 → null",
+  "data": "ネットワーク例外",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FS-01",
+  "fn": "fetchSheetsEntry",
+  "branch": "XLSX成功 → bytes+gidHint（CSVフィンガープリント併載）",
+  "data": "xlsx 200 + csv 200",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FS-02",
+  "fn": "fetchSheetsEntry",
+  "branch": "XLSX失敗(HTTP) → CSV保険にフォールバック",
+  "data": "xlsx 500 + csv 200",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FS-03",
+  "fn": "fetchSheetsEntry",
+  "branch": "CSV保険 + skillYears非空 → skillYears設定",
+  "data": "skill抽出が{Java:12}を返す",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FS-04",
+  "fn": "fetchSheetsEntry",
+  "branch": "XLSX例外(タイムアウト) → CSV保険",
+  "data": "xlsx throw + csv 200",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FS-05",
+  "fn": "fetchSheetsEntry",
+  "branch": "XLSXもCSVも失敗 → null",
+  "data": "両方 500",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FS-06",
+  "fn": "fetchSheetsEntry",
+  "branch": "CSVが空白のみ → 保険にせず null",
+  "data": "csv=空白",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FS-07",
+  "fn": "fetchSheetsEntry",
+  "branch": "拡張子なしdisposition → attachment.name に .xlsx 付与",
+  "data": "filename=\"SheetTitle\"（拡張子なし）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FDx-01",
+  "fn": "fetchDocsEntry",
+  "branch": "DOCX成功 → bytes保持",
+  "data": "docx 200",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FDx-02",
+  "fn": "fetchDocsEntry",
+  "branch": "DOCX失敗 → txt保険",
+  "data": "docx 500 + txt 200",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FDx-03",
+  "fn": "fetchDocsEntry",
+  "branch": "DOCX例外 + txt HTTPエラー → null",
+  "data": "docx throw + txt 404",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FDx-04",
+  "fn": "fetchDocsEntry",
+  "branch": "txt側も例外 → null",
+  "data": "docx 500 + txt throw",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DR-01",
+  "fn": "fetchDriveEntry",
+  "branch": "直前150字にポートフォリオ語 → スキップ",
+  "data": "ポートフォリオ+リンク",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DR-02",
+  "fn": "fetchDriveEntry",
+  "branch": "HTTPエラー → null",
+  "data": "status 403",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DR-03",
+  "fn": "fetchDriveEntry",
+  "branch": "content-type=pdf → kind=pdf + bytes",
+  "data": "application/pdf",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DR-04",
+  "fn": "fetchDriveEntry",
+  "branch": "content-type=text → kind=text（本文読込）",
+  "data": "text/plain",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DR-05",
+  "fn": "fetchDriveEntry",
+  "branch": "Excel系MIME → kind=excel",
+  "data": "application/vnd.ms-excel",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DR-06",
+  "fn": "fetchDriveEntry",
+  "branch": "MIME不明でも拡張子.docx → kind=word",
+  "data": "octet-stream + resume.docx",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DR-07",
+  "fn": "fetchDriveEntry",
+  "branch": "未対応タイプ → null + 診断ログ",
+  "data": "image/png",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DR-08",
+  "fn": "fetchDriveEntry",
+  "branch": "fetch例外 → null",
+  "data": "ネットワーク例外",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "MF-01",
+  "fn": "matchSheetByFingerprint",
+  "branch": "有効セル3個未満 → null（照合不能）",
+  "data": "CSV=1セルのみ",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "MF-02",
+  "fn": "matchSheetByFingerprint",
+  "branch": "8割以上一致 → シート名",
+  "data": "5セル中5一致",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "MF-03",
+  "fn": "matchSheetByFingerprint",
+  "branch": "最高スコアでも8割未満 → null（誤爆防止）",
+  "data": "5セル中3一致",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "MF-04",
+  "fn": "matchSheetByFingerprint",
+  "branch": "複数シート → 最良一致を選択",
+  "data": "一致2個 vs 5個",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "EE-01",
+  "fn": "extractEntry",
+  "branch": "bytesなし（text系） → そのまま返す",
+  "data": "attachmentなし",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "EE-02",
+  "fn": "extractEntry",
+  "branch": "Excel parseError → B-PARSE-ERR記録",
+  "data": "parseError=zip壊れ",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "EE-03",
+  "fn": "extractEntry",
+  "branch": "Excel成功 + gid選択 + リンクあり → B-SHEET-GID/B-LINKS/内容反映",
+  "data": "gidCsvRowsあり",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "EE-04",
+  "fn": "extractEntry",
+  "branch": "Excel skillYears空 → undefined（空オブジェクトを残さない）",
+  "data": "skillYears={}",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "EE-05",
+  "fn": "extractEntry",
+  "branch": "Word抽出結果が空 → B-EXTRACT-EMPTY",
+  "data": "text=空白のみ",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "EE-06",
+  "fn": "extractEntry",
+  "branch": "Word成功 + links + 月数 → 反映",
+  "data": "links1件+月数36",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "EE-07",
+  "fn": "extractEntry",
+  "branch": "PDF → テキスト抽出",
+  "data": "pdf text=PDF本文",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "EE-08",
+  "fn": "extractEntry",
+  "branch": "kind=text（どの分岐にも該当せず） → そのまま",
+  "data": "bytesありkind=text",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "LN-01",
+  "fn": "looksLikeRosterName",
+  "branch": "空文字 → false",
+  "data": "\"\"",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "LN-02",
+  "fn": "looksLikeRosterName",
+  "branch": "26字超 → false",
+  "data": "26字の文字列",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "LN-03",
+  "fn": "looksLikeRosterName",
+  "branch": "経歴書ラベル語 → false",
+  "data": "生年月日/最終学歴/作業概要",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "LN-04",
+  "fn": "looksLikeRosterName",
+  "branch": "数字・括弧始まり → false",
+  "data": "1989年4月 / （参考）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "LN-05",
+  "fn": "looksLikeRosterName",
+  "branch": "英字1単語3字以上（技術用語） → false",
+  "data": "Unix/Mysql/Apa",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "LN-06",
+  "fn": "looksLikeRosterName",
+  "branch": "イニシャル → true",
+  "data": "A.M / OH / K.T",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "LN-07",
+  "fn": "looksLikeRosterName",
+  "branch": "漢字姓名・スペース区切りローマ字 → true",
+  "data": "山田 太郎 / Tanaka Taro",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DG-01",
+  "fn": "detectRoster",
+  "branch": "gridなし → グリッド判定スキップ（非名簿）",
+  "data": "grid=undefined",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DG-02",
+  "fn": "detectRoster",
+  "branch": "氏名ヘッダ列なし → 非名簿",
+  "data": "ヘッダ=スキル/年数",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DG-03",
+  "fn": "detectRoster",
+  "branch": "氏名セルはあるがヘッダ語（年齢/駅/単価等）が同行にない → 非名簿（縦型経歴書対策）",
+  "data": "氏名の行にヘッダ語なし",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DG-04",
+  "fn": "detectRoster",
+  "branch": "正常な名簿（ヘッダ+人名2行） → 名簿・行リンク対応付け",
+  "data": "2人+行リンク",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DG-05",
+  "fn": "detectRoster",
+  "branch": "空行3行で表終了 → 離れたセルを行として拾わない",
+  "data": "2人+空行3+遠隔1人",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DG-06",
+  "fn": "detectRoster",
+  "branch": "30字超の氏名セルはスキップ",
+  "data": "31字の値+正常2人",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DG-07",
+  "fn": "detectRoster",
+  "branch": "ラベル語の氏名セルはスキップ（looksLikeRosterName連携）",
+  "data": "生年月日+正常2人",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DG-08",
+  "fn": "detectRoster",
+  "branch": "氏名以外が1セル以下の行はスキップ（人材行でない）",
+  "data": "他セル0個の行",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DG-09",
+  "fn": "detectRoster",
+  "branch": "人材行1行のみ → 非名簿（1人用プロフィール表）",
+  "data": "1人だけ",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DT-01",
+  "fn": "detectRoster",
+  "branch": "シート跨ぎの氏名2出現 → 非名簿（同一人物の重複登録防止）",
+  "data": "履歴書+経歴書の各1名",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DT-02",
+  "fn": "detectRoster",
+  "branch": "同一シート内に氏名2セット → 名簿",
+  "data": "1シートに2名",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DT-03",
+  "fn": "detectRoster",
+  "branch": "セグメント30字未満 → 行として不採用",
+  "data": "極小セグメント×2",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DT-04",
+  "fn": "detectRoster",
+  "branch": "候補者フィールド語を含まないセグメント → 不採用",
+  "data": "■XX（歳）形式+ラベルなし",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DT-05",
+  "fn": "detectRoster",
+  "branch": "氏名抽出がnull → 行として不採用",
+  "data": "extractNameFallback=null",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DT-06",
+  "fn": "detectRoster",
+  "branch": "氏名1セットのみ → 非名簿",
+  "data": "1名分のテキスト",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FL-01",
+  "fn": "fetchLinkedResume",
+  "branch": "depth>=1 → 打ち切り（名簿の名簿は展開しない）",
+  "data": "depth=1",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FL-02",
+  "fn": "fetchLinkedResume",
+  "branch": "Sheetsリンク → 取得+抽出",
+  "data": "sheets URL",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FL-03",
+  "fn": "fetchLinkedResume",
+  "branch": "Docsリンク → 取得+抽出",
+  "data": "docs URL",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FL-04",
+  "fn": "fetchLinkedResume",
+  "branch": "Driveリンク → 取得+抽出",
+  "data": "drive URL",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FL-05",
+  "fn": "fetchLinkedResume",
+  "branch": "Google系でないURL → null",
+  "data": "https://example.com/x",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FL-06",
+  "fn": "fetchLinkedResume",
+  "branch": "取得失敗 → null",
+  "data": "全route 500",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "ER-01",
+  "fn": "expandRosterEntries",
+  "branch": "非名簿エントリ → そのまま素通し",
+  "data": "名簿でない1件",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "ER-02",
+  "fn": "expandRosterEntries",
+  "branch": "埋め込み型行 → 行テキストで単票化（非Googleリンクは本文に残す）",
+  "data": "2人・Boxリンク1個",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "ER-03",
+  "fn": "expandRosterEntries",
+  "branch": "行数上限（15行）で打ち切り + C-ROSTER-CAP",
+  "data": "20人の名簿",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "ER-04",
+  "fn": "expandRosterEntries",
+  "branch": "Googleリンク行 → リンク先を取得し本人エントリに差し替え",
+  "data": "行リンク=Sheets",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "ER-05",
+  "fn": "expandRosterEntries",
+  "branch": "リンク取得失敗 → 行テキストの埋め込みで継続（C-ROW-LINK-FAIL）",
+  "data": "行リンク先が全滅",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GS-01",
+  "fn": "gateSingleCandidate",
+  "branch": "本文の氏名なし → 全許可（従来動作）",
+  "data": "name=null",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GS-02",
+  "fn": "gateSingleCandidate",
+  "branch": "氏名が正規化後2字未満 → 全許可",
+  "data": "name=あ（1字）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GS-03",
+  "fn": "gateSingleCandidate",
+  "branch": "本人名がファイル名/中身に一致 → 割当（D-GATE-OK）",
+  "data": "ファイル名一致+中身一致",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GS-04",
+  "fn": "gateSingleCandidate",
+  "branch": "別人の名簿行 → 除外（D-GATE-REJ）",
+  "data": "rosterRowName=佐藤",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GS-05",
+  "fn": "gateSingleCandidate",
+  "branch": "氏名シグナルなし → 許可（D-GATE-ALL・誤紐づけ防止は明確な他人のみ）",
+  "data": "汎用ファイル",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "GS-06",
+  "fn": "gateSingleCandidate",
+  "branch": "名簿行の氏名が本人と同一 → 除外しない",
+  "data": "rosterRowName=山田太郎（表記ゆれ）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PU-01",
+  "fn": "promoteUnassigned",
+  "branch": "既存ブロックと同名（正規化一致） → 昇格しない",
+  "data": "山田太郎 vs 山田 太郎",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PU-02",
+  "fn": "promoteUnassigned",
+  "branch": "新規の名簿行 → 昇格（D-NEWBLOCK）",
+  "data": "佐藤（既存=山田のみ）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PU-03",
+  "fn": "promoteUnassigned",
+  "branch": "rosterRowNameなし → 対象外",
+  "data": "通常エントリ",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PU-04",
+  "fn": "promoteUnassigned",
+  "branch": "氏名2字未満 → 対象外",
+  "data": "1字の名前",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PU-05",
+  "fn": "promoteUnassigned",
+  "branch": "名簿内の同名重複 → 2件目はスキップ",
+  "data": "I.S×2行",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PB-01",
+  "fn": "pickBodyResumeLink",
+  "branch": "GoogleURLなし → null",
+  "data": "リンクなし本文",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PB-02",
+  "fn": "pickBodyResumeLink",
+  "branch": "経歴書キーワード直後200字以内のURL優先",
+  "data": "スキルシート→URL",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PB-03",
+  "fn": "pickBodyResumeLink",
+  "branch": "キーワードなし → Sheetsを優先",
+  "data": "drive+sheets並記",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PB-04",
+  "fn": "pickBodyResumeLink",
+  "branch": "Sheetsなし → 先頭のURL",
+  "data": "driveのみ",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "RR-01",
+  "fn": "resolveResumeUrl",
+  "branch": "本人割当ファイルのStorage成功 → 最優先で採用",
+  "data": "割当1件 upload成功",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "RR-02",
+  "fn": "resolveResumeUrl",
+  "branch": "1件目のStorage失敗 → 次の割当ファイルで成功",
+  "data": "upload: 失敗→成功",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "RR-03",
+  "fn": "resolveResumeUrl",
+  "branch": "割当なし → 未解析添付（スキャンPDF等）のフォールバック",
+  "data": "rawにPDF1件",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "RR-04",
+  "fn": "resolveResumeUrl",
+  "branch": "Office/PDF以外の添付は対象外 → なしなら null",
+  "data": "raw=画像のみ",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "RR-05",
+  "fn": "resolveResumeUrl",
+  "branch": "割当bytesありでStorage全滅 → 本文リンク + INV-E-BODYLINK-SKIP記録",
+  "data": "upload全null+本文リンク",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "RR-06",
+  "fn": "resolveResumeUrl",
+  "branch": "Storage候補なし+本文リンクあり → 本文リンク（違反なし）",
+  "data": "本文リンクのみ",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "RR-07",
+  "fn": "resolveResumeUrl",
+  "branch": "全ソースなし → null（E-URL-NONE）",
+  "data": "割当/raw/リンク全て空",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PS-01",
+  "fn": "pickSkillYears",
+  "branch": "実スキル名を持つエントリを優先採用",
+  "data": "内部キーのみ vs Java:24",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PS-02",
+  "fn": "pickSkillYears",
+  "branch": "内部キーのみのエントリ → 第2優先で採用",
+  "data": "_totalProjectMonths=10",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PS-03",
+  "fn": "pickSkillYears",
+  "branch": "Wordのプロジェクト月数 → 第3優先で採用",
+  "data": "totalProjectMonths=36",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "PS-04",
+  "fn": "pickSkillYears",
+  "branch": "全エントリにskillYearsなし → 空",
+  "data": "skillYearsなし2件",
+  "ok": true,
+  "detail": ""
+ }
+]
