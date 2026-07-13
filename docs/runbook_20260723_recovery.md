@@ -56,7 +56,22 @@ node scripts/trace_email.mjs --name "<候補者名>"
 - gid付きリンクなら `B-SHEET-GID` の出現を確認
 - 名簿メールが来ていたら `C-ROSTER` → `C-ROW-LINK-OK` → 複数登録を確認
 
-### Step 4: 当日夕方の総括
+### Step 4: 案件メール誤登録の監査（当日〜数日以内に1回）
+
+Task #2（prod candidates +3,002 vs projects +3 の乖離）の実データ調査。
+ai_logs は30日保持なので、復旧後早めに実行して過去分を確保する:
+
+```bash
+node scripts/audit_misregistration.mjs --days 30 --dump audit_result.json
+```
+
+- **[A] 現行パターンで捕捉可能** → 当時パターンが無かっただけ。件数の把握のみでOK
+- **[B] スキップ対象の混入** → 同上
+- **[C] ヒューリスティック疑い** → ★本命。シグナル頻度表を見て `poll-email` の
+  `PROJECT_BODY_PATTERNS` にパターンを追加 → 再実行して[C]が[A]に移ることを確認
+- 誤登録と確定した candidates の削除は**ユーザー確認の上で**実施（本番データ変更のため）
+
+### Step 5: 当日夕方の総括
 
 ```bash
 node scripts/monitor_quality.mjs --days 1
