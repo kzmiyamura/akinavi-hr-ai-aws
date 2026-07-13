@@ -6122,42 +6122,65 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
     // 行番号からスキルシート列のハイパーリンクとも対応付けられる（リンク型名簿の基盤）
     {
       const globalNameReG = new RegExp(MULTI_NAME_FIELD_RE.source, 'm')
-      const colCount = Math.max(...entry.grid.map(r => r.length), 0)
-      let best: { col: number; rows: number[] } | null = null
-      for (let c = 0; c < colCount; c++) {
-        const rowIdxs: number[] = []
-        for (let r = 0; r < entry.grid.length; r++) {
-          const cell = (entry.grid[r][c] ?? '').trim()
-          if (cell.length >= 30 && globalNameReG.test(cell) && MULTI_CANDIDATE_FIELD_RE.test(cell)) rowIdxs.push(r)
+      const trySummaryRoster = (
+        grid: string[][],
+        links: { cell: string; url: string }[],
+      ): { name: string; rowText: string; links: { cell: string; url: string }[] }[] | null => {
+        const colCount = Math.max(...grid.map(r => r.length), 0)
+        let best: { col: number; rows: number[] } | null = null
+        for (let c = 0; c < colCount; c++) {
+          const rowIdxs: number[] = []
+          for (let r = 0; r < grid.length; r++) {
+            const cell = (grid[r][c] ?? '').trim()
+            if (cell.length >= 30 && globalNameReG.test(cell) && MULTI_CANDIDATE_FIELD_RE.test(cell)) rowIdxs.push(r)
+          }
+          if (rowIdxs.length >= 2 && rowIdxs.length > (best?.rows.length ?? 0)) best = { col: c, rows: rowIdxs }
         }
-        if (rowIdxs.length >= 2 && rowIdxs.length > (best?.rows.length ?? 0)) best = { col: c, rows: rowIdxs }
-      }
-      if (best) {
+        if (!best) return null
         // ヘッダ行（先頭行に短い列名が2つ以上並ぶ場合）を行テキストのラベルに使う
-        const headerRow = entry.grid[0] ?? []
+        const headerRow = grid[0] ?? []
         const hasHeader = headerRow.filter(c => { const t = (c ?? '').trim(); return t.length > 0 && t.length <= 15 }).length >= 2
           && !best.rows.includes(0)
         const dataRows: { name: string; rowText: string; links: { cell: string; url: string }[] }[] = []
         for (const r of best.rows) {
-          const summaryCell = (entry.grid[r][best.col] ?? '').trim()
+          const summaryCell = (grid[r][best.col] ?? '').trim()
           // 「【氏名】：I.S」形式ではラベル後の「：」まで名前として拾われるため先頭の区切りを除去
           const name = (extractNameFallback(summaryCell) ?? '').replace(/^[：:\s　]+/, '')
           if (!name || !looksLikeRosterName(name)) continue
-          const otherFields = entry.grid[r].map((v, i) => {
+          const otherFields = grid[r].map((v, i) => {
             if (i === best!.col) return null
             const val = (v ?? '').trim()
             if (!val) return null
             const label = hasHeader ? (headerRow[i] ?? '').trim().slice(0, 12) : ''
             return label ? `【${label}】${val}` : val
           }).filter(Boolean).join('\n')
-          const rowLinks = (entry.links ?? []).filter(l => {
+          const rowLinks = links.filter(l => {
             const m = l.cell.match(/(\d+)$/)
             return m ? Number(m[1]) === r + 1 : false
           })
           dataRows.push({ name, rowText: [otherFields, summaryCell].filter(Boolean).join('\n'), links: rowLinks })
         }
         const distinct = new Set(dataRows.map(x => x.name.replace(/[.\s　・]/g, '').toLowerCase()))
-        if (dataRows.length >= 2 && distinct.size >= 2) return { isRoster: true, rows: dataRows }
+        return dataRows.length >= 2 && distinct.size >= 2 ? dataRows : null
+      }
+
+      // 行方向（人が行に並ぶ・リンクは同じ行）を先に試す
+      const rowWise = trySummaryRoster(entry.grid, entry.links ?? [])
+      if (rowWise) return { isRoster: true, rows: rowWise }
+
+      // フォールバック: 転置して列方向（人が列に並ぶ・リンクは同じ列）。
+      // グリッドを転置し、リンクのセル番地は「列」を疑似行番号（T<列index+1>）へ変換することで
+      // 行方向と完全に同じアルゴリズム・同じガードを通す
+      const maxCols = Math.max(...entry.grid.map(r => r.length), 0)
+      if (maxCols >= 3 && entry.grid.length >= 2) {
+        const tGrid: string[][] = Array.from({ length: maxCols }, (_, c) =>
+          entry.grid!.map(row => row[c] ?? ''))
+        const tLinks = (entry.links ?? []).map(l => {
+          const ci = colIndexFromCellRef(l.cell)
+          return ci >= 0 ? { cell: `T${ci + 1}`, url: l.url } : null
+        }).filter((x): x is { cell: string; url: string } => x !== null)
+        const colWise = trySummaryRoster(tGrid, tLinks)
+        if (colWise) return { isRoster: true, rows: colWise }
       }
     }
   }
@@ -6186,6 +6209,15 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
     if (rows.length >= 2 && distinctNames.size >= 2) return { isRoster: true, rows }
   }
   return { isRoster: false, rows: [] }
+}
+
+/** セル参照 "G14" / "AA3" の列文字を0始まりの列indexへ変換（転置名簿のリンク対応付け用） */
+function colIndexFromCellRef(cell: string): number {
+  const m = cell.match(/^([A-Za-z]+)/)
+  if (!m) return -1
+  let n = 0
+  for (const ch of m[1].toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64)
+  return n - 1
 }
 
 /** ゾーンC: 名簿行内のリンク先を再取得する。深さ1で打ち切り（名簿の名簿は展開しない） */
@@ -6244,7 +6276,15 @@ async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger, linkB
       }
       if (googleLink) {
         const linked = await fetchLinkedResume(googleLink.url, ledger, 0)
-        if (linked) {
+        // リンク先の氏名検証: 取得した経歴書のファイル名+中身に本人の氏名/イニシャルが
+        // 見えなければ採用しない（行ズレ・転置判定ミス等で他人の経歴書を紐づける事故の
+        // 最終防衛線。誤った紐づけより無しの方が安全）。見送った行は埋め込みで登録継続
+        const rowNorm = row.name.replace(/[.\s　・]/g, '').toLowerCase()
+        const linkedHay = linked ? `${linked.filename}\n${linked.content}`.replace(/[.\s　・]/g, '').toLowerCase() : ''
+        if (linked && rowNorm.length >= 2 && !linkedHay.includes(rowNorm)) {
+          ledger.log(rowEntryId, 'C-ROW-LINK-REJ', `リンク先に氏名(${row.name})が見当たらないため採用見送り`)
+          rowEntry.content += `\n${googleLink.url}`
+        } else if (linked) {
           ledger.log(rowEntryId, 'C-ROW-LINK-OK', googleLink.url.slice(0, 60))
           rowEntry = {
             ...linked,

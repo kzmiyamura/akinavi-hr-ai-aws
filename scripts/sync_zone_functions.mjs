@@ -85,6 +85,7 @@ const targets = [
   [/^async function fetchDriveEntry\(/, 'fetchDriveEntry'],
   [/^function matchSheetByFingerprint\(/, 'matchSheetByFingerprint'],
   [/^async function extractEntry\(/, 'extractEntry'],
+  [/^function colIndexFromCellRef\(/, 'colIndexFromCellRef'],
   [/^const MULTI_CANDIDATE_FIELD_RE = /, null],
   [/^const MULTI_NAME_FIELD_RE = /, null],
   [/^function looksLikeRosterName\(/, 'looksLikeRosterName'],

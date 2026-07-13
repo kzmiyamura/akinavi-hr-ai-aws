@@ -33,3 +33,6 @@ scripts/testData/excel/
 # ローカルテスト用の実ファイル（実在の経歴書・名簿 = PII。絶対にコミットしない）
 /testData/
 test_results.html
+test_specification.html
+supabase/.branches/
+/deno.lock

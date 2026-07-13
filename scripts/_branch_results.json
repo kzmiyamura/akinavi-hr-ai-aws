@@ -600,6 +600,22 @@
   "detail": ""
  },
  {
+  "id": "DS-05",
+  "fn": "detectRoster",
+  "branch": "転置名簿（人が列方向） → 転置フォールバックで検出・列でリンク対応付け",
+  "data": "2人が列に横並び+列リンク",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DS-06",
+  "fn": "detectRoster",
+  "branch": "行方向を優先（転置より先に成立） → 行番号でリンク対応付け",
+  "data": "縦2人（行方向で成立）",
+  "ok": true,
+  "detail": ""
+ },
+ {
   "id": "DT-01",
   "fn": "detectRoster",
   "branch": "シート跨ぎの氏名2出現 → 非名簿（同一人物の重複登録防止）",
@@ -730,8 +746,16 @@
  {
   "id": "ER-04",
   "fn": "expandRosterEntries",
-  "branch": "Googleリンク行 → リンク先を取得し本人エントリに差し替え",
-  "data": "行リンク=Sheets",
+  "branch": "Googleリンク行 → リンク先を取得し本人エントリに差し替え（氏名検証パス）",
+  "data": "行リンク=Sheets・中身に本人名",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "ER-07",
+  "fn": "expandRosterEntries",
+  "branch": "リンク先に本人の氏名が無い → 採用見送り・埋め込みで継続（C-ROW-LINK-REJ）",
+  "data": "リンク先=別人の経歴",
   "ok": true,
   "detail": ""
  },

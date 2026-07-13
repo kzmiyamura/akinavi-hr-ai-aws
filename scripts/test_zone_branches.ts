@@ -411,6 +411,26 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
     const r = detectRoster(e({ grid, content: '' }))
     check('DS-04', 'detectRoster', 'ヘッダ行なしでも検出（ラベルなし行テキスト）', 'ヘッダなし2人',
       r.isRoster && r.rows.length === 2 && !r.rows[0].rowText.includes('【自由記述メモ】')) }
+  { // 転置名簿: 人が「列」方向に並ぶ（サマリーが1つの行に横並び・リンクも同じ列）
+    const grid = [
+      ['項目', 'サマリー', 'サマリー'],
+      ['紹介文', summary('I.S', 'A駅'), summary('F.K', 'B駅')],
+      ['資料', 'スキルシート', 'スキルシート'],
+    ]
+    const links = [
+      { cell: 'B3', url: 'https://docs.google.com/spreadsheets/d/' + 'V'.repeat(30) },
+      { cell: 'C3', url: 'https://docs.google.com/document/d/' + 'W'.repeat(30) },
+    ]
+    const r = detectRoster(e({ grid, links, content: '' }))
+    check('DS-05', 'detectRoster', '転置名簿（人が列方向） → 転置フォールバックで検出・列でリンク対応付け', '2人が列に横並び+列リンク',
+      r.isRoster && r.rows.length === 2 && r.rows[0].name === 'I.S' && r.rows[1].name === 'F.K'
+      && r.rows[0].links[0]?.url.includes('V'.repeat(30)) && r.rows[1].links[0]?.url.includes('W'.repeat(30))) }
+  { // 行方向が成立する場合は転置を試さない（行方向優先）
+    const grid = [['メモ', 'サマリー'], ['x', summary('I.S', 'A駅')], ['y', summary('F.K', 'B駅')]]
+    const links = [{ cell: 'B2', url: 'https://x.example/is' }, { cell: 'B3', url: 'https://x.example/fk' }]
+    const r = detectRoster(e({ grid, links, content: '' }))
+    check('DS-06', 'detectRoster', '行方向を優先（転置より先に成立） → 行番号でリンク対応付け', '縦2人（行方向で成立）',
+      r.isRoster && r.rows[0].links[0]?.url === 'https://x.example/is' && r.rows[1].links[0]?.url === 'https://x.example/fk') }
 }
 
 // ═══ ゾーンC: detectRoster（テキスト型） ═══════════════════════════════════
@@ -494,11 +514,22 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
       [/format=csv/, () => resp('a,b')],
       [/format=xlsx/, () => resp(new Uint8Array([1]), 200)],
     ])
-    deps.extractExcelAll = () => Promise.resolve({ text: '山田さんの個人経歴シート', skillYears: { Java: 60 } })
+    deps.extractExcelAll = () => Promise.resolve({ text: '氏名 山田太郎 の個人経歴シート', skillYears: { Java: 60 } })
     const l = L(); const r = await expandRosterEntries([e({ grid, links, content: '' })], l)
-    check('ER-04', 'expandRosterEntries', 'Googleリンク行 → リンク先を取得し本人エントリに差し替え', '行リンク=Sheets',
-      r.length === 2 && r[0].content.includes('山田さんの個人経歴シート') && r[0].content.includes('【氏名】山田 太郎')
+    check('ER-04', 'expandRosterEntries', 'Googleリンク行 → リンク先を取得し本人エントリに差し替え（氏名検証パス）', '行リンク=Sheets・中身に本人名',
+      r.length === 2 && r[0].content.includes('山田太郎 の個人経歴シート') && r[0].content.includes('【氏名】山田 太郎')
       && r[0].skillYears?.Java === 60 && r[0].rosterRowName === '山田 太郎' && codes(l).includes('C-ROW-LINK-OK')) }
+  { const grid = [header, ['山田 太郎', '30', '渋谷', 'リンク'], ['佐藤 花子', '40', '横浜', '']]
+    const links = [{ cell: 'D2', url: 'https://docs.google.com/spreadsheets/d/' + 'R'.repeat(30) + '/edit' }]
+    route([
+      [/format=csv/, () => resp('a,b')],
+      [/format=xlsx/, () => resp(new Uint8Array([1]), 200)],
+    ])
+    deps.extractExcelAll = () => Promise.resolve({ text: '全く別人（鈴木一郎）の経歴シート', skillYears: { PHP: 24 } })
+    const l = L(); const r = await expandRosterEntries([e({ grid, links, content: '' })], l)
+    check('ER-07', 'expandRosterEntries', 'リンク先に本人の氏名が無い → 採用見送り・埋め込みで継続（C-ROW-LINK-REJ）', 'リンク先=別人の経歴',
+      r.length === 2 && !r[0].content.includes('鈴木一郎') && r[0].content.includes('【氏名】山田 太郎')
+      && r[0].skillYears === undefined && codes(l).includes('C-ROW-LINK-REJ')) }
   { const grid = [header, ['山田 太郎', '30', '渋谷', 'リンク'], ['佐藤 花子', '40', '横浜', '']]
     const links = [{ cell: 'D2', url: 'https://docs.google.com/spreadsheets/d/' + 'R'.repeat(30) + '/edit' }]
     route([[/./, () => resp('x', 500)]])
