@@ -1,0 +1,440 @@
+<title>AIがスキル年数を後から埋める仕組み — 平易版</title>
+<style>
+  :root {
+    --bg: #eef1ee;
+    --surface: #ffffff;
+    --surface-2: #e3e8e3;
+    --ink: #1a1e1c;
+    --muted: #5b625d;
+    --line: #b7c0b8;
+    --accent: #2d6a63;
+    --accent-soft: #d9e8e5;
+    --good: #3d7a44;
+    --good-soft: #dcece0;
+    --warn: #a6631f;
+    --warn-soft: #f3e3cf;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Segoe UI", sans-serif;
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #141715;
+    --surface: #1c201d;
+    --surface-2: #232824;
+    --ink: #e8ebe7;
+    --muted: #9aa39c;
+    --line: #454e48;
+    --accent: #6fb8ac;
+    --accent-soft: #1e3330;
+    --good: #7ec488;
+    --good-soft: #1f3323;
+    --warn: #e0a34f;
+    --warn-soft: #3a2c17;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141715;
+      --surface: #1c201d;
+      --surface-2: #23282d;
+      --ink: #e8ebe7;
+      --muted: #9aa39c;
+      --line: #454e48;
+      --accent: #6fb8ac;
+      --accent-soft: #1e3330;
+      --good: #7ec488;
+      --good-soft: #1f3323;
+      --warn: #e0a34f;
+      --warn-soft: #3a2c17;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+
+  header.top {
+    margin-bottom: 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-size: 25px;
+    font-weight: 700;
+    margin: 0 0 8px;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+
+  .sub {
+    color: var(--muted);
+    font-size: 14px;
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .note-link {
+    margin-top: 14px;
+    padding: 10px 14px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    font-size: 12.5px;
+    color: var(--muted);
+    max-width: 60ch;
+  }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .chip { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .chip.good { background: var(--good); }
+  .chip.warn { background: var(--warn); }
+  .chip.neutral { background: var(--accent); }
+
+  .col { display: flex; flex-direction: column; align-items: stretch; }
+
+  .box {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 13px 16px;
+    width: 100%;
+  }
+  .box summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .box summary::-webkit-details-marker { display: none; }
+  .box summary::before {
+    content: "▸";
+    font-size: 10px;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+    flex: none;
+    margin-top: 3px;
+  }
+  .box[open] summary::before { transform: rotate(90deg); }
+  .box.risk { border-left: 3px solid var(--warn); }
+  .box.fixed { border-left: 3px solid var(--good); }
+  .box.proposed { border: 1.5px dashed var(--accent); background: var(--accent-soft); }
+  .badge.proposed { background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }
+
+  .box-title { font-weight: 600; font-size: 14.5px; }
+  .badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .badge.good { background: var(--good-soft); color: var(--good); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .detail {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px dashed var(--line);
+    font-size: 13px;
+  }
+  .detail p { margin: 0 0 7px; }
+  .detail p:last-child { margin-bottom: 0; }
+  .detail code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .detail ol, .detail ul { margin: 0 0 7px; padding-left: 20px; }
+  .detail li { margin-bottom: 4px; }
+  .detail li:last-child { margin-bottom: 0; }
+
+  .arrow {
+    display: flex;
+    justify-content: center;
+    height: 26px;
+    position: relative;
+  }
+  .arrow::before {
+    content: "";
+    width: 2px;
+    height: 100%;
+    background: var(--line);
+  }
+  .arrow::after {
+    content: "";
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+  }
+
+  .zone {
+    margin: 26px 0;
+    padding: 20px 20px 16px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    border: 1px solid var(--line);
+  }
+  .zone-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 16px;
+  }
+
+  .table-wrap { overflow-x: auto; }
+  .cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 2px; }
+  .cmp-table th, .cmp-table td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .cmp-table th { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .cmp-table td.route { font-family: var(--mono); font-size: 11.5px; white-space: nowrap; }
+
+  pre.tree {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  pre.tree b { color: var(--accent); font-weight: 700; }
+  pre.tree i { color: var(--muted); font-style: normal; }
+
+  footer.foot {
+    margin-top: 36px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-size: 11.5px;
+    font-family: var(--mono);
+    color: var(--muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .box summary::before { transition: none; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="top">
+    <p class="eyebrow">AIフォールバック設計 — 平易版</p>
+    <h1>AIが「スキル年数の空欄」を<br>後から埋める仕組み</h1>
+    <p class="sub">経歴書からスキルの経験年数がルール（プログラム）でうまく取れなかったとき、あとからAIが読み直して埋めてくれる新機能の設計。専門用語をできるだけ減らして「何を・なぜ・どう」だけをまとめた。</p>
+    <div class="note-link">これは平易版。実装の合意・仕様の細部（状態遷移・障害時の挙動・容量計算など）は <code>ai-enrich-design-v1.2.html</code>（詳細設計書）が正式版。</div>
+    <div class="legend">
+      <span class="legend-item"><span class="chip neutral"></span>処理ステップ</span>
+      <span class="legend-item"><span class="chip good"></span>安全のための仕組み</span>
+      <span class="legend-item"><span class="chip warn"></span>まだ分かっていないこと・弱点</span>
+    </div>
+  </header>
+
+  <div class="col">
+
+    <details class="box" open>
+      <summary><span class="box-title">3行でいうと</span></summary>
+      <div class="detail">
+        <ol>
+          <li>今のルール（プログラム）では、経歴書の書き方が変わっていると「スキル：何年経験」が読み取れないことがある</li>
+          <li>その空欄を、<b>候補者登録の後で・裏側でこっそり</b>AIが経歴書を読み直して埋める（メールの処理自体は今のまま・1秒も遅くならない）</li>
+          <li>AIは無料の自前サーバー（Hugging Face Spaces）で動かす。お金はかからず、経歴書のデータも外部の会社には送らない</li>
+        </ol>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box" open>
+      <summary><span class="box-title">なぜ必要か</span></summary>
+      <div class="detail">
+        <p>今の仕組みは「よくある書き方」を覚えたルールでスキル年数を読み取っている。ところが経歴書のフォーマットは会社ごと・人ごとにバラバラで、<b>見たことのない書き方だと0件になる</b>。ルールを1件ずつ直して対応する今のやり方（週次の改善ループ）は効果があるが、追いつかない書き方が必ず残る。</p>
+        <p>AIは「決まった形式」ではなく<b>内容を読んで理解する</b>ため、初めて見る書き方でもある程度読み取れる。ルールを置き換えるのではなく、<b>ルールが取れなかった分だけを後から拾う保険</b>として使う。</p>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box" open>
+      <summary><span class="box-title">絶対に守る4つの約束</span></summary>
+      <div class="detail">
+        <div class="table-wrap">
+          <table class="cmp-table">
+            <thead><tr><th>約束</th><th>どう守るか</th></tr></thead>
+            <tbody>
+              <tr><td class="route">お金がかからない</td><td>ChatGPTのような有料APIは使わない。無料で使える自前サーバー上でAIモデルを動かす</td></tr>
+              <tr><td class="route">個人情報を外に出さない</td><td>経歴書の中身は自社のサーバーの中だけで処理する。外部の会社のAIサービスには一切送らない</td></tr>
+              <tr><td class="route">メールの処理を遅くしない</td><td>候補者の登録は今まで通りすぐ終わる。AIは登録が終わった<b>後で</b>裏側で動く</td></tr>
+              <tr><td class="route">間違った情報を混ぜない</td><td>AIの答えをそのまま信じない。「本当に実在するスキル名か」「年数がおかしくないか」を機械的にチェックしてから、通ったものだけを反映する</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">どう動くか（全体の流れ）</p>
+
+      <details class="box" open>
+        <summary><span class="box-title">10分おきに「様子見」に来て、空欄を見つけたら埋める</span></summary>
+        <div class="detail">
+          <pre class="tree">1. メールが届く → いつも通り候補者を登録（スキル年数が空欄でもそのまま登録される）
+                        │
+2. 10分おきに、自動で「スキル年数が空欄の候補者、いない？」と確認しに行く
+                        │
+3. 見つかったら（1回につき最大3人まで）、保存してある経歴書ファイルを
+   AI（自前サーバー上のAIモデル）にもう一度読ませる
+                        │
+4. AIの答えを<b>そのまま信じず</b>、機械的なチェックに通す（次のブロック参照）
+                        │
+5. チェックを通った分だけ、候補者の情報に追記する</pre>
+          <p><b>なぜ「登録後にこっそり」なのか:</b> AIに経歴書を読ませるのは数十秒〜数分かかることがある。メールが届いた瞬間にAIを待たせると登録全体が遅くなってしまうため、登録は先に終わらせて、AIは後から追いかける形にしている。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">AIは何を読むのか</p>
+
+      <details class="box fixed" open>
+        <summary><span class="box-title">できるだけ「元のExcelファイル」を読み直す</span><span class="badge good">v1.2での変更点</span></summary>
+        <div class="detail">
+          <p>登録時にすでにテキスト化された文章をAIに読ませることも考えたが、そのテキスト化の過程で「氏名：保有技術」のような<b>おかしなペアができてしまう</b>ことが分かっている（元々の弱点）。壊れた文章をAIに読ませても、AIも間違えてしまう。</p>
+          <p>そこでv1.2では、<b>保存してある元のExcelファイルをもう一度開き直して</b>、セルの位置関係が分かる形でAIに渡すことにした。表の縦横の並びをAI自身に判断させることで、テキスト化の際の誤りを回避できる。Excel以外（Wordなど）の場合は、これまで通りのテキスト（先頭3,000字）を読ませる。</p>
+          <p><b>使うライブラリ:</b> Python の <code>openpyxl</code>（AIサーバー側で新たに追加する）。今のメール処理（TypeScript・<code>xlsx</code>ライブラリ）とは別物で、AIサーバーが独自に元ファイルをダウンロードして開き直す。「結合されているセルを本来の広がりに展開する」という機械的な処理だけを行うので、今のメール処理側のロジックと二重管理になる心配はほぼない。</p>
+          <p><b>AIに渡すデータの中身（セル位置付きテキスト）:</b> ふつうの文章ではなく、「どのマス目に何が書いてあるか」を1行ずつ並べたテキスト。例えば経歴書の一部が下のような表だった場合:</p>
+          <pre class="tree">[行3, 列2-4] 品川駅
+[行4, 列2]   年齢
+[行4, 列3-4] 45歳</pre>
+          <p>「行3の列2〜4（横に結合された1マス）に"品川駅"」「行4の列2に"年齢"」「行4の列3〜4に"45歳"」という意味。ふつうにテキスト化すると<code>年齢45歳</code>のようにくっついて読み間違えやすい部分も、位置情報が残っていればAIが表の構造として正しく解釈しやすくなる。渡すのは先頭400マス分程度まで（大きすぎる名簿ファイル対策）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">間違った情報を混ぜない仕組み（いちばん大事な部分）</p>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">AIの答えは「候補」でしかない。3段階でふるいにかける</span></summary>
+        <div class="detail">
+          <ol>
+            <li><b>形式チェック:</b> AIの答えがきちんとしたデータ形式になっているか（壊れていたら丸ごと捨てる）</li>
+            <li><b>実在チェック:</b> 出てきたスキル名が、社内で管理している約1,660件のスキル一覧に実在するか（一覧にない名前は個別に捨てる。AIが存在しないスキル名を答えてしまう「幻覚」への対策）</li>
+            <li><b>数値チェック:</b> 経験月数が明らかにおかしい数字（マイナス・0・30年超など）でないか</li>
+          </ol>
+          <p>3つとも通った分だけ、候補者の情報に書き加える。<b>既にスキル年数が入っている項目をAIが上書きすることは絶対にない</b>（空欄だけを埋める）。誰がいつAIで埋めたかも記録に残すので、後から見返して間違いに気づけば取り消せる。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <details class="box" open>
+      <summary><span class="box-title">動かなくなったらどうなるか</span></summary>
+      <div class="detail">
+        <p>この仕組みが止まったり失敗したりしても、<b>すでに登録されているデータには一切影響しない</b>。困るのは「AIによる上乗せが増えない」というだけで、登録・検索・経歴書ボタンなど他の機能はいつも通り使える。</p>
+        <div class="table-wrap">
+          <table class="cmp-table">
+            <thead><tr><th>起きること</th><th>結果</th></tr></thead>
+            <tbody>
+              <tr><td class="route">AIサーバーが一時的に止まっている</td><td>次の10分後にまた挑戦する。手動対応は不要</td></tr>
+              <tr><td class="route">AIが変な答えを返す</td><td>チェックで機械的に弾かれる。何も書き込まれない</td></tr>
+              <tr><td class="route">処理が終わらないまま固まる</td><td>2時間で自動的にリセットされ、また挑戦できる状態に戻る</td></tr>
+              <tr><td class="route">思ったより効果が悪い</td><td>設定を1つオフにするだけで即座に停止できる（緊急停止スイッチ）。データは無傷</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box risk" open>
+      <summary><span class="box-title">どれくらいの量をさばけるか — 正直、まだ分からない</span><span class="badge warn">実測してから本稼働</span></summary>
+      <div class="detail">
+        <p>「1日に何人分の空欄が発生するか」はまだ実測できていない（別件の制限中のため）。ただし1人読むのに40〜90秒かかるとしても、1台のAIサーバーだけで<b>1日あたり1,000件前後</b>は処理できる計算になっている。仮に想定を超える量が来ても「新しい候補者から優先して処理する」「サーバーをもう1台増やす」といった対処法をあらかじめ用意してある。</p>
+        <p>数字が読めない状態でいきなり本番稼働はしない。まず実際の空欄発生数と処理時間を数日間観測し、それに合わせて頻度を調整してから有効化する、という順序を踏む。</p>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box">
+      <summary><span class="box-title">導入の進め方（いきなり全部は動かさない）</span></summary>
+      <div class="detail">
+        <ol>
+          <li>まずAIサーバー側だけを作って、手元のテストデータで正しく答えられるか確認する</li>
+          <li>本番環境に配線（10分おきの自動チェック）だけ入れるが、<b>スイッチはオフのまま</b>にする — この時点では1件も動かない</li>
+          <li>数日間、実際にどれくらい空欄が発生するか観測する</li>
+          <li>観測結果をもとに頻度を決めて、1件だけ手動で試し、結果を目視確認する</li>
+          <li>問題なければスイッチをオンにして本稼働。その後も1週間は結果を見張る</li>
+        </ol>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box risk">
+      <summary><span class="box-title">残る弱点（正直に）</span></summary>
+      <div class="detail">
+        <ul>
+          <li>使うAIモデルは小型（軽量版）なので、複雑な経歴書だと読み取れないことがある。ただし「間違って埋まる」ことはなく「取れる分だけ増える」だけなので、悪化はしない</li>
+          <li>社内のスキル一覧にまだ登録されていない新しい技術名は、実在チェックで弾かれてしまい拾えない（一覧の定期メンテで対応）</li>
+          <li>文字が入っていないスキャンPDFや画像の経歴書は、そもそも読む文字がないので対象外のまま</li>
+        </ul>
+      </div>
+    </details>
+
+  </div>
+
+  <footer class="foot">最終更新 2026-07-14 ・ 平易版（詳細設計書v1.2の要約） ・ 正式版: ai-enrich-design-v1.2.html</footer>
+
+</div>
