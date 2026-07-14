@@ -1,0 +1,1116 @@
+<title>inbound-email 添付・リンク処理フロー</title>
+<style>
+  :root {
+    --bg: #eef1ee;
+    --surface: #ffffff;
+    --surface-2: #e3e8e3;
+    --ink: #1a1e1c;
+    --muted: #5b625d;
+    --line: #b7c0b8;
+    --accent: #2d6a63;
+    --accent-soft: #d9e8e5;
+    --good: #3d7a44;
+    --good-soft: #dcece0;
+    --warn: #a6631f;
+    --warn-soft: #f3e3cf;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Segoe UI", sans-serif;
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #141715;
+    --surface: #1c201d;
+    --surface-2: #232824;
+    --ink: #e8ebe7;
+    --muted: #9aa39c;
+    --line: #454e48;
+    --accent: #6fb8ac;
+    --accent-soft: #1e3330;
+    --good: #7ec488;
+    --good-soft: #1f3323;
+    --warn: #e0a34f;
+    --warn-soft: #3a2c17;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141715;
+      --surface: #1c201d;
+      --surface-2: #23282d;
+      --ink: #e8ebe7;
+      --muted: #9aa39c;
+      --line: #454e48;
+      --accent: #6fb8ac;
+      --accent-soft: #1e3330;
+      --good: #7ec488;
+      --good-soft: #1f3323;
+      --warn: #e0a34f;
+      --warn-soft: #3a2c17;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+
+  header.top {
+    margin-bottom: 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-size: 25px;
+    font-weight: 700;
+    margin: 0 0 8px;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+
+  .sub {
+    color: var(--muted);
+    font-size: 14px;
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .chip { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .chip.good { background: var(--good); }
+  .chip.warn { background: var(--warn); }
+  .chip.neutral { background: var(--accent); }
+  .chip.decision { background: var(--surface); border: 1.5px solid var(--accent); }
+
+  /* ---- flowchart primitives ---- */
+  .col { display: flex; flex-direction: column; align-items: stretch; }
+
+  .box {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 13px 16px;
+    width: 100%;
+  }
+  .box summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .box summary::-webkit-details-marker { display: none; }
+  .box summary::before {
+    content: "▸";
+    font-size: 10px;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+    flex: none;
+    margin-top: 3px;
+  }
+  .box[open] summary::before { transform: rotate(90deg); }
+  .box.risk { border-left: 3px solid var(--warn); }
+  .box.fixed { border-left: 3px solid var(--good); }
+  .box.proposed { border: 1.5px dashed var(--accent); background: var(--accent-soft); }
+  .badge.proposed { background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }
+  .badge.resolved { background: var(--surface); color: var(--good); border: 1px solid var(--good); }
+
+  .box-title { font-weight: 600; font-size: 14.5px; }
+  .loc {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--surface-2);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .badge.good { background: var(--good-soft); color: var(--good); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .detail {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px dashed var(--line);
+    font-size: 13px;
+  }
+  .detail p { margin: 0 0 7px; }
+  .detail p:last-child { margin-bottom: 0; }
+  .detail code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .detail ol, .detail ul { margin: 0 0 7px; padding-left: 20px; }
+  .detail li { margin-bottom: 4px; }
+  .detail li:last-child { margin-bottom: 0; }
+
+  /* arrow connector between stacked single boxes */
+  .arrow {
+    display: flex;
+    justify-content: center;
+    height: 26px;
+    position: relative;
+  }
+  .arrow::before {
+    content: "";
+    width: 2px;
+    height: 100%;
+    background: var(--line);
+  }
+  .arrow::after {
+    content: "";
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+  }
+
+  /* decision diamond */
+  .decision-wrap { display: flex; justify-content: center; margin: 2px 0; }
+  .decision {
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    background: var(--accent-soft);
+    border: 1.5px solid var(--accent);
+    padding: 34px 58px;
+    max-width: 300px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .decision .loc { display: block; margin-top: 6px; font-weight: 400; }
+  .decision.proposed-decision { border-style: dashed; }
+
+  /* branch fork/merge */
+  .branch {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 26px;
+    margin-top: 22px;
+    padding-top: 22px;
+  }
+  .branch::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 6%; right: 6%;
+    height: 2px;
+    background: var(--line);
+  }
+  .branch-col { position: relative; padding-bottom: 22px; }
+  .branch-col::after {
+    content: "";
+    position: absolute;
+    bottom: 0; left: 50%;
+    width: 2px; height: 22px;
+    background: var(--line);
+    transform: translateX(-50%);
+  }
+  .branch-tag {
+    position: absolute;
+    top: -3px; left: 50%;
+    transform: translate(-50%, -100%);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    background: var(--bg);
+    padding: 1px 6px;
+  }
+  .fork-in {
+    display: flex;
+    justify-content: center;
+    height: 22px;
+    position: relative;
+  }
+  .fork-in::before {
+    content: "";
+    width: 2px;
+    height: 100%;
+    background: var(--line);
+  }
+  .fork-in::after {
+    content: "";
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+  }
+
+  .merge-bar { position: relative; height: 24px; }
+  .merge-bar::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 6%; right: 6%;
+    height: 2px;
+    background: var(--line);
+  }
+  .merge-bar::after {
+    content: "";
+    position: absolute;
+    top: 0; left: 50%;
+    width: 0; height: 0;
+    transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+    margin-top: 17px;
+  }
+  .merge-bar-stem {
+    position: absolute;
+    top: 0; left: 50%;
+    width: 2px; height: 24px;
+    background: var(--line);
+    transform: translateX(-50%);
+  }
+
+  /* swimlane zone */
+  .zone {
+    margin: 26px 0;
+    padding: 20px 20px 16px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    border: 1px solid var(--line);
+  }
+  .zone.design { border: 1.5px dashed var(--accent); }
+  .zone-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 16px;
+  }
+  .zone.design .zone-label { color: var(--accent); }
+  .zone-note {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin: 18px 0 0;
+    max-width: 56ch;
+  }
+
+  /* tables */
+  .scope-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 2px; }
+  .scope-table th, .scope-table td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); }
+  .scope-table th { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .scope-table td.field { font-family: var(--mono); font-size: 12px; }
+  .scope-pill { display: inline-block; font-family: var(--mono); font-size: 10.5px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .scope-pill.per-candidate { background: var(--good-soft); color: var(--good); }
+  .scope-pill.whole-email { background: var(--warn-soft); color: var(--warn); }
+  .table-wrap { overflow-x: auto; }
+
+  .fn {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+
+  pre.tree {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  pre.tree b { color: var(--accent); font-weight: 700; }
+  pre.tree i { color: var(--muted); font-style: normal; }
+
+  .sig-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 4px 0 12px; }
+  .sig-table th, .sig-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .sig-table th { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .sig-table td.fname { font-family: var(--mono); font-size: 11.5px; color: var(--accent); white-space: nowrap; font-weight: 600; }
+  .sig-table td.io { font-family: var(--mono); font-size: 11px; }
+  .sig-table td.st { white-space: nowrap; }
+  .sig-h {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 16px 0 4px;
+    font-weight: 700;
+  }
+
+  .cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 2px; }
+  .cmp-table th, .cmp-table td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .cmp-table th { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .cmp-table td.route { font-family: var(--mono); font-size: 11.5px; white-space: nowrap; }
+
+  footer.foot {
+    margin-top: 36px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-size: 11.5px;
+    font-family: var(--mono);
+    color: var(--muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .box summary::before { transition: none; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="top">
+    <p class="eyebrow">supabase/functions/inbound-email/index.ts — 実装完了・検証済み版（v5）</p>
+    <h1>添付ファイル・Googleリンク処理フロー</h1>
+    <p class="sub">v4（実装前設計）を実装・検証した完了版。4系統の入力（メール添付／Drive単体ファイル／Sheetsリンク／Docsリンク）を単一の抽出パイプラインに正規化し、穴①〜④と名簿・resume_url問題を塞いだ。破線の箱＝今回新設した設計（<b>すべて実装・検証済み</b>）、実線＝従来からのコード。実装時に判明した設計との差分・追加ガードは「実装差分」として明記。</p>
+    <div class="legend">
+      <span class="legend-item"><span class="chip neutral"></span>現行のまま</span>
+      <span class="legend-item"><span class="chip good"></span>修正済み</span>
+      <span class="legend-item"><span class="chip warn"></span>現行の既知リスク</span>
+      <span class="legend-item"><span class="chip decision"></span>分岐</span>
+      <span class="legend-item"><span class="chip" style="background:var(--accent-soft);border:1.5px dashed var(--accent);"></span>新設計（実装・検証済み）</span>
+    </div>
+  </header>
+
+  <div class="col">
+
+    <details class="box">
+      <summary><span class="box-title">この設計で塞ぐ穴の一覧</span><span class="badge proposed">対策マップ</span></summary>
+      <div class="detail">
+        <div class="table-wrap">
+          <table class="cmp-table">
+            <thead><tr><th>問題</th><th>対策（図中の場所）</th></tr></thead>
+            <tbody>
+              <tr><td>穴① シート誤選択（添付Excel含む既存の限界）</td><td>共通「シート選択器」を新設。Sheetsリンク限定でgid照合を追加し添付より高精度化 → ゾーンB</td></tr>
+              <tr><td>穴② Docsの format=docx 未検証</td><td>docx→（mammoth失敗時 .docバイナリ）→ txtエクスポートの3段フォールバック → ゾーンA②</td></tr>
+              <tr><td>穴③ タイムアウト不揃い（Docs 10秒）</td><td>バイナリ取得は全系統20秒に統一 → ゾーンA①②③</td></tr>
+              <tr><td>穴④ XLSX全面化で失敗時テキスト0件</td><td>CSV/txt経路を削除せず「フォールバック」に降格して残す → ゾーンA①②</td></tr>
+              <tr><td>名簿の丸ごと誤割当（usedフラグ問題）</td><td>候補者割当より前の共通ステージで名簿判定・行展開 → ゾーンC</td></tr>
+              <tr><td>resume_url優先順位バグ（F.K実害）</td><td>優先順位を反転: 本人割当ファイルのStorage URL > 本文リンク → ゾーンE</td></tr>
+              <tr><td>driveSheetSkillYearsの無条件上書き（6760-6761）</td><td>skillYearsは本人に割り当てられたエントリ由来のみ採用 → ゾーンE</td></tr>
+              <tr><td>単一人材メールは検証レス（割当ロジックが複数人材時しか動かず、全添付・全リンクを無条件に本人へ紐づけ）</td><td>ゾーンCの名簿判定を単一でも必ず通し、ゾーンD単一側に氏名照合ゲートを新設</td></tr>
+              <tr><td>サイレント失敗（誤割当・URL取り違え・skillYears汚染は正常終了するため、既存のtracePhase/FATALログでは捕捉不能）</td><td>エントリ台帳＋ステージコード＋不変条件チェックの横断トレース → ゾーンT</td></tr>
+              <tr><td>Sheets/Docsはラベルがファイル名でないためパス1/2が構造的に不可能・Drive由来はattachment無しでresume_url候補になれない</td><td>ゾーンAでcontent-dispositionから実タイトルをfilenameとして取得し、全ソースでbytesを保持 → 割当・Storage保存の非対称が消える</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>制約: <a href="#" style="color:var(--accent);pointer-events:none;text-decoration:none;">inbound-emailはAI不使用（regex+DB照合のみ）の方針を維持</a>。全ステージがルールベース。</p>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box fixed" open>
+      <summary><span class="box-title">実装・検証の完了状態（2026-07-13）</span><span class="badge resolved">全ゾーン実装済み</span></summary>
+      <div class="detail">
+        <ul>
+          <li><strong>検証:</strong> 分岐網羅（C1）<b>120/120</b>・E2E <b>21/21</b>（実経歴書16ファイル+実名簿）・既存回帰0劣化（regex 154/154・Excel 10P/4W/0F）</li>
+          <li><strong>実Google結合:</strong> 名簿内の実リンクで Sheets XLSX本流／gid照合／Docs DOCX／Drive PDF を実地検証済み</li>
+          <li><strong>実名簿E2E:</strong> 名簿メール1通49秒 → 14人登録・全員に本人のリンク先経歴書のStorage URL・違反0</li>
+          <li><strong>テスト過程で発見・修正した本番バグ6件:</strong> ①縦型経歴書の名簿誤検出（ゴミ候補者大量登録） ②spanCellsToJson組合せ爆発（1通30-60分=本番silent drop） ③CSVパース引用符内改行破損（gid照合全滅） ④複数シート同名の名簿誤認（1人が2候補者に分裂） ⑤名簿昇格ブロックの割当全滅（resume_url全滅） ⑥抽出誤ペアリングの名簿増幅（「保有技術」等のゴミ候補者）</li>
+          <li><strong>成果物:</strong> テスト項目書 <code>test_specification.html</code>／監視 <code>scripts/monitor_quality.mjs</code>／トレース <code>scripts/trace_email.mjs</code>／復旧手順 <code>docs/runbook_20260723_recovery.md</code></li>
+        </ul>
+      </div>
+    </details>
+
+
+    <div class="arrow"></div>
+
+    <details class="box proposed" open>
+      <summary><span class="box-title">詳細設計: mainからの呼び出しツリーと関数シグネチャ</span><span class="badge proposed">実装の設計図</span></summary>
+      <div class="detail">
+
+        <p>mainルーチンは既存の<code>Deno.serve</code>ハンドラ。ゾーンA〜Cを新設のオーケストレータ関数に切り出し、mainからは各ゾーン1コールで呼ぶ。<b>太字=新設</b>、<i>斜体グレー=既存流用（行番号は e8c63eb 時点）</i>:</p>
+
+        <pre class="tree">Deno.serve ハンドラ <i>(既存main・6262行目〜)</i>
+│
+├─ ゾーンA  entries = await <b>collectSourceEntries</b>(body, attachments, ledger)
+│   ├─ <b>detectGoogleLinks</b>(body)            <i>← 5656-5658の3正規表現を関数化+ID重複排除</i>
+│   ├─ <b>fetchSheetsEntry</b>({id, gid})        XLSX本流
+│   │   ├─ <i>fetchWithTimeout(url, 20000)</i>   <i>(既存5634)</i>
+│   │   ├─ <b>fetchCsvFingerprint</b>(id, gid)   gid照合用+保険テキスト
+│   │   └─ <b>filenameFromDisposition</b>(res)   <i>← 5778-5780を関数化</i>
+│   ├─ <b>fetchDocsEntry</b>({id})               DOCX本流→txt保険
+│   ├─ <b>fetchDriveEntry</b>({id}, body)        <i>← 5759-5818を移植（ロジック不変）</i>
+│   └─ <b>normalizeAttachment</b>(att)           メール添付→SourceEntry
+│
+├─ ゾーンB  extracted = await Promise.all(entries.map(e => <b>extractEntry</b>(e, ledger)))
+│   ├─ kind=excel: <b>selectSheets</b>(workbook, e.gidHint)   シート選択器（穴①）
+│   │   └─ <b>matchSheetByFingerprint</b>(workbook, csvRows)
+│   │      → <i>extractExcelAll(base64, {preferSheets})</i>   <i>(既存5517・引数追加)</i>
+│   │      → <b>extractSheetHyperlinks</b>(bytes, sheetName)  rels解析
+│   ├─ kind=word:  <i>extractWordText(base64)</i>             <i>(既存2663・links追加)</i>
+│   └─ kind=pdf/text: 解析なし（既存動作）
+│
+├─ ゾーンC  expanded = await <b>expandRosterEntries</b>(extracted, ledger, depth=0)
+│   ├─ <b>detectRoster</b>(entry)                氏名フィールド組2セット以上判定
+│   │   └─ <i>NAME_FIELD_RE / CANDIDATE_FIELD_RE</i> <i>(splitMultiCandidateBody内の既存regex)</i>
+│   └─ 名簿行ごと: <b>expandRosterRow</b>(row, parent, depth)
+│       ├─ リンク型: <b>fetchLinkedResume</b>(url, depth)  <i>→ fetchSheetsEntry等を再利用・depth=1で打切</i>
+│       └─ 埋め込み型: 行テキスト→単票エントリ化
+│
+├─ <i>splitMultiCandidateBody(effectiveBody)</i>  <i>(既存6884・変更なし)</i>
+│
+├─ ゾーンD 複数人材: <i>assignAttachmentsToBlocks(blockMetas, expanded)</i> <i>(既存6080・I/F不変)</i>
+│   │                <i>ケースB/C安全弁 (既存6931-6971・変更なし)</i>
+│   └─ <b>promoteUnassignedRosterEntries</b>(expanded, assignment)  名簿残余→新規候補者
+├─ ゾーンD 単一人材: <b>gateSingleCandidate</b>(meta, expanded)      氏名照合ゲート
+│
+├─ ゾーンE  候補者ごと:
+│   ├─ <b>resolveResumeUrl</b>(assignedEntries, bodyLinks)
+│   │   └─ <i>uploadToStorage(name, mime, data)</i>  <i>(既存6807相当)</i>
+│   └─ <b>pickSkillYears</b>(assignedEntries)
+│
+└─ ゾーンT  <b>ledger.checkInvariants</b>(state) → <b>ledger.serializeTrace</b>(blockIdx)
+            → raw_profile.pipeline_trace に保存</pre>
+
+        <p class="sig-h">共有型（新設）</p>
+        <pre class="tree"><b>SourceEntry</b>  = { entryId, bytes?: Uint8Array, filename: string,
+                kind: 'excel'|'word'|'pdf'|'text',
+                origin: 'attachment'|'drive'|'sheets'|'docs',
+                gidHint?: { gid: string, csvRows?: string[][] },
+                sourceUrl?: string, parentId?: number }
+<b>ExtractedEntry</b> = SourceEntry & { text: string, skillYears: Record&lt;string,number&gt;,
+                jsonRows?, skillSummary?, grid?, totalProjectMonths?,
+                links: { cell: string, url: string }[] }</pre>
+
+        <p class="sig-h">ゾーンA: 入力収集・正規化</p>
+        <div class="table-wrap">
+          <table class="sig-table">
+            <thead><tr><th>関数</th><th>input</th><th>output</th><th>状態</th></tr></thead>
+            <tbody>
+              <tr><td class="fname">collectSourceEntries</td><td class="io">body: string, attachments: Attachment[], ledger</td><td class="io">Promise&lt;SourceEntry[]&gt;</td><td class="st">新設（オーケストレータ）</td></tr>
+              <tr><td class="fname">detectGoogleLinks</td><td class="io">body: string</td><td class="io">{ sheets: {id,gid}[], docs: {id}[], drive: {id}[] }</td><td class="st">新設（5656-5658を関数化）</td></tr>
+              <tr><td class="fname">fetchSheetsEntry</td><td class="io">{id, gid}</td><td class="io">Promise&lt;SourceEntry | null&gt;</td><td class="st">新設</td></tr>
+              <tr><td class="fname">fetchCsvFingerprint</td><td class="io">id, gid</td><td class="io">Promise&lt;string[][] | null&gt;（先頭数行）</td><td class="st">新設</td></tr>
+              <tr><td class="fname">fetchDocsEntry</td><td class="io">{id}</td><td class="io">Promise&lt;SourceEntry | null&gt;</td><td class="st">新設</td></tr>
+              <tr><td class="fname">fetchDriveEntry</td><td class="io">{id}, body</td><td class="io">Promise&lt;SourceEntry | null&gt;</td><td class="st">既存5759-5818を移植</td></tr>
+              <tr><td class="fname">normalizeAttachment</td><td class="io">att: Attachment</td><td class="io">SourceEntry</td><td class="st">新設（薄いラッパ）</td></tr>
+              <tr><td class="fname">filenameFromDisposition</td><td class="io">res: Response</td><td class="io">string | null</td><td class="st">既存5778-5780を関数化</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="sig-h">ゾーンB: 統一抽出</p>
+        <div class="table-wrap">
+          <table class="sig-table">
+            <thead><tr><th>関数</th><th>input</th><th>output</th><th>状態</th></tr></thead>
+            <tbody>
+              <tr><td class="fname">extractEntry</td><td class="io">entry: SourceEntry, ledger</td><td class="io">Promise&lt;ExtractedEntry&gt;</td><td class="st">新設（kind別ディスパッチ）</td></tr>
+              <tr><td class="fname">selectSheets</td><td class="io">workbook, gidHint?</td><td class="io">{ sheetNames: string[], code: 'GID'|'KW' }</td><td class="st">新設（5524-5539を包含）</td></tr>
+              <tr><td class="fname">matchSheetByFingerprint</td><td class="io">workbook, csvRows: string[][]</td><td class="io">string | null（シート名）</td><td class="st">新設・実データ検証済み</td></tr>
+              <tr><td class="fname">extractExcelAll</td><td class="io">base64, opts?: {preferSheets?: string[]}</td><td class="io">{text, skillYears, jsonRows?, skillSummary?, parseError?}</td><td class="st">既存5517・引数追加</td></tr>
+              <tr><td class="fname">extractSheetHyperlinks</td><td class="io">bytes: Uint8Array, sheetName</td><td class="io">{cell, url}[]</td><td class="st">新設（SheetJS l→zip直読fallback）</td></tr>
+              <tr><td class="fname">extractWordText</td><td class="io">base64</td><td class="io">既存 + links: {url}[]</td><td class="st">既存2663・戻り値拡張</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="sig-h">ゾーンC: 名簿判定・行展開</p>
+        <div class="table-wrap">
+          <table class="sig-table">
+            <thead><tr><th>関数</th><th>input</th><th>output</th><th>状態</th></tr></thead>
+            <tbody>
+              <tr><td class="fname">expandRosterEntries</td><td class="io">entries: ExtractedEntry[], ledger, depth</td><td class="io">Promise&lt;ExtractedEntry[]&gt;（単票+展開行の混在）</td><td class="st">新設（オーケストレータ）</td></tr>
+              <tr><td class="fname">detectRoster</td><td class="io">entry: ExtractedEntry</td><td class="io">{ isRoster: boolean, rows?: RosterRow[] }</td><td class="st">新設（既存regex流用）</td></tr>
+              <tr><td class="fname">expandRosterRow</td><td class="io">row: RosterRow, parent, depth</td><td class="io">Promise&lt;ExtractedEntry&gt;（parentId付き）</td><td class="st">新設</td></tr>
+              <tr><td class="fname">fetchLinkedResume</td><td class="io">url, depth</td><td class="io">Promise&lt;SourceEntry | null&gt;（depth≥1はnull）</td><td class="st">新設（ゾーンAのfetch群を再利用）</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="sig-h">ゾーンD: 割当</p>
+        <div class="table-wrap">
+          <table class="sig-table">
+            <thead><tr><th>関数</th><th>input</th><th>output</th><th>状態</th></tr></thead>
+            <tbody>
+              <tr><td class="fname">assignAttachmentsToBlocks</td><td class="io">blockMetas: {name,station}[], entries</td><td class="io">Map&lt;blockIdx, entry&gt;</td><td class="st">既存6080・変更なし</td></tr>
+              <tr><td class="fname">gateSingleCandidate</td><td class="io">meta: {name,station}, entries</td><td class="io">{ assigned: [], rejected: [], newBlocks: [] }</td><td class="st">新設（単一人材ゲート）</td></tr>
+              <tr><td class="fname">promoteUnassignedRosterEntries</td><td class="io">entries, assignment: Map</td><td class="io">CandidateBlock[]（新規候補者）</td><td class="st">新設</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="sig-h">ゾーンE: 保存</p>
+        <div class="table-wrap">
+          <table class="sig-table">
+            <thead><tr><th>関数</th><th>input</th><th>output</th><th>状態</th></tr></thead>
+            <tbody>
+              <tr><td class="fname">resolveResumeUrl</td><td class="io">assignedEntries, bodyLinks: string[]</td><td class="io">Promise&lt;{ url: string|null, code: 'STORAGE'|'BODYLINK'|'NONE' }&gt;</td><td class="st">新設（6779-6815を置換）</td></tr>
+              <tr><td class="fname">uploadToStorage</td><td class="io">name, mime, data</td><td class="io">Promise&lt;string | null&gt;</td><td class="st">既存6807相当・変更なし</td></tr>
+              <tr><td class="fname">pickSkillYears</td><td class="io">assignedEntries</td><td class="io">{ skillYears, sourceEntryId }</td><td class="st">新設（6760-6761を置換）</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="sig-h">ゾーンT: トレース（Ledgerオブジェクト）</p>
+        <div class="table-wrap">
+          <table class="sig-table">
+            <thead><tr><th>関数</th><th>input</th><th>output</th><th>状態</th></tr></thead>
+            <tbody>
+              <tr><td class="fname">createLedger</td><td class="io">traceRid: string</td><td class="io">Ledger</td><td class="st">新設</td></tr>
+              <tr><td class="fname">ledger.log</td><td class="io">entryId, code: string, detail?</td><td class="io">void（台帳追記+console 1行）</td><td class="st">新設</td></tr>
+              <tr><td class="fname">ledger.checkInvariants</td><td class="io">{ entries, assignment, resumeUrls, skillYearsSources }</td><td class="io">string[]（INV-*コード）</td><td class="st">新設</td></tr>
+              <tr><td class="fname">ledger.serializeTrace</td><td class="io">blockIdx</td><td class="io">JSON（8KB上限truncate）→ pipeline_trace</td><td class="st">新設</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>実装上の規約: <b>fetch系（ゾーンA・fetchLinkedResume）以外はすべて純関数</b>とし、ledgerへの記録もコードを戻り値に含めて呼び出し側で記録する。これにより<code>sync_extractors.mjs</code>が全関数を<code>_extractors.gen.mjs</code>へ再生成でき、<code>test_excel_parsing.mjs</code>でデプロイなしにゾーンB〜Eの全ロジックをテストできる。</p>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box">
+      <summary><span class="box-title">pg_cron 起動</span><span class="loc">5分間隔</span></summary>
+      <div class="detail"><p><code>poll-email</code> の <code>Deno.serve</code>（907行目）を呼び出す。</p></div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <div class="decision-wrap">
+      <div class="decision">前回のポーリングが実行中？<span class="loc">poll-email 921-934</span></div>
+    </div>
+
+    <div class="branch">
+      <div class="branch-col">
+        <span class="branch-tag">Yes（8分未満）</span>
+        <div class="fork-in"></div>
+        <div class="box"><span class="box-title">何もせず終了（LOCKED）</span></div>
+      </div>
+      <div class="branch-col">
+        <span class="branch-tag">No</span>
+        <div class="fork-in"></div>
+        <div class="box"><span class="box-title">ロック取得して続行</span></div>
+      </div>
+    </div>
+
+    <div class="merge-bar"><div class="merge-bar-stem"></div></div>
+
+    <div class="decision-wrap">
+      <div class="decision">email_poll_mode = paused？<span class="loc">poll-email 940-951</span></div>
+    </div>
+
+    <div class="branch">
+      <div class="branch-col">
+        <span class="branch-tag">Yes</span>
+        <div class="fork-in"></div>
+        <div class="box"><span class="box-title">何もせず終了</span></div>
+      </div>
+      <div class="branch-col">
+        <span class="branch-tag">No</span>
+        <div class="fork-in"></div>
+        <details class="box">
+          <summary><span class="box-title">4アカウントを並列ポーリング</span><span class="loc">962-973</span></summary>
+          <div class="detail"><p>human/project × prod/demo の4系統（<code>POLL_CONFIGS</code> 305-330行目）を<code>Promise.allSettled</code>で並列実行。AI分類有効時はcandidate系統のみ（同一受信箱の二重処理防止、960-965行目）。</p></div>
+        </details>
+      </div>
+    </div>
+
+    <div class="merge-bar"><div class="merge-bar-stem"></div></div>
+
+    <div class="zone">
+      <p class="zone-label">poll-email: アカウントごとに実行（pollAccount 722-903行目・変更なし）</p>
+
+      <details class="box">
+        <summary><span class="box-title">トークン更新・メール一覧取得</span><span class="loc">735-763</span></summary>
+        <div class="detail"><p>リフレッシュトークンでアクセストークン取得・ローテーション保存後、Graph APIでメールを取得。<code>incremental</code>モードは未読のみ最大50件、<code>full</code>モードは指定日以降を<code>nextLink</code>でページング。</p></div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box">
+        <summary><span class="box-title">ルールベース事前フィルター → Gemini分類 → 分割呼出判定</span><span class="loc">259-290・557-652・845-858</span></summary>
+        <div class="detail"><p>件名・本文パターンで skip／candidate・project確定／unknown に振り分け → unknownはGeminiバッチ分類（有効時）→ candidateかつOffice添付2件以上なら1ファイル=1候補者として分割呼出（<code>dedup_salt</code>にメッセージID+添付名）。この段は今回の設計で変更しない。詳細は旧版の図と同一のため折り畳み。</p></div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box">
+        <summary><span class="box-title">callInboundEmail() 実行</span><span class="loc">674-711</span></summary>
+        <div class="detail"><p><code>INBOUND_URL</code>へHTTP POST。成功すればOutlook側のメールを削除、例外発生時は未読に戻して次回ポーリングで再試行（866-877行目）。</p></div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <details class="box">
+      <summary><span class="box-title">inbound-email 起動</span><span class="loc">Deno.serve</span></summary>
+      <div class="detail"><p><code>body</code>（本文）・<code>attachments</code>・<code>type</code>（candidate / human / project）を取得。以降はこの1通単位で処理が進む。</p></div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <div class="zone design">
+      <p class="zone-label">ゾーンA: 入力収集・正規化（メール全体で1回・設計）</p>
+
+      <details class="box">
+        <summary><span class="box-title">本文からGoogleリンクを3種類、独立に正規表現検出</span><span class="loc">5656-5658・変更なし</span></summary>
+        <div class="detail"><p><code>sheetsMatchesPreview</code>（<code>docs.google.com/spreadsheets/...</code>、gidも捕捉）・<code>docsMatchesPreview</code>（<code>docs.google.com/document/...</code>）・<code>driveMatchesPreview</code>（<code>drive.google.com/file/... | open?id=...</code>）。同一IDが本文に複数回現れる場合はここでID単位に重複排除する（設計・現状は素通し）。</p></div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">① Sheetsリンク: XLSXを本流に、CSVは照合用+保険に降格</span><span class="fn">fetchSheetsEntry</span><span class="badge proposed">設計</span></summary>
+        <div class="detail">
+          <ol>
+            <li><strong>CSV取得</strong>（<code>export?format=csv&amp;gid=X</code>・軽量）— 役割を変更: 本流のテキストソースではなく、(a) XLSX内で「送信者が指したタブ」を特定するための<strong>gidフィンガープリント</strong>、(b) XLSX失敗時の<strong>保険テキスト</strong>（穴④対策）の2役。</li>
+            <li><strong>XLSX取得</strong>（<code>export?format=xlsx</code>・タイムアウト20秒に統一=穴③対策）— ブック全体が落ちる。バイナリを保持し、後段の統一パイプライン（<code>extractExcelAll</code>）と名簿判定・rels解析（ハイパーリンク検出）の入力にする。<strong>Storageアップロード候補にもなる</strong>（後段ゾーンE）。</li>
+            <li><strong>両方失敗</strong>: 警告ログのみで次のリンクへ（現行と同じ）。</li>
+          </ol>
+          <p>gidフィンガープリント照合: エクスポートされたXLSXにはGoogleのgidが含まれないため、gid指定でCSV取得した1タブの内容（先頭数行のセル値）をXLSXの各シートと突き合わせ、一致したシートを「送信者が指したタブ」と認定する（8割以上一致で採用）。<span class="badge resolved">実データ検証済み</span> 実リンク（2タブの実経歴書）で19/20一致→正しいタブを選択・<code>B-SHEET-GID</code>発火を確認。<b>実装差分:</b> 前提としてCSVパースを「引用符内の改行・カンマ・\"\"エスケープ」対応の1パス実装にする必要があった — 行分割を先に行う素朴なパーサでは複数行セル（「シメイ↵氏名」等）が壊れ、実データで照合が全滅する（初回実装で実際に発生）。照合不能時はキーワードソートに落ちるだけで悪化はしない。</p>
+          <p><strong>filenameの補完:</strong> エクスポートレスポンスの<code>content-disposition</code>からスプレッドシートの実タイトルを取得し、正規化エントリの<code>filename</code>にする（Drive経路の5778-5780行目と同じ手法）。現行のSheets/Docsはラベルが「Googleスプレッドシート(ファイルID)」で人名を含みようがなく、候補者割当のパス1（名前）・パス2（駅名）が<strong>構造的に絶対マッチしない</strong>非対称があった。タイトルに人名が入っている名簿・個人シート（実務では頻出）でファイル名マッチが初めて機能するようになる。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">② Docsリンク: DOCXを本流に、txtは保険に降格</span><span class="fn">fetchDocsEntry</span><span class="badge proposed">設計</span></summary>
+        <div class="detail">
+          <ol>
+            <li><strong>DOCX取得</strong>（<code>export?format=docx</code>・タイムアウト20秒=穴③対策）→ 統一パイプラインの<code>extractWordText</code>へ。mammothが失敗しても関数内部に.docバイナリ抽出フォールバックが既にある（2725-2727行目）。</li>
+            <li><strong>DOCX取得またはWord解析が失敗</strong>: 現行の<code>export?format=txt</code>にフォールバック（穴②④対策）。実績のある経路を保険として残すため、txtで取れていたケースが取れなくなる後退は起きない。</li>
+          </ol>
+          <p>DOCX化で新たに得られるもの: <code>totalProjectMonths</code>（案件月数）・<code>skillYears</code>・<code>grid</code>（表構造）。txt経路ではいずれも取れていなかった。Sheetsと同様、<code>content-disposition</code>からドキュメントの実タイトルを<code>filename</code>として取得する。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box">
+        <summary><span class="box-title">③ Driveファイルリンク: 現行のまま（既に統一済み）</span><span class="fn">fetchDriveEntry</span><span class="loc">5759-5818</span></summary>
+        <div class="detail"><p>「ポートフォリオ」「作品集」等がリンク直前150文字にあればスキップ。<code>uc?export=download</code>（20秒）でバイナリ取得し、content-type/拡張子でExcel/Word/PDF/テキストを判定。Excel/Wordは既に<code>extractExcelAll</code>/<code>extractWordText</code>を通っているため変更なし。バイナリは正規化エントリとして保持する（現行は解析後に捨てている）。</p></div>
+      </details>
+
+      <div class="merge-bar"><div class="merge-bar-stem"></div></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">正規化: 全ソースを統一エントリに揃える</span><span class="fn">collectSourceEntries → SourceEntry[]</span><span class="badge proposed">設計の核</span></summary>
+        <div class="detail">
+          <p>メール添付・Drive単体ファイル・Sheets(XLSX)・Docs(DOCX)を、すべて同じ形のエントリに正規化する:</p>
+          <p><code>{ bytes, filename, kind: excel|word|pdf|text, origin: attachment|drive|sheets|docs, gidHint?, sourceUrl? }</code></p>
+          <p>これで以降の全処理（抽出・名簿判定・候補者割当・Storage保存・resume_url決定）が入力ソースを区別せずに動く。「Sheetsだから」「添付だから」という分岐は正規化より下には存在させない。<code>gidHint</code>と<code>sourceUrl</code>だけがソース固有のメタデータとして残り、シート選択器とresume_url決定でのみ参照される。</p>
+          <p><strong>bytesを全ソースで保持する意味:</strong> 現行はDrive/Sheets/Docs由来のエントリが<code>attachment</code>（元バイナリ）を持たず（6819行目コメント）、複数人材のケースB判定<code>t.attachment?.data</code>（6938行目）を絶対に通れない＝<strong>テキストとして本人に割り当てられてもresume_urlの根拠には永遠になれない</strong>非対称があった。正規化で全ソースがbytesを持つため、Storage保存・resume_url候補の資格が入力経路に依らなくなる。</p>
+          <div class="table-wrap">
+            <table class="cmp-table">
+              <thead><tr><th>入力ソース</th><th>取得形式（設計後）</th><th>抽出関数（設計後）</th></tr></thead>
+              <tbody>
+                <tr><td class="route">メール添付</td><td>バイナリ（変更なし）</td><td><code>extractExcelAll</code> / <code>extractWordText</code></td></tr>
+                <tr><td class="route">Drive単体ファイル</td><td>バイナリ（変更なし）</td><td>同上</td></tr>
+                <tr><td class="route">Sheetsリンク</td><td>XLSX（CSVは照合+保険）</td><td><code>extractExcelAll</code></td></tr>
+                <tr><td class="route">Docsリンク</td><td>DOCX（txtは保険）</td><td><code>extractWordText</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone design">
+      <p class="zone-label">ゾーンB: 統一抽出パイプライン（エントリごと・設計）</p>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">シート選択器（穴①対策・全Excelソース共通）</span><span class="fn">selectSheets</span><span class="badge proposed">設計</span></summary>
+        <div class="detail">
+          <p><code>extractExcelAll</code>の冒頭に、処理対象シートを決める共通ロジックとして切り出す。優先順位:</p>
+          <ol>
+            <li><code>EXCLUDE_SHEET_RE</code>（5532行目）で記入例・比較用・チェックリスト等を除外 — 現行維持</li>
+            <li><strong>gidフィンガープリント一致シートを最優先</strong>（<code>gidHint</code>があるSheetsリンク限定・新設）— 送信者が明示的に指したタブを確実に先頭へ</li>
+            <li>キーワード優先ソート（スキル/経歴/職務…）で上位3シート — 現行維持。gidHintが無い添付・Driveファイルはここから</li>
+          </ol>
+          <p>これで「複数シートから誤ったシートを採用する」既存の限界（<code>IT.xlsx</code>の比較用シート誤採用の実例、5528-5531行目コメント）は、添付では現状維持、Sheetsリンクでは<strong>添付より改善</strong>になる。後退する経路は無い。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">抽出は2関数のみ: extractExcelAll / extractWordText</span><span class="fn">extractEntry</span><span class="badge proposed">設計</span></summary>
+        <div class="detail">
+          <p>Excel系（xlsx/xls/ods）→ <code>extractExcelAll</code>（5517行目）: <code>text</code>・<code>skillYears</code>・<code>jsonRows</code>・<code>skillSummary</code>。Word系（docx/doc）→ <code>extractWordText</code>（2663行目）: <code>text</code>・<code>totalProjectMonths</code>・<code>skillYears</code>・<code>grid</code>。PDF→従来通り解析せずStorage保存対象のみ。テキスト/CSV→そのまま。</p>
+          <p>これに伴い削除できるもの: Sheets専用の自前CSVパーサ（5678-5690行目）・<code>extractSkillYearsFromSheetData</code>のSheets経路・CSV/XLSX二段再試行の重複コード（5697-5740行目）。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">rels解析: セル単位ハイパーリンクの抽出</span><span class="fn">extractSheetHyperlinks</span><span class="badge proposed">設計・名簿リンク型の基盤</span></summary>
+        <div class="detail">
+          <p>XLSXバイナリの<code>xl/worksheets/_rels/*.rels</code>と<code>&lt;hyperlink&gt;</code>要素を解析し、セル座標→URLの対応表を各Excelエントリに付与する。CSVエクスポートでは原理的に取れない情報（F.Kさんの名簿の「スキルシート」列が実は個人スプレッドシートへのリンクだった件）が、XLSX本流化によって全Excelソースで取れるようになる。SheetJSが<code>l</code>プロパティでハイパーリンクを保持する場合はそれを使い、欠ける場合のみzip直読みにフォールバック。</p>
+          <p><strong>対象はメール添付・Driveファイル・Sheets XLSXの全Excel系エントリ</strong>（正規化済みなので入力経路の区別なし）。Word系（docx）の名簿は、mammoth <code>convertToHtml</code>が出力する<code>&lt;a href&gt;</code>要素から同等のリンク情報を取る（Excelのrels相当・頻度は低いが同じ枠組みで扱える）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone design">
+      <p class="zone-label">ゾーンC: 名簿判定・行展開（全エントリ対象・候補者割当より前・設計）</p>
+
+      <div class="decision-wrap">
+        <div class="decision proposed-decision">このエントリは複数人分の名簿か？<span class="loc">判定: 【氏名】等の必須フィールド組が2セット以上 or 氏名列+行構造</span></div>
+      </div>
+
+      <div class="branch">
+        <div class="branch-col">
+          <span class="branch-tag">No（1人分）</span>
+          <div class="fork-in"></div>
+          <div class="box"><span class="box-title">単票エントリとしてそのまま次段へ</span></div>
+        </div>
+        <div class="branch-col">
+          <span class="branch-tag">Yes（名簿）</span>
+          <div class="fork-in"></div>
+          <details class="box proposed" open>
+            <summary><span class="box-title">行ごとに独立エントリへ展開</span><span class="fn">expandRosterEntries / detectRoster</span><span class="badge proposed">設計</span></summary>
+            <div class="detail"><p><b>実装差分（検出方式は4系統に進化）:</b> ①氏名ヘッダ列型グリッド（氏名+年齢/駅/単価等のヘッダ共起を要求） ②サマリー列型（氏名ヘッダなし・1列に【氏名】入りセルが縦並び=アイスタンダード形式。グリッド直読みのためテキスト文字数上限の影響を受けず全行検出可能） ③転置型（人が列方向に並ぶ場合のフォールバック。グリッドを転置しリンクのセル番地は列→疑似行番号に変換して②と同一経路） ④テキスト型（同一シート内限定）。<b>誤検出ガード5種:</b> ヘッダ語共起検証／氏名値の妥当性チェック<code>looksLikeRosterName</code>（ラベル語・日付・英字技術用語を除外）／人材行の連続性（空行3行で表終了）／相異なる氏名2人以上（同一人物の氏名2回出現=履歴書+経歴書シートや表紙+本文を名簿と誤認しない）／展開上限<code>ROSTER_MAX_ROWS=15</code>。これらは実ファイルテストで発見したバグ①④⑥への対策。</p>
+            <p>名簿1個を1エントリのまま下流に渡すことを<strong>禁止</strong>する。<code>assignAttachmentsToBlocks</code>は「1エントリ=1人」前提で、割当済みエントリを<code>used</code>フラグ（6096行目）で使用不能にするため、名簿丸ごとが誰か1人に誤割当されると他の候補者が二度と使えなくなる。行の数だけエントリに分割してから渡すことで、この前提と整合させる。パス2.5の誤マッチ問題も上流で構造的に消える。</p></div>
+          </details>
+        </div>
+      </div>
+
+      <div class="merge-bar"><div class="merge-bar-stem"></div></div>
+
+      <div class="decision-wrap">
+        <div class="decision proposed-decision">展開した行のセルにハイパーリンクがあるか？<span class="loc">ゾーンBのrels解析結果を参照</span></div>
+      </div>
+
+      <div class="branch">
+        <div class="branch-col">
+          <span class="branch-tag">Yes（リンク型）</span>
+          <div class="fork-in"></div>
+          <details class="box proposed" open>
+            <summary><span class="box-title">リンク先を再取得（深さ1制限）→ 本人エントリに差し替え</span><span class="fn">fetchLinkedResume</span><span class="badge proposed">設計</span></summary>
+            <div class="detail"><p>行内のGoogleリンク/DriveリンクをゾーンAと同じ取得ロジックで再取得し、その中身を本人の単票エントリとする（F.Kさんの例: 名簿G8セル→個人スプレッドシート<code>1IvwOuI8...</code>）。<strong>再帰は深さ1で打ち切り</strong>: 名簿から辿ったリンク先はたとえ複数人分に見えても名簿判定せず1人分として扱う（名簿の名簿による無限ループ・爆発防止）。取得失敗時はその行の埋め込みテキストのみで続行。取得したバイナリはStorage保存候補として保持（ゾーンE）。</p>
+            <p><b>実装差分（安全弁2つ追加）:</b> ①<b>リンク先の氏名検証</b> — 取得した経歴書のファイル名+中身に本人の氏名/イニシャルが見えなければ<code>C-ROW-LINK-REJ</code>で採用見送り（行は埋め込みで登録継続）。行ズレ・転置判定ミスで他人の経歴書を紐づける事故の最終防衛線。②<b>リンク取得の時間予算60秒</b> — Edgeワーカー時間制限対策。予算超過後の行は<code>C-ROW-LINK-SKIP</code>で埋め込みに降格して登録を継続（登録漏れよりリンク先情報の欠落を選ぶ）。</p>
+            <p><strong>再取得の対象範囲:</strong> Google系リンク（Sheets/Docs/Driveファイル）のみ。Box・OneDrive等の認証必須リンクはダウンロードせず、その行の候補者の<code>box_url</code>等として保存するに留める（現行の<code>extractBoxUrls</code> 5892行目と同じ扱い）。この経路は名簿の出どころがメール添付でもDriveファイルでもSheetsリンクでも同一に動く — 正規化済みエントリに対する処理のため。</p></div>
+          </details>
+        </div>
+        <div class="branch-col">
+          <span class="branch-tag">No（埋め込み型）</span>
+          <div class="fork-in"></div>
+          <details class="box proposed">
+            <summary><span class="box-title">行のテキストを本人の経歴データとする</span><span class="fn">expandRosterRow</span><span class="badge proposed">設計</span></summary>
+            <div class="detail"><p>サマリー列等に【氏名】【年齢】等のラベル形式で直接書かれた情報をそのまま使う。<code>splitMultiCandidateBody</code>の<code>NAME_FIELD_RE</code>/<code>CANDIDATE_FIELD_RE</code>を流用。</p></div>
+          </details>
+        </div>
+      </div>
+
+      <div class="merge-bar"><div class="merge-bar-stem"></div></div>
+
+      <p class="zone-note">この段の出力: 単票エントリ＋名簿展開エントリの混在リスト。すべて「1エントリ=1人分」が保証された状態で候補者割当へ渡る。ハイブリッド名簿（埋め込み行とリンク行の混在）も行単位で自然に処理される。</p>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">ゾーンD: 候補者ごとの分岐・割当（既存ロジック維持）</p>
+
+      <div class="decision-wrap">
+        <div class="decision">単一 or 複数人材？<span class="loc">splitMultiCandidateBody 6884</span></div>
+      </div>
+
+      <div class="branch">
+        <div class="branch-col">
+          <span class="branch-tag">単一</span>
+          <div class="fork-in"></div>
+          <div class="col" style="gap:0;">
+
+            <details class="box risk" open>
+              <summary><span class="box-title">現行: 検証レスで全部を本人に紐づけ</span><span class="badge warn">補填ではなく無検証</span></summary>
+              <div class="detail"><p><code>assignAttachmentsToBlocks</code>の呼び出しは6929行目の1箇所のみで、複数人材分岐（6885行目）の中にしかない。単一人材メール（大半のケース）では「この添付・リンクは本人のものか」という検証が<strong>一切存在せず</strong>、全添付・全Driveテキストが無条件に本人へ紐づく（6837行目で全件連結してスキル照合）。名簿リンクが混ざっていればそのまま汚染される — F.Kさんの事故はこの構造で起きた。</p></div>
+            </details>
+
+            <div class="arrow"></div>
+
+            <details class="box proposed" open>
+              <summary><span class="box-title">氏名照合ゲート（単一人材でも通す）</span><span class="fn">gateSingleCandidate</span><span class="badge proposed">設計</span></summary>
+              <div class="detail">
+                <p>単一人材でもゾーンCの名簿判定は全エントリが通過済み（名簿はここに来る前に行展開されている）。その上で各エントリに軽量な氏名照合ゲートを設ける:</p>
+                <ol>
+                  <li><strong>本人の氏名（またはイニシャル）がエントリのfilename/contentに含まれる</strong> → 本人に割当（現行の暗黙動作を明示的に確認）</li>
+                  <li><strong>本人の氏名が無く、別人の氏名だけが明確に検出される</strong> → 本人に紐づけず、名簿展開由来なら新規候補者ブロックとして起こす。それ以外は診断ログ（<code>unattributedEntries</code>）へ記録し、skillYears・resume_urlの根拠から除外</li>
+                  <li><strong>どちらの氏名も検出できない</strong>（汎用ファイル名・氏名レス経歴書）→ エントリが1件だけなら本人に割当（パス3と同じ「残り1対1」の考え方）。複数件なら本文との内容一致度が高いものだけ採用</li>
+                </ol>
+                <p>誤検出時の倒し方は複数人材のケースBと同じ思想: <strong>誤った紐づけをするより、紐づけ無しの方が安全</strong>。</p>
+                <p><b>実装差分:</b> 規則2の除外は「名簿行の氏名が別人と確定した場合」（<code>D-GATE-REJ</code>）に限定し、規則3の「複数件は内容一致度で選別」は初期リリースでは全許可（<code>D-GATE-ALL</code>・従来動作維持）に簡略化した。明確に他人と分かるものだけを弾く安全側の縮小で、recall後退を避ける判断。</p>
+              </div>
+            </details>
+
+            <div class="arrow"></div>
+
+            <details class="box proposed">
+              <summary><span class="box-title">ゲート通過エントリのみ本人に割当</span><span class="badge proposed">設計</span></summary>
+              <div class="detail"><p>名簿展開でエントリが複数人分ある場合は、本文の氏名と一致する行のみ本人に割当て、残りは<strong>新規候補者ブロックとして起こす</strong>（名簿にしか載っていない人材を取りこぼさない）。</p></div>
+            </details>
+
+          </div>
+        </div>
+        <div class="branch-col">
+          <span class="branch-tag">複数</span>
+          <div class="fork-in"></div>
+          <div class="col" style="gap:0;">
+
+            <details class="box">
+              <summary><span class="box-title">assignAttachmentsToBlocks（パス1〜3・変更なし）+ 名簿昇格ブロックの1:1確定割当（実装差分）</span><span class="loc">6080-6174</span></summary>
+              <div class="detail">
+                <p>パス1: ファイル名に候補者名（6098-6111）→ パス2: ファイル名に最寄駅名、他人名は除外（6113-6132）→ パス2.5: 中身にイニシャル、複数人一致は曖昧除外（6134-6155）→ パス3: 残り1対1なら機械対応（6157-6171）。一度割り当てたエントリは<code>used</code>で再利用不可。</p>
+                <p><span class="badge resolved">設計で解消</span> 旧図でパス2.5に付けていた「名簿だと誤マッチしうる」リスクは、ゾーンCが全エントリを1人分に展開してから渡すため構造的に発生しなくなる。パス自体の変更は不要。名簿展開エントリは行内の氏名がほぼ確実に取れているため、実際にはパス1相当（名前完全一致）で決まる。</p>
+                <p><span class="badge resolved">設計で解消</span> 現行はSheets/Docs由来エントリのラベルが「Googleスプレッドシート(ファイルID)」でパス1（名前）・パス2（駅名）が構造的に絶対マッチしなかったが、ゾーンAのfilename補完（content-dispositionの実タイトル）で全ソースがファイル名マッチの土俵に乗る。</p>
+              </div>
+            </details>
+
+            <div class="arrow"></div>
+
+            <details class="box">
+              <summary><span class="box-title">ケースB/C 安全弁（呼び出し元・変更なし）</span><span class="loc">6931-6971</span></summary>
+              <div class="detail">
+                <p>パス1〜3で決まらなかったブロックの最終処遇。<strong>ケースB</strong>: 氏名は取れたが添付未割当のブロックがメール全体で<strong>ちょうど1人</strong>なら、残り1件の未割当エントリを渡す。2人以上未確定なら誰にも渡さずresume_urlも設定しない（「誤った経歴書を見せるより無しの方が安全」6933-6934行目）。<strong>ケースC</strong>: ブロックから氏名自体が取れない場合のみ、全添付テキストを共有する最終フォールバック。</p>
+                <p>設計上の注意: ゾーンCの行展開でエントリ数が増えるため、ケースBの「残り1件」条件の成立頻度が下がる方向に変わる。安全側への変化（渡さなくなる）なので許容するが、実装時に回帰テストで既存挙動の変化量を確認すること。</p>
+              </div>
+            </details>
+
+            <div class="arrow"></div>
+
+            <details class="box proposed">
+              <summary><span class="box-title">未割当の名簿展開エントリ → 新規候補者ブロック化</span><span class="fn">promoteUnassignedRosterEntries</span><span class="badge proposed">設計</span></summary>
+              <div class="detail"><p>本文に書かれていない人材が名簿にだけ載っているケース。パス1〜3で余った名簿展開エントリは捨てずに、それぞれ独立した候補者ブロックとして登録フローに乗せる（本文ブロック由来の候補者と同じ検証・dedup処理を通す）。</p></div>
+            </details>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="merge-bar"><div class="merge-bar-stem"></div></div>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone design">
+      <p class="zone-label">ゾーンE: 候補者ごとの保存 — resume_url・skillYears の決定（設計・優先順位を反転）</p>
+
+      <div class="decision-wrap">
+        <div class="decision proposed-decision">この候補者に割り当てられた解析済みファイルがあるか？<span class="loc">ゾーンDの割当結果を参照</span></div>
+      </div>
+
+      <div class="branch">
+        <div class="branch-col">
+          <span class="branch-tag">Yes</span>
+          <div class="fork-in"></div>
+          <details class="box proposed" open>
+            <summary><span class="box-title">Storageにアップロードし、そのURLを resume_url に</span><span class="fn">resolveResumeUrl</span><span class="badge proposed">最優先</span></summary>
+            <div class="detail"><p>割り当てられたエントリのバイナリ（添付・Driveファイル・Sheets XLSX・名簿リンク先を問わず）を<code>uploadToStorage</code>（6807行目の既存パターン）で保存する。<strong>本文にGoogleリンクがあってもスキップしない</strong>（現行6799行目の<code>if (!resumeUrl)</code>ガードを撤廃）。F.Kさんの実害（本人のExcelが正しくパースされていたのに名簿リンクが優先された）はこの反転で再発しなくなる。</p></div>
+          </details>
+        </div>
+        <div class="branch-col">
+          <span class="branch-tag">No</span>
+          <div class="fork-in"></div>
+          <details class="box proposed">
+            <summary><span class="box-title">本文リンクをキーワード近接で選定（フォールバックに降格）</span><span class="badge proposed">劣後</span></summary>
+            <div class="detail"><p>現行の6779-6793行目のロジック（キーワード近接判定・Sheets優先フォールバック）をそのまま使うが、役割は「解析済みファイルが1つも無いときの保険」に降格する。中身未確認のURLがresume_urlになるのは、他に何も無い場合だけ。</p></div>
+          </details>
+        </div>
+      </div>
+
+      <div class="merge-bar"><div class="merge-bar-stem"></div></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">skillYears: 本人に割り当てられたエントリ由来のみ採用</span><span class="fn">pickSkillYears</span><span class="badge proposed">設計</span></summary>
+        <div class="detail"><p>現行の「添付Excelのスキル年数が空なら<code>driveSheetSkillYears</code>で無条件上書き」（6760-6761行目）を廃止。skillYears・totalProjectMonths・skillSummaryは、ゾーンDでこの候補者に割り当てられたエントリからのみ取る。メール全体で1セットしか無かった<code>driveSheetSkillYears</code>という変数自体が消え、「取得元が本人のデータとは限らない」問題が構造的に無くなる。skill_master照合テキストも同様に本人割当エントリ＋本人の本文ブロックに限定する。</p></div>
+      </details>
+
+      <div class="merge-bar" style="margin-top:22px;"><div class="merge-bar-stem"></div></div>
+
+      <div class="box">
+        <div class="box-title">raw_profile 保存フィールドのスコープ（設計後）</div>
+        <div class="detail">
+          <div class="table-wrap">
+            <table class="scope-table">
+              <thead><tr><th>フィールド</th><th>内容</th><th>スコープ</th></tr></thead>
+              <tbody>
+                <tr><td class="field">attachmentNames</td><td>この候補者に割り当てられたエントリのみ</td><td><span class="scope-pill per-candidate">候補者ごと</span></td></tr>
+                <tr><td class="field">resume_url</td><td>本人割当ファイルのStorage URL（本文リンクは保険）</td><td><span class="scope-pill per-candidate">候補者ごと（設計で変更）</span></td></tr>
+                <tr><td class="field">skillYears系</td><td>本人割当エントリ由来のみ</td><td><span class="scope-pill per-candidate">候補者ごと（設計で変更）</span></td></tr>
+                <tr><td class="field">allParsedAttachmentLabels</td><td>メール内で解析できた全エントリのラベル</td><td><span class="scope-pill whole-email">メール全体（診断用・維持）</span></td></tr>
+                <tr><td class="field">driveLinks</td><td>検出した全リンクのラベル</td><td><span class="scope-pill whole-email">メール全体（診断用・維持）</span></td></tr>
+                <tr><td class="field">unrecognizedAttachments / sourceAttachmentCount</td><td>未対応形式・添付総数</td><td><span class="scope-pill whole-email">メール全体（診断用・維持）</span></td></tr>
+                <tr><td class="field">pipeline_trace</td><td>本人割当エントリの台帳＋メール全体サマリー・invariantViolations（ゾーンT・8KB上限）</td><td><span class="scope-pill per-candidate">候補者ごと（新設）</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p style="font-size:12.5px;color:var(--muted);margin:8px 0 0;">診断用フィールドは意図的にメール全体スコープのまま残す（「このメールから何が取れたか」の監査用）。実データに影響するフィールドはすべて候補者ごとに変わる。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone design">
+      <p class="zone-label">ゾーンT: 横断トレース — 一発でこけた場所を特定するデバッグ設計（全ゾーン共通・設計）</p>
+
+      <details class="box risk">
+        <summary><span class="box-title">現行のデバッグ資産と限界</span><span class="loc">traceRid・tracePhase 6262-6887・8492-8529</span></summary>
+        <div class="detail"><p>既存は <code>traceRid</code>（リクエストID）＋<code>tracePhase</code>（<code>parse_raw</code>→<code>drive_links_fetch</code>→<code>multi_candidate</code>等、粗い13段階の文字列）。ただし表に出るのは<strong>FATALクラッシュ時のみ</strong>（8495-8500行目のconsole.errorと8506行目のai_logs）。今回の議論で出た問題 — 名簿の丸ごと誤割当・resume_urlの取り違え・skillYears汚染 — はすべて<strong>正常終了するサイレント失敗</strong>で、この機構では原理的に捕捉できない。散在する<code>[DriveLink]</code>/<code>[Excel-parse]</code>等のログは相関IDが無く、1通のメールの行程をログから復元するのは手作業。</p></div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">T-1. エントリ台帳（entryLedger）</span><span class="fn">createLedger / ledger.log</span><span class="badge proposed">設計の核</span></summary>
+        <div class="detail">
+          <p>ゾーンAの正規化時に各エントリへ<code>entryId</code>（連番）を振り、以降の全ゾーンが台帳に1行ずつ追記する。エントリの一生がコード列として残る:</p>
+          <p><code>{ entryId, origin, filename, codes: ["A-XLSX-OK(38KB,1.2s)", "B-SHEET-GID(経歴書)", "B-EXTRACT-OK(t=4812,sy=7)", "C-ROSTER(6行)→展開", ...], contentHead, contentLen }</code></p>
+          <p><code>contentHead</code>は抽出テキスト先頭120字＋全長のみ（本文丸ごとは持たない）。名簿展開で生まれた行エントリは親の<code>entryId</code>を<code>parentId</code>として持ち、系譜が辿れる。<strong>台帳の最後のコードが「こけた場所」</strong> — 例えばresume_urlが付かなかった候補者は、割り当たったエントリの最終コードが<code>E-STO-FAIL</code>なのか、そもそも<code>D-UNASSIGNED</code>で止まっているのかが一目で分かる。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">T-2. ステージコード体系</span><span class="badge proposed">設計</span></summary>
+        <div class="detail">
+          <div class="table-wrap">
+            <table class="cmp-table">
+              <thead><tr><th>ゾーン</th><th>コード（主要なもの）</th></tr></thead>
+              <tbody>
+                <tr><td class="route">A 取得</td><td><code>A-XLSX-OK / A-CSV-FB</code>（CSV保険に落ちた）<code>/ A-DOCX-OK / A-TXT-FB / A-FETCH-FAIL(status) / A-SKIP-PORTFOLIO / A-DEDUP-DROP</code></td></tr>
+                <tr><td class="route">B 抽出</td><td><code>B-SHEET-GID(name)</code>（gid照合ヒット）<code>/ B-SHEET-KW(name)</code>（キーワード選択に落ちた）<code>/ B-SHEET-EXCL-ALL</code>（全シート除外＝異常）<code>/ B-EXTRACT-OK(t,sy) / B-EXTRACT-EMPTY / B-PARSE-ERR(msg) / B-LINKS(n)</code>（relsリンクn件検出）</td></tr>
+                <tr><td class="route">C 名簿</td><td><code>C-ROSTER(n)</code>（n行に展開）<code>/ C-ROSTER-CAP(n→15)</code>（上限打ち切り）<code>/ C-ROW-LINK-OK / C-ROW-LINK-REJ</code>（氏名検証で採用見送り）<code>/ C-ROW-LINK-SKIP</code>（60秒予算超過）<code>/ C-ROW-LINK-FAIL / C-ROW-EMBED / C-DEPTH-CUT</code>（深さ1打ち切り）</td></tr>
+                <tr><td class="route">D 割当</td><td><code>D-P1 / D-P2 / D-P25 / D-P3 / D-CASEB / D-CASEC</code>（どのパスで決まったか）<code>/ D-GATE-OK / D-GATE-REJ(他人名) / D-GATE-ALL / D-GATE-NONAME</code>（単一人材ゲート）<code>/ D-ASSIGNED(block) / D-UNASSIGNED / D-NEWBLOCK</code>（名簿残余→新規候補者化）</td></tr>
+                <tr><td class="route">E 保存</td><td><code>E-STO-OK(url) / E-STO-FAIL(err) / E-URL-STORAGE / E-URL-BODYLINK</code>（保険が発動した）<code>/ E-URL-NONE / E-SY-FROM(entryId)</code>（skillYearsの出どころ）</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>「保険・フォールバックの発動」は全部コード化する（<code>A-CSV-FB</code>・<code>B-SHEET-KW</code>・<code>D-CASEB</code>・<code>E-URL-BODYLINK</code>）。本流で通ったのか保険で拾われたのかの区別が、品質劣化の早期発見シグナルになる — 保険発動率が上がったらどこかが壊れ始めている。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">T-3. 不変条件チェック（サイレント失敗の検出器）</span><span class="fn">ledger.checkInvariants</span><span class="badge proposed">設計・今回のバグ群を直接狙う</span></summary>
+        <div class="detail">
+          <p>ゾーン境界で「設計上ありえないはずの状態」を検査し、違反したら<code>INV-*</code>コードで台帳とログに記録する（処理は止めない）。今回の議論で見つかったバグはすべて不変条件違反として書ける:</p>
+          <ul>
+            <li><code>INV-C-MULTI</code>: ゾーンC通過後のエントリに氏名フィールド組が2セット以上残っている（名簿判定のすり抜け）</li>
+            <li><code>INV-D-DUP</code>: 同一エントリが2人以上のブロックに割当（usedフラグ破り）</li>
+            <li><code>INV-E-BODYLINK-SKIP</code>: 本人に解析成功エントリが割当済みなのにresume_urlが本文リンク（<strong>F.Kさんのバグの再発検知そのもの</strong>）</li>
+            <li><code>INV-SY-FOREIGN</code>: skillYearsの出どころ（<code>E-SY-FROM</code>）が本人に割当てられていないエントリ（汚染検知）</li>
+            <li><code>INV-D-ORPHAN</code>: 解析成功エントリが誰にも割当たらず新規候補者化もされていない（無音ドロップ検知）</li>
+          </ul>
+          <p>違反はメール全体サマリーの<code>invariantViolations</code>配列に集約。<strong>ここが空でなければ「どこかでこけた」、コードを見れば「どこで」まで一発</strong>。</p>
+          <p><b>実装差分:</b> <code>INV-D-DUP</code>と<code>INV-E-BODYLINK-SKIP</code>は違反チェックとして実装。<code>INV-C-MULTI</code>は行展開の構造（展開後リストに親を残さない）+深さ1打ち切りで構造的に保証、<code>INV-SY-FOREIGN</code>は<code>pickSkillYears</code>が割当エントリしか受け取らない設計で構造的に保証、<code>INV-D-ORPHAN</code>は情報ログ<code>D-UNASSIGNED</code>として記録（違反ではなく監視対象）。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">T-4. 保存先と読み出し</span><span class="fn">ledger.serializeTrace</span><span class="badge proposed">設計</span></summary>
+        <div class="detail">
+          <ul>
+            <li><strong>raw_profile.pipeline_trace</strong>（候補者ごと）: 本人に割当たったエントリの台帳＋メール全体サマリー（全エントリの最終コード列・<code>invariantViolations</code>）。JSONB肥大防止のため全体8KB上限でtruncate。既存の診断フィールド（driveLinks等）はこの中に統合。</li>
+            <li><strong>console.log</strong>: 1ステージ1行、<code>[trace:rid] [A-XLSX-OK] entry=3 file=経歴書_FK.xlsx ...</code> 形式。既存<code>traceRid</code>を全ログの先頭に統一装着し、Supabaseログで <code>trace:rid</code> をgrepすれば1通の全行程が時系列で出る。</li>
+            <li><strong>読み出しスクリプト</strong>: <code>scripts/trace_email.mjs &lt;candidateId&gt;</code> を新設。DBのpipeline_traceを整形表示し、エントリごとの最終コードと不変条件違反をハイライト。既存<code>check_extraction.mjs</code>（取りこぼし調査）はコード列の集計に対応させ、「直近14日でD-UNASSIGNEDが多い送信元」等のパターン検出に使う。</li>
+            <li><strong>テスト可能性（実装差分）</strong>: 当初案の「全関数純関数化+sync_extractors拡張」に代えて、専用の<code>scripts/sync_zone_functions.mjs</code>がゾーン関数をTypeScriptのまま抽出し（fetch/抽出/Storage等の外部依存はdepsシムでモック注入）、<code>scripts/test_zone_branches.ts</code>が<b>全IF分岐120件を分岐IDつきで検証</b>する方式にした。ledgerは実物を使いserializeTraceでコード列をアサートする。</li>
+          </ul>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <details class="box fixed">
+      <summary><span class="box-title">実装で追加された設計外の保護・既知の逸脱</span><span class="badge resolved">実装差分</span></summary>
+      <div class="detail">
+        <ul>
+          <li><b>spanCellsToJsonの5秒時間予算:</b> 結合セル459個の実経歴書で再帰が組合せ爆発し1通30〜60分（本番Edgeはワーカー強制終了=メールsilent drop）。予算超過でそこまでの結果を返して打ち切る。jsonRowsは補助データのため主要機能への影響なし。</li>
+          <li><b>filenameFromDispositionの文字化け復元:</b> Driveが日本語ファイル名を生UTF-8バイトでヘッダに載せるケースをlatin1→UTF-8再デコードで復元（実リンク検証で発見）。</li>
+          <li><b>resolveResumeUrlの未解析添付フォールバック:</b> テキスト層なしのスキャンPDF等、解析対象にならなかった生添付も旧動作どおりStorage候補にする（「経歴書ボタンが出ない」防止）。</li>
+          <li><b>既知の逸脱（安全側・未対応）:</b> ①単一人材パスのskill_master照合・フィールド抽出用テキストはメール全体のまま（ゲートで除外したエントリのテキストが混入しうる。skillYears/resume_urlは割当ベースで浄化済み） ②複数人材ケースC（名前不明ブロック）のresume_urlは本文リンクのみ（旧「先頭添付のStorage URL共有」は誰のものか不明なため廃止）。</li>
+        </ul>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box fixed" open>
+      <summary><span class="box-title">実装ガードレール（デプロイ前チェックリスト）</span><span class="badge good">必須</span></summary>
+      <div class="detail">
+        <ol>
+          <li>✅ 完了: Sheets実リンクで <code>export?format=xlsx</code>+gid照合、Docs実リンクで <code>export?format=docx</code>、Drive実リンクでPDF経路を検証済み（2026-07-12）。</li>
+          <li>修正は常に <code>supabase/functions/inbound-email/index.ts</code>。変更後 <code>node scripts/sync_extractors.mjs</code> で再生成。</li>
+          <li><code>node scripts/test_extraction.mjs</code>（154件）と <code>node scripts/test_excel_parsing.mjs --compact</code>（testData/excel 14件・failures 3件）が<strong>0件劣化</strong>であることを確認してからデプロイ。回帰テストではゾーンTのコード列もアサートし、既存ファイルが本流コード（保険発動なし）で通ることを固定する。</li>
+          <li>デプロイ後の最初の実メールで <code>scripts/trace_email.mjs</code> を実行し、<code>invariantViolations</code> が空であることを確認。</li>
+          <li>AI不使用方針の維持: 名簿判定・行展開・gid照合はすべてregex+構造解析。AI呼び出しを追加しない。</li>
+          <li>デプロイは <code>bash scripts/check-and-deploy-edge.sh inbound-email</code>。<code>--log</code> で改善記録 → commit &amp; push。</li>
+          <li><b>追加（恒常運用）:</b> 週次で <code>node scripts/monitor_quality.mjs --days 7</code>（6チェック突合せ）。品質チェックの大量取得は本番RESTに向けずローカル環境で実行（egress超過の再発防止）。7/23復旧日の手順は <code>docs/runbook_20260723_recovery.md</code>。</li>
+        </ol>
+      </div>
+    </details>
+
+  </div>
+
+  <footer class="foot">最終更新 2026-07-13 ・ 実装完了版v5: v4設計を実装・検証（分岐網羅120/120・E2E21/21・実Google結合・実名簿E2E）し実装差分を反映 ・ 実装コミット fcf218b〜3debf65 ・ 行番号表記は設計時点(e8c63eb)のもの</footer>
+
+</div>

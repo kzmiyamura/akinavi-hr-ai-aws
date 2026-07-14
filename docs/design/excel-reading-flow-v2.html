@@ -1,0 +1,665 @@
+<title>Excel読み込みフロー — スキル年数はどう取れるのか</title>
+<style>
+  :root {
+    --bg: #eef1ee;
+    --surface: #ffffff;
+    --surface-2: #e3e8e3;
+    --ink: #1a1e1c;
+    --muted: #5b625d;
+    --line: #b7c0b8;
+    --accent: #2d6a63;
+    --accent-soft: #d9e8e5;
+    --good: #3d7a44;
+    --good-soft: #dcece0;
+    --warn: #a6631f;
+    --warn-soft: #f3e3cf;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Segoe UI", sans-serif;
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #141715;
+    --surface: #1c201d;
+    --surface-2: #232824;
+    --ink: #e8ebe7;
+    --muted: #9aa39c;
+    --line: #454e48;
+    --accent: #6fb8ac;
+    --accent-soft: #1e3330;
+    --good: #7ec488;
+    --good-soft: #1f3323;
+    --warn: #e0a34f;
+    --warn-soft: #3a2c17;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141715;
+      --surface: #1c201d;
+      --surface-2: #23282d;
+      --ink: #e8ebe7;
+      --muted: #9aa39c;
+      --line: #454e48;
+      --accent: #6fb8ac;
+      --accent-soft: #1e3330;
+      --good: #7ec488;
+      --good-soft: #1f3323;
+      --warn: #e0a34f;
+      --warn-soft: #3a2c17;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+
+  header.top {
+    margin-bottom: 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-size: 25px;
+    font-weight: 700;
+    margin: 0 0 8px;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+
+  .sub {
+    color: var(--muted);
+    font-size: 14px;
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .chip { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .chip.good { background: var(--good); }
+  .chip.warn { background: var(--warn); }
+  .chip.neutral { background: var(--accent); }
+  .chip.decision { background: var(--surface); border: 1.5px solid var(--accent); }
+
+  /* ---- flowchart primitives ---- */
+  .col { display: flex; flex-direction: column; align-items: stretch; }
+
+  .box {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 13px 16px;
+    width: 100%;
+  }
+  .box summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .box summary::-webkit-details-marker { display: none; }
+  .box summary::before {
+    content: "▸";
+    font-size: 10px;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+    flex: none;
+    margin-top: 3px;
+  }
+  .box[open] summary::before { transform: rotate(90deg); }
+  .box.risk { border-left: 3px solid var(--warn); }
+  .box.fixed { border-left: 3px solid var(--good); }
+  .box.proposed { border: 1.5px dashed var(--accent); background: var(--accent-soft); }
+  .badge.proposed { background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }
+  .badge.resolved { background: var(--surface); color: var(--good); border: 1px solid var(--good); }
+
+  .box-title { font-weight: 600; font-size: 14.5px; }
+  .loc {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--surface-2);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .badge.good { background: var(--good-soft); color: var(--good); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .detail {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px dashed var(--line);
+    font-size: 13px;
+  }
+  .detail p { margin: 0 0 7px; }
+  .detail p:last-child { margin-bottom: 0; }
+  .detail code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .detail ol, .detail ul { margin: 0 0 7px; padding-left: 20px; }
+  .detail li { margin-bottom: 4px; }
+  .detail li:last-child { margin-bottom: 0; }
+
+  /* arrow connector between stacked single boxes */
+  .arrow {
+    display: flex;
+    justify-content: center;
+    height: 26px;
+    position: relative;
+  }
+  .arrow::before {
+    content: "";
+    width: 2px;
+    height: 100%;
+    background: var(--line);
+  }
+  .arrow::after {
+    content: "";
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+  }
+
+  /* decision diamond */
+  .decision-wrap { display: flex; justify-content: center; margin: 2px 0; }
+  .decision {
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    background: var(--accent-soft);
+    border: 1.5px solid var(--accent);
+    padding: 34px 58px;
+    max-width: 300px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .decision .loc { display: block; margin-top: 6px; font-weight: 400; }
+  .decision.proposed-decision { border-style: dashed; }
+
+  /* branch fork/merge */
+  .branch {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 26px;
+    margin-top: 22px;
+    padding-top: 22px;
+  }
+  .branch::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 6%; right: 6%;
+    height: 2px;
+    background: var(--line);
+  }
+  .branch-col { position: relative; padding-bottom: 22px; }
+  .branch-col::after {
+    content: "";
+    position: absolute;
+    bottom: 0; left: 50%;
+    width: 2px; height: 22px;
+    background: var(--line);
+    transform: translateX(-50%);
+  }
+  .branch-tag {
+    position: absolute;
+    top: -3px; left: 50%;
+    transform: translate(-50%, -100%);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    background: var(--bg);
+    padding: 1px 6px;
+  }
+  .fork-in {
+    display: flex;
+    justify-content: center;
+    height: 22px;
+    position: relative;
+  }
+  .fork-in::before {
+    content: "";
+    width: 2px;
+    height: 100%;
+    background: var(--line);
+  }
+  .fork-in::after {
+    content: "";
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+  }
+
+  .merge-bar { position: relative; height: 24px; }
+  .merge-bar::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 6%; right: 6%;
+    height: 2px;
+    background: var(--line);
+  }
+  .merge-bar::after {
+    content: "";
+    position: absolute;
+    top: 0; left: 50%;
+    width: 0; height: 0;
+    transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+    margin-top: 17px;
+  }
+  .merge-bar-stem {
+    position: absolute;
+    top: 0; left: 50%;
+    width: 2px; height: 24px;
+    background: var(--line);
+    transform: translateX(-50%);
+  }
+
+  /* swimlane zone */
+  .zone {
+    margin: 26px 0;
+    padding: 20px 20px 16px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    border: 1px solid var(--line);
+  }
+  .zone.design { border: 1.5px dashed var(--accent); }
+  .zone-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 16px;
+  }
+  .zone.design .zone-label { color: var(--accent); }
+  .zone-note {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin: 18px 0 0;
+    max-width: 56ch;
+  }
+
+  /* tables */
+  .scope-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 2px; }
+  .scope-table th, .scope-table td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); }
+  .scope-table th { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .scope-table td.field { font-family: var(--mono); font-size: 12px; }
+  .scope-pill { display: inline-block; font-family: var(--mono); font-size: 10.5px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .scope-pill.per-candidate { background: var(--good-soft); color: var(--good); }
+  .scope-pill.whole-email { background: var(--warn-soft); color: var(--warn); }
+  .table-wrap { overflow-x: auto; }
+
+  .fn {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+
+  pre.tree {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  pre.tree b { color: var(--accent); font-weight: 700; }
+  pre.tree i { color: var(--muted); font-style: normal; }
+
+  .sig-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 4px 0 12px; }
+  .sig-table th, .sig-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .sig-table th { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .sig-table td.fname { font-family: var(--mono); font-size: 11.5px; color: var(--accent); white-space: nowrap; font-weight: 600; }
+  .sig-table td.io { font-family: var(--mono); font-size: 11px; }
+  .sig-table td.st { white-space: nowrap; }
+  .sig-h {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 16px 0 4px;
+    font-weight: 700;
+  }
+
+  .cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 2px; }
+  .cmp-table th, .cmp-table td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .cmp-table th { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .cmp-table td.route { font-family: var(--mono); font-size: 11.5px; white-space: nowrap; }
+
+  footer.foot {
+    margin-top: 36px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-size: 11.5px;
+    font-family: var(--mono);
+    color: var(--muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .box summary::before { transition: none; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="top">
+    <p class="eyebrow">extractExcelAll — 実装現況 + AIフォールバック設計（v2）</p>
+    <h1>Excel読み込みフロー</h1>
+    <p class="sub">経歴書Excelから「文章」「スキル年数」「名簿情報」「リンク」を取り出す仕組みの全体像。難しい関数名は補足として残しつつ、各段階を「やること・なぜ必要か・具体例」で説明する。最後に今回追加する<b>AIフォールバック（完全無料・自前HF Space）</b>の設計を載せた。</p>
+    <div class="legend">
+      <span class="legend-item"><span class="chip neutral"></span>処理ステップ</span>
+      <span class="legend-item"><span class="chip good"></span>保護・保険</span>
+      <span class="legend-item"><span class="chip warn"></span>弱点（正直に）</span>
+      <span class="legend-item"><span class="chip" style="background:var(--accent-soft);border:1.5px dashed var(--accent);"></span>新設計（これから実装）</span>
+    </div>
+  </header>
+
+  <div class="col">
+
+    <details class="box" open>
+      <summary><span class="box-title">3行でいうと</span></summary>
+      <div class="detail">
+        <ol>
+          <li>Excelを開いて「<b>どのシートを読むか</b>」を決める（記入例や比較用は捨てる）</li>
+          <li>シートを「<b>文章</b>」「<b>マス目</b>」「<b>リンク一覧</b>」の3つの形に写し取る（それぞれ使い道が違う）</li>
+          <li>スキル年数を<b>4段構え</b>で取り出す — ルール2方式 → 保険2段 → それでも空なら<b>夜間にAIが埋める（新設計）</b></li>
+        </ol>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box" open>
+      <summary><span class="box-title">全体マップ（これだけ見れば流れがわかる）</span></summary>
+      <div class="detail">
+        <pre class="tree">Excelファイル（メール添付・Drive・Googleスプレッドシート・名簿のリンク先 — 入口は4つ、処理は1本）
+│
+├─ <b>段階1</b> どのシートを読むか決める
+│    記入例・比較用シートを捨てる → それっぽい名前を優先 → 最大3シート
+│    <i>Googleスプレッドシートで「このタブ」と指定があれば、それを最優先（照合精度98%を実測）</i>
+│
+├─ <b>段階2</b> シートを3つの形に写し取る
+│    ① マス目そのまま（結合セルも展開）……… 名簿かどうかの判定に使う
+│    ② セルの位置・大きさ付き ……………………… レイアウトが崩れた表の解析に使う
+│    ③ セル内のリンク一覧 ………………………… 名簿の行 → 本人の経歴書リンクの対応付け
+│
+├─ <b>段階3</b> 人間が読める文章に変換
+│    マス目 → 「氏名：田中太郎」「最寄駅：品川」のような行に
+│    <i>→ スキル照合・氏名チェック・項目抽出はこの文章を読む</i>
+│
+├─ <b>段階4</b> スキル年数を取り出す（4段構え）
+│    1段目: 表の列名から読む（きれいな表むけ）
+│    2段目: セルの配置から読む（崩れた表むけ）　→ 多く取れた方を採用
+│    3段目: 保険— バラバラの期間セルを合算 / 在籍期間から概算
+│    4段目: <b>AIフォールバック（新設計）</b>— 夜間にAIが空欄を埋める
+│
+└─ <b>段階5</b> 結果をまとめて返す → 候補者登録・名簿展開・経歴書ボタンに使われる</pre>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">段階1: どのシートを読むか決める</p>
+
+      <details class="box">
+        <summary><span class="box-title">やること: 3ステップでシートを選ぶ</span><span class="loc">extractExcelAll 5531</span></summary>
+        <div class="detail">
+          <p><b>なぜ必要か:</b> 経歴書Excelには「記入例」「チェックリスト」「昔の経歴（比較用）」など<b>本人と関係ないシート</b>が同居していることがある。過去に「比較用」シートの<b>別人の経歴</b>が本人のデータとして採用される事故が実際に起きた。</p>
+          <ol>
+            <li><b>捨てる:</b> シート名に「記入例・非表示・チェックリスト・テンプレート・比較用」を含むものを除外</li>
+            <li><b>並べる:</b> 「スキル」「経歴」「職務」等を含む名前のシートを先頭に</li>
+            <li><b>絞る:</b> 上位3シートだけ読む（巨大ファイル対策）</li>
+          </ol>
+          <p><b>例:</b> [記入例] [スキルシート] [2011年以前] → 「スキルシート」を最優先で読む</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box fixed">
+        <summary><span class="box-title">Googleスプレッドシート限定の追加精度: 指定タブの特定</span><span class="badge good">実データ検証済み</span></summary>
+        <div class="detail">
+          <p>送信者がリンクで「このタブを見て」と指定している場合（URLにgid番号が付く）、その<b>タブの中身</b>とExcel内の各シートを見比べて、指定タブを正確に当てる。実在の2タブ経歴書で<b>19/20セル一致→正解タブを選択</b>できることを確認済み。名前頼みのシート選びより一段賢い。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">段階2: シートを3つの形に写し取る（用途がそれぞれ違う）</p>
+
+      <details class="box">
+        <summary><span class="box-title">① マス目そのまま（結合セルも正しく展開）</span><span class="loc">worksheetToGrid 3586</span></summary>
+        <div class="detail"><p><b>使い道: 名簿発見。</b>「この1ファイルに複数人入っていないか？」を判定するとき、文章ではなく<b>マス目の構造</b>を見る。マス目は文字数制限なしで全行保持するので、117人の名簿でも全員見える。</p></div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box">
+        <summary><span class="box-title">② セルの位置・大きさ情報つきの一覧</span><span class="loc">worksheetToCells 3735</span></summary>
+        <div class="detail"><p><b>使い道: 崩れた表の解析。</b>経歴書はセル結合を多用したデザインが多く、マス目にすると列がズレる。「このセルは縦に3マス分の大きさ」という<b>結合の広がり情報</b>を保持しておくことで、デザイン重視の経歴書からもスキル年数を読み取れる。</p></div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box">
+        <summary><span class="box-title">③ セル内のリンク一覧（どのセルにどのURLが貼ってあるか）</span><span class="loc">cell.l.Target</span></summary>
+        <div class="detail"><p><b>使い道: リンク型名簿。</b>「スキルシート」列にリンクが貼られた名簿では、<b>同じ行にあるリンク＝その人の経歴書</b>という物理位置で対応付ける。この情報はCSV変換では消えてしまうため、Excelを直接読むからこそ取れる。</p></div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">段階3: 人間が読める文章に変換</p>
+
+      <details class="box">
+        <summary><span class="box-title">マス目 → 「ラベル：値」の行に組み立てる</span><span class="loc">gridToFieldText 3649</span></summary>
+        <div class="detail">
+          <p><b>例:</b> マス目 <code>| 氏名 | 田中太郎 | 年齢 | 35 |</code> → 文章 <code>氏名：田中太郎</code> ＋ <code>年齢：35</code></p>
+          <p>「氏名」「最寄駅」「単価」など<b>約30語のラベル辞書</b>を持っていて、辞書語の隣のセルを値としてペアにする。この文章が、スキル照合・氏名チェック・駅や単価の抽出すべての入力になる。1シート6,000字まで。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box risk">
+        <summary><span class="box-title">弱点: ペアの組み間違い</span><span class="badge warn">未解決（影響は限定）</span></summary>
+        <div class="detail"><p>ラベルの隣が空欄のデザインだと、離れたセルと誤ってペアになり「<code>氏名：保有技術</code>」のような変な文章ができることがある（実例あり）。この誤りが名簿誤検出に化ける事故は防御済みだが、<b>文章自体の誤りは残っている</b>。スキル年数が取れない一因で、下の段階4の保険とAIフォールバックが受け皿になる。</p></div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">段階4: スキル年数を取り出す（4段構え）</p>
+
+      <details class="box" open>
+        <summary><span class="box-title">1〜2段目: ルール2方式を並走 → 多く取れた方を採用</span></summary>
+        <div class="detail">
+          <div class="table-wrap">
+            <table class="cmp-table">
+              <thead><tr><th>方式</th><th>得意な表</th><th>例</th></tr></thead>
+              <tbody>
+                <tr><td class="route">列名方式 <span class="loc">4531</span></td><td>きれいな表（「使用言語」「経験年数」列がある）</td><td>Java｜3年 → {Java: 36ヶ月}</td></tr>
+                <tr><td class="route">配置方式 <span class="loc">5113</span></td><td>セル結合で崩れた表・プロジェクト単位の経歴</td><td>案件ブロックごとの期間×使用技術を積算</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>スキル数が多く取れた方を採用。処理が暴走しないよう<b>5秒で打ち切る保護</b>つき（複雑すぎるExcelで1通に30分かかりメールごと消えた事故への対策）。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box fixed">
+        <summary><span class="box-title">3段目: 保険2段（ルールが全滅したとき）</span><span class="badge good">保険</span></summary>
+        <div class="detail"><ol>
+          <li>「0年11ヶ月」のような<b>バラバラの期間セルを合算</b>して総経験月数だけでも出す</li>
+          <li>「2016年5月〜2022年10月」の<b>日付の幅から在籍期間を概算</b>する</li>
+        </ol>
+        <p>スキル別年数は取れなくても「経験何年の人か」は残す発想。</p></div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box proposed" open>
+        <summary><span class="box-title">4段目（新設計）: AIフォールバック — 夜間にAIが空欄を埋める</span><span class="badge proposed">これから実装</span></summary>
+        <div class="detail">
+          <p><b>なぜ:</b> ルールは「見たことのある形式」しか読めない。経歴書テンプレートは無限に増えるので、初見形式の取りこぼしをゼロにするにはAI（形式を問わず読める）が必要。</p>
+          <p><b>制約と解:</b> AIは完全無料のみ・API課金不可 → <b>既に運用中の自前HF Space</b>（無料枠・keepalive/プロキシ構築済み）でオープンモデルをセルフホスト。APIサービスを一切使わず、経歴書データも外部に出ない。</p>
+          <pre class="tree">メール処理（今のまま・1秒も遅くならない）
+  └ スキル年数が空のまま登録 → 保存済みの経歴書テキスト（5,000字）が残っている
+                    │
+終日cron（10分おき・需要は実測で確定） → hf-proxy → <b>自前HF Space</b>（Qwen2.5-1.5B・無料枠）
+  <i>既存インフラ再利用</i>                「この経歴からスキル→経験月数をJSONで」
+                    │
+        ┌───────────┴───────────┐
+        <b>検証層（ここが安全の要）</b>
+        ・skill_masterに実在するスキル名だけ採用
+        ・経験月数は上限360ヶ月でキャップ
+        ・検証落ちは捨てる（ゴミは絶対に入れない）
+                    │
+        合格分だけ raw_profile に書き戻し（トレースに E-SY-AI 記録）</pre>
+          <div class="table-wrap">
+            <table class="cmp-table">
+              <thead><tr><th>設計上の約束</th><th>実現方法</th></tr></thead>
+              <tbody>
+                <tr><td class="route">完全無料</td><td>HF Spaces無料枠 + 既存Edge Function。API課金ゼロ</td></tr>
+                <tr><td class="route">PIIを外に出さない</td><td>自前Space内で完結。第三者の学習に使われない</td></tr>
+                <tr><td class="route">メール処理を遅くしない</td><td>非同期（登録は今のまま・夜間に後追いで埋める）</td></tr>
+                <tr><td class="route">間違いを混ぜない</td><td>skill_master照合+月数上限の検証を通った分だけ採用</td></tr>
+                <tr><td class="route">劣化に気づける</td><td>AI発動率が監視指標（上がる=ルールの取りこぼし増加のシグナル）</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><b>詳細は専用の詳細設計書（状態機械・障害モード表・容量シナリオ・実測ゲート）を正とする。</b></p>
+          <p><b>実装ステップ:</b> ①Space（hf-spaces/app.py）に <code>/extract_skill_years</code> 追加+モデルを0.5B→1.5Bへ ②エンリッチ用cron（skillYears空の候補者を拾って書き戻す） ③ローカルSupabaseでE2E検証 ④本番cron有効化は7/23復旧後。</p>
+          <p><b>正直な期待値:</b> 1.5Bは小型モデルなので完璧ではない。ただし検証層があるため「間違って入る」ことはなく、「取れる分だけ増える」片側にしか動かない。文字のないスキャンPDFは対象外のまま。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">段階5: 結果はどこで使われるか</p>
+
+      <details class="box" open>
+        <summary><span class="box-title">取り出したものと行き先</span><span class="loc">5665</span></summary>
+        <div class="detail">
+          <div class="table-wrap">
+            <table class="cmp-table">
+              <thead><tr><th>取り出すもの</th><th>行き先（何に使われるか）</th></tr></thead>
+              <tbody>
+                <tr><td class="route">文章</td><td>スキル照合・氏名の本人確認・駅/単価/年齢の抽出</td></tr>
+                <tr><td class="route">スキル年数</td><td>経験年数の推定・候補者画面のスキル別年数表示</td></tr>
+                <tr><td class="route">マス目</td><td>名簿の発見（1ファイル複数人の検出・行ごとの分解）</td></tr>
+                <tr><td class="route">リンク一覧</td><td>名簿の各行 → 本人の経歴書リンクの対応付け・自動取得</td></tr>
+                <tr><td class="route">元ファイルそのもの</td><td>Storageに保存 → 候補者画面の「経歴書」ボタン</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>ファイルが壊れていて読めない場合も、<b>元ファイルの保存だけは必ず行う</b>ので「経歴書ボタンが出ない」事故にはならない。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <details class="box risk">
+      <summary><span class="box-title">残る弱点まとめ（正直に）と受け皿</span><span class="badge warn">恒常改善の対象</span></summary>
+      <div class="detail">
+        <div class="table-wrap">
+          <table class="cmp-table">
+            <thead><tr><th>弱点</th><th>受け皿</th></tr></thead>
+            <tbody>
+              <tr><td>初見フォーマットのスキル年数取りこぼし</td><td><b>AIフォールバック（新設計）</b>+ 週次監視→実例をテストに追加して改善</td></tr>
+              <tr><td>ラベル・値の組み間違い（段階3）</td><td>監視で実例収集 → ペアリング改善。名簿誤検出への波及は防御済み</td></tr>
+              <tr><td>添付Excelの複数シート選びは名前頼み</td><td>タブ指定精度が効くのはGoogleリンクのみ（既存の限界のまま）</td></tr>
+              <tr><td>文字のないスキャンPDF・画像</td><td>読めない（経歴書ボタンは出る）。OCRは未導入</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+  </div>
+
+  <footer class="foot">最終更新 2026-07-14 ・ v2: 人間向けに全面リライト + AIフォールバック（HF Spaces自前ホスト）設計を追加 ・ 行番号は commit fc9e54c 時点 ・ 姉妹図: 添付・リンク処理フロー（ゾーンA〜E・T）</footer>
+
+</div>

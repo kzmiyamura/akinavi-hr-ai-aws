@@ -1,0 +1,824 @@
+<title>AIフォールバック詳細設計書 — スキル年数エンリッチ（HF Spaces）</title>
+<style>
+  :root {
+    --bg: #eef1ee;
+    --surface: #ffffff;
+    --surface-2: #e3e8e3;
+    --ink: #1a1e1c;
+    --muted: #5b625d;
+    --line: #b7c0b8;
+    --accent: #2d6a63;
+    --accent-soft: #d9e8e5;
+    --good: #3d7a44;
+    --good-soft: #dcece0;
+    --warn: #a6631f;
+    --warn-soft: #f3e3cf;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Segoe UI", sans-serif;
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #141715;
+    --surface: #1c201d;
+    --surface-2: #232824;
+    --ink: #e8ebe7;
+    --muted: #9aa39c;
+    --line: #454e48;
+    --accent: #6fb8ac;
+    --accent-soft: #1e3330;
+    --good: #7ec488;
+    --good-soft: #1f3323;
+    --warn: #e0a34f;
+    --warn-soft: #3a2c17;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141715;
+      --surface: #1c201d;
+      --surface-2: #23282d;
+      --ink: #e8ebe7;
+      --muted: #9aa39c;
+      --line: #454e48;
+      --accent: #6fb8ac;
+      --accent-soft: #1e3330;
+      --good: #7ec488;
+      --good-soft: #1f3323;
+      --warn: #e0a34f;
+      --warn-soft: #3a2c17;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+
+  header.top {
+    margin-bottom: 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-size: 25px;
+    font-weight: 700;
+    margin: 0 0 8px;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+
+  .sub {
+    color: var(--muted);
+    font-size: 14px;
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .chip { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .chip.good { background: var(--good); }
+  .chip.warn { background: var(--warn); }
+  .chip.neutral { background: var(--accent); }
+  .chip.decision { background: var(--surface); border: 1.5px solid var(--accent); }
+
+  /* ---- flowchart primitives ---- */
+  .col { display: flex; flex-direction: column; align-items: stretch; }
+
+  .box {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 13px 16px;
+    width: 100%;
+  }
+  .box summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .box summary::-webkit-details-marker { display: none; }
+  .box summary::before {
+    content: "▸";
+    font-size: 10px;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+    flex: none;
+    margin-top: 3px;
+  }
+  .box[open] summary::before { transform: rotate(90deg); }
+  .box.risk { border-left: 3px solid var(--warn); }
+  .box.fixed { border-left: 3px solid var(--good); }
+  .box.proposed { border: 1.5px dashed var(--accent); background: var(--accent-soft); }
+  .badge.proposed { background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }
+  .badge.resolved { background: var(--surface); color: var(--good); border: 1px solid var(--good); }
+
+  .box-title { font-weight: 600; font-size: 14.5px; }
+  .loc {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    background: var(--surface-2);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .badge.good { background: var(--good-soft); color: var(--good); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .detail {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px dashed var(--line);
+    font-size: 13px;
+  }
+  .detail p { margin: 0 0 7px; }
+  .detail p:last-child { margin-bottom: 0; }
+  .detail code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .detail ol, .detail ul { margin: 0 0 7px; padding-left: 20px; }
+  .detail li { margin-bottom: 4px; }
+  .detail li:last-child { margin-bottom: 0; }
+
+  /* arrow connector between stacked single boxes */
+  .arrow {
+    display: flex;
+    justify-content: center;
+    height: 26px;
+    position: relative;
+  }
+  .arrow::before {
+    content: "";
+    width: 2px;
+    height: 100%;
+    background: var(--line);
+  }
+  .arrow::after {
+    content: "";
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+  }
+
+  /* decision diamond */
+  .decision-wrap { display: flex; justify-content: center; margin: 2px 0; }
+  .decision {
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+    background: var(--accent-soft);
+    border: 1.5px solid var(--accent);
+    padding: 34px 58px;
+    max-width: 300px;
+    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .decision .loc { display: block; margin-top: 6px; font-weight: 400; }
+  .decision.proposed-decision { border-style: dashed; }
+
+  /* branch fork/merge */
+  .branch {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 26px;
+    margin-top: 22px;
+    padding-top: 22px;
+  }
+  .branch::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 6%; right: 6%;
+    height: 2px;
+    background: var(--line);
+  }
+  .branch-col { position: relative; padding-bottom: 22px; }
+  .branch-col::after {
+    content: "";
+    position: absolute;
+    bottom: 0; left: 50%;
+    width: 2px; height: 22px;
+    background: var(--line);
+    transform: translateX(-50%);
+  }
+  .branch-tag {
+    position: absolute;
+    top: -3px; left: 50%;
+    transform: translate(-50%, -100%);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    background: var(--bg);
+    padding: 1px 6px;
+  }
+  .fork-in {
+    display: flex;
+    justify-content: center;
+    height: 22px;
+    position: relative;
+  }
+  .fork-in::before {
+    content: "";
+    width: 2px;
+    height: 100%;
+    background: var(--line);
+  }
+  .fork-in::after {
+    content: "";
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+  }
+
+  .merge-bar { position: relative; height: 24px; }
+  .merge-bar::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 6%; right: 6%;
+    height: 2px;
+    background: var(--line);
+  }
+  .merge-bar::after {
+    content: "";
+    position: absolute;
+    top: 0; left: 50%;
+    width: 0; height: 0;
+    transform: translateX(-50%);
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+    margin-top: 17px;
+  }
+  .merge-bar-stem {
+    position: absolute;
+    top: 0; left: 50%;
+    width: 2px; height: 24px;
+    background: var(--line);
+    transform: translateX(-50%);
+  }
+
+  /* swimlane zone */
+  .zone {
+    margin: 26px 0;
+    padding: 20px 20px 16px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    border: 1px solid var(--line);
+  }
+  .zone.design { border: 1.5px dashed var(--accent); }
+  .zone-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 16px;
+  }
+  .zone.design .zone-label { color: var(--accent); }
+  .zone-note {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin: 18px 0 0;
+    max-width: 56ch;
+  }
+
+  /* tables */
+  .scope-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 2px; }
+  .scope-table th, .scope-table td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); }
+  .scope-table th { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .scope-table td.field { font-family: var(--mono); font-size: 12px; }
+  .scope-pill { display: inline-block; font-family: var(--mono); font-size: 10.5px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .scope-pill.per-candidate { background: var(--good-soft); color: var(--good); }
+  .scope-pill.whole-email { background: var(--warn-soft); color: var(--warn); }
+  .table-wrap { overflow-x: auto; }
+
+  .fn {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+
+  pre.tree {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  pre.tree b { color: var(--accent); font-weight: 700; }
+  pre.tree i { color: var(--muted); font-style: normal; }
+
+  .sig-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 4px 0 12px; }
+  .sig-table th, .sig-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .sig-table th { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .sig-table td.fname { font-family: var(--mono); font-size: 11.5px; color: var(--accent); white-space: nowrap; font-weight: 600; }
+  .sig-table td.io { font-family: var(--mono); font-size: 11px; }
+  .sig-table td.st { white-space: nowrap; }
+  .sig-h {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 16px 0 4px;
+    font-weight: 700;
+  }
+
+  .cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 2px; }
+  .cmp-table th, .cmp-table td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .cmp-table th { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .cmp-table td.route { font-family: var(--mono); font-size: 11.5px; white-space: nowrap; }
+
+  footer.foot {
+    margin-top: 36px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-size: 11.5px;
+    font-family: var(--mono);
+    color: var(--muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .box summary::before { transition: none; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="top">
+    <p class="eyebrow">AI skill-years enrichment — 詳細設計書 v1（実装前の合意用）</p>
+    <h1>AIフォールバック詳細設計書<br>スキル年数エンリッチ（自前HF Space）</h1>
+    <p class="sub">ルールで取れなかったスキル年数を、登録後に非同期でAIが埋める仕組みの完全設計。完全無料（API課金ゼロ）・PII外部提供なし・メール処理への影響ゼロを設計制約とし、状態遷移・冪等性・ロック・検証・障害モード・容量・テスト・ロールアウトまで全て定義する。Excel読み込みフロー図の「段階4・4段目」の詳細版。</p>
+    <div class="legend">
+      <span class="legend-item"><span class="chip neutral"></span>既存資産（変更なし）</span>
+      <span class="legend-item"><span class="chip" style="background:var(--accent-soft);border:1.5px dashed var(--accent);"></span>新設</span>
+      <span class="legend-item"><span class="chip warn"></span>調査で判明した注意点</span>
+    </div>
+  </header>
+
+  <div class="col">
+
+    <details class="box" open>
+      <summary><span class="box-title">1. 目的と非目標</span></summary>
+      <div class="detail">
+        <p><b>目的:</b> ルール抽出（2方式+保険2段）で実スキル年数が0件になった候補者に対し、保存済みの経歴書テキストをAIに読ませてスキル年数を補完する。初見フォーマットの取りこぼしを構造的に減らす。<b>1日あたりの対象件数は未実測</b>（402制限中のため）— 本設計は需要を仮定せず、§11のシナリオ設計と§15の実測ゲートで成立性を担保する。</p>
+        <p><b>非目標（やらないこと）:</b></p>
+        <ul>
+          <li>メール処理パイプライン（inbound-email）の変更 — 1行も触らない</li>
+          <li>ルール抽出の置き換え — ルールが本流のまま。AIは空欄の後追い補完のみ</li>
+          <li>文字のないスキャンPDF・画像のOCR — テキストが無いものは対象外</li>
+          <li>既存の品質チェック機能（/run_quality_check）の改修 — 独立させる</li>
+        </ul>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box" open>
+      <summary><span class="box-title">2. 設計制約（ユーザー合意事項）</span></summary>
+      <div class="detail">
+        <div class="table-wrap">
+          <table class="cmp-table">
+            <thead><tr><th>制約</th><th>設計での担保</th></tr></thead>
+            <tbody>
+              <tr><td class="route">完全無料</td><td>HF Spaces無料枠の自前Space + 既存hf-proxy。APIサービス不使用（オープンモデルをセルフホスト）。Gemini等の従量APIは一切呼ばない</td></tr>
+              <tr><td class="route">PIIを外に出さない</td><td>経歴書テキストは Supabase ↔ 自前Space 間のみをHTTPSで往復。第三者APIに送らない・Space側でテキストをログに残さない</td></tr>
+              <tr><td class="route">メール処理を遅くしない</td><td>完全非同期。登録は今のまま完了し、後からcronが埋める</td></tr>
+              <tr><td class="route">間違いを混ぜない</td><td>検証層（§7）を通過した値のみ書き込み。検証落ちは全部捨てる</td></tr>
+              <tr><td class="route">流量3,000通/日でも成立</td><td>需要（年数空の登録件数/日）は<b>未実測</b>。§11で最悪シナリオ（全3,000通が対象化）までの挙動と対処を定義し、§15で実測してからパラメータ確定・有効化する</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>本設計は「inbound-emailはAI不使用」方針の<b>例外を1箇所追加</b>するもの（指定箇所リストに「スキル年数エンリッチ（自前HF Space・非同期）」を追記する）。</p>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box risk" open>
+      <summary><span class="box-title">3. 既存資産の実態（コード調査で確定・設計の前提）</span><span class="badge warn">正直な現状</span></summary>
+      <div class="detail">
+        <div class="table-wrap">
+          <table class="cmp-table">
+            <thead><tr><th>資産</th><th>実態</th></tr></thead>
+            <tbody>
+              <tr><td class="route">自前Space<br><span class="loc">hf-spaces/app.py 588行</span></td><td>FastAPI。<b>SUPABASE_URL + SERVICE_ROLE_KEY をSecretsに保持済み</b>＝SupabaseへのRead/Write可能。x-api-secret認証実装済み。skill_masterのロード関数あり</td></tr>
+              <tr><td class="route">hf-proxy<br><span class="loc">Edge Function</span></td><td>pg_cron→HFの中継。コールドスタート対応（25秒×4リトライ）実装済み</td></tr>
+              <tr><td class="route">cron 2本</td><td>quality-check定期実行 + <b>keepalive（Spaceを寝かせない）</b>稼働中</td></tr>
+              <tr><td class="route">Storage（attachments）</td><td>候補者の<b>元ファイル（xlsx等）が保存済み</b>（resume_url）。エンリッチ時に再取得すれば、DBに保存された加工後テキストに依存せず生データから読み直せる</td></tr>
+              <tr><td class="route">⚠ LLM</td><td><b>実は未稼働</b>。llama-cpp-python が requirements.txt に無く、Qwen2.5-0.5Bのロードは毎回失敗→ルールベースのみで続行している。本設計で正式導入する（1.5Bへ）</td></tr>
+              <tr><td class="route">⚠ /run_quality_check</td><td><b>本体は休止中</b>（先頭の早期returnで起動確認のみ返す状態）。本設計はこれに依存せず、独立エンドポイント /run_enrich を新設する</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box proposed" open>
+      <summary><span class="box-title">4. アーキテクチャ — Pull型を採用</span><span class="badge proposed">設計の核</span></summary>
+      <div class="detail">
+        <pre class="tree">pg_cron（10分おき） <i>既存パターン</i>
+  │  net.http_post
+  ▼
+hf-proxy（Edge Function・既存） <i>?action=enrich を追加</i>
+  │  x-api-secret付きでSpaceを起こす（コールドスタート対応済み）
+  ▼
+<b>自前HF Space  POST /run_enrich</b> <i>新設</i>
+  │  ① 即座に {ok, started} を返す（202相当・プロキシを待たせない）
+  │  ② BackgroundTask で以下を実行（Spaceには実行時間制限が無い）
+  ▼
+<b>Space内バックグラウンド処理</b>
+  1. ロック確認（多重起動なら即終了）
+  2. Supabaseから対象候補者を最大3件取得（§5の選定条件）
+  3. 各候補者: aiEnrich.status='processing' マーク
+       → LLM抽出（Qwen2.5-1.5B・§6）
+       → 検証層（§7）
+       → 書き戻し + ai_logs記録
+  4. 8分経過で残りを次回cronに委ねて終了</pre>
+        <p><b>Push型（新Edge FunctionがSpaceを呼ぶ案）を却下した理由:</b> Edge Functionには実行時間制限（壁時計150秒）があり、LLM推論40〜90秒/件を待つと1呼び出し1件が限界で、リトライ・タイムアウト管理が複雑化する。Pull型ならSpace側に時間制限が無く、SupabaseアクセスもSpaceが既に持つ資格情報で完結。<b>新しいEdge Functionを作る必要がなく、可動部品が増えない</b>。</p>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box proposed" open>
+      <summary><span class="box-title">5. データ設計 — 対象選定・状態機械・冪等性・ロック</span><span class="badge proposed">隙のなさの核①</span></summary>
+      <div class="detail">
+        <p class="sig-h">対象選定クエリ（毎回実行・キューテーブルは作らない）</p>
+        <pre class="tree">candidates から次の全条件で古い順に最大3件:
+  ・data_env = 'prod'                     <i>デモ環境は対象外（テスト汚染防止）</i>
+  ・created_at ≥ now() − 6日              <i>7日でアーカイブされる前に処理</i>
+  ・duplicate_flag = false / merged_into IS NULL
+  ・raw_profile->attachmentText が存在     <i>読む文字が無ければ対象外</i>
+  ・raw_profile->skillYears に実スキルキーが無い（_内部キーのみは対象）
+  ・raw_profile->aiEnrich->status が 'done'/'skipped' でない
+  ・aiEnrich->attempts < 3
+  ・aiEnrich->lastAt < now() − 2時間       <i>失敗直後の連続再試行を防ぐバックオフ</i></pre>
+        <p><b>キュー専用テーブルを作らない理由:</b> 状態は<code>raw_profile.aiEnrich</code>（下記）に持たせれば選定クエリだけでキューが表現でき、スキーマ変更ゼロ・アーカイブ時も状態が一緒に移動する。</p>
+
+        <p class="sig-h">状態オブジェクト raw_profile.aiEnrich</p>
+        <pre class="tree">{ status: 'processing' | 'done' | 'failed' | 'skipped',
+  attempts: number,        <i>モデル起因の失敗のみカウント（§9）</i>
+  lastAt: ISO文字列,
+  model: 'qwen2.5-1.5b-q4',
+  added: {スキル名: 月数},   <i>採用された分（監査用）</i>
+  rejected: number,         <i>検証で捨てた件数（品質観測用）</i>
+  reason?: string }         <i>failed/skippedの理由</i></pre>
+
+        <p class="sig-h">状態遷移</p>
+        <pre class="tree">（未処理・aiEnrichなし）
+   │ 選定される
+   ▼
+processing ──成功──▶ <b>done</b>（以後、選定されない）
+   │                  <i>採用0件でも done（「読んだが無かった」も確定情報）</i>
+   ├─モデル失敗（JSON壊れ・検証全滅3回目）──▶ <b>failed</b>（選定されない・監視対象）
+   ├─テキスト無し/短すぎ ──▶ <b>skipped</b>
+   └─通信失敗・タイムアウト ──▶ 状態を戻す（attempts消費なし・次回cronで再試行）</pre>
+
+        <p class="sig-h">冪等性・競合の担保</p>
+        <ul>
+          <li><b>二重処理防止:</b> 書き込み直前に候補者を<b>再読込</b>し、実スキル年数が既に入っていたら（再解析等との競合）書き込まず done(reason=race) にする</li>
+          <li><b>上書き禁止:</b> AIは「空欄を埋める」だけ。既存の実スキル年数を書き換える経路は存在しない（§8 INV-AI-OVERWRITE）</li>
+          <li><b>多重起動防止:</b> Space内のグローバルロック（処理中フラグ+開始時刻）。TTL15分 — プロセスが死んでも次のcronで自動回復。cron間隔10分 &lt; TTLなので通常は重ならない</li>
+          <li><b>processingで固まった場合:</b> lastAtが2時間超過すれば選定条件に再合致して自動復帰</li>
+        </ul>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box proposed" open>
+      <summary><span class="box-title">6. Space API・モデル・プロンプト仕様</span><span class="badge proposed">新設</span></summary>
+      <div class="detail">
+        <p class="sig-h">エンドポイント</p>
+        <div class="table-wrap">
+          <table class="sig-table">
+            <thead><tr><th>API</th><th>入出力</th><th>備考</th></tr></thead>
+            <tbody>
+              <tr><td class="fname">POST /run_enrich</td><td class="io">認証: x-api-secret → {ok, started:true} or {ok, busy:true}</td><td class="st">即返し・本体はBackgroundTask</td></tr>
+              <tr><td class="fname">GET /health</td><td class="io">既存 + enrich統計（直近の処理数/失敗数/ロック状態）を追加</td><td class="st">既存拡張</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="sig-h">モデル導入（本設計で初めてLLMが実際に動く）</p>
+        <ul>
+          <li><b>Qwen2.5-1.5B-Instruct Q4_K_M（GGUF・約1.0GB）</b> — 無料枠16GB RAMに余裕。0.5Bは抽出タスクには弱すぎるため昇格</li>
+          <li>requirements.txt に <code>llama-cpp-python</code> を追加（現状欠落＝LLM未稼働の原因）</li>
+          <li>推論設定: temperature=0（毎回同じ答え）・最大出力256トークン・<b>JSONグラマー強制</b>（llama.cppの機能で出力を機械的にJSON形式に制限 — 「JSONで返して」というお願いではなく文法レベルの強制）</li>
+        </ul>
+        <p class="sig-h">入力の決定（v1.2で二段構えに変更 — DBの加工済みテキストに依存しない）</p>
+        <pre class="tree">対象候補者
+  │
+  ├─ resume_url が Storage の .xlsx/.xls？
+  │    <b>Yes → 本流: 元ファイル再取得 + セル位置付き生データ</b>
+  │      SpaceがStorageから元ファイルをダウンロード
+  │      → openpyxl で結合セル（rowspan/colspan）付きセル一覧を再生成
+  │      → セル位置付きテキストに整形してLLMへ:
+  │           [行3, 列2-4] 品川駅
+  │           [行4, 列2]   年齢
+  │           [行4, 列3-4] 45歳
+  │      LLMは表の位置関係から構造を推測できるため、
+  │      ラベル辞書に依存する状態機械の弱点（値の飲み込み・誤ペア）を丸ごと迂回する
+  │
+  └─ No（Word・PDF・Storage外URL）
+       → <b>保険: attachmentText（文章・先頭3,000字）</b></pre>
+        <p><b>なぜDB保存済みのテキストを本流にしないか:</b> DB内の <code>attachmentText</code>（文章化）と <code>jsonRows</code>（構造化）はどちらも抽出パイプラインの加工を経ており、実データで誤ペア（「氏名：保有技術」）・値の飲み込み（「最寄駅＝品川駅<b>年齢45歳</b>」のような結合）が確認されている。壊れた入力を読ませればAIも壊れた答えを返す。元ファイルからの再生成なら加工バグを一切経由せず、attachmentTextの5,000字・上位3シート制限も受けない。</p>
+        <p><b>SpanCell再生成をPython（openpyxl）で書き直すことについて:</b> 結合セルの展開は機械的処理（ヒューリスティック無し）のため、TypeScript版（worksheetToCells）との二重管理リスクは実質ない。約30行。requirements.txt に openpyxl を追加する。</p>
+        <p class="sig-h">プロンプト仕様</p>
+        <pre class="tree">入力: セル位置付きデータ（先頭400セル目安） または 文章3,000字
+指示: 「Excelのセル位置付きデータ（[行,列範囲] 値）です。位置関係を読んで
+      スキル名→経験月数を JSON {"スキル名": 月数} で。
+      記載から確実に読み取れるものだけ。推測禁止。無ければ {}」
+出力例: {"Java": 60, "AWS": 24, "PostgreSQL": 36}</pre>
+        <p><b>skill_masterの候補リストをプロンプトに入れない理由:</b> リストを見せると「リストに合わせて答えを作る」誘導（幻覚）が起きる。照合は書き込み前の検証層（§7）で機械的にやるので、モデルには自由に読ませて検証で絞る方が安全。</p>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box proposed" open>
+      <summary><span class="box-title">7. 検証層 — 書き込んでよいものの定義</span><span class="badge proposed">隙のなさの核②</span></summary>
+      <div class="detail">
+        <pre class="tree">LLM出力（JSON文字列）
+  │ ① 厳格パース: JSONとして壊れていたら全捨て（attempts+1）
+  ▼
+  │ ② スキル名検証: skill_master の name / aliases に正規化一致
+  │    （小文字化・空白除去。Space起動時ロード済みの約1,660件と照合）
+  │    一致しないキーは<b>個別に捨てる</b>（rejectedカウント）
+  ▼
+  │ ③ 月数検証: 整数化できない・0以下・360超 は捨てる（360=30年でキャップ）
+  ▼
+  │ ④ 直前再読込: 実スキル年数が既に入っていたら中断（競合防止）
+  ▼
+書き込み（1候補者につき1回のUPDATE）:
+  ・raw_profile.skillYears ← 検証済みの値（skill_master正名で格納）
+  ・raw_profile.aiEnrich ← done + added/rejected
+  ・raw_profile.pipeline_trace.emailCodes へ "E-SY-AI(n件採用/m件棄却)" を追記
+  ・candidates.skills 配列へ未収載スキルを追加 + candidate_skills へINSERT
+     <i>（inbound-emailが登録時にやっている「skillYears→skills反映」と同じ規則）</i>
+  ・experience_years が null の場合のみ、月数から推定して補完
+  ・ai_logs へ1行INSERT（model='hf-qwen2.5-1.5b', linked_id=候補者ID）
+     <i>（既存のAIコスト・品質監視の枠にそのまま乗る）</i></pre>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box proposed" open>
+      <summary><span class="box-title">8. 不変条件（違反したらバグ）</span></summary>
+      <div class="detail">
+        <ul>
+          <li><code>INV-AI-OVERWRITE</code>: 実スキル年数が入っている候補者のskillYearsをAIが変更することは無い（選定条件+書込前再読込の二重防御）</li>
+          <li><code>INV-AI-UNVALIDATED</code>: skill_masterに存在しないスキル名がAI経由で書き込まれることは無い</li>
+          <li><code>INV-AI-DEMO</code>: data_env='demo' の候補者にAIが書き込むことは無い（E2Eテストの期待値を汚さない）</li>
+          <li><code>INV-AI-TRACE</code>: AIが書き込んだ候補者には必ず aiEnrich と E-SY-AI が残る（後から「どれがAI由来か」を100%特定できる）</li>
+        </ul>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box" open>
+      <summary><span class="box-title">9. 障害モード表 — 全部の「壊れ方」と挙動</span><span class="badge good">隙のなさの核③</span></summary>
+      <div class="detail">
+        <div class="table-wrap">
+          <table class="cmp-table">
+            <thead><tr><th>障害</th><th>挙動</th><th>attempts</th></tr></thead>
+            <tbody>
+              <tr><td class="route">Spaceがコールドスタート中</td><td>hf-proxyが25秒×4リトライで起こす（既存実装）。起きなければ次の10分後cronへ</td><td>—</td></tr>
+              <tr><td class="route">Space再起動でロック消失</td><td>ロックはメモリ上のため消える＝次のcronが正常に取得。processing残骸は2時間バックオフ後に自動再選定</td><td>消費なし</td></tr>
+              <tr><td class="route">Supabase接続失敗（402含む）</td><td>バッチ全体を中断。候補者の状態は変更されない → 次回そのまま再試行</td><td>消費なし</td></tr>
+              <tr><td class="route">Storageから元ファイルの取得失敗</td><td>attachmentText（文章）に降格して続行。トレースに記録</td><td>—</td></tr>
+              <tr><td class="route">元ファイルが巨大（名簿等）</td><td>セル数上限（先頭400セル目安）で切ってLLMへ。超過をトレースに記録</td><td>—</td></tr>
+              <tr><td class="route">xlsxが破損していて開けない</td><td>attachmentTextに降格。それも無ければ skipped</td><td>—</td></tr>
+              <tr><td class="route">LLM出力がJSONとして壊れた</td><td>グラマー強制で原則発生しないが、発生時は全捨てして attempts+1。3回で failed</td><td>+1</td></tr>
+              <tr><td class="route">LLMが妄想スキルを出した</td><td>skill_master照合で機械的に棄却（rejected計上）。採用0件でも done（正常終了）</td><td>—</td></tr>
+              <tr><td class="route">推論が異常に長い</td><td>1件あたり180秒のハードタイムアウト → 通信失敗扱い。バッチ全体は8分予算で打ち切り</td><td>消費なし</td></tr>
+              <tr><td class="route">再解析と同時実行（競合）</td><td>書込前再読込で検出 → 書き込まず done(reason=race)</td><td>—</td></tr>
+              <tr><td class="route">7日以内に処理が追いつかずアーカイブ</td><td>対象から自然に消える（未補完のままアーカイブ）。容量16倍の余裕があるため通常起きない。発生率は監視で観測</td><td>—</td></tr>
+              <tr><td class="route">HF無料枠の仕様変更・停止</td><td>エンリッチが止まるだけ。<b>登録済みデータには一切影響なし</b>（このシステムの他の機能から完全に独立）</td><td>—</td></tr>
+              <tr><td class="route">モデルが劣悪な結果を量産</td><td>ai_logs と aiEnrich.added が全件監査可能。app_config で即時停止＋AI由来分は E-SY-AI で特定して一括巻き戻し可能</td><td>—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box">
+      <summary><span class="box-title">10. セキュリティ・プライバシー</span></summary>
+      <div class="detail">
+        <ul>
+          <li>認証: 既存の <code>x-api-secret</code>（Space側Secrets）。secretなしのアクセスは全拒否</li>
+          <li>経路: Supabase ↔ 自前Space のHTTPSのみ。第三者API・外部サービスへの送信なし</li>
+          <li>Space側で経歴書テキストを<b>ログに出力しない</b>（文字数のみログ可）。ディスク保存もしない（メモリ処理のみ）</li>
+          <li>HF Spaceは<b>privateリポジトリ</b>にする（コード内にSupabase URLが含まれるため）。Secretsは HF Spaces の Secrets 機構で管理（コードに書かない）</li>
+          <li>自前Space内のセルフホスト推論のため、入力データが第三者のモデル学習に使われる経路が存在しない</li>
+        </ul>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box" open>
+      <summary><span class="box-title">11. 性能・容量 — 需要は未実測。だから「未知でも成立する」設計にする</span><span class="badge warn">要実測2項目あり</span></summary>
+      <div class="detail">
+        <p><b>正直な前提:</b> 本番の需要（=年数空で登録される件数/日）は402制限中で<b>測れていない</b>。参考値（登録約130件/日 × テストセットのルール失敗率3割 ≈ 40件/日）は推定×推定であり、設計の根拠にしない。設計は「需要がいくつでも壊れない」ことを示し、実数は§15のゲートで確定する。</p>
+
+        <p class="sig-h">供給の物理天井（ここだけが確かな数字の枠組み）</p>
+        <pre class="tree">Space内の処理は直列（1プロセス・ロック§5）なので、日次の絶対天井は:
+
+    <b>天井 = 86,400秒 ÷ T</b>   （T = 1件の処理秒数・<b>要実測①</b>・想定40〜90秒）
+
+    T=90秒 → 約  960件/日
+    T=60秒 → 約1,440件/日
+    T=40秒 → 約2,160件/日
+
+cron間隔・バッチ数はこの天井内での「呼び出し方」にすぎない:
+    初期値 10分おき×3件 = 432件/日（意図的に天井より絞った安全運転）
+    ノブ: バッチ6件 or 5分間隔 → 天井近くまで増強可（コード定数の変更のみ）</pre>
+
+        <p class="sig-h">需要シナリオ表 — いくつ来ても挙動が定義されている</p>
+        <div class="table-wrap">
+          <table class="cmp-table">
+            <thead><tr><th>需要/日</th><th>挙動</th></tr></thead>
+            <tbody>
+              <tr><td class="route">〜400件</td><td>初期値（432件/日）のまま当日中に消化。設定変更不要</td></tr>
+              <tr><td class="route">〜900件</td><td>ノブ増強（バッチ/間隔）で天井内。T=90秒の悲観値でも収まる</td></tr>
+              <tr><td class="route">〜2,000件</td><td>T実測が60秒以下なら天井内。超えるなら入力字数削減（3,000→2,000字）でTを短縮 or Space並列化（無料で複数Space可・候補者IDで分担）</td></tr>
+              <tr><td class="route">3,000件（受信全通が対象化する理論上限）</td><td>1 Spaceでは不足。ただしこの状態は「全メールが年数空candidateとして登録されている」ことを意味し、<b>それ自体が誤登録監査(audit_misregistration)で対処すべき異常</b>。エンリッチ側は下記の溢れ政策で安全に部分処理</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="sig-h">溢れたときの政策（供給&lt;需要でも壊れない）</p>
+        <ul>
+          <li><b>優先度: 新しい順</b>に処理（営業は新着から当たるため補完価値が高い。§5の選定を created_at DESC に変更）</li>
+          <li>処理が7日以内に届かなかった候補者は未補完のままアーカイブへ — <b>欠けるのは「AIによる上乗せ」だけ</b>で、登録・検索・経歴書ボタン・ルール抽出分は無影響</li>
+          <li>未処理率は監視（§13）で観測し、恒常的に高ければノブ増強 or Space並列化を発動</li>
+        </ul>
+
+        <p class="sig-h">要実測（§15のゲートで確定するまで有効化しない）</p>
+        <ol>
+          <li><b>T（1件の処理秒数）</b>: 無料枠2vCPU上の実測。ローカル検証と初回ビルド後にSpaceで計測</li>
+          <li><b>需要/日</b>: 7/23復旧後に monitor_quality.mjs のBチェック（添付ありskillYears空）を数日観測して確定</li>
+        </ol>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box">
+      <summary><span class="box-title">12. 設定・スケジュール定義</span></summary>
+      <div class="detail">
+        <div class="table-wrap">
+          <table class="cmp-table">
+            <thead><tr><th>設定</th><th>既定</th><th>意味</th></tr></thead>
+            <tbody>
+              <tr><td class="route">app_config: ai_enrich_enabled</td><td><b>false</b></td><td>Space側が処理開始前に確認。falseなら即no-op。<b>導入時は寝かせた状態でデプロイし、検証後にtrue</b>。緊急停止スイッチを兼ねる</td></tr>
+              <tr><td class="route">バッチ上限 / 時間予算</td><td>3件 / 8分</td><td>Space内定数</td></tr>
+              <tr><td class="route">attempts上限 / バックオフ</td><td>3回 / 2時間</td><td>同上</td></tr>
+              <tr><td class="route">cron: ai-enrich-skill-years</td><td>10分おき</td><td>hf-proxy?action=enrich を叩くだけ。migrationで追加</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box">
+      <summary><span class="box-title">13. 監視（既存の枠にそのまま乗せる）</span></summary>
+      <div class="detail">
+        <ul>
+          <li><b>monitor_quality.mjs に2チェック追加:</b> ①AI発動率（aiEnrich保有率）— 上昇＝ルールの取りこぼし増加のシグナル ②failed率 — 上昇＝モデル/Space異常</li>
+          <li><b>ai_logs:</b> エンリッチ1件=1行なので、既存のAIログ監視・30日自動削除にそのまま乗る</li>
+          <li><b>週次ルール改善ループとの関係:</b> AIが埋めた件（=ルールが負けた件）は「ルール改善の教師データ」。aiEnrich.added を見て頻出パターンをルール化すれば、AI発動率が下がっていく——AIに依存を深める方向ではなく、<b>ルールを育てる方向に働く設計</b></li>
+        </ul>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box">
+      <summary><span class="box-title">14. テスト計画と受入基準</span></summary>
+      <div class="detail">
+        <ol>
+          <li><b>プロンプト/検証層ユニット（ローカルPython）:</b> Spaceをローカル起動し、既知のWARN 4ファイル（K_M/R_O/S_I/Y_M・実xlsxがtestDataにある）を<b>セル位置付き生データ経路</b>で抽出。文章経路（attachmentText相当）とも比較。<b>受入基準: 4件中2件以上で検証通過スキルが1件以上増える／検証層をすり抜ける不正値が0件</b></li>
+          <li><b>状態機械テスト:</b> done後の再実行=no-op／JSON破壊3回→failed／processing放置→2時間後に自動復帰／既に年数あり→race検出、を合成データで全パス</li>
+          <li><b>E2E（ローカルSupabase）:</b> skillYears空の候補者を投入 → /run_enrich → skillYears/skills/candidate_skills/ai_logs/E-SY-AIが全て正しく書かれる</li>
+          <li><b>既存回帰:</b> inbound-emailは無変更のため、既存の分岐網羅123+E2E21が0劣化のままであることを確認</li>
+        </ol>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box fixed" open>
+      <summary><span class="box-title">15. ロールアウト手順（安全弁つき）</span><span class="badge good">この順で実施</span></summary>
+      <div class="detail">
+        <ol>
+          <li>hf-spaces/app.py に /run_enrich + 検証層を実装、requirements.txt に llama-cpp-python 追加、モデルを1.5Bに変更（<b>既存の/run_quality_checkには触れない</b>）</li>
+          <li>ローカルでSpace起動 → テスト計画1〜2を全パス</li>
+          <li>ローカルSupabaseでE2E（テスト計画3）</li>
+          <li><b>ユーザー作業:</b> HF Spaceリポジトリへpush（ビルド数分・llama-cpp-pythonのビルド含め初回15分程度）</li>
+          <li>hf-proxyに action=enrich 追加 + cron migration をデプロイ — ただし <code>ai_enrich_enabled=false</code> のまま（<b>全部署完了しても1件も動かない</b>）</li>
+          <li>7/23復旧後・<b>実測ゲート①</b>: monitor_quality.mjs のBチェックを数日観測し、需要/日を実測 → §11のシナリオ表に照らしてcron間隔・バッチ数を確定</li>
+          <li><b>実測ゲート②</b>: 本番で1件だけ手動実行（/run_enrich直叩き）→ 結果の目視確認 + T（処理秒数）を実測 → 天井を計算し需要と比較</li>
+          <li>両ゲート通過後に <code>ai_enrich_enabled=true</code>。需要が供給を超える見込みならノブ増強を先に実施</li>
+          <li>1週間 monitor_quality で発動率・failed率・addedの中身を観測 → 問題あれば false に戻すだけ（登録データは無傷）</li>
+        </ol>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box risk">
+      <summary><span class="box-title">16. 既知の限界（この設計でも残るもの）</span><span class="badge warn">正直に</span></summary>
+      <div class="detail">
+        <ul>
+          <li><b>1.5Bモデルの読解力:</b> 複雑な経歴書では取りこぼす。ただし検証層により「間違って入る」ことはなく「取れる分だけ増える」片側にしか動かない</li>
+          <li><b>attachmentTextの品質に依存:</b> 段階3の誤ペアリング（氏名：保有技術問題）が混ざったテキストを読むため、そこが壊れている部分は AIでも読み誤る可能性がある。根治は文章化側の縦ペア対応（別件）</li>
+          <li><b>skill_master未収載の新技術:</b> 検証層が正しく棄却する＝拾えない。rejectedカウントが高い場合はskill_master追加の月次レビューで対応（既存運用）</li>
+          <li><b>スキャンPDF・画像:</b> 対象外のまま（テキストが存在しないため）</li>
+        </ul>
+      </div>
+    </details>
+
+  </div>
+
+  <footer class="foot">最終更新 2026-07-14 ・ AIフォールバック詳細設計書 v1.2（入力を「元ファイル再取得+セル位置付き生データ」本流に変更 — DB内の加工済みテキストの誤ペア・値飲み込みバグを迂回） ・ 姉妹図: Excel読み込みフロー（段階4の4段目）／添付・リンク処理フロー（ゾーンA〜E・T）</footer>
+
+</div>
