@@ -72,6 +72,21 @@ function parseYMParts(s) {
   return null
 }
 
+// ── unionIntervalMonths ──
+function unionIntervalMonths(iv){
+  const sorted = iv.slice().sort((a, b) => a[0] - b[0])
+  let total = 0
+  let curS = sorted[0][0]
+  let curE = sorted[0][1]
+  for (let x = 1; x < sorted.length; x++) {
+    const s2 = sorted[x][0]
+    const e2 = sorted[x][1]
+    if (s2 <= curE + 1) curE = Math.max(curE, e2)
+    else { total += curE - curS + 1; curS = s2; curE = e2 }
+  }
+  return total + (curE - curS + 1)
+}
+
 // ── calcMonthsFromMultilineCell ──
 function calcMonthsFromMultilineCell(cellValue){
   const parts = cellValue.split(/[\r\n]+/).map(s => s.trim())
@@ -754,24 +769,8 @@ function extractSkillYearsFromSheetData(data){
         }
       }
     }
-    // スキルごとに日付つき区間を和集合で月数化（重複・並行期間は1回だけ数える）。
-    // 連続区間（前の終了月の翌月から開始）は結合されるため、重複が無い場合の合計は
-    // 従来の単純加算と完全に一致する（既存回帰への影響なし）
-    const unionMonths = (iv)=> {
-      const sorted = iv.slice().sort((a, b) => a[0] - b[0])
-      let total = 0
-      let curS = sorted[0][0]
-      let curE = sorted[0][1]
-      for (let x = 1; x < sorted.length; x++) {
-        const s2 = sorted[x][0]
-        const e2 = sorted[x][1]
-        if (s2 <= curE + 1) curE = Math.max(curE, e2)
-        else { total += curE - curS + 1; curS = s2; curE = e2 }
-      }
-      return total + (curE - curS + 1)
-    }
     for (const skill of Object.keys(skillIntervals)) {
-      skillMonths[skill] = (skillMonths[skill] ?? 0) + unionMonths(skillIntervals[skill])
+      skillMonths[skill] = (skillMonths[skill] ?? 0) + unionIntervalMonths(skillIntervals[skill])
     }
     for (const skill of Object.keys(skillDatelessMonths)) {
       skillMonths[skill] = (skillMonths[skill] ?? 0) + skillDatelessMonths[skill]
@@ -948,6 +947,125 @@ function extractSkillYearsFromSheetData(data){
       }
     }
   }
+  // ── Method 1.7: KVブロック型（S.I型）──
+  // 「No.|期間|内容」のブロックヘッダー行が案件ごとに繰り返され、期間は開始/終了の
+  // 日付セル（Excelシリアル含む）、スキルは「環境」等の行ラベルの下のセルに書かれる形式。
+  // 列ヘッダー前提のMethod 1では構造的に取れない。Excelステートマシン（spanCellsToJson）が
+  // 読むKV/コンテナ構造のうち「期間×環境」パターンをグリッド上で直接マイニングする
+  {
+    const BLOCK_PERIOD_LABEL = /^(期間|プロジェクト期間|PJ期間|参画期間|在籍期間)$/
+    const BLOCK_SKILL_LABEL = /^(環境|開発環境|使用環境|技術環境|使用言語|言語|使用技術)$/
+    const normCell = (v) => String(v ?? '').split(/[\r\n]/)[0].replace(/[\s　]+/g, '').trim()
+    // ブロックヘッダー行の検出: No.セルと期間セルが同一行に並ぶ
+    const blockHeaderRows = []
+    let blockPeriodCol = -1
+    for (let i = 0; i < data.length; i++) {
+      const row = data[i]
+      let noIdx = -1
+      let perIdx = -1
+      for (let j = 0; j < row.length; j++) {
+        const v = normCell(String(row[j]))
+        if (/^(No\.?|№|項番|番号)$/i.test(v) && noIdx < 0) noIdx = j
+        if (BLOCK_PERIOD_LABEL.test(v) && perIdx < 0) perIdx = j
+      }
+      if (noIdx >= 0 && perIdx > noIdx) {
+        blockHeaderRows.push(i)
+        if (blockPeriodCol < 0) blockPeriodCol = perIdx
+      }
+    }
+    if (blockHeaderRows.length >= 1 && blockPeriodCol >= 0) {
+      const intervals17= {}
+      const dateless17= {}
+      const allIntervals = []
+      let allDateless = 0
+      for (let b = 0; b < Math.min(blockHeaderRows.length, 30); b++) {
+        const bStart = blockHeaderRows[b] + 1
+        const bEnd = b + 1 < blockHeaderRows.length ? blockHeaderRows[b + 1] : Math.min(data.length, bStart + 25)
+        // 期間: ブロック先頭データ行の期間列〜+12列から日付セルを収集（最初=開始・最後=終了）
+        let sYM = null
+        let eYM = null
+        let blockMonths = null
+        {
+          const dataRow = data[bStart] ?? []
+          const ymList = []
+          for (let j = blockPeriodCol; j < Math.min(dataRow.length, blockPeriodCol + 12); j++) {
+            const p = parseYMParts(String(dataRow[j] ?? '').trim())
+            if (p) ymList.push(p.year * 12 + p.month)
+          }
+          if (ymList.length >= 2 && ymList[ymList.length - 1] >= ymList[0]) {
+            sYM = ymList[0]
+            eYM = ymList[ymList.length - 1]
+          }
+        }
+        // フォールバック: ブロック内の期間列に "0年10ヶ月" 等の期間テキスト
+        if (sYM === null) {
+          for (let r = bStart; r < bEnd && !blockMonths; r++) {
+            blockMonths = parseDurationToMonths(String((data[r] ?? [])[blockPeriodCol] ?? ''))
+          }
+        }
+        if (sYM === null && !blockMonths) continue
+        // スキル: ブロック内の「環境」等ラベルセルの右隣 + 同列の下方セルから収集。
+        // ラベルは期間列の近傍（±3列）に限定する — 遠い列の「言語」等は経歴書フォームの
+        // 別セクション（能力評価表・個人情報欄）のラベルで、誤発動の原因になる（H_O実害）
+        // sync_extractors のTS→JS変換の制約により new __REMOVED_TYPE__() 形式は使わない（型は変数側に注釈）
+        const blockSkills= new Set()
+        for (let r = bStart; r < bEnd; r++) {
+          const row = data[r] ?? []
+          for (let j = Math.max(0, blockPeriodCol - 3); j <= blockPeriodCol + 3 && j < row.length; j++) {
+            if (!BLOCK_SKILL_LABEL.test(normCell(String(row[j])))) continue
+            const candidates = []
+            if (String(row[j + 1] ?? '').trim()) candidates.push(String(row[j + 1]))
+            for (let r2 = r + 1; r2 < bEnd; r2++) {
+              const v2 = String((data[r2] ?? [])[j] ?? '').trim()
+              if (v2) candidates.push(v2)
+            }
+            for (const cand of candidates) {
+              // 【環境/ツール】のようなセクション見出しは "/" 分割で壊れる前に丸ごと除去する
+              const cleaned = cand.replace(/【[^】\n]*】/g, '\n')
+              for (const line of cleaned.split(/[\r\n、，,\/／]+/)) {
+                const t = line.trim().replace(/^[・\-\s　]+/, '').trim()
+                if (!t || t.length < 2 || /^\d+$/.test(t)) continue
+                if (/[：:]\s*$/.test(t)) continue          // 「能力指標：」等のラベル残骸
+                if (/^[（(][^）)]*[）)]$/.test(t)) continue  // 「(遠隔操作用)」等の注記のみ
+                if (/^[ｦ-ﾟ]+$/.test(t)) continue           // 半角カナのみ（ﾌﾘｶﾞﾅ等のフォームラベル）
+                blockSkills.add(t)
+              }
+            }
+          }
+        }
+        if (blockSkills.size === 0) continue
+        if (sYM !== null && eYM !== null) {
+          allIntervals.push([sYM, eYM])
+          for (const sk of blockSkills) {
+            if (!intervals17[sk]) intervals17[sk] = []
+            intervals17[sk].push([sYM, eYM])
+          }
+        } else if (blockMonths) {
+          allDateless += blockMonths
+          for (const sk of blockSkills) {
+            dateless17[sk] = (dateless17[sk] ?? 0) + blockMonths
+          }
+        }
+      }
+      const sm17= {}
+      for (const sk of Object.keys(intervals17)) {
+        sm17[sk] = (sm17[sk] ?? 0) + unionIntervalMonths(intervals17[sk])
+      }
+      for (const sk of Object.keys(dateless17)) {
+        sm17[sk] = (sm17[sk] ?? 0) + dateless17[sk]
+      }
+      // フィルタ後の実スキルが3件以上のときだけ採用する。それ未満はブロック検出の
+      // 誤発動（経歴書フォームの別表をブロックと誤認）の可能性が高く、早期returnすると
+      // 後続のMethod 3/2が本来取れるはずの結果を潰してしまう（H_Oで実害を確認）
+      const filtered17 = filterSkillYears(sm17)
+      if (Object.keys(filtered17).filter(k => !k.startsWith('_')).length >= 3) {
+        filtered17['_totalProjectMonths'] = headerTotalMonths
+          ?? ((allIntervals.length > 0 ? unionIntervalMonths(allIntervals) : 0) + allDateless)
+        return filtered17
+      }
+    }
+  }
+
   // ── Method 3: スキル一覧型（経験年数列が数値のみ） ──
   // 例: "スキル名 | 5 | ◎" のように経験年数が整数で表現されている形式
   {
@@ -1094,6 +1212,7 @@ export {
   parseDurationToMonths,
   excelSerialToDateStr,
   parseYMParts,
+  unionIntervalMonths,
   calcMonthsFromMultilineCell,
   calcMonthsFromDates,
   filterSkillYears,
