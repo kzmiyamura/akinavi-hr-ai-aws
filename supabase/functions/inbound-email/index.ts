@@ -7170,6 +7170,9 @@ Deno.serve(async (req: Request) => {
         if (pdfText.trim()) {
           officeTextContents.push({ label: `PDF(${att.name ?? 'document.pdf'})`, content: pdfText.slice(0, 8000), attachment: att })
         } else {
+          // raw_profile.excelParseNotes に永続化する（console.log だけでは Edge ログ失効後に
+          // 「skillYears が空」の原因が PDF 読み取り失敗だと特定できない — monitor_quality [B] の調査用）
+          excelParseNotes.push(`PDF(${att.name ?? 'document.pdf'}): テキスト層なし（スキャンPDF等・抽出0文字）`)
           console.log(`[PDF] テキスト層なし（スキャンPDF）: ${att.name ?? 'document.pdf'}`)
         }
       } else if (!SUPPORTED_MIME.includes(att.mimeType)) {

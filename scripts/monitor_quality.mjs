@@ -14,7 +14,7 @@
  *   [A] invariantViolations が空でない（設計上の不変条件違反 = どこかでサイレント失敗）
  *   [B] 添付/リンクがあるのに skillYears が空（抽出漏れ or 新フォーマット）
  *   [C] 添付/リンクがあるのに resume_url が null（経歴書ボタンが出ない）
- *   [D] トレースに異常コード（B-PARSE-ERR / A-FETCH-FAIL / E-STO-FAIL / C-ROW-LINK-FAIL / D-UNASSIGNED）
+ *   [D] トレースに異常コード（B-PARSE-ERR / A-FETCH-FAIL / E-STO-FAIL / C-ROW-LINK-FAIL / D-UNASSIGNED / B-EXTRACT-EMPTY）
  *   [E] 未対応形式の添付が無視された（unrecognizedAttachments）
  *   [F] 名前が「不明」のまま登録された
  *
@@ -81,7 +81,7 @@ const SELECT = [
 
 const rows = await rest(`candidates?select=${SELECT}&created_at=gte.${since}&order=created_at.desc&limit=1000`)
 
-const BAD_CODES = ['B-PARSE-ERR', 'A-FETCH-FAIL', 'E-STO-FAIL', 'C-ROW-LINK-FAIL', 'D-UNASSIGNED']
+const BAD_CODES = ['B-PARSE-ERR', 'A-FETCH-FAIL', 'E-STO-FAIL', 'C-ROW-LINK-FAIL', 'D-UNASSIGNED', 'B-EXTRACT-EMPTY']
 const findings = { A: [], B: [], C: [], D: [], E: [], F: [] }
 
 for (const r of rows) {
