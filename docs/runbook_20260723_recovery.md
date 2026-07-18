@@ -80,6 +80,26 @@ node scripts/monitor_quality.mjs --days 1
 - 「添付ありskillYears空」が出たファイルは `testData/excel/` に追加して
   CLAUDE.mdの精度改善ループへ（これは恒常運用）
 
+### Step 6: PDF流量の集計 → PDFテキスト抽出の実装判断（当日でなくてよい・週内に1回）
+
+inbound-email は現在 PDF を解析せず Storage 保存のみ（設計書v5の既知の穴①）。
+スキャンPDFは実データに存在しないことを運用者確認済みのため、テキスト抽出のみで塞げる。
+まず実害規模を測る:
+
+```bash
+# candidates.resume_url が .pdf の割合を直近30日で集計（大量取得はローカル環境で）
+# → 月数件なら優先度下げて放置。有意な割合なら以下を実装:
+```
+
+- inbound-email に pdf.js 系（unpdf 等）のテキスト抽出関数を追加し、
+  kind=pdf を「解析なし」→「テキスト抽出→既存regexパイプライン」に変更（**AI不使用方針は維持**）
+- テキスト型名簿検出が PDF にも効くようになる
+- 実PDFサンプルを `testData/` に追加して回帰テスト整備
+- 注意: 表構造（スキル×年数ペア）はテキスト化で崩れるため Excel より精度が落ちる。
+  残りは AIフォールバック設計（ai-enrich-design-v1.2.html）の領域
+- ※本来は GitHub Issue 化する項目だが、Issue 作成スクリプトが Supabase Edge Function 経由のため
+  停止中は作成不可 → 復旧後にこの Step を Issue 化してもよい
+
 ## 恒常運用ルール（再発防止）
 
 | ルール | 理由 |
