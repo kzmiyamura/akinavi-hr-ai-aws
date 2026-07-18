@@ -6263,9 +6263,18 @@ const ROSTER_MAX_ROWS = 15
 /** 名簿1通あたりのリンク先取得に使える時間予算（ms）。超過後の行は埋め込み型に降格して継続 */
 const ROSTER_LINK_FETCH_BUDGET_MS = 60_000
 
-async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger, linkBudgetMs = ROSTER_LINK_FETCH_BUDGET_MS): Promise<SourceEntry[]> {
+async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger, linkBudgetMs = ROSTER_LINK_FETCH_BUDGET_MS, priorityNames: string[] = []): Promise<SourceEntry[]> {
   const linkFetchStart = Date.now()
   const out: SourceEntry[] = []
+  // 本文で紹介されている人材の行を先頭へ（安定ソート）。
+  // 15行上限・リンク取得60秒予算は先頭から消費されるため、並べ替えないと
+  // 「本文に名前がある人が名簿の16行目以降にいる」場合に行情報とリンク先経歴書ごと失われる。
+  const normName = (s: string) => s.replace(/[.\s　・]/g, '').toLowerCase()
+  const priNorms = priorityNames.map(normName).filter(n => n.length >= 2)
+  const isPriority = (rowName: string) => {
+    const rn = normName(rowName)
+    return rn.length >= 2 && priNorms.some(p => p.includes(rn) || rn.includes(p))
+  }
   for (const entry of entries) {
     const roster = detectRoster(entry)
     if (!roster.isRoster) {
@@ -6273,8 +6282,16 @@ async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger, linkB
       continue
     }
     ledger.log(entry.entryId, 'C-ROSTER', `${roster.rows.length}行に展開`)
-    if (roster.rows.length > ROSTER_MAX_ROWS) ledger.log(entry.entryId, 'C-ROSTER-CAP', `${roster.rows.length}→${ROSTER_MAX_ROWS}`)
-    for (const row of roster.rows.slice(0, ROSTER_MAX_ROWS)) {
+    let orderedRows = roster.rows
+    if (priNorms.length > 0) {
+      const pri = roster.rows.filter(r => isPriority(r.name))
+      if (pri.length > 0) {
+        orderedRows = [...pri, ...roster.rows.filter(r => !isPriority(r.name))]
+        ledger.log(entry.entryId, 'C-ROSTER-PRI', `本文人材${pri.length}人の行を優先`)
+      }
+    }
+    if (orderedRows.length > ROSTER_MAX_ROWS) ledger.log(entry.entryId, 'C-ROSTER-CAP', `${orderedRows.length}→${ROSTER_MAX_ROWS}`)
+    for (const row of orderedRows.slice(0, ROSTER_MAX_ROWS)) {
       const rowEntryId = ledger.nextEntryId()
       let rowEntry: SourceEntry = {
         entryId: rowEntryId, parentId: entry.entryId,
@@ -7472,8 +7489,13 @@ Deno.serve(async (req: Request) => {
 
     // ゾーンC: 名簿判定・行展開（全エントリ・候補者割当より前）。
     // 名簿は行ごとに独立エントリへ展開され、「1エントリ=1人」が下流に保証される。
+    // 本文に書かれている人材の氏名を優先対象として渡す: 名簿が15行上限で打ち切られても、
+    // 本文で紹介された人の行（+リンク先経歴書）は必ず展開対象に入るようにする
     tracePhase = 'roster_expand'
-    const allTextContents: SourceEntry[] = await expandRosterEntries([...googleEntries, ...officeEntries], ledger)
+    const bodyPriorityNames = (earlyMultiCheck ?? [body])
+      .map((t) => extractCandidateFieldsRegex(t, '').name ?? extractNameFallback(t))
+      .filter((n): n is string => !!n)
+    const allTextContents: SourceEntry[] = await expandRosterEntries([...googleEntries, ...officeEntries], ledger, undefined, bodyPriorityNames)
 
     // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
     // 本文と添付を分けて照合し、精度を向上させる。

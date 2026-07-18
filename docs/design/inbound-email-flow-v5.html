@@ -824,7 +824,7 @@
           <div class="fork-in"></div>
           <details class="box proposed" open>
             <summary><span class="box-title">行ごとに独立エントリへ展開</span><span class="fn">expandRosterEntries / detectRoster</span><span class="badge proposed">設計</span></summary>
-            <div class="detail"><p><b>実装差分（検出方式は4系統に進化）:</b> ①氏名ヘッダ列型グリッド（氏名+年齢/駅/単価等のヘッダ共起を要求） ②サマリー列型（氏名ヘッダなし・1列に【氏名】入りセルが縦並び=アイスタンダード形式。グリッド直読みのためテキスト文字数上限の影響を受けず全行検出可能） ③転置型（人が列方向に並ぶ場合のフォールバック。グリッドを転置しリンクのセル番地は列→疑似行番号に変換して②と同一経路） ④テキスト型（同一シート内限定）。<b>誤検出ガード5種:</b> ヘッダ語共起検証／氏名値の妥当性チェック<code>looksLikeRosterName</code>（ラベル語・日付・英字技術用語を除外）／人材行の連続性（空行3行で表終了）／相異なる氏名2人以上（同一人物の氏名2回出現=履歴書+経歴書シートや表紙+本文を名簿と誤認しない）／展開上限<code>ROSTER_MAX_ROWS=15</code>。これらは実ファイルテストで発見したバグ①④⑥への対策。</p>
+            <div class="detail"><p><b>実装差分（検出方式は4系統に進化）:</b> ①氏名ヘッダ列型グリッド（氏名+年齢/駅/単価等のヘッダ共起を要求） ②サマリー列型（氏名ヘッダなし・1列に【氏名】入りセルが縦並び=アイスタンダード形式。グリッド直読みのためテキスト文字数上限の影響を受けず全行検出可能） ③転置型（人が列方向に並ぶ場合のフォールバック。グリッドを転置しリンクのセル番地は列→疑似行番号に変換して②と同一経路） ④テキスト型（同一シート内限定）。<b>誤検出ガード5種:</b> ヘッダ語共起検証／氏名値の妥当性チェック<code>looksLikeRosterName</code>（ラベル語・日付・英字技術用語を除外）／人材行の連続性（空行3行で表終了）／相異なる氏名2人以上（同一人物の氏名2回出現=履歴書+経歴書シートや表紙+本文を名簿と誤認しない）／展開上限<code>ROSTER_MAX_ROWS=15</code>。これらは実ファイルテストで発見したバグ①④⑥への対策。<b>2026-07-18追記:</b> 15行上限・60秒予算の適用前に<b>メール本文で紹介されている人材の行を先頭へ安定ソート</b>する（<code>C-ROSTER-PRI</code>）。本文の人材が名簿の16行目以降にいると行情報・リンク先経歴書ごと失われる問題への対策（実名簿115人+上限15の組合せで顕在化）。優先名は本文ブロックの氏名regexから取得、マッチ判定は正規化した部分一致（イニシャル対応）。</p>
             <p>名簿1個を1エントリのまま下流に渡すことを<strong>禁止</strong>する。<code>assignAttachmentsToBlocks</code>は「1エントリ=1人」前提で、割当済みエントリを<code>used</code>フラグ（6096行目）で使用不能にするため、名簿丸ごとが誰か1人に誤割当されると他の候補者が二度と使えなくなる。行の数だけエントリに分割してから渡すことで、この前提と整合させる。パス2.5の誤マッチ問題も上流で構造的に消える。</p></div>
           </details>
         </div>
@@ -1036,7 +1036,7 @@
               <tbody>
                 <tr><td class="route">A 取得</td><td><code>A-XLSX-OK / A-CSV-FB</code>（CSV保険に落ちた）<code>/ A-DOCX-OK / A-TXT-FB / A-FETCH-FAIL(status) / A-SKIP-PORTFOLIO / A-DEDUP-DROP</code></td></tr>
                 <tr><td class="route">B 抽出</td><td><code>B-SHEET-GID(name)</code>（gid照合ヒット）<code>/ B-SHEET-KW(name)</code>（キーワード選択に落ちた）<code>/ B-SHEET-EXCL-ALL</code>（全シート除外＝異常）<code>/ B-EXTRACT-OK(t,sy) / B-EXTRACT-EMPTY / B-PARSE-ERR(msg) / B-LINKS(n)</code>（relsリンクn件検出）</td></tr>
-                <tr><td class="route">C 名簿</td><td><code>C-ROSTER(n)</code>（n行に展開）<code>/ C-ROSTER-CAP(n→15)</code>（上限打ち切り）<code>/ C-ROW-LINK-OK / C-ROW-LINK-REJ</code>（氏名検証で採用見送り）<code>/ C-ROW-LINK-SKIP</code>（60秒予算超過）<code>/ C-ROW-LINK-FAIL / C-ROW-EMBED / C-DEPTH-CUT</code>（深さ1打ち切り）</td></tr>
+                <tr><td class="route">C 名簿</td><td><code>C-ROSTER(n)</code>（n行に展開）<code>/ C-ROSTER-PRI(n)</code>（本文人材の行を優先ソート・2026-07-18追加）<code>/ C-ROSTER-CAP(n→15)</code>（上限打ち切り）<code>/ C-ROW-LINK-OK / C-ROW-LINK-REJ</code>（氏名検証で採用見送り）<code>/ C-ROW-LINK-SKIP</code>（60秒予算超過）<code>/ C-ROW-LINK-FAIL / C-ROW-EMBED / C-DEPTH-CUT</code>（深さ1打ち切り）</td></tr>
                 <tr><td class="route">D 割当</td><td><code>D-P1 / D-P2 / D-P25 / D-P3 / D-CASEB / D-CASEC</code>（どのパスで決まったか）<code>/ D-GATE-OK / D-GATE-REJ(他人名) / D-GATE-ALL / D-GATE-NONAME</code>（単一人材ゲート）<code>/ D-ASSIGNED(block) / D-UNASSIGNED / D-NEWBLOCK</code>（名簿残余→新規候補者化）</td></tr>
                 <tr><td class="route">E 保存</td><td><code>E-STO-OK(url) / E-STO-FAIL(err) / E-URL-STORAGE / E-URL-BODYLINK</code>（保険が発動した）<code>/ E-URL-NONE / E-SY-FROM(entryId)</code>（skillYearsの出どころ）</td></tr>
               </tbody>

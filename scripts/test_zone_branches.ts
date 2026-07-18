@@ -508,6 +508,14 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
     const l = L(); const r = await expandRosterEntries([e({ grid, content: '' })], l)
     check('ER-03', 'expandRosterEntries', '行数上限（15行）で打ち切り + C-ROSTER-CAP', '20人の名簿',
       r.length === 15 && codes(l).includes('C-ROSTER-CAP')) }
+  { const grid = [header, ...Array.from({ length: 20 }, (_, i) => [`社員${i}山田`, '30', '渋谷', ''])]
+    const l = L(); const r = await expandRosterEntries([e({ grid, content: '' })], l, undefined, ['社員17山田'])
+    check('ER-08', 'expandRosterEntries', '本文人材の行を優先して上限適用（16行目以降でも展開される）', '20人名簿・本文に18人目の名前',
+      r.length === 15 && r[0].rosterRowName === '社員17山田' && codes(l).includes('C-ROSTER-PRI') && codes(l).includes('C-ROSTER-CAP')) }
+  { const grid = [header, ...Array.from({ length: 20 }, (_, i) => [`社員${i}山田`, '30', '渋谷', ''])]
+    const l = L(); const r = await expandRosterEntries([e({ grid, content: '' })], l, undefined, ['名簿に居ない人'])
+    check('ER-09', 'expandRosterEntries', '優先名が名簿に不在 → 従来順で先頭15人（C-ROSTER-PRIなし）', '優先名マッチ0件',
+      r.length === 15 && r[0].rosterRowName === '社員0山田' && !codes(l).includes('C-ROSTER-PRI')) }
   { const grid = [header, ['山田 太郎', '30', '渋谷', 'リンク'], ['佐藤 花子', '40', '横浜', '']]
     const links = [{ cell: 'D2', url: 'https://docs.google.com/spreadsheets/d/' + 'R'.repeat(30) + '/edit' }]
     route([
