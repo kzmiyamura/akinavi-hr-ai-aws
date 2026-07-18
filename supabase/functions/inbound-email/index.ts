@@ -2644,16 +2644,33 @@ function extractWordSkillYears(json: WordHtmlJson): Record<string, number> {
 }
 
 /**
+ * PDF抽出テキストの康熙部首・CJK部首補助の正規化。
+ * PDF生成ソフト（Chrome印刷・一部のExcel/Word→PDF変換）はフォントの都合で
+ * 「氏→⽒(U+2F92)」「西→⻄(U+2EC4)」のような部首コードポイントを出力することがあり、
+ * そのままだと【氏名】・駅名・スキル名のregexが一切マッチしない（実PDFテストで発見）。
+ * 康熙部首(U+2F00-2FD5)はNFKCで通常漢字に戻る。CJK部首補助(U+2E80-2EF3)はNFKC非対応のため、
+ * 単独の漢字と見た目同形のものだけ明示マップで戻す（左偏用の⺅⺡等は単独漢字の代替に使われないので放置）。
+ */
+function normalizePdfRadicals(text: string): string {
+  const RADICAL_FIX: Record<string, string> = {
+    '⺠': '民', '⻁': '虎', '⻄': '西', '⻆': '角', '⻉': '貝', '⻑': '長', '⻘': '青', '⻗': '雨',
+    '⻝': '食', '⻣': '骨', '⻤': '鬼', '⻥': '魚', '⻨': '麦', '⻩': '黄', '⻫': '斉', '⻭': '歯',
+    '⻯': '竜', '⻲': '亀',
+  }
+  return text.replace(/[⺀-⿟]/g, (ch) => RADICAL_FIX[ch] ?? ch.normalize('NFKC'))
+}
+
+/**
  * PDF（base64）からテキストを抽出する。
  * スキャンPDF（画像のみ）の場合は空文字を返す。
  */
 async function extractPdfText(base64: string): Promise<string> {
   try {
-    const { extractText } = await import('npm:unpdf') as { extractText: (pdf: Uint8Array, opts?: { mergePages?: boolean }) => Promise<{ text: string; totalPages: number }> }
+    const { extractText } = await import('npm:unpdf@1.6.2') as { extractText: (pdf: Uint8Array, opts?: { mergePages?: boolean }) => Promise<{ text: string; totalPages: number }> }
     const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
     const { text, totalPages } = await extractText(bytes, { mergePages: true })
     console.log(`[PDF] テキスト抽出完了: ${totalPages}ページ / ${text.length}文字`)
-    return text ?? ''
+    return normalizePdfRadicals(text ?? '')
   } catch (e) {
     console.warn('[PDF] テキスト抽出失敗（スキャンPDF等）:', e instanceof Error ? e.message : String(e))
     return ''

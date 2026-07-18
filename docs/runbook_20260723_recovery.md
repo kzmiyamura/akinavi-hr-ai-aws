@@ -80,25 +80,29 @@ node scripts/monitor_quality.mjs --days 1
 - 「添付ありskillYears空」が出たファイルは `testData/excel/` に追加して
   CLAUDE.mdの精度改善ループへ（これは恒常運用）
 
-### Step 6: PDF流量の集計 → PDFテキスト抽出の実装判断（当日でなくてよい・週内に1回）
+### Step 6: PDF経歴書の本番動作確認（当日でなくてよい・週内に1回）
 
-inbound-email は現在 PDF を解析せず Storage 保存のみ（設計書v5の既知の穴①）。
-スキャンPDFは実データに存在しないことを運用者確認済みのため、テキスト抽出のみで塞げる。
-まず実害規模を測る:
+**7/18更新: PDFテキスト抽出は実装済みだったことが判明**（unpdf・メール添付は `index.ts:7152`、
+Drive/リンク経由は extractEntry の kind=pdf 分岐）。v5設計書の「PDF解析なし」は古い記述だった（修正済み）。
+さらに7/18に以下を修正してデプロイ済み:
+
+- **康熙部首・CJK部首補助の正規化バグ修正**: PDF生成ソフトが「氏→⽒」「西→⻄」等の
+  部首コードポイントを出力し、【氏名】・駅名regexが全滅する実害を実PDFテストで発見。
+  `normalizePdfRadicals` で通常漢字に正規化（NFKC + 明示マップ18字）
+- unpdf のバージョンを @1.6.2 に固定（従来は未固定でコールドスタート時の破損リスク）
+
+復旧後にやること:
 
 ```bash
-# candidates.resume_url が .pdf の割合を直近30日で集計（大量取得はローカル環境で）
-# → 月数件なら優先度下げて放置。有意な割合なら以下を実装:
+# PDF添付メールが処理されたら trace で確認（B-EXTRACT-OK pdf t=NNN が出ること）
+node scripts/trace_email.mjs --name "<PDF経歴書の候補者名>"
 ```
 
-- inbound-email に pdf.js 系（unpdf 等）のテキスト抽出関数を追加し、
-  kind=pdf を「解析なし」→「テキスト抽出→既存regexパイプライン」に変更（**AI不使用方針は維持**）
-- テキスト型名簿検出が PDF にも効くようになる
-- 実PDFサンプルを `testData/` に追加して回帰テスト整備
-- 注意: 表構造（スキル×年数ペア）はテキスト化で崩れるため Excel より精度が落ちる。
-  残りは AIフォールバック設計（ai-enrich-design-v1.2.html）の領域
-- ※本来は GitHub Issue 化する項目だが、Issue 作成スクリプトが Supabase Edge Function 経由のため
-  停止中は作成不可 → 復旧後にこの Step を Issue 化してもよい
+1. **流量集計**: candidates.resume_url が .pdf の割合を直近30日で集計（大量取得はローカル環境で）
+2. **実PDFで氏名・駅名・スキルが取れているか確認**。取れていないPDFがあれば実ファイルを
+   `testData/` に追加して改善ループへ（部首正規化の漏れ字種が見つかったらマップに追加）
+3. 表構造（スキル×年数ペア）はテキスト化で崩れるため Excel より精度が落ちる。
+   ここは AIフォールバック設計（ai-enrich-design-v1.2.html）の領域
 
 ## 恒常運用ルール（再発防止）
 

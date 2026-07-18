@@ -495,7 +495,8 @@
 │   │      → <i>extractExcelAll(base64, {preferSheets})</i>   <i>(既存5517・引数追加)</i>
 │   │      → <b>extractSheetHyperlinks</b>(bytes, sheetName)  rels解析
 │   ├─ kind=word:  <i>extractWordText(base64)</i>             <i>(既存2663・links追加)</i>
-│   └─ kind=pdf/text: 解析なし（既存動作）
+│   ├─ kind=pdf:   <i>extractPdfText(base64)</i>              <i>(unpdf・テキスト抽出+部首正規化)</i>
+│   └─ kind=text: 解析なし（既存動作）
 │
 ├─ ゾーンC  expanded = await <b>expandRosterEntries</b>(extracted, ledger, depth=0)
 │   ├─ <b>detectRoster</b>(entry)                氏名フィールド組2セット以上判定
@@ -787,7 +788,7 @@
       <details class="box proposed" open>
         <summary><span class="box-title">抽出は2関数のみ: extractExcelAll / extractWordText</span><span class="fn">extractEntry</span><span class="badge proposed">設計</span></summary>
         <div class="detail">
-          <p>Excel系（xlsx/xls/ods）→ <code>extractExcelAll</code>（5517行目）: <code>text</code>・<code>skillYears</code>・<code>jsonRows</code>・<code>skillSummary</code>。Word系（docx/doc）→ <code>extractWordText</code>（2663行目）: <code>text</code>・<code>totalProjectMonths</code>・<code>skillYears</code>・<code>grid</code>。PDF→従来通り解析せずStorage保存対象のみ。テキスト/CSV→そのまま。</p>
+          <p>Excel系（xlsx/xls/ods）→ <code>extractExcelAll</code>（5517行目）: <code>text</code>・<code>skillYears</code>・<code>jsonRows</code>・<code>skillSummary</code>。Word系（docx/doc）→ <code>extractWordText</code>（2663行目）: <code>text</code>・<code>totalProjectMonths</code>・<code>skillYears</code>・<code>grid</code>。PDF→<code>extractPdfText</code>（unpdf）でテキスト抽出し<code>content</code>に流す（テキスト型名簿検出・氏名照合・文章パターン年数抽出の対象になる。スキャンPDFは空文字→Storage保存のみ）。テキスト/CSV→そのまま。<b>2026-07-18追記:</b> PDF生成ソフトが混入させる康熙部首・CJK部首補助（⽒→氏・⻄→西等。regexが全滅する実害を実PDFテストで発見）を<code>normalizePdfRadicals</code>で通常漢字に正規化する。unpdfは@1.6.2に固定。</p>
           <p>これに伴い削除できるもの: Sheets専用の自前CSVパーサ（5678-5690行目）・<code>extractSkillYearsFromSheetData</code>のSheets経路・CSV/XLSX二段再試行の重複コード（5697-5740行目）。</p>
         </div>
       </details>

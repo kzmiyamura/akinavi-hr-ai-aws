@@ -348,7 +348,7 @@
       <details class="box" open>
         <summary><span class="box-title">読み取り機は2台だけ。Excel用とWord用</span></summary>
         <div class="detail">
-          <p>どんな届き方でも、Excel系は共通のExcel読み取り、Word系は共通のWord読み取りを通る。ここで氏名・スキル・経験年数などのテキストを取り出す。PDFは中身を読まず、そのまま保管対象になる。</p>
+          <p>どんな届き方でも、Excel系は共通のExcel読み取り、Word系は共通のWord読み取りを通る。ここで氏名・スキル・経験年数などのテキストを取り出す。<b>PDFも文字データを取り出して同じ流れに乗せる</b>（氏名・駅名・スキル名の拾い出しと名簿判定に使える）。ただしPDFは「印刷物」なので表の構造（どのスキルとどの年数がペアか）は崩れやすく、Excelより読み取り精度は落ちる。スキャンPDF（画像だけのPDF）は文字が取れないため保管のみになる。</p>
           <p><b>Excelは「どのシートを読むか」が大事:</b> 経歴書Excelには「記入例」「比較用」など読んではいけないシートが混ざっていることがある。それらを除外した上で、スキル・経歴などのキーワードでシートを選ぶ。さらにSheetsリンクの場合は、<b>送信者がリンクで指していたタブがどれかを特定できる</b>ので、添付ファイルよりも正確にシートを選べる。</p>
           <p><b>セルに貼られたリンクも取り出す:</b> 名簿の「スキルシート」列のセルに、実は個人の経歴書へのリンクが貼られていることがある。見た目では分からないこのリンクを、Excelファイルの内部データから取り出しておく（次の部屋で使う）。</p>
         </div>
@@ -437,6 +437,37 @@
         <summary><span class="box-title">名簿にしか載っていない人も取りこぼさない</span><span class="badge good">新規登録</span></summary>
         <div class="detail">
           <p>メール本文には書かれていないが名簿には載っている人材は、切り分けた行をもとに<b>新しい候補者として登録する</b>。本文由来の候補者と同じ検証・重複チェックを通る。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box" open>
+        <summary><span class="box-title">対応ケース一覧（本文×ファイルの組み合わせ）</span></summary>
+        <div class="detail">
+          <div class="table-wrap">
+            <table class="cmp-table">
+              <thead><tr><th>本文</th><th>ファイル側</th><th>状態</th></tr></thead>
+              <tbody>
+                <tr><td class="route">1人</td><td>個人ファイル1件/複数件</td><td>✓ 氏名照合ゲート</td></tr>
+                <tr><td class="route">1人</td><td>名簿が混在</td><td>✓ 行展開→他人分は新規登録or除外</td></tr>
+                <tr><td class="route">複数人</td><td>人数分の個別ファイル</td><td>✓ 4段階照合</td></tr>
+                <tr><td class="route">複数人</td><td>名簿1つ</td><td>✓ 行展開→名前で対応づけ</td></tr>
+                <tr><td class="route">複数人</td><td>個別+名簿の混在</td><td>✓ 行単位で自然に処理</td></tr>
+                <tr><td class="route">—</td><td>名簿の行にリンク（個人経歴書）</td><td>✓ 取得+本人氏名検証つき</td></tr>
+                <tr><td class="route">—</td><td>縦型・サマリー列型・転置型名簿</td><td>✓ 検出4パターン</td></tr>
+                <tr><td class="route">—</td><td>PDF経歴書（テキスト層あり）</td><td>✓ 文字抽出→同じ流れ（表構造は崩れる）</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p style="margin-top:8px;"><b>意図的にやらないこと（安全側の割り切り）:</b></p>
+          <ul>
+            <li>1つの名簿からの展開は最大15人まで（暴走防止）</li>
+            <li>名簿の先の名簿は開かない（無限ループ防止）</li>
+            <li>Box・OneDrive等のログインが必要なリンクは開かず、URLの記録だけして別処理に回す</li>
+            <li>スキャンPDF（画像のみ）は文字が取れないため保管のみ</li>
+          </ul>
+          <p>これらに当てはまる未知のケースは「間違った紐づけ」ではなく「紐づけなし+記録に残る」に倒れる設計。</p>
         </div>
       </details>
     </div>
