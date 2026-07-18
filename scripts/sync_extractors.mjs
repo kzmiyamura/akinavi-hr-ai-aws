@@ -33,7 +33,80 @@ const TARGET_FUNCTIONS = [
 // 既知のTypeScript型名（これらに続く <...> だけを除去する）
 const TS_TYPE_NAMES = /^(?:Record|Array|Set|Map|Promise|ReadonlyArray|Partial|Required|Readonly|NonNullable|Extract|Exclude|ReturnType|RegExpExecArray)$/
 
+/**
+ * 正規表現リテラルをプレースホルダに退避する。
+ * stripTs の後置!除去などのテキスト変換が正規表現リテラル内の文字
+ * （例: /#REF!|NUM!/ の「!」）を破壊する実害があったため、変換前に退避して最後に戻す。
+ * 判定: 直前の有意文字が演算子・区切り（= ( , : [ ! & | ? ; { } return）なら正規表現、
+ * オペランド末尾（識別子・数値・) ]）なら除算として扱う。文字列・コメントはスキップ。
+ */
+function maskRegexLiterals(code) {
+  const literals = []
+  let out = ''
+  let i = 0
+  let prevSig = ''  // 直前の有意文字（空白以外・コメント除く）
+  const REGEX_PRECEDING = new Set(['', '=', '(', ',', ':', '[', '!', '&', '|', '?', ';', '{', '}', '\n'])
+  while (i < code.length) {
+    const ch = code[i]
+    if (ch === '/' && code[i + 1] === '/') {
+      const j = code.indexOf('\n', i)
+      const seg = code.slice(i, j === -1 ? code.length : j)
+      out += seg; i += seg.length; continue
+    }
+    if (ch === '/' && code[i + 1] === '*') {
+      const j = code.indexOf('*/', i)
+      const seg = code.slice(i, j === -1 ? code.length : j + 2)
+      out += seg; i += seg.length; continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      let j = i + 1
+      while (j < code.length) {
+        if (code[j] === '\\') j += 2
+        else if (code[j] === ch) { j++; break }
+        else j++
+      }
+      out += code.slice(i, j); prevSig = ch; i = j; continue
+    }
+    if (ch === '/') {
+      const isRegex = REGEX_PRECEDING.has(prevSig) || /\breturn$/.test(out.trimEnd())
+      if (isRegex) {
+        let j = i + 1
+        let inClass = false
+        while (j < code.length) {
+          const c = code[j]
+          if (c === '\\') { j += 2; continue }
+          if (c === '[') inClass = true
+          else if (c === ']') inClass = false
+          else if (c === '/' && !inClass) { j++; break }
+          else if (c === '\n') break  // 改行を跨いだら正規表現ではなかった（安全側で除算扱い）
+          j++
+        }
+        if (code[j - 1] === '/') {
+          while (j < code.length && /[gimsuy]/.test(code[j])) j++
+          literals.push(code.slice(i, j))
+          out += `__REGEX_LIT_${literals.length - 1}__`
+          prevSig = '/'
+          i = j
+          continue
+        }
+      }
+      out += ch; prevSig = ch; i++; continue
+    }
+    out += ch
+    if (!/\s/.test(ch)) prevSig = ch
+    i++
+  }
+  return { code: out, literals }
+}
+
+function unmaskRegexLiterals(code, literals) {
+  return code.replace(/__REGEX_LIT_(\d+)__/g, (_, n) => literals[Number(n)])
+}
+
 function stripTs(code) {
+  // 0. 正規表現リテラルを退避（変換による破壊防止。最後に復元する）
+  const masked = maskRegexLiterals(code)
+  code = masked.code
   // 1. インターフェース・type定義を削除
   code = code.replace(/^\s*(?:export\s+)?(?:interface|type)\s+\w+[^{]*\{[^}]*\}\s*\n/gm, '')
   code = code.replace(/^\s*type\s+\w+\s*=\s*.+;\s*\n/gm, '')
@@ -89,7 +162,8 @@ function stripTs(code) {
   // 8. 後置 ! (non-null assertion) — !=, !== は保護
   code = code.replace(/([a-zA-Z0-9_$'")\]])\s*!(?!=)/g, '$1')
 
-  return code
+  // 9. 退避した正規表現リテラルを復元
+  return unmaskRegexLiterals(code, masked.literals)
 }
 
 // ── 関数本体抽出 ──────────────────────────────────────────────────

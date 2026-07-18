@@ -41,6 +41,16 @@ function excelSerialToDateStr(s){
 
 // ── parseYMParts ──
 function parseYMParts(s) {
+  // 和暦（昭和/平成/令和・S/H/R）+ 1〜2桁年は西暦に換算する。
+  // 従来の「プレフィックス除去だけ」だと H30/4 → "30/4" → 2030年4月 と未来に誤変換されていた
+  // （正: 平成30年 = 2018年）。3〜4桁年（R2020/04 等の誤記）は従来どおり除去して西暦扱い
+  const eraM = s.trim().match(/^(昭和|平成|令和|[SsHhRr])\s*(\d{1,2})[\/\-年.](\d{1,2})/)
+  if (eraM) {
+    const offset = /^(?:昭和|[Ss])/.test(eraM[1]) ? 1925 : /^(?:平成|[Hh])/.test(eraM[1]) ? 1988 : 2018
+    const year = offset + parseInt(eraM[2])
+    const month = parseInt(eraM[3])
+    if (month >= 1 && month <= 12 && year >= 1970 && year <= 2100) return { year, month }
+  }
   // 元号プレフィックス（g=Gregorian表記・昭和/平成/令和アルファベット）を除去
   const cleaned = s.trim().replace(/^[gGhHrRsS]/, '')
   const normalized = excelSerialToDateStr(cleaned)
@@ -95,7 +105,7 @@ function filterSkillYears(sy){
   // キー自体が「8ヶ月」等の期間表記そのものになっている自己参照的な誤マッチを除外
   const SELF_DURATION_RE = /^\d+\s*[年ヶかカ]?[月]?$/
   // Excelの壊れた数式参照（削除されたセル・シートを指す数式が残っている場合）はスキル名として無効
-  const FORMULA_ERROR_RE = /^#(?:REF|VALUE|NAME\?|DIV\/0|N\/A|NULL|NUM)$/
+  const FORMULA_ERROR_RE = /^#(?:REF!|VALUE!|NAME\?|DIV\/0!|N\/A|NULL!|NUM!)$/
   // 「【言語】」「【DB】」「【FW】」等、隅付き括弧で囲まれたセクション見出しはスキル名として無効
   // （経歴書の「担当業務」自由記述欄によくある環境見出しパターン）
   const BRACKET_HEADER_RE = /^【[^】]{1,10}】$/

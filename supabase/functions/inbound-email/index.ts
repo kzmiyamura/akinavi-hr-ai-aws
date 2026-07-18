@@ -2966,6 +2966,16 @@ function calcMonthsFromMultilineCell(cellValue: string): number | null {
 /** 年月文字列を {year, month} に解析（元号プレフィックス・Excelシリアル・US日付形式に対応）
  *  戻り値型は sync_extractors のTS→JS変換の制約により注釈せず推論に任せる */
 function parseYMParts(s: string) {
+  // 和暦（昭和/平成/令和・S/H/R）+ 1〜2桁年は西暦に換算する。
+  // 従来の「プレフィックス除去だけ」だと H30/4 → "30/4" → 2030年4月 と未来に誤変換されていた
+  // （正: 平成30年 = 2018年）。3〜4桁年（R2020/04 等の誤記）は従来どおり除去して西暦扱い
+  const eraM = s.trim().match(/^(昭和|平成|令和|[SsHhRr])\s*(\d{1,2})[\/\-年.](\d{1,2})/)
+  if (eraM) {
+    const offset = /^(?:昭和|[Ss])/.test(eraM[1]) ? 1925 : /^(?:平成|[Hh])/.test(eraM[1]) ? 1988 : 2018
+    const year = offset + parseInt(eraM[2])
+    const month = parseInt(eraM[3])
+    if (month >= 1 && month <= 12 && year >= 1970 && year <= 2100) return { year, month }
+  }
   // 元号プレフィックス（g=Gregorian表記・昭和/平成/令和アルファベット）を除去
   const cleaned = s.trim().replace(/^[gGhHrRsS]/, '')
   const normalized = excelSerialToDateStr(cleaned)
