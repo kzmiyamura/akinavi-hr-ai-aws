@@ -1,0 +1,479 @@
+<title>添付ファイル・Googleリンク処理フロー — 平易版</title>
+<style>
+  :root {
+    --bg: #eef1ee;
+    --surface: #ffffff;
+    --surface-2: #e3e8e3;
+    --ink: #1a1e1c;
+    --muted: #5b625d;
+    --line: #b7c0b8;
+    --accent: #2d6a63;
+    --accent-soft: #d9e8e5;
+    --good: #3d7a44;
+    --good-soft: #dcece0;
+    --warn: #a6631f;
+    --warn-soft: #f3e3cf;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Segoe UI", sans-serif;
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #141715;
+    --surface: #1c201d;
+    --surface-2: #232824;
+    --ink: #e8ebe7;
+    --muted: #9aa39c;
+    --line: #454e48;
+    --accent: #6fb8ac;
+    --accent-soft: #1e3330;
+    --good: #7ec488;
+    --good-soft: #1f3323;
+    --warn: #e0a34f;
+    --warn-soft: #3a2c17;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141715;
+      --surface: #1c201d;
+      --surface-2: #23282d;
+      --ink: #e8ebe7;
+      --muted: #9aa39c;
+      --line: #454e48;
+      --accent: #6fb8ac;
+      --accent-soft: #1e3330;
+      --good: #7ec488;
+      --good-soft: #1f3323;
+      --warn: #e0a34f;
+      --warn-soft: #3a2c17;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+  }
+
+  header.top {
+    margin-bottom: 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-size: 25px;
+    font-weight: 700;
+    margin: 0 0 8px;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+
+  .sub {
+    color: var(--muted);
+    font-size: 14px;
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .note-link {
+    margin-top: 14px;
+    padding: 10px 14px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    font-size: 12.5px;
+    color: var(--muted);
+    max-width: 60ch;
+  }
+
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+    font-size: 12px;
+    font-family: var(--mono);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .chip { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .chip.good { background: var(--good); }
+  .chip.warn { background: var(--warn); }
+  .chip.neutral { background: var(--accent); }
+
+  .col { display: flex; flex-direction: column; align-items: stretch; }
+
+  .box {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 13px 16px;
+    width: 100%;
+  }
+  .box summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .box summary::-webkit-details-marker { display: none; }
+  .box summary::before {
+    content: "▸";
+    font-size: 10px;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+    flex: none;
+    margin-top: 3px;
+  }
+  .box[open] summary::before { transform: rotate(90deg); }
+  .box.risk { border-left: 3px solid var(--warn); }
+  .box.fixed { border-left: 3px solid var(--good); }
+
+  .box-title { font-weight: 600; font-size: 14.5px; }
+  .badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .badge.good { background: var(--good-soft); color: var(--good); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .detail {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px dashed var(--line);
+    font-size: 13px;
+  }
+  .detail p { margin: 0 0 7px; }
+  .detail p:last-child { margin-bottom: 0; }
+  .detail code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .detail ol, .detail ul { margin: 0 0 7px; padding-left: 20px; }
+  .detail li { margin-bottom: 4px; }
+  .detail li:last-child { margin-bottom: 0; }
+
+  .arrow {
+    display: flex;
+    justify-content: center;
+    height: 26px;
+    position: relative;
+  }
+  .arrow::before {
+    content: "";
+    width: 2px;
+    height: 100%;
+    background: var(--line);
+  }
+  .arrow::after {
+    content: "";
+    position: absolute;
+    bottom: 2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--line);
+  }
+
+  .zone {
+    margin: 26px 0;
+    padding: 20px 20px 16px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    border: 1px solid var(--line);
+  }
+  .zone-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 16px;
+  }
+
+  .table-wrap { overflow-x: auto; }
+  .cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 2px; }
+  .cmp-table th, .cmp-table td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .cmp-table th { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .cmp-table td.route { font-family: var(--mono); font-size: 11.5px; white-space: nowrap; }
+
+  pre.tree {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  pre.tree b { color: var(--accent); font-weight: 700; }
+  pre.tree i { color: var(--muted); font-style: normal; }
+
+  footer.foot {
+    margin-top: 36px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    font-size: 11.5px;
+    font-family: var(--mono);
+    color: var(--muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .box summary::before { transition: none; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="top">
+    <p class="eyebrow">添付ファイル・Googleリンク処理 — 平易版</p>
+    <h1>メールから経歴書を取り出して、<br>正しい人に紐づける仕組み</h1>
+    <p class="sub">営業メールには経歴書が「添付ファイル」だったり「Googleのリンク」だったり、色々な形で届く。それを全部受け取って、読んで、正しい候補者に紐づけるまでの流れを、専門用語をできるだけ減らして説明する。</p>
+    <div class="note-link">これは平易版。関数名・行番号・検証の詳細を含む正式版は <code>inbound-email-flow-v5.html</code>。</div>
+    <div class="legend">
+      <span class="legend-item"><span class="chip neutral"></span>処理ステップ</span>
+      <span class="legend-item"><span class="chip good"></span>安全のための仕組み</span>
+      <span class="legend-item"><span class="chip warn"></span>過去に起きた事故</span>
+    </div>
+  </header>
+
+  <div class="col">
+
+    <details class="box" open>
+      <summary><span class="box-title">3行でいうと</span></summary>
+      <div class="detail">
+        <ol>
+          <li>経歴書は「添付」「Googleスプレッドシートのリンク」など4通りの形で届くが、<b>最初に全部ダウンロードして「ただのファイル」に揃えてしまう</b>。以降は届き方の違いを一切気にしない</li>
+          <li>1ファイルに複数人が載っている「名簿」は、<b>1人分ずつに切り分けてから</b>「このファイルは誰のものか」を氏名で照合して紐づける</li>
+          <li>誰のものか確信が持てないファイルは<b>紐づけない</b>（間違った経歴書を見せるより、無い方がまし）。全工程は記録が残り、問題が起きたらどこで止まったか一発で分かる</li>
+        </ol>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <details class="box" open>
+      <summary><span class="box-title">全体像: 郵便室にたとえると</span></summary>
+      <div class="detail">
+        <p>メール1通が届いてから候補者データになるまで、5つの部屋を順番に通る。</p>
+        <pre class="tree"><b>部屋A「受け取り」</b>  添付もリンクも、全部ファイル実体にして受け取る
+        │
+<b>部屋B「開封」</b>      Excel・Wordを開いて中身を読み取る
+        │
+<b>部屋C「仕分け」</b>    名簿（複数人のファイル）は1人分ずつに切り分ける
+        │
+<b>部屋D「宛名照合」</b>  どのファイルが誰のものかを氏名で照合する
+        │
+<b>部屋E「保管」</b>      本人のファイルを自社の保管庫にコピーし、
+                    経歴書ボタンのリンク先にする
+
+<i>+ 監視カメラ（全部屋共通）: ファイル1つ1つに通し番号を振り、
+  どの部屋で何が起きたかを全部記録する</i></pre>
+        <p>ポイントは部屋の<b>順番</b>。昔は「仕分け（名簿の切り分け）」の部屋がなく、名簿が丸ごと1人に配達される事故が起きた。今は宛名照合の<b>前に</b>必ず仕分けを通る。</p>
+      </div>
+    </details>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">部屋A: 受け取り — 4通りの届き方を1つに揃える</p>
+
+      <details class="box" open>
+        <summary><span class="box-title">届き方が違っても、最初に全部「ファイル実体」にする</span></summary>
+        <div class="detail">
+          <div class="table-wrap">
+            <table class="cmp-table">
+              <thead><tr><th>届き方</th><th>やること</th></tr></thead>
+              <tbody>
+                <tr><td class="route">メール添付</td><td>そのまま受け取る</td></tr>
+                <tr><td class="route">Sheetsリンク</td><td>Googleから<b>Excelファイルとしてダウンロード</b>する</td></tr>
+                <tr><td class="route">Docsリンク</td><td>Googleから<b>Wordファイルとしてダウンロード</b>する</td></tr>
+                <tr><td class="route">Driveリンク</td><td>ファイルを直接ダウンロードする（Excel/Word/PDFを自動判別）</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><b>なぜダウンロードするのか:</b> リンクをリンクのまま扱うと、後の工程が「中身を見ていないURL」を信じることになり、リンク先が別人の名簿だった…という事故が防げない。最初に実体化して「添付ファイルと同じもの」にしてしまえば、以降の全工程が届き方を区別せずに動く。<b>「リンクだから」という特別扱いの分岐が存在しないこと自体が、バグの温床を消している</b>。</p>
+          <p><b>ファイル名も取る:</b> ダウンロード時にスプレッドシートの実際のタイトル（「山田太郎_経歴書」等）をファイル名として取得する。昔はリンク経由のファイルに人名入りのファイル名がなく、後の宛名照合が構造的に効かなかった。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box fixed">
+        <summary><span class="box-title">ダウンロードに失敗したら？</span><span class="badge good">保険</span></summary>
+        <div class="detail">
+          <p>Sheetsは軽量版（CSV）、Docsはテキスト版という「昔から動いている取り方」を保険として残してある。本流のダウンロードが失敗しても、以前取れていたものが取れなくなる後退は起きない。また「ポートフォリオ」「作品集」と書き添えられたリンクは経歴書ではないのでスキップする。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">部屋B: 開封 — ファイルを開いて読み取る</p>
+
+      <details class="box" open>
+        <summary><span class="box-title">読み取り機は2台だけ。Excel用とWord用</span></summary>
+        <div class="detail">
+          <p>どんな届き方でも、Excel系は共通のExcel読み取り、Word系は共通のWord読み取りを通る。ここで氏名・スキル・経験年数などのテキストを取り出す。PDFは中身を読まず、そのまま保管対象になる。</p>
+          <p><b>Excelは「どのシートを読むか」が大事:</b> 経歴書Excelには「記入例」「比較用」など読んではいけないシートが混ざっていることがある。それらを除外した上で、スキル・経歴などのキーワードでシートを選ぶ。さらにSheetsリンクの場合は、<b>送信者がリンクで指していたタブがどれかを特定できる</b>ので、添付ファイルよりも正確にシートを選べる。</p>
+          <p><b>セルに貼られたリンクも取り出す:</b> 名簿の「スキルシート」列のセルに、実は個人の経歴書へのリンクが貼られていることがある。見た目では分からないこのリンクを、Excelファイルの内部データから取り出しておく（次の部屋で使う）。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">部屋C: 仕分け — 名簿は1人分ずつに切り分ける</p>
+
+      <details class="box risk">
+        <summary><span class="box-title">なぜこの部屋が必要か: 実際に起きた事故</span><span class="badge warn">実害</span></summary>
+        <div class="detail">
+          <p>後の工程は「1ファイル=1人分」という前提で動く。そこに14人分の名簿が丸ごと1ファイルで入ってくると、名簿全体が誰か1人に誤って紐づき、しかも「使用済み」扱いになって残り13人には何も紐づかない、という事故が実際に起きた。だから<b>宛名照合の前に、必ずここで1人分ずつにばらす</b>。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box" open>
+        <summary><span class="box-title">名簿と判定したら、行ごとに分割する</span></summary>
+        <div class="detail">
+          <p>「氏名の列があって人が行に並んでいる」「【氏名】ラベル入りのセルが縦に並んでいる」「人が横方向に並んでいる（転置型）」など4パターンの名簿を検出し、1行=1人のデータに展開する（1つの名簿から最大15人まで）。</p>
+          <p>行のセルに経歴書へのリンクが貼られていたら、<b>その人の経歴書を取りに行く</b>（部屋Aと同じダウンロード処理を再利用）。ただし:</p>
+          <ul>
+            <li><b>取ってきたファイルに本人の氏名（かイニシャル）が見えなければ使わない</b>。行がずれて他人の経歴書を紐づける事故の最終防衛線</li>
+            <li><b>名簿の先の名簿は開かない</b>（深追い禁止）。無限ループ防止</li>
+            <li>リンク取得は合計60秒まで。超えたら残りはリンクなしで登録を続ける（登録漏れの方が痛いため）</li>
+          </ul>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box fixed">
+        <summary><span class="box-title">名簿と誤認しないためのガード</span><span class="badge good">誤検出防止</span></summary>
+        <div class="detail">
+          <p>「1人の経歴書なのに名簿扱いされて、ゴミ候補者が大量登録される」逆方向の事故も実データで起きた。対策として、氏名らしくない値（「保有技術」等のラベル語・日付・技術用語）を弾く、同じ人の名前が2回出てきただけ（履歴書+職務経歴書の2シート等）は名簿としない、などの5種類のチェックを通してから名簿と認定する。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">部屋D: 宛名照合 — このファイルは誰のものか</p>
+
+      <details class="box" open>
+        <summary><span class="box-title">照合は「確実な手がかり」から順に4段階</span></summary>
+        <div class="detail">
+          <ol>
+            <li><b>ファイル名に候補者の名前</b>がある → その人のもの</li>
+            <li><b>ファイル名に最寄駅名</b>がある（他人の名前がないこと）→ その人のもの</li>
+            <li><b>中身にイニシャル</b>が見える → その人のもの（複数人に該当したら曖昧なので見送り）</li>
+            <li>残ったファイルと残った人が<b>ちょうど1対1</b>なら機械的に対応づける</li>
+          </ol>
+          <p>どの段階でも決まらなかったら、<b>紐づけない</b>。「誤った経歴書を見せるより、無しの方が安全」がこの部屋の合言葉。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box risk">
+        <summary><span class="box-title">1人だけのメールでも照合するようになった</span><span class="badge warn">昔の事故</span></summary>
+        <div class="detail">
+          <p>昔は「メールに1人しか載っていなければ、添付もリンクも全部その人のもの」と無条件に決めていた。ところがそのメールに他人の名簿リンクが混ざっていて、別人の経歴書とスキル年数が本人に上書きされる事故が起きた。今は1人だけのメールでも「本人の名前がファイルに見えるか」「明らかに別人のものではないか」を確認してから紐づける。</p>
+        </div>
+      </details>
+
+      <div class="arrow"></div>
+
+      <details class="box fixed">
+        <summary><span class="box-title">名簿にしか載っていない人も取りこぼさない</span><span class="badge good">新規登録</span></summary>
+        <div class="detail">
+          <p>メール本文には書かれていないが名簿には載っている人材は、切り分けた行をもとに<b>新しい候補者として登録する</b>。本文由来の候補者と同じ検証・重複チェックを通る。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">部屋E: 保管 — 経歴書ボタンのリンク先を決める</p>
+
+      <details class="box" open>
+        <summary><span class="box-title">本人のファイルを自社の保管庫にコピーする</span></summary>
+        <div class="detail">
+          <p>部屋Dで本人のものと確認されたファイルを、自社の保管庫（Supabase Storage）にコピーし、そのURLを画面の「経歴書」ボタンのリンク先（<code>resume_url</code>）にする。届き方が添付でもGoogleリンクでも名簿のリンク先でも、扱いは同じ。</p>
+          <p><b>なぜコピーするのか:</b> ① 送信者が後からGoogle上のファイルを消したり権限を変えたりしても見られる。② 保管庫にあるのは「本人のものと照合済みのファイルだけ」なので、ボタンを押したら別人の経歴書が出てくる事故がない。</p>
+          <p><b>本文のリンクは最後の保険:</b> ファイルが1つも確保できなかったときだけ、メール本文に書かれていたリンクをそのまま使う。昔はこの優先順位が逆（本文リンク優先）で、本人のExcelが正しく読めていたのに別人の名簿リンクが経歴書ボタンになる事故が起きた。今は反転済み。</p>
+          <p><b>スキル年数も同じ考え方:</b> 経験年数などのデータは「本人に紐づいたファイル」からしか取らない。昔は他人のファイルの年数で上書きされる穴があったが、仕組みごと廃止した。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
+      <p class="zone-label">監視カメラ: 問題が起きたら場所が一発で分かる</p>
+
+      <details class="box" open>
+        <summary><span class="box-title">全ファイルに通し番号、全部屋で記録</span></summary>
+        <div class="detail">
+          <p>ファイル1つ1つに通し番号を振り、「部屋Aでダウンロード成功」「部屋Bでシート選択」「部屋Dで誰に紐づいたか」…という行程をコードで記録し、候補者データと一緒に保存する。<b>記録の最後のコードが「止まった場所」</b>なので、経歴書ボタンが付いていない候補者がいたら、保存に失敗したのか、そもそも照合で決まらなかったのかがすぐ分かる。</p>
+          <p>さらに「設計上ありえないはずの状態」（照合済みファイルがあるのに本文リンクが使われている、同じファイルが2人に紐づいている等）を自動チェックしていて、過去の事故はどれも再発したら即検知される。<b>保険ルートの発動率が上がってきたら、どこかが壊れ始めているサイン</b>としても使う。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <details class="box fixed" open>
+      <summary><span class="box-title">どこまで確認済みか（2026-07-13時点）</span><span class="badge good">検証済み</span></summary>
+      <div class="detail">
+        <ul>
+          <li>プログラムの全分岐120通り・実際の経歴書16ファイル+実名簿でのテスト21件、すべて合格。既存の動きの後退なし</li>
+          <li>実際の名簿メール1通（14人分）を49秒で処理し、14人全員に本人の経歴書URLが付いた</li>
+          <li>テストの過程で本番の隠れバグを6件発見して修正（1人の経歴書を名簿と誤認・特殊なExcelで処理が30分以上かかりメールが消える 等）</li>
+        </ul>
+      </div>
+    </details>
+
+  </div>
+
+  <footer class="foot">最終更新 2026-07-18 ・ 正式版 inbound-email-flow-v5.html（実装完了・検証済み）の内容を平易に再構成したもの ・ 実装は supabase/functions/inbound-email/index.ts</footer>
+
+</div>
