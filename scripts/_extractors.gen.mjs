@@ -39,6 +39,29 @@ function excelSerialToDateStr(s){
   return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}`
 }
 
+// ── parseYMParts ──
+function parseYMParts(s) {
+  // 元号プレフィックス（g=Gregorian表記・昭和/平成/令和アルファベット）を除去
+  const cleaned = s.trim().replace(/^[gGhHrRsS]/, '')
+  const normalized = excelSerialToDateStr(cleaned)
+  // "/" "-" "年" に加えて "." も区切り文字として許容（例: "1991.10"）
+  const m = normalized.match(/(\d{2,4})[\/\-年.](\d{1,2})/)
+  if (m) {
+    let year = parseInt(m[1])
+    if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+    if (year >= 1970 && year <= 2100) return { year, month: parseInt(m[2]) }
+  }
+  // US 日付形式 M/D/YY or M/D/YYYY（Excel が日付セルを M/D/YY で出力するケース）
+  const usm = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+  if (usm) {
+    const month = parseInt(usm[1])
+    let year = parseInt(usm[3])
+    if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+    if (month >= 1 && month <= 12 && year >= 1970 && year <= 2100) return { year, month }
+  }
+  return null
+}
+
 // ── calcMonthsFromMultilineCell ──
 function calcMonthsFromMultilineCell(cellValue){
   const parts = cellValue.split(/[\r\n]+/).map(s => s.trim())
@@ -49,29 +72,8 @@ function calcMonthsFromMultilineCell(cellValue){
 
 // ── calcMonthsFromDates ──
 function calcMonthsFromDates(start, end){
-  const parseYM = (s) => {
-    // 元号プレフィックス（g=Gregorian表記・昭和/平成/令和アルファベット）を除去
-    const cleaned = s.trim().replace(/^[gGhHrRsS]/, '')
-    const normalized = excelSerialToDateStr(cleaned)
-    // "/" "-" "年" に加えて "." も区切り文字として許容（例: "1991.10"）
-    const m = normalized.match(/(\d{2,4})[\/\-年.](\d{1,2})/)
-    if (m) {
-      let year = parseInt(m[1])
-      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
-      if (year >= 1970 && year <= 2100) return { year, month: parseInt(m[2]) }
-    }
-    // US 日付形式 M/D/YY or M/D/YYYY（Excel が日付セルを M/D/YY で出力するケース）
-    const usm = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
-    if (usm) {
-      const month = parseInt(usm[1])
-      let year = parseInt(usm[3])
-      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
-      if (month >= 1 && month <= 12 && year >= 1970 && year <= 2100) return { year, month }
-    }
-    return null
-  }
-  const s = parseYM(start)
-  const e = parseYM(end)
+  const s = parseYMParts(start)
+  const e = parseYMParts(end)
   if (!s || !e) return null
   const months = (e.year - s.year) * 12 + (e.month - s.month) + 1
   return months > 0 ? months : null
@@ -528,6 +530,11 @@ function extractSkillYearsFromSheetData(data){
   }
   if (langColIdx >= 0) {
     const skillMonths= {}
+    // スキルごとの期間記録: 日付が特定できた行は区間として貯め、後で和集合で月数化する。
+    // 並行案件で同じスキルが複数行にあると単純加算では実年数（年齢）を超えるための対策。
+    // 日付が取れない行（純整数の月数列等）は時間軸に置けないため従来どおり加算
+    const skillIntervals= {}
+    const skillDatelessMonths= {}
     // プロジェクト期間の重複なし合計（経験年数推定用）
     const projectPeriods= []
     let prevProcessedNo = ''  // マージセル重複スキップ用
@@ -556,6 +563,25 @@ function extractSkillYearsFromSheetData(data){
       prevProcessedNo = altNoCell || noCell
       const langCell = String(row[langColIdx] ?? '').trim()
       const fwCell = fwColIdx >= 0 ? String(row[fwColIdx] ?? '').trim() : ''
+      // この行の期間が日付として特定できたら記録する（スキル別の区間マージ用）
+      let rowStartYM = null
+      let rowEndYM = null
+      const calcSpan = (a, b)=> {
+        const m = calcMonthsFromDates(a, b)
+        if (m) {
+          const sP = parseYMParts(a)
+          const eP = parseYMParts(b)
+          if (sP && eP) { rowStartYM = sP.year * 12 + sP.month; rowEndYM = eP.year * 12 + eP.month }
+        }
+        return m
+      }
+      // calcMonthsFromMultilineCell と同じ分解ロジックで、日付の記録だけ追加したもの
+      const spanFromMultiline = (cellValue)=> {
+        const parts = cellValue.split(/[\r\n]+/).map(s => s.trim())
+          .filter(s => s && !/^[～~〜\-－]$/.test(s) && s !== '現在' && s !== '継続中')
+        if (parts.length < 2) return null
+        return calcSpan(parts[0], parts[parts.length - 1])
+      }
       // 期間は次の行の "10年9ヶ月" テキストから取得（最大3行後まで・col[1]とcol[2]を確認）
       let months = null
       // HM型: col[0] にマルチライン "1\n(6ヶ月間)\n..." 形式で期間が埋め込まれている場合
@@ -578,12 +604,12 @@ function extractSkillYearsFromSheetData(data){
         // 期間列が日付範囲 "2017.04 ～ 2019.12" / "2020/04〜2023/03" 形式の場合
         if (!months) {
           // マルチライン（"2017.04\n～\n2019.12"）にも対応
-          months = calcMonthsFromMultilineCell(durRaw)
+          months = spanFromMultiline(durRaw)
           if (!months) {
             const rangeM = durRaw.match(/(.+?)\s*[〜～~\-－]+\s*(.+)/)
             if (rangeM) {
               const endVal = /現在|今|present|継続/i.test(rangeM[2]) ? new Date().getFullYear() + '/' + (new Date().getMonth() + 1) : rangeM[2]
-              months = calcMonthsFromDates(rangeM[1], endVal)
+              months = calcSpan(rangeM[1], endVal)
             }
           }
           // parseDuration も試す（"1年6ヶ月" 等）
@@ -621,14 +647,14 @@ function extractSkillYearsFromSheetData(data){
               endDateStr = subDurCell
             } else if (endDateStr && di > 3) {
               // 終了日は見つかったがduration textがない → date計算で確定
-              months = calcMonthsFromDates(startDateStr, endDateStr); break
+              months = calcSpan(startDateStr, endDateStr); break
             }
             // 次のプロジェクト開始日（終了日確認後さらに新しい日付）が来たら終了
             if (endDateStr && /^\d{4}[\/\-年.]\d{1,2}/.test(subDurCell) && subDurCell !== endDateStr) {
-              months = calcMonthsFromDates(startDateStr, endDateStr); break
+              months = calcSpan(startDateStr, endDateStr); break
             }
           }
-          if (!months && endDateStr) months = calcMonthsFromDates(startDateStr, endDateStr)
+          if (!months && endDateStr) months = calcSpan(startDateStr, endDateStr)
         } else {
           const maxDi = durationColIdx >= 0 ? 5 : 3  // durationColIdx あり → 最大5行後まで確認
           for (let di = 1; di <= maxDi && !months; di++) {
@@ -649,24 +675,24 @@ function extractSkillYearsFromSheetData(data){
         }
       }
       // col[1] に "2025年3月\n～\n2026年2月" 形式で開始〜終了が入っている場合
-      if (!months) months = calcMonthsFromMultilineCell(String(row[1] ?? ''))
+      if (!months) months = spanFromMultiline(String(row[1] ?? ''))
       // col[1] が日付範囲 "2017.04 ～ 2019.12" の場合（単一セル）
       if (!months) {
         const col1 = String(row[1] ?? '').trim()
         const rangeM1 = col1.match(/(.+?)\s*[〜～~\-－]+\s*(.+)/)
         if (rangeM1) {
           const endVal1 = /現在|今|present|継続/i.test(rangeM1[2]) ? new Date().getFullYear() + '/' + (new Date().getMonth() + 1) : rangeM1[2]
-          months = calcMonthsFromDates(rangeM1[1], endVal1)
+          months = calcSpan(rangeM1[1], endVal1)
         }
       }
       // 明示的な開始・終了列がある場合
       if (!months && startDateColIdx >= 0 && endDateColIdx >= 0) {
-        months = calcMonthsFromDates(String(row[startDateColIdx] ?? ''), String(row[endDateColIdx] ?? ''))
+        months = calcSpan(String(row[startDateColIdx] ?? ''), String(row[endDateColIdx] ?? ''))
       }
       // col[1]/col[2] が開始・終了日付（M/D/YY形式 等）の場合
-      if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), String(row[2] ?? ''))
+      if (!months) months = calcSpan(String(row[1] ?? ''), String(row[2] ?? ''))
       // col[1]/col[3] が別々の日付の場合（またはExcelシリアル日付）
-      if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), String(row[3] ?? ''))
+      if (!months) months = calcSpan(String(row[1] ?? ''), String(row[3] ?? ''))
       // ペア行型: 次行の col[0] or col[1] が "～" で始まる場合、次行の col[1] or col[2] が終了日 (SH型・K.U型)
       if (!months && i + 1 < data.length) {
         const nextRow = data[i + 1]
@@ -676,17 +702,17 @@ function extractSkillYearsFromSheetData(data){
         if (/^[〜～~]/.test(nextCol0)) {
           // K.U型: nextRow[0]="～1996.3" or nextRow[0]="～", nextRow[1]="38657"
           const endDate = nextCol0.replace(/^[〜～~：:]+/, '').trim()
-          if (endDate) months = calcMonthsFromDates(String(row[1] ?? ''), endDate)
-          if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), nextCol1)
-          if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), nextCol2)
+          if (endDate) months = calcSpan(String(row[1] ?? ''), endDate)
+          if (!months) months = calcSpan(String(row[1] ?? ''), nextCol1)
+          if (!months) months = calcSpan(String(row[1] ?? ''), nextCol2)
         } else if (/^[〜～~]/.test(nextCol1)) {
           // SH型: nextRow[1]="～", nextRow[2]=endSerial
-          if (!months) months = calcMonthsFromDates(String(row[1] ?? ''), nextCol2)
+          if (!months) months = calcSpan(String(row[1] ?? ''), nextCol2)
         }
         // K.U型2: nextRow[1] が "～YYYY.M" 形式
         if (!months && /^[〜～~]/.test(nextCol1)) {
           const endDate2 = nextCol1.replace(/^[〜～~：:]+/, '').trim()
-          if (endDate2) months = calcMonthsFromDates(String(row[1] ?? ''), endDate2)
+          if (endDate2) months = calcSpan(String(row[1] ?? ''), endDate2)
         }
       }
       if (!months || months <= 0) continue
@@ -708,9 +734,37 @@ function extractSkillYearsFromSheetData(data){
         }
         skillTexts.push(line)
       }
+      const hasRowDates = rowStartYM !== null && rowEndYM !== null && rowEndYM >= rowStartYM
       for (const skill of skillTexts) {
-        skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+        if (hasRowDates) {
+          if (!skillIntervals[skill]) skillIntervals[skill] = []
+          skillIntervals[skill].push([rowStartYM , rowEndYM ])
+        } else {
+          skillDatelessMonths[skill] = (skillDatelessMonths[skill] ?? 0) + months
+        }
       }
+    }
+    // スキルごとに日付つき区間を和集合で月数化（重複・並行期間は1回だけ数える）。
+    // 連続区間（前の終了月の翌月から開始）は結合されるため、重複が無い場合の合計は
+    // 従来の単純加算と完全に一致する（既存回帰への影響なし）
+    const unionMonths = (iv)=> {
+      const sorted = iv.slice().sort((a, b) => a[0] - b[0])
+      let total = 0
+      let curS = sorted[0][0]
+      let curE = sorted[0][1]
+      for (let x = 1; x < sorted.length; x++) {
+        const s2 = sorted[x][0]
+        const e2 = sorted[x][1]
+        if (s2 <= curE + 1) curE = Math.max(curE, e2)
+        else { total += curE - curS + 1; curS = s2; curE = e2 }
+      }
+      return total + (curE - curS + 1)
+    }
+    for (const skill of Object.keys(skillIntervals)) {
+      skillMonths[skill] = (skillMonths[skill] ?? 0) + unionMonths(skillIntervals[skill])
+    }
+    for (const skill of Object.keys(skillDatelessMonths)) {
+      skillMonths[skill] = (skillMonths[skill] ?? 0) + skillDatelessMonths[skill]
     }
     if (Object.keys(skillMonths).length > 0) {
       // プロジェクト合計月数を特殊キーとして付与（経験年数フォールバック用）
@@ -1029,6 +1083,7 @@ function extractSkillYearsFromSheetData(data){
 export {
   parseDurationToMonths,
   excelSerialToDateStr,
+  parseYMParts,
   calcMonthsFromMultilineCell,
   calcMonthsFromDates,
   filterSkillYears,

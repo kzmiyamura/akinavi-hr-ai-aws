@@ -20,6 +20,7 @@ const DEST = resolve(ROOT, 'scripts/_extractors.gen.mjs')
 const TARGET_FUNCTIONS = [
   'parseDurationToMonths',
   'excelSerialToDateStr',
+  'parseYMParts',
   'calcMonthsFromMultilineCell',
   'calcMonthsFromDates',
   'filterSkillYears',
