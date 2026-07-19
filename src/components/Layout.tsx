@@ -1,7 +1,7 @@
-import { Users, Briefcase, Star, LogOut, Settings } from 'lucide-react'
+import { Users, Briefcase, Star, LogOut, Settings, Bell } from 'lucide-react'
 import type { DataEnv } from '../lib/dataEnv'
 
-export type Page = 'matching' | 'candidates' | 'projects' | 'settings' | 'heatmap'
+export type Page = 'matching' | 'candidates' | 'projects' | 'notifications' | 'settings' | 'heatmap'
 
 interface Props {
   /** タブのハイライトに使う（詳細画面では戻り先のタブ） */
@@ -20,6 +20,7 @@ const NAV_ITEMS: { page: Page; label: string; icon: React.ReactNode }[] = [
   { page: 'matching', label: 'マッチング', icon: <Star size={16} className="shrink-0" /> },
   { page: 'candidates', label: '人材', icon: <Users size={16} className="shrink-0" /> },
   { page: 'projects', label: '案件', icon: <Briefcase size={16} className="shrink-0" /> },
+  { page: 'notifications', label: '通知', icon: <Bell size={16} className="shrink-0" /> },
   { page: 'settings', label: '設定', icon: <Settings size={16} className="shrink-0" /> },
 ]
 

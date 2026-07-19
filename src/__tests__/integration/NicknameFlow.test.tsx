@@ -29,6 +29,8 @@ function renderApp() {
 describe('ニックネームフロー', () => {
   beforeEach(() => {
     localStorage.clear()
+    // useNickname は cookie 優先保存（PWA対策 55375fb）のため cookie も消す
+    document.cookie = 'akinavi_nickname=; max-age=0; path=/'
   })
 
   it('初回アクセス時にニックネーム入力モーダルが表示される', () => {
@@ -88,6 +90,7 @@ describe('ニックネームフロー', () => {
 
 describe('タブナビゲーション', () => {
   beforeEach(() => {
+    document.cookie = 'akinavi_nickname=; max-age=0; path=/'
     localStorage.setItem('akinavi_nickname', 'テストユーザー')
   })
 
@@ -98,26 +101,28 @@ describe('タブナビゲーション', () => {
     })
   })
 
-  it('人材登録タブに切り替えられる', async () => {
+  it('人材タブに切り替えられる', async () => {
     renderApp()
-    await waitFor(() => screen.getByText('人材登録'))
-    fireEvent.click(screen.getByText('人材登録'))
-    expect(screen.getByText('人材を登録')).toBeInTheDocument()
+    await waitFor(() => screen.getByRole('button', { name: '人材' }))
+    fireEvent.click(screen.getByRole('button', { name: '人材' }))
+    // CandidatePage は lazy ロードのため待つ（「新規登録」ボタンは一覧に常時表示）
+    await waitFor(() => expect(screen.getByText('新規登録')).toBeInTheDocument())
   })
 
-  it('案件登録タブに切り替えられる', async () => {
+  it('案件タブに切り替えられる', async () => {
     renderApp()
-    await waitFor(() => screen.getByText('案件登録'))
-    fireEvent.click(screen.getByText('案件登録'))
-    expect(screen.getByText('案件を登録')).toBeInTheDocument()
+    await waitFor(() => screen.getByRole('button', { name: '案件' }))
+    fireEvent.click(screen.getByRole('button', { name: '案件' }))
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(/案件名・必須\/尚可スキル/)).toBeInTheDocument())
   })
 
-  it('マッチング結果タブに切り替えられる', async () => {
+  it('マッチングタブに切り替えられる', async () => {
     renderApp()
-    await waitFor(() => screen.getByText('人材登録'))
-    fireEvent.click(screen.getByText('案件登録'))
-    await waitFor(() => screen.getByText('案件を登録'))
-    fireEvent.click(screen.getByText('マッチング結果'))
+    await waitFor(() => screen.getByRole('button', { name: '案件' }))
+    fireEvent.click(screen.getByRole('button', { name: '案件' }))
+    await waitFor(() => screen.getByPlaceholderText(/案件名・必須\/尚可スキル/))
+    fireEvent.click(screen.getByRole('button', { name: 'マッチング' }))
     expect(screen.getByText('マッチング結果一覧')).toBeInTheDocument()
   })
 })

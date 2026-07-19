@@ -15,6 +15,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ defa
 const CandidateDetailPage = lazy(() => import('./pages/CandidateDetailPage').then(m => ({ default: m.CandidateDetailPage })))
 const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage').then(m => ({ default: m.ProjectDetailPage })))
 const HeatmapPage = lazy(() => import('./pages/HeatmapPage').then(m => ({ default: m.HeatmapPage })))
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then(m => ({ default: m.NotificationsPage })))
 import type { DataEnv } from './lib/dataEnv'
 import {
   applyDemoKeyFromUrlToggle,
@@ -202,6 +203,9 @@ function AppInner() {
             </div>
             {tabPage === 'projects' && (
               <ProjectPage nickname={nickname} dataEnv={dataEnv} demoUiEnabled={demoUiEnabled} onOpenProjectDetail={openProjectDetail} />
+            )}
+            {tabPage === 'notifications' && (
+              <NotificationsPage dataEnv={dataEnv} nickname={nickname} />
             )}
             {tabPage === 'settings' && (
               <SettingsPage demoUiEnabled={demoUiEnabled} onToggleDemoUi={setDemoUiEnabled} />

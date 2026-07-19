@@ -21,7 +21,9 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 
 const TENANT = 'consumers'
-const SCOPE = 'offline_access Mail.Read Mail.ReadWrite User.Read'
+// Mail.Send: 通知機能（notify-candidates）のメール送信に必要。
+// 既存の連携済みトークンには含まれないため、設定画面から再連携（再同意）すると有効になる
+const SCOPE = 'offline_access Mail.Read Mail.ReadWrite Mail.Send User.Read'
 const TOKEN_ENDPOINT = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`
 const AUTHORIZE_ENDPOINT = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize`
 

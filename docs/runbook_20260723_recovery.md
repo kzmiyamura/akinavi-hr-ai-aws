@@ -104,6 +104,24 @@ node scripts/trace_email.mjs --name "<PDF経歴書の候補者名>"
 3. 表構造（スキル×年数ペア）はテキスト化で崩れるため Excel より精度が落ちる。
    ここは AIフォールバック設計（ai-enrich-design-v1.2.html）の領域
 
+### Step 7: 通知機能の有効化（マイグレーション+cron登録+Microsoft再連携）
+
+停止中に実装した「通知」タブ（人材ウォッチ→メール通知）の有効化。コード・Edge Functionはデプロイ済み。
+
+```bash
+# 1. テーブル作成（notification_rules / notification_log / app_configキー3つ）
+supabase db query --linked -f supabase/migrations/add_notification_rules.sql
+
+# 2. cron登録（YOUR_PROJECT_REF / YOUR_SERVICE_ROLE_KEY を書き換えてから）
+supabase db query --linked -f supabase/migrations/add_notify_cron.sql
+```
+
+3. **Microsoft再連携（Mail.Send同意）**: 設定タブ → Microsoft連携（human/prodアカウント）を再実行。
+   スコープに Mail.Send を追加済みのため、再同意すると通知メールが送れるようになる。
+   再連携しない間は通知タブに送信エラーが表示される（チェック自体は動き、同意後にまとめて送信される）
+4. 動作確認: 通知タブでルールを1件作成 → テスト人材メールを1通処理 → 通知メール到着と
+   `notification_log` への記録を確認
+
 ## 恒常運用ルール（再発防止）
 
 | ルール | 理由 |
