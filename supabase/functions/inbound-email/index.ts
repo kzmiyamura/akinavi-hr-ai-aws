@@ -3098,7 +3098,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       if ((vNorm.includes('使用言語') || vNorm === '言語' || vNorm.includes('使用技術') || vNorm.includes('技術スタック') || vNorm === '技術' || vNorm === '言語/技術'
            || vNorm.includes('開発言語') || vNorm.includes('PG言語')  // "OS・DB・開発言語" / "PG言語" 等の複合ヘッダー対応
            // 複合列ヘッダー対応: "言語　FW" / "言語/FW" / "言語・FW" / "言語 ツール" / "言語/DB" 等
-           || (vNorm.includes('言語') && (vNorm.includes('FW') || vNorm.includes('ツール') || vNorm.includes('技術') || vNorm.includes('DB') || vNorm.includes('OS')))
+           || (vNorm.includes('言語') && (vNorm.includes('FW') || vNorm.includes('ツール') || vNorm.includes('技術') || vNorm.includes('DB') || vNorm.includes('OS') || vNorm.includes('環境') || vNorm.includes('その他')))
            // 全角ASCII含む複合ヘッダー: "ＯＳ/ＤＢ/環境/言語/他" など（TMK-S型）
            || (vNorm.includes('言語') && (vAscii.includes('OS') || vAscii.includes('DB') || vAscii.includes('FW')))
            // "利用技術" / "機種/OS/DB等" / "OS/言語/DB" 等のヘッダー
@@ -3111,7 +3111,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       // vFull も使うことで "作業\n月数" → "作業月数" のような改行含みヘッダーも検出できる（ＹＫ型）
       if ((/^作業月数$|^月数$|^期間[\(（]月|^期間$/.test(vNorm) || /^作業月数$|^月数$|^期間[\(（]月|^期間$/.test(vFull)) && durationColIdx < 0) durationColIdx = j
       // 作業期間列（"2017.04 ～ 2019.12" 形式の日付範囲を含む列）→ periodRangeColIdx として別途管理
-      if ((/^作業期間$|^稼働期間$|^プロジェクト期間$|^PJ期間$|^参画期間$|^在籍期間$/.test(vNorm) || /^作業期間$|^稼働期間$|^プロジェクト期間$|^PJ期間$|^参画期間$|^在籍期間$/.test(vFull)) && durationColIdx < 0) durationColIdx = j
+      if ((/^作業期間$|^稼働期間$|^プロジェクト期間$|^PJ期間$|^参画期間$|^在籍期間$|^業務期間$|^開発期間$/.test(vNorm) || /^作業期間$|^稼働期間$|^プロジェクト期間$|^PJ期間$|^参画期間$|^在籍期間$|^業務期間$|^開発期間$/.test(vFull)) && durationColIdx < 0) durationColIdx = j
       // 開始・終了日付列（"終了年月：システム名" のような複合ヘッダーにも対応）
       if ((/^開始年月$|^開始$/.test(vNorm) || /^開始年月$|^開始$/.test(vFull)) && startDateColIdx < 0) startDateColIdx = j
       if ((/^終了年月$|^終了$/.test(vNorm) || /^終了年月$|^終了$/.test(vFull) || vNorm.startsWith('終了年月') || vNorm.startsWith('終了：')) && endDateColIdx < 0) endDateColIdx = j
@@ -3377,7 +3377,13 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       }
       if (!months || months <= 0) continue
       projectPeriods.push({ start: String(row[1] ?? ''), end: String(row[3] ?? ''), months })
-      const rawSkillLines = (langCell + '\n' + fwCell).split(/[\n\r、，,]+/).map(s => s.trim())
+      // 【DBツール】等のセクション見出しは除去（IS型Word: 「【DBツール】GCP・BigQuery」対策）。
+      // 中点・は「ASCIIを含むトークンのみ」さらに分割する（GCP・BigQuery は分割し、
+      // 運用・保守 のような日本語複合語は壊さない）
+      const rawSkillLines = (langCell + '\n' + fwCell).replace(/【[^】\n]*】/g, '\n')
+        .split(/[\n\r、，,／]+/)
+        .flatMap((s) => /[A-Za-z]/.test(s) ? s.split(/[・]/) : [s])
+        .map(s => s.trim())
         .filter(s => s && s !== '-' && s !== '－' && !/^[\s\-－]+$/.test(s))
       const skillTexts: string[] = []
       for (const line of rawSkillLines) {
@@ -3783,8 +3789,8 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   // 環境ラベルが無いため、スキルは業務内容テキスト中のASCII技術語から拾い、期間はセル内の
   // 日付範囲から取る。技術語3件未満なら総経験のみ記録して他Methodへ委譲する（誠実な退化）
   {
-    const PERIOD_H = /^期間$/
-    const CONTENT_H = /^(業務内容|担当業務|作業内容|職務内容|内容)$/
+    const PERIOD_H = /^(期間|開発期間|業務期間|作業期間)$/
+    const CONTENT_H = /^(業務内容|担当業務|作業内容|職務内容|内容|担当フェーズ|環境・?言語等?)$/
     const normC = (v: string) => String(v ?? '').split(/[\r\n]/)[0].replace(/[\s　]+/g, '').trim()
     const hdrs: number[] = []
     for (let i = 0; i < data.length; i++) {
@@ -3854,6 +3860,57 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       }
       // スキルが作れなくても総経験だけは残す（関数末尾の最終フォールバックが拾う）
       if (!headerTotalMonths && total18 > 0) headerTotalMonths = total18
+    }
+  }
+
+  // ── Method 1.9: セル内テキスト日付範囲型（H.M型のWord経歴表）──
+  // 「役割（…2019年4月〜2020年3月…）| 内容」のように、期間がセルの文章中に埋め込まれた表。
+  // 日付範囲を含む行が3行以上ある表を対象に、行=案件として ASCII技術語×期間で集計する
+  {
+    const RANGE_RE = /((?:19|20)\d{2}\s*年\s*\d{1,2}\s*月|(?:19|20)\d{2}[\/.]\d{1,2})\s*[〜～~\-－]\s*(現在|継続中?|(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月|(?:19|20)\d{2}[\/.]\d{1,2})/
+    const nowYM19 = new Date().getFullYear() * 12 + (new Date().getMonth() + 1)
+    const rowsWithRange: Array<{ r: number; s: number; e: number }> = []
+    for (let r = 0; r < data.length; r++) {
+      for (const c of data[r] ?? []) {
+        const cell = String(c)
+        if (cell.length < 12 || cell.length > 1200) continue
+        const mm = cell.match(RANGE_RE)
+        if (!mm) continue
+        const a = parseYMParts(mm[1])
+        const z = /現在|継続/.test(mm[2]) ? { year: Math.floor((nowYM19 - 1) / 12), month: ((nowYM19 - 1) % 12) + 1 } : parseYMParts(mm[2])
+        if (a && z) {
+          const aa = a.year * 12 + a.month
+          const zz = z.year * 12 + z.month
+          if (zz >= aa && zz - aa <= 600) { rowsWithRange.push({ r, s: aa, e: zz }); break }
+        }
+      }
+    }
+    if (rowsWithRange.length >= 3) {
+      const iv19: Record<string, number[][]> = {}
+      const allIv19: number[][] = []
+      for (const { r, s, e } of rowsWithRange.slice(0, 40)) {
+        allIv19.push([s, e])
+        const toks: Set<string> = new Set()
+        const ROLE_ABBR = /^(PM|PL|PG|SE|PO|PMO|QA|TL|IT|OA|AI|IoT|FX|EC|BtoB|BtoC|SNS|No|OK|NG)$/i
+        for (const c of data[r] ?? []) {
+          for (const mt of String(c).matchAll(/[A-Za-z][A-Za-z0-9+.#-]{1,24}/g)) {
+            if (!ROLE_ABBR.test(mt[0])) toks.add(mt[0])
+          }
+        }
+        for (const t of toks) {
+          if (!iv19[t]) iv19[t] = []
+          iv19[t].push([s, e])
+        }
+      }
+      const sm19: Record<string, number> = {}
+      for (const k of Object.keys(iv19)) sm19[k] = unionIntervalMonths(iv19[k])
+      const f19 = filterSkillYears(sm19)
+      if (Object.keys(f19).filter(k => !k.startsWith('_')).length >= 3) {
+        f19['_totalProjectMonths'] = headerTotalMonths ?? unionIntervalMonths(allIv19)
+        f19['_extractMethod'] = 19
+        return f19
+      }
+      if (!headerTotalMonths && allIv19.length > 0) headerTotalMonths = unionIntervalMonths(allIv19)
     }
   }
 
