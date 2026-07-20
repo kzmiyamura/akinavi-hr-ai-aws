@@ -15,7 +15,7 @@
  *     FAIL を確認 → index.ts を修正 → PASS を確認（テストファースト）
  *   - index.ts 変更後は node scripts/sync_extractors.mjs を忘れずに
  */
-import { extractSkillYearsFromSheetData } from './_extractors.gen.mjs'
+import { extractSkillYearsFromSheetData, scoreSkillQuality } from './_extractors.gen.mjs'
 
 const verbose = process.argv.includes('-v')
 let pass = 0
@@ -280,6 +280,26 @@ t('G5: ラベル残骸・注記・半角カナはスキルにしない',
    ['', '', '環境', '', ''],
    ['', '', '能力指標：\n(遠隔操作用)\nﾌﾘｶﾞﾅ\nPHP\nMySQL\nLinux', '', '']],
   { PHP: 12, MySQL: 12, Linux: 12 })
+
+console.log('=== H. 品質スコア（方式勝者の選択基準） ===')
+{
+  const master = new Set(['java', 'aws', 'python'])
+  const sc = (label, ok) => {
+    if (ok) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}`) }
+  }
+  sc('H1: マスタ一致キーは3点・不一致は1点',
+    scoreSkillQuality({ Java: 24, 独自ツール: 12 }, master) === 4)
+  sc('H2: マスタ未取得（null）は件数に退化',
+    scoreSkillQuality({ Java: 24, 独自ツール: 12 }, null) === 2)
+  sc('H3: 内部キー（_totalProjectMonths等）は数えない',
+    scoreSkillQuality({ Java: 24, _totalProjectMonths: 60 }, master) === 3)
+  sc('H4: ゴミ5件(1点×5) はマスタ一致2件(3点×2)+1件(1点) に勝てない',
+    scoreSkillQuality({ a1: 1, a2: 1, a3: 1, a4: 1, a5: 1 }, master)
+      < scoreSkillQuality({ Java: 24, AWS: 12, 独自: 6 }, master))
+  sc('H5: 照合はスペース・大小文字を無視',
+    scoreSkillQuality({ 'JAVA ': 24 }, new Set(['java'])) === 3)
+}
 
 console.log(`\n📊 ${pass} passed / ${fail} failed（全${pass + fail}ケース）`)
 if (fail > 0) console.log('FAILED:', failures.join(' | '))

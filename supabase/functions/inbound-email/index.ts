@@ -2711,10 +2711,10 @@ async function extractWordText(base64: string): Promise<{ text: string; totalPro
           // Word・Excel 統合方式で skillYears 抽出（列名・配列・テキストパターンを全試行）
           const wordGrid = wordJson.tables.flat(1)
           const syGrid = extractSkillYearsUnified(wordGrid, wordJson.paragraphs)
-          // SpanCell（colspan/rowspan保持）ベースでも抽出し、Excelと同じく多く取れた方を採用
-          const syCells = extractSkillYearsFromCells(wordJson.cells)
-          const countGrid = Object.keys(syGrid).filter(k => !k.startsWith('_')).length
-          const countCells = Object.keys(syCells).filter(k => !k.startsWith('_')).length
+          // SpanCell（colspan/rowspan保持）ベースでも抽出し、Excelと同じく品質スコアで勝者選択
+          const syCells = filterSkillYears(extractSkillYearsFromCells(wordJson.cells))
+          const countGrid = scoreSkillQuality(syGrid, _skillNameSet)
+          const countCells = scoreSkillQuality(syCells, _skillNameSet)
           let skillYears: Record<string, number> = {}
           if (countCells > 0 || countGrid > 0) {
             skillYears = countCells >= countGrid ? syCells : syGrid
@@ -3006,6 +3006,24 @@ function calcMonthsFromDates(start: string, end: string): number | null {
   if (!s || !e) return null
   const months = (e.year - s.year) * 12 + (e.month - s.month) + 1
   return months > 0 ? months : null
+}
+
+/**
+ * 抽出結果の品質スコア。方式の勝者選択を「件数」から「正しさの重み付き合計」に変える。
+ * skill_master（名前+エイリアスの正規化Set）に載っているキー=3点、載っていないキー=1点。
+ * 「ゴミを多く出す方式が、正確に少なく出す方式に勝つ」従来の件数比較の欠陥への対策。
+ * masterSet が null（コールドスタート・ローカルテスト）のときは全キー1点=件数と同等に退化する。
+ * masterSet の型は sync_extractors のTS→JS変換の制約で any（実体は Set<string> | null）
+ */
+// deno-lint-ignore no-explicit-any
+function scoreSkillQuality(sy: Record<string, number>, masterSet: any = null): number {
+  let score = 0
+  for (const k of Object.keys(sy)) {
+    if (k.startsWith('_')) continue
+    if (masterSet && masterSet.has(k.toLowerCase().replace(/\s+/g, ''))) score += 3
+    else score += 1
+  }
+  return score
 }
 
 /** 期間区間（year*12+month の開始・終了ペア）の和集合を月数化する。
@@ -4809,11 +4827,9 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
   // 方式1: 列名ベース
   const jsonRows = gridToJsonRows(grid)
   const sy1 = extractSkillYearsFromSheetJson(jsonRows)
-  const count1 = Object.keys(sy1).filter(k => !k.startsWith('_')).length
 
   // 方式2: 2D配列ベース
   const sy2 = extractSkillYearsFromSheetData(grid)
-  const count2 = Object.keys(sy2).filter(k => !k.startsWith('_')).length
 
   // 方式3: テキストパターンベース（「スキル名 X年」）
   const sy3: Record<string, number> = {}
@@ -4830,7 +4846,6 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
       }
     }
   }
-  const count3 = Object.keys(sy3).length
 
   // 方式4: Word 職務経歴書型（YYYY年MM月~約N年間 + [OS]/[言語]/[DB] パターン）
   const sy4: Record<string, number> = {}
@@ -4886,7 +4901,6 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
       }
     }
   }
-  const count4 = Object.keys(sy4).length
 
   // 方式5: キャリアシート型（「スキル名 [N] 年 [M] ヶ月」が1行に複数並ぶ形式）
   // 例: "Win 28 年 2 ヶ月 Java 16 年 4 ヶ月 Oracle 16 年 2 ヶ月"（各トークンが別セル）
@@ -4918,7 +4932,6 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
       }
     }
   }
-  const count5 = Object.keys(sy5).filter(k => !k.startsWith('_')).length
 
   // 方式6: 能力評価型（◎/○/△/☆形式のスキルシート）
   // 例: "VBA ... 〇" → 12ヶ月（実務経験1年以上）、"事務 ... ◎" → 36ヶ月（3年以上）
@@ -4953,21 +4966,32 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
       }
     }
   }
-  const count6 = Object.keys(sy6).filter(k => !k.startsWith('_')).length
 
-  // 最も多く取れた方式を採用
+  // 勝者選択（2026-07-20変更）: 「件数の多い方式」→「フィルタ後の品質スコアが最高の方式」。
+  // 旧実装は (a)ゴミを多く出す方式が正確な方式に勝てる (b)方式2だけフィルタ後件数・他はフィルタ前
+  // という不公平があった。全方式をフィルタしてから skill_master 照合の重み付きスコアで比較する
+  const masterSet = _skillNameSet  // 起動時プリフェッチ済みキャッシュ（null時はスコア=件数に退化）
+  const candidates: Array<{ sy: Record<string, number>; method: string }> = [
+    { sy: sy1, method: 'column' },
+    { sy: sy2, method: 'array' },
+    { sy: sy5, method: 'career-sheet' },
+    { sy: sy6, method: 'rating' },
+    { sy: sy4, method: 'word-narrative' },
+    { sy: sy3, method: 'text' },
+  ]
   let best: Record<string, number> = {}
   let bestMethod = 'none'
-  if (count1 >= count2 && count1 >= count3 && count1 >= count4 && count1 >= count5 && count1 >= count6 && count1 > 0) { best = sy1; bestMethod = 'column' }
-  else if (count2 >= count3 && count2 >= count4 && count2 >= count5 && count2 >= count6 && count2 > 0)                 { best = sy2; bestMethod = 'array' }
-  else if (count5 >= count3 && count5 >= count4 && count5 >= count6 && count5 > 0)                                      { best = sy5; bestMethod = 'career-sheet' }
-  else if (count6 >= count3 && count6 >= count4 && count6 > 0)                                                          { best = sy6; bestMethod = 'rating' }
-  else if (count4 >= count3 && count4 > 0)                                                                              { best = sy4; bestMethod = 'word-narrative' }
-  else if (count3 > 0)                                                                                                  { best = sy3; bestMethod = 'text' }
+  let bestScore = 0
+  for (const c of candidates) {
+    const filtered = filterSkillYears(c.sy)
+    const score = scoreSkillQuality(filtered, masterSet)
+    // 同点は先勝ち（配列順=従来の優先順位を維持）
+    if (score > bestScore) { best = filtered; bestMethod = c.method; bestScore = score }
+  }
 
   if (bestMethod !== 'none') {
     const count = Object.keys(best).filter(k => !k.startsWith('_')).length
-    console.log(`[skillYears-unified] method=${bestMethod} count=${count}`)
+    console.log(`[skillYears-unified] method=${bestMethod} count=${count} score=${bestScore}${masterSet ? '' : ' (master未取得=件数退化)'}`)
   }
   // 経路の永続記録（_extractMethod → raw_profile / pipeline_trace の B-SY-METHOD）。
   // 方式2(array)=extractSkillYearsFromSheetData は内部でより細かい番号
@@ -5897,11 +5921,11 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
         if (Date.now() > jsonDeadline) console.warn(`[Excel-json] TIMEOUT sheet="${sheetName}" 5秒予算超過のため部分結果で打ち切り rows=${jsonRows.length}`)
         console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
         const syGrid = extractSkillYearsUnified(grid)
-        const syCells = extractSkillYearsFromCells(cells)
-        const countGrid = Object.keys(syGrid).filter(k => !k.startsWith('_')).length
-        const countCells = Object.keys(syCells).filter(k => !k.startsWith('_')).length
+        const syCells = filterSkillYears(extractSkillYearsFromCells(cells))
+        // 品質スコア比較（件数→skill_master照合の重み付き。同点は SpanCell 優先＝空間構造が正確）
+        const countGrid = scoreSkillQuality(syGrid, _skillNameSet)
+        const countCells = scoreSkillQuality(syCells, _skillNameSet)
         if (countGrid > 0 || countCells > 0) {
-          // スキル数が多い方を採用（同数なら SpanCell ベースを優先＝空間構造が正確）
           skillYears = countCells >= countGrid ? syCells : syGrid
           // cells ベースの _totalProjectMonths / _dateSpanMonths を常に保持（grid にはこの情報がない）
           if (syCells['_totalProjectMonths'] && !skillYears['_totalProjectMonths']) {
@@ -7391,6 +7415,16 @@ Deno.serve(async (req: Request) => {
     let attachmentParsedGrid: { source: 'excel'; rows: Array<Record<string, string>> } | { source: 'word'; rows: string[][] } | null = null
     // 「添付はあるのにスキル年数が入っていない」を後から切り分けられるようにするための診断メモ。
     // パース自体が例外で失敗したのか、パースは成功したがスキル年数が0件だったのかを区別して記録する。
+    // 品質スコア選択（scoreSkillQuality）用に skill_master キャッシュをプリフェッチ。
+    // 添付解析より前に _skillNameSet を温めておく（5分TTLキャッシュ・コールドスタート時のみDB1回）。
+    // 失敗しても続行＝スコアが件数比較に退化するだけで抽出自体は動く
+    try {
+      const preClient = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
+      getSkillNameSet(await getSkillMasterFromDb(preClient))
+    } catch (e) {
+      console.warn('[skill_master] プリフェッチ失敗（品質スコアは件数退化で続行）:', String(e))
+    }
+
     const excelParseNotes: string[] = []
     // Word/Excel/PDFのいずれの判定にも一致せず完全に無視された添付を記録する診断情報。
     // 従来はこのケースがログにすら残らず、「メールに実際は複数添付があったのに1件しか

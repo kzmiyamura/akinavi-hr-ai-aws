@@ -87,6 +87,17 @@ function unionIntervalMonths(iv){
   return total + (curE - curS + 1)
 }
 
+// ── scoreSkillQuality ──
+function scoreSkillQuality(sy, masterSet = null){
+  let score = 0
+  for (const k of Object.keys(sy)) {
+    if (k.startsWith('_')) continue
+    if (masterSet && masterSet.has(k.toLowerCase().replace(/\s+/g, ''))) score += 3
+    else score += 1
+  }
+  return score
+}
+
 // ── calcMonthsFromMultilineCell ──
 function calcMonthsFromMultilineCell(cellValue){
   const parts = cellValue.split(/[\r\n]+/).map(s => s.trim())
@@ -1286,6 +1297,7 @@ export {
   excelSerialToDateStr,
   parseYMParts,
   unionIntervalMonths,
+  scoreSkillQuality,
   calcMonthsFromMultilineCell,
   calcMonthsFromDates,
   filterSkillYears,

@@ -564,7 +564,9 @@
 <b>第3層: grid vs SpanCell の勝者選択</b>
   グリッド読み（第2層）と結合セル空間読み（SpanCell）を両方実行
   → 多く取れた方（同数ならSpanCell優先）</pre>
-          <p>つまり「Method 1と2はどちらも使うのか」の答えは層で異なる: <b>第1層内は排他（Method 1が1件でも取れたらMethod 2は走らない）、第2・3層は併走して多数勝ち</b>。どの経路が採用されたかは候補者ごとに <code>_extractMethod</code>（raw_profile）と <code>B-SY-METHOD</code>（pipeline_trace）で後から確認できる。</p>
+          <p>つまり「Method 1と2はどちらも使うのか」の答えは層で異なる: <b>第1層内は排他（Method 1が1件でも取れたらMethod 2は走らない）、第2・3層は併走</b>。どの経路が採用されたかは候補者ごとに <code>_extractMethod</code>（raw_profile）と <code>B-SY-METHOD</code>（pipeline_trace）で後から確認できる。</p>
+          <p><b>2026-07-20変更 — 勝者の基準を「件数」から「品質スコア」へ:</b> 第2・3層の勝者選択は従来「スキル数が多い方式」だったが、これは<b>ゴミを多く出す方式が正確な方式に勝てる</b>構造的欠陥だった（網羅率に最適化され、正確さはフィルタ頼み）。現在は全方式の結果をフィルタしてから <b>skill_master照合の重み付きスコア（マスタ一致=3点・不一致=1点）</b>で比較する。マスタ未取得時（コールドスタート）は件数比較に自然に退化する。あわせて「方式2だけフィルタ後件数・他はフィルタ前」だった選択バイアスも解消した。</p>
+          <p><b>同日追加 — ゴールデンテスト（精度の見える化）:</b> 実ファイル回帰は従来「取れた/取れない」だけの判定で、値の正しさは見ていなかった（ゴミ1件でも合格になる「偽PASS」の温床）。<code>excel_golden.json</code> に14ファイル・186スキル値の期待値を固定し、毎回±2ヶ月の厳密比較で一致率を計測する（<code>--update-golden</code> で意図的更新）。期待値の人手確認用に <code>excel_golden_review.md</code> を生成済み。</p>
           <div class="table-wrap">
             <table class="cmp-table">
               <thead><tr><th>方式</th><th>得意な表</th><th>例</th></tr></thead>

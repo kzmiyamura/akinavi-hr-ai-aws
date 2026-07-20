@@ -22,6 +22,7 @@ const TARGET_FUNCTIONS = [
   'excelSerialToDateStr',
   'parseYMParts',
   'unionIntervalMonths',
+  'scoreSkillQuality',
   'calcMonthsFromMultilineCell',
   'calcMonthsFromDates',
   'filterSkillYears',

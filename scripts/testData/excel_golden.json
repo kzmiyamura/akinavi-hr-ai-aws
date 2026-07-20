@@ -1,0 +1,273 @@
+{
+ "_note": "実ファイルの期待値スナップショット。--update-golden で再生成。値の正しさの人手確認状況は _verified を参照",
+ "_generated": "2026-07-20",
+ "_verified": "未確認（現状の抽出値のスナップショット）",
+ "files": {
+  "FY.xlsx": {
+   "sheet": "エンジニアスキルシート",
+   "skills": {
+    "IBM": 3,
+    "COBOL": 111,
+    "z/OS": 61,
+    "Windows": 63,
+    "Java": 61,
+    "DB2": 61,
+    "富士通 GS8800": 39,
+    "COBOL/S": 122,
+    "YPS-COBOL": 28,
+    "AIM DB/DC": 134,
+    "VB.net": 2,
+    "PowerCenter": 93,
+    "トランスフォーメーション言語": 93,
+    "Oracle": 101,
+    "富士通 GS21": 80,
+    "COBOL85": 80,
+    "富士通 GS8400": 15,
+    "IBM　AS400": 8,
+    "SAP": 8,
+    "NEC　ACOS4(XVP)": 94,
+    "RIQS": 94,
+    "JASPOL": 94
+   },
+   "total": 393
+  },
+  "HS.xlsx": {
+   "sheet": "新スキルシート",
+   "skills": {
+    "Windows10": 113,
+    "Excel": 81,
+    "PowerPoint": 81,
+    "Linux": 2,
+    "WordPress": 2,
+    "JP1/AJS": 30,
+    "Oracle": 19,
+    "PostgreSQL": 11
+   },
+   "total": 113
+  },
+  "H_O.xlsx": {
+   "sheet": "経歴書",
+   "skills": {},
+   "total": 36
+  },
+  "IH.xlsx": {
+   "sheet": "スキルシート",
+   "skills": {
+    "Windows": 45,
+    "Microsoft365": 45,
+    "HTML": 39,
+    "CSS": 39,
+    "Adobe": 34,
+    "2DCAD": 3,
+    "3DCAD": 3
+   },
+   "total": 45
+  },
+  "K_H.xlsx": {
+   "sheet": "経歴書",
+   "skills": {
+    "Teams": 6,
+    "Backlog": 6,
+    "Jira": 6,
+    "Git": 6,
+    "シェアポイント": 6,
+    "WBSはエクセル": 7,
+    "コミュニケーションはTeams": 7,
+    "チケット管理Backlog": 1,
+    "―": 9,
+    "AWS": 8,
+    "GoogleWorkSpace": 5,
+    "Redmine": 5,
+    "JP1": 90,
+    "Tivoli": 90,
+    "NNM": 90,
+    "ＳａｌｅｓＦｏｒｃｅ": 90,
+    "サイボウズガルーン": 90,
+    "VCS(VeritasClusterServer)": 3,
+    "SAV(SymantecAntiVirus)": 3,
+    "MCOperations": 3,
+    "SymantecMailSecurity": 8,
+    "SunJava Messaging Server": 8,
+    "Postfix": 8,
+    "SystemWalker": 36,
+    "千手（NRI社運用ツール）": 4,
+    "Sendmail": 18,
+    "HPOpenView Operations (OVO)": 12,
+    "VeritasClusterServer": 12,
+    "Lifekeeper": 12,
+    "RF-ID": 12,
+    "ISVW": 12,
+    "ARCServe": 30,
+    "Sniffer": 11
+   },
+   "total": 357
+  },
+  "K_M.xlsx": {
+   "sheet": "フォーマット",
+   "skills": {},
+   "total": 74
+  },
+  "MK.xlsx": {
+   "sheet": "Sheet1",
+   "skills": {
+    "オフコン": 73,
+    "PROGRESS2": 32,
+    "DataFlex": 61,
+    "DOS/V": 60,
+    "UNIX": 70,
+    "VB6": 60,
+    "Oracle9i": 60,
+    "C#": 139,
+    "VB.NET": 132,
+    "Java": 163,
+    "Oracle10g": 317,
+    "SQL-Server": 132,
+    "Linux": 6,
+    "11ｇ": 3,
+    "WindowsSV": 8,
+    "Postgress": 3,
+    "（Eclipse）": 18,
+    "Weblogic": 172,
+    "Oracle11ｇ": 172,
+    "PL/SQL": 235,
+    "Oracle11g": 4,
+    "BizBrowser": 4,
+    "COBOL": 5,
+    "Java（Eclipse）": 237,
+    "Oracle12c": 154,
+    "Oracle-ClusterRAC": 154,
+    "PostgressSQL": 154,
+    "Oracle-Cloud": 63,
+    "Oracle-Apex": 56,
+    "Spring boot": 76,
+    "Oracle-DataBase11g": 7,
+    "AWS": 20
+   },
+   "total": 606
+  },
+  "M_I.xlsx": {
+   "sheet": "フォーマット",
+   "skills": {
+    "Windows10": 10,
+    "SQL": 2,
+    "Excel": 18,
+    "Windows11": 54,
+    "PowerPoint": 18
+   },
+   "total": null
+  },
+  "N_Y.xlsx": {
+   "sheet": "Sheet1 - Table 1",
+   "skills": {
+    "C#": 48,
+    ".NET": 48,
+    "Microsoft Visual Studio": 48,
+    "Slack": 30,
+    "VS Code": 18,
+    "GitHub": 9,
+    "Git": 27,
+    "Teams": 18,
+    "Windows Server": 24,
+    "JavaScript": 12,
+    "HTML": 12,
+    "CSS": 12,
+    "Salesforce": 12,
+    "Backlog": 24
+   },
+   "total": 72
+  },
+  "R_O.xlsx": {
+   "sheet": "スキルシート",
+   "skills": {},
+   "total": 134
+  },
+  "S_I.xlsx": {
+   "sheet": "S.I",
+   "skills": {
+    "PHP": 133,
+    "CakePHP": 69,
+    "Mac": 16,
+    "GitLab": 13,
+    "PHP8": 8,
+    "Windows": 223,
+    "Codeigniter４": 3,
+    "backlog": 8,
+    "Laravel11": 5,
+    "Github": 11,
+    "SQL": 14,
+    "MySQL": 153,
+    "ESCORT": 4,
+    "SQLAssistant": 4,
+    "PHP5": 10,
+    "OracleDB": 36,
+    "Docker": 32,
+    "PHP7": 77,
+    "Linux": 167,
+    "SVN": 2,
+    "Gitbash": 5,
+    "PHPUnit": 5,
+    "Symphony": 6,
+    "ExcelVBA": 36,
+    "Laravel8系": 9,
+    "AWS": 49,
+    "独自Shell": 5,
+    "Laravel7系": 12,
+    "Excel": 7,
+    "Word": 7,
+    "PowerPoint": 7,
+    "Visio": 7,
+    "PDF": 7,
+    "RPA(UiPath)": 22,
+    "Laravel5系": 28,
+    "Vue.js": 22,
+    ".NETFramework": 22,
+    "MacOS": 22,
+    "PostgreSQL": 47,
+    "Git": 22,
+    "Postgres": 6,
+    "mariaDB": 6,
+    "Codeigniter": 11,
+    "JavaScript": 14,
+    "HTML": 15,
+    "A5:SQL Mk-2": 4,
+    "ZendFrameWork": 86
+   },
+   "total": 239
+  },
+  "T_O.xlsx": {
+   "sheet": "スキルシート",
+   "skills": {
+    "案件名": 73,
+    "【イラストサイネージシステム開発】": 4
+   },
+   "total": 36
+  },
+  "Y_M.xlsx": {
+   "sheet": "フォーマット",
+   "skills": {
+    "shell(bash)": 1,
+    "SQL": 1,
+    "Windows10": 1,
+    "Linux(CentOS)": 1,
+    "Tera Term": 1,
+    "Oracle 19c EE": 1,
+    "SQL*PLUS": 1,
+    "Zoom": 1,
+    "Discord": 1,
+    "チャット": 1,
+    "MetaLife": 1,
+    "Linux": 2,
+    "Windows11": 2,
+    "AWS": 2,
+    "Microsoftoffice": 2,
+    "draw.io": 2
+   },
+   "total": 3
+  },
+  "Y_S.xlsx": {
+   "sheet": "スキルシート",
+   "skills": {},
+   "total": 60
+  }
+ }
+}
