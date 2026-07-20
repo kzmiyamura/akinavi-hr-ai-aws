@@ -153,6 +153,9 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
   route([[/format=csv/, () => resp('x', 403)]])
   check('CF-02', 'fetchCsvFingerprint', 'HTTPエラー → null', 'status 403',
     (await fetchCsvFingerprint('ID', '0')) === null)
+  route([[/format=csv/, () => resp('<!doctype html><html>rate limited</html>', 200, { 'content-type': 'text/html' })]])
+  check('CF-06', 'fetchCsvFingerprint', '200+HTML応答 → null（HTMLをCSVとして解析しない）', 'csv 200だがtext/html',
+    (await fetchCsvFingerprint('ID', '0')) === null)
   deps.fetchWithTimeout = () => Promise.reject(new Error('net'))
   check('CF-03', 'fetchCsvFingerprint', 'fetch例外 → null', 'ネットワーク例外',
     (await fetchCsvFingerprint('ID', '0')) === null)
@@ -164,7 +167,7 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
   resetDeps()
   route([
     [/format=csv/, () => resp('氏名,年齢\n山田,30')],
-    [/format=xlsx/, () => resp(new Uint8Array([1, 2, 3]), 200, { 'content-disposition': 'attachment; filename="skill.xlsx"' })],
+    [/format=xlsx/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200, { 'content-disposition': 'attachment; filename="skill.xlsx"' })],
   ])
   { const l = L(); const r = await fetchSheetsEntry({ id: ID, gid: '2' }, l)
     check('FS-01', 'fetchSheetsEntry', 'XLSX成功 → bytes+gidHint（CSVフィンガープリント併載）', 'xlsx 200 + csv 200',
@@ -177,6 +180,25 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
   { const l = L(); const r = await fetchSheetsEntry({ id: ID, gid: '0' }, l)
     check('FS-02', 'fetchSheetsEntry', 'XLSX失敗(HTTP) → CSV保険にフォールバック', 'xlsx 500 + csv 200',
       r?.kind === 'text' && r.content.includes('山田') && codes(l).includes('A-FETCH-FAIL') && codes(l).includes('A-CSV-FB')) }
+  // Googleはレート制限・権限なし時に HTTP 200 で HTMLを返す（looksLikeZipBytes検証）
+  route([
+    [/format=csv/, () => resp('氏名,年齢\n山田,30')],
+    [/format=xlsx/, () => resp('<!doctype html><html>rate limited</html>', 200, { 'content-type': 'text/html' })],
+  ])
+  { const l = L(); const r = await fetchSheetsEntry({ id: ID, gid: '0' }, l)
+    check('FS-08', 'fetchSheetsEntry', 'XLSXが200+HTML(レート制限) → 添付にせずCSV保険へ', 'xlsx 200だが中身HTML',
+      r?.kind === 'text' && !r?.attachment && r.content.includes('山田') && codes(l).includes('A-FETCH-FAIL')) }
+  route([
+    [/format=csv/, () => resp('<!doctype html><html>login</html>', 200, { 'content-type': 'text/html' })],
+    [/format=xlsx/, () => resp('<!doctype html><html>login</html>', 200, { 'content-type': 'text/html' })],
+  ])
+  { const l = L(); const r = await fetchSheetsEntry({ id: ID, gid: '0' }, l)
+    check('FS-09', 'fetchSheetsEntry', 'XLSXもCSVもHTML → null（HTMLを経歴書にしない）', '両経路ともHTML応答',
+      r === null) }
+  route([
+    [/format=csv/, () => resp('氏名,年齢\n山田,30')],
+    [/format=xlsx/, () => resp('err', 500)],
+  ])
   { deps.extractSkillYearsFromSheetData = () => ({ Java: 12 })
     const l = L(); const r = await fetchSheetsEntry({ id: ID, gid: '0' }, l)
     check('FS-03', 'fetchSheetsEntry', 'CSV保険 + skillYears非空 → skillYears設定', 'skill抽出が{Java:12}を返す',
@@ -203,7 +225,7 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
       (await fetchSheetsEntry({ id: ID, gid: '0' }, l)) === null) }
   route([
     [/format=csv/, () => resp('a,b')],
-    [/format=xlsx/, () => resp(new Uint8Array([1]), 200, { 'content-disposition': 'attachment; filename="SheetTitle"' })],
+    [/format=xlsx/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200, { 'content-disposition': 'attachment; filename="SheetTitle"' })],
   ])
   { const l = L(); const r = await fetchSheetsEntry({ id: ID, gid: '0' }, l)
     check('FS-07', 'fetchSheetsEntry', '拡張子なしdisposition → attachment.name に .xlsx 付与', 'filename="SheetTitle"（拡張子なし）',
@@ -214,7 +236,7 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
 {
   const ID = 'D'.repeat(30)
   resetDeps()
-  route([[/format=docx/, () => resp(new Uint8Array([1]), 200, { 'content-disposition': 'attachment; filename="resume.docx"' })]])
+  route([[/format=docx/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200, { 'content-disposition': 'attachment; filename="resume.docx"' })]])
   { const l = L(); const r = await fetchDocsEntry({ id: ID }, l)
     check('FDx-01', 'fetchDocsEntry', 'DOCX成功 → bytes保持', 'docx 200',
       r?.kind === 'word' && !!r?.attachment?.data && codes(l).includes('A-DOCX-OK')) }
@@ -237,6 +259,20 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
   ])
   { const l = L(); check('FDx-04', 'fetchDocsEntry', 'txt側も例外 → null', 'docx 500 + txt throw',
       (await fetchDocsEntry({ id: ID }, l)) === null) }
+  // レート制限・権限なしのHTML応答（HTTP 200）を経歴書として取り込まない
+  route([
+    [/format=docx/, () => resp('<!doctype html><html>limited</html>', 200, { 'content-type': 'text/html' })],
+    [/format=txt/, () => resp('本文テキスト', 200, { 'content-type': 'text/plain' })],
+  ])
+  { const l = L(); const r = await fetchDocsEntry({ id: ID }, l)
+    check('FDx-05', 'fetchDocsEntry', 'DOCXが200+HTML → 添付にせずtxt保険へ', 'docx 200だが中身HTML',
+      r?.kind === 'text' && r.content === '本文テキスト' && codes(l).includes('A-FETCH-FAIL')) }
+  route([
+    [/format=docx/, () => resp('<!doctype html>', 200, { 'content-type': 'text/html' })],
+    [/format=txt/, () => resp('<!doctype html><html>login</html>', 200, { 'content-type': 'text/html' })],
+  ])
+  { const l = L(); check('FDx-06', 'fetchDocsEntry', 'txt保険もHTML → null', '両経路HTML応答',
+      (await fetchDocsEntry({ id: ID }, l)) === null) }
 }
 
 // ═══ ゾーンA: fetchDriveEntry ══════════════════════════════════════════════
@@ -250,7 +286,7 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
   route([[/uc\?export=download/, () => resp('x', 403)]])
   { const l = L(); check('DR-02', 'fetchDriveEntry', 'HTTPエラー → null', 'status 403',
       (await fetchDriveEntry({ id: ID, index: 0 }, '', l)) === null) }
-  route([[/uc\?export=download/, () => resp(new Uint8Array([1]), 200, { 'content-type': 'application/pdf' })]])
+  route([[/uc\?export=download/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200, { 'content-type': 'application/pdf' })]])
   { const l = L(); const r = await fetchDriveEntry({ id: ID, index: 0 }, '', l)
     check('DR-03', 'fetchDriveEntry', 'content-type=pdf → kind=pdf + bytes', 'application/pdf',
       r?.kind === 'pdf' && !!r?.attachment?.data) }
@@ -258,21 +294,24 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
   { const l = L(); const r = await fetchDriveEntry({ id: ID, index: 0 }, '', l)
     check('DR-04', 'fetchDriveEntry', 'content-type=text → kind=text（本文読込）', 'text/plain',
       r?.kind === 'text' && r.content.includes('プレーン')) }
-  route([[/uc\?export=download/, () => resp(new Uint8Array([1]), 200, { 'content-type': 'application/vnd.ms-excel' })]])
+  route([[/uc\?export=download/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200, { 'content-type': 'application/vnd.ms-excel' })]])
   { const l = L(); const r = await fetchDriveEntry({ id: ID, index: 0 }, '', l)
     check('DR-05', 'fetchDriveEntry', 'Excel系MIME → kind=excel', 'application/vnd.ms-excel',
       r?.kind === 'excel') }
-  route([[/uc\?export=download/, () => resp(new Uint8Array([1]), 200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="resume.docx"' })]])
+  route([[/uc\?export=download/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="resume.docx"' })]])
   { const l = L(); const r = await fetchDriveEntry({ id: ID, index: 0 }, '', l)
     check('DR-06', 'fetchDriveEntry', 'MIME不明でも拡張子.docx → kind=word', 'octet-stream + resume.docx',
       r?.kind === 'word') }
-  route([[/uc\?export=download/, () => resp(new Uint8Array([1]), 200, { 'content-type': 'image/png' })]])
+  route([[/uc\?export=download/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200, { 'content-type': 'image/png' })]])
   { const l = L(); const r = await fetchDriveEntry({ id: ID, index: 0 }, '', l)
     check('DR-07', 'fetchDriveEntry', '未対応タイプ → null + 診断ログ', 'image/png',
       r === null && codes(l).includes('未対応タイプ')) }
   deps.fetchWithTimeout = () => Promise.reject(new Error('net'))
   { const l = L(); check('DR-08', 'fetchDriveEntry', 'fetch例外 → null', 'ネットワーク例外',
       (await fetchDriveEntry({ id: ID, index: 0 }, '', l)) === null) }
+  route([[/uc\?export=download/, () => resp('<!doctype html><html>virus scan warning</html>', 200, { 'content-type': 'text/html' })]])
+  { const l = L(); check('DR-09', 'fetchDriveEntry', '200+HTML応答（制限/権限/確認ページ） → null（HTMLをテキスト経歴書にしない）', 'drive 200だがtext/html',
+      (await fetchDriveEntry({ id: ID, index: 0 }, '', l)) === null && codes(l).includes('A-FETCH-FAIL')) }
 }
 
 // ═══ ゾーンB: matchSheetByFingerprint ══════════════════════════════════════
@@ -470,16 +509,16 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
       r === null && codes(l).includes('C-DEPTH-CUT')) }
   { route([
       [/format=csv/, () => resp('a,b')],
-      [/format=xlsx/, () => resp(new Uint8Array([1]), 200)],
+      [/format=xlsx/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200)],
     ])
     deps.extractExcelAll = () => Promise.resolve({ text: 'リンク先の経歴', skillYears: {} })
     const l = L(); const r = await fetchLinkedResume('https://docs.google.com/spreadsheets/d/' + 'Q'.repeat(30) + '/edit', l, 0)
     check('FL-02', 'fetchLinkedResume', 'Sheetsリンク → 取得+抽出', 'sheets URL', r?.content === 'リンク先の経歴') }
-  { route([[/format=docx/, () => resp(new Uint8Array([1]), 200)]])
+  { route([[/format=docx/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200)]])
     deps.extractWordText = () => Promise.resolve({ text: 'Word経歴' })
     const l = L(); const r = await fetchLinkedResume('https://docs.google.com/document/d/' + 'Q'.repeat(30), l, 0)
     check('FL-03', 'fetchLinkedResume', 'Docsリンク → 取得+抽出', 'docs URL', r?.content === 'Word経歴') }
-  { route([[/uc\?export=download/, () => resp(new Uint8Array([1]), 200, { 'content-type': 'application/pdf' })]])
+  { route([[/uc\?export=download/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200, { 'content-type': 'application/pdf' })]])
     deps.extractPdfText = () => Promise.resolve('PDF経歴')
     const l = L(); const r = await fetchLinkedResume('https://drive.google.com/file/d/' + 'Q'.repeat(30) + '/view', l, 0)
     check('FL-04', 'fetchLinkedResume', 'Driveリンク → 取得+抽出', 'drive URL', r?.content === 'PDF経歴') }
@@ -520,7 +559,7 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
     const links = [{ cell: 'D2', url: 'https://docs.google.com/spreadsheets/d/' + 'R'.repeat(30) + '/edit' }]
     route([
       [/format=csv/, () => resp('a,b')],
-      [/format=xlsx/, () => resp(new Uint8Array([1]), 200)],
+      [/format=xlsx/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200)],
     ])
     deps.extractExcelAll = () => Promise.resolve({ text: '氏名 山田太郎 の個人経歴シート', skillYears: { Java: 60 } })
     const l = L(); const r = await expandRosterEntries([e({ grid, links, content: '' })], l)
@@ -531,7 +570,7 @@ const e = (over: Partial<SourceEntry>): SourceEntry => ({
     const links = [{ cell: 'D2', url: 'https://docs.google.com/spreadsheets/d/' + 'R'.repeat(30) + '/edit' }]
     route([
       [/format=csv/, () => resp('a,b')],
-      [/format=xlsx/, () => resp(new Uint8Array([1]), 200)],
+      [/format=xlsx/, () => resp(new Uint8Array([0x50, 0x4B, 3, 4]), 200)],
     ])
     deps.extractExcelAll = () => Promise.resolve({ text: '全く別人（鈴木一郎）の経歴シート', skillYears: { PHP: 24 } })
     const l = L(); const r = await expandRosterEntries([e({ grid, links, content: '' })], l)

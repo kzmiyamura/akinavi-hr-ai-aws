@@ -80,6 +80,7 @@ const targets = [
   [/^const DRIVE_SKIP_KEYWORDS = /, null],
   [/^const EXCEL_MIME = /, null],
   [/^const WORD_MIME = /, null],
+  [/^function looksLikeZipBytes\(/, 'looksLikeZipBytes'],
   [/^async function fetchSheetsEntry\(/, 'fetchSheetsEntry'],
   [/^async function fetchDocsEntry\(/, 'fetchDocsEntry'],
   [/^async function fetchDriveEntry\(/, 'fetchDriveEntry'],

@@ -6141,6 +6141,8 @@ async function fetchCsvFingerprint(id: string, gid: string): Promise<{ rows: str
     const res = await fetchWithTimeout(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`)
     if (!res.ok) return null
     const raw = await res.text()
+    // レート制限・権限なしのHTMLページはCSVとして扱わない
+    if (/^\s*</.test(raw) || /text\/html/.test(res.headers.get('content-type') ?? '')) return null
     // 引用符内の改行・カンマ・""エスケープに対応した1パスCSVパース。
     // 行分割を先にやると「"シメイ\n氏名"」のような複数行セルが壊れてゴミセルになり、
     // gidフィンガープリント照合のスコアが実データで届かない実害があった（実リンク検証で発見）
@@ -6174,6 +6176,16 @@ const XLSX_EXPORT_MIME = 'application/vnd.openxmlformats-officedocument.spreadsh
 const DOCX_EXPORT_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 const DRIVE_SKIP_KEYWORDS = ['ポートフォリオ', '作品集', 'portfolio', 'Portfolio']
 
+/**
+ * GoogleのエクスポートAPIはレート制限・権限なし時も HTTP 200 で HTMLページを返すため、
+ * res.ok だけでは検知できない（HTMLを経歴書として保存する事故になる）。
+ * xlsx/docx は zip形式＝先頭が "PK" であることを利用して実体を検証する。
+ */
+function looksLikeZipBytes(ab: ArrayBuffer): boolean {
+  const b = new Uint8Array(ab.slice(0, 2))
+  return b.length >= 2 && b[0] === 0x50 && b[1] === 0x4B
+}
+
 /** ゾーンA①: Sheetsリンク → XLSX本流（bytes保持）・CSVは照合用フィンガープリント＋保険 */
 async function fetchSheetsEntry(link: { id: string; gid: string }, ledger: Ledger): Promise<SourceEntry | null> {
   const entryId = ledger.nextEntryId()
@@ -6182,7 +6194,12 @@ async function fetchSheetsEntry(link: { id: string; gid: string }, ledger: Ledge
   try {
     const res = await fetchWithTimeout(`https://docs.google.com/spreadsheets/d/${link.id}/export?format=xlsx`, 20000)
     if (res.ok) {
-      const b64 = arrayBufferToBase64(await res.arrayBuffer())
+      const ab = await res.arrayBuffer()
+      if (!looksLikeZipBytes(ab)) {
+        // レート制限・権限なしのHTMLページ。catch節でA-FETCH-FAILを記録しCSV保険へフォールバック
+        throw new Error('xlsxがHTML応答(レート制限/権限なし)')
+      }
+      const b64 = arrayBufferToBase64(ab)
       const filename = filenameFromDisposition(res) ?? `GoogleSheet_${link.id}.xlsx`
       ledger.log(entryId, 'A-XLSX-OK', `${filename} ${Math.round(b64.length * 3 / 4 / 1024)}KB`)
       return {
@@ -6216,7 +6233,9 @@ async function fetchDocsEntry(link: { id: string }, ledger: Ledger): Promise<Sou
   try {
     const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=docx`, 20000)
     if (res.ok) {
-      const b64 = arrayBufferToBase64(await res.arrayBuffer())
+      const ab = await res.arrayBuffer()
+      if (!looksLikeZipBytes(ab)) throw new Error('docxがHTML応答(レート制限/権限なし)')
+      const b64 = arrayBufferToBase64(ab)
       const filename = filenameFromDisposition(res) ?? `GoogleDoc_${link.id}.docx`
       ledger.log(entryId, 'A-DOCX-OK', filename)
       return {
@@ -6231,7 +6250,7 @@ async function fetchDocsEntry(link: { id: string }, ledger: Ledger): Promise<Sou
   // 保険: txtエクスポート（旧本流）
   try {
     const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=txt`, 20000)
-    if (res.ok) {
+    if (res.ok && !/text\/html/.test(res.headers.get('content-type') ?? '')) {
       ledger.log(entryId, 'A-TXT-FB', `docs ${link.id}`)
       return {
         entryId, label: `Googleドキュメント(${link.id})`, content: await res.text(),
@@ -6257,6 +6276,11 @@ async function fetchDriveEntry(link: { id: string; index: number }, body: string
     const res = await fetchWithTimeout(`https://drive.google.com/uc?export=download&id=${link.id}`, 20000)
     if (!res.ok) { ledger.log(entryId, 'A-FETCH-FAIL', `drive status=${res.status}`); return null }
     const ct = (res.headers.get('content-type') ?? '').split(';')[0].trim()
+    if (ct === 'text/html') {
+      // レート制限・権限なし・ウイルススキャン確認ページ等。HTMLをテキスト経歴書として取り込まない
+      ledger.log(entryId, 'A-FETCH-FAIL', 'driveがHTML応答(レート制限/権限/確認ページ)')
+      return null
+    }
     const filename = filenameFromDisposition(res) ?? `drive_${link.id}`
     const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xlsx?|ods)$/i.test(filename)
     const isWord = WORD_MIME.includes(ct) || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(docx?)$/i.test(filename)
