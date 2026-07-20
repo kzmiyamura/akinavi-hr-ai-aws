@@ -23,6 +23,9 @@ const TARGET_FUNCTIONS = [
   'parseYMParts',
   'unionIntervalMonths',
   'scoreSkillQuality',
+  'gridToJsonRows',
+  'extractSkillYearsFromSheetJson',
+  'extractSkillYearsUnified',
   'calcMonthsFromMultilineCell',
   'calcMonthsFromDates',
   'filterSkillYears',
@@ -116,11 +119,36 @@ function stripTs(code) {
   // 2. as Type キャスト（"as string", "as any" 等）— 比較演算子の > は含まない
   code = code.replace(/\bas\s+(?:string|number|boolean|unknown|any|null|undefined|\w+)/g, '')
 
-  // 3. 既知TypeScript型名に続く <...> だけ除去（比較演算子は除外）
-  //    Record<string, number>, Array<string>, RegExpExecArray|null 等
-  code = code.replace(/\b(Record|Array|Set|Map|Promise|ReadonlyArray|RegExpExecArray)<[^>]*>/g, (_m, name) => {
-    return name === 'Array' ? '[]' : '__REMOVED_TYPE__'
-  })
+  // 3. 既知TypeScript型名に続く <...> を括弧対応を数えて丸ごと除去。
+  //    旧実装は [^>]* の非貪欲マッチだったため Array<Record<string, string>> のような
+  //    入れ子ジェネリクスで内側の > までしか消えず、壊れたJSを生成する実害があった
+  {
+    const GENERIC_NAMES = ['Record', 'Array', 'Set', 'Map', 'Promise', 'ReadonlyArray', 'Partial', 'RegExpExecArray']
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const name of GENERIC_NAMES) {
+        let idx = 0
+        while ((idx = code.indexOf(name + '<', idx)) !== -1) {
+          const prev = code[idx - 1]
+          if (prev && /[\w$]/.test(prev)) { idx += name.length; continue }  // 別識別子の一部
+          let depth = 0
+          let j = idx + name.length
+          for (; j < code.length; j++) {
+            if (code[j] === '<') depth++
+            else if (code[j] === '>') { depth--; if (depth === 0) { j++; break } }
+            else if (code[j] === '\n') break  // 行を跨ぐ比較演算子等は対象外
+          }
+          if (depth === 0 && code[j - 1] === '>') {
+            code = code.slice(0, idx) + '__REMOVED_TYPE__' + code.slice(j)
+            changed = true
+          } else {
+            idx += name.length
+          }
+        }
+      }
+    }
+  }
   // __REMOVED_TYPE__ が変数宣言の型注釈位置に残っている場合は削除
   code = code.replace(/\s*:\s*__REMOVED_TYPE__\s*(?=[=])/g, '')
   // パラメータ位置に残っている場合
@@ -161,8 +189,10 @@ function stripTs(code) {
   // 7. for...of 変数型
   code = code.replace(/\b(const|let)\s+(\w+)\s*:\s*[\w[\]|& ]+\s+(of|in)\b/g, '$1 $2 $3')
 
-  // 8. 後置 ! (non-null assertion) — !=, !== は保護
-  code = code.replace(/([a-zA-Z0-9_$'")\]])\s*!(?!=)/g, '$1')
+  // 8. 後置 ! (non-null assertion) — !=, !== は保護。
+  //    後置断定は必ず直前トークンに密着する（foo! / )!）ため空白は許さない。
+  //    旧実装は \s* を挟んでいたため「return !isNaN(x)」の論理否定まで除去する実害があった
+  code = code.replace(/([a-zA-Z0-9_$'")\]])!(?!=)/g, '$1')
 
   // 9. 退避した正規表現リテラルを復元
   return unmaskRegexLiterals(code, masked.literals)

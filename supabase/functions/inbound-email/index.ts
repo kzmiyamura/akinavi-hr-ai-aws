@@ -485,7 +485,7 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
 
   // パターン3b: 「スキル（Nヶ月）」（月数のみ・年なし）
   // 例: Java(2年2ヶ月) は pattern3 で捕捉済み、Springboot(6ヶ月) はこちら
-  const patternMonthsOnly = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15})\s*[（(]\s*([0-9０-９]+)[ヶかカ]月\s*[）)]/g
+  const patternMonthsOnly = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15})\s*[（(]\s*([0-9０-９]+)[ヶかカヵｶ]月\s*[）)]/g
   while ((m = patternMonthsOnly.exec(text)) !== null) {
     const name = cleanSkillName(m[1])
     const mo = parseInt(m[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
@@ -679,8 +679,8 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
         // 明示的な期間を探す（N年Nヶ月、Nヶ月間、(Nヶ月)等）
         let blockMonths = 0
         const durPatterns = [
-          /(\d+)年(\d+)[ヶかカ]月/,
-          /(\d+)[ヶかカ]月間/,
+          /(\d+)年(\d+)[ヶかカヵｶ]月/,
+          /(\d+)[ヶかカヵｶ]月間/,
           /（(\d+)ヶ月）/,
           /\((\d+)ヶ月\)/,
           /(\d+)ヶ月/,
@@ -2087,7 +2087,7 @@ function extractCandidateFieldsRegex(
   // （例: ・ヘルプデスク：10ヶ月 / ・テスト実施：5ヶ月）→ 合算して概算の経験年数とする
   // 2件以上の箇条書きがある場合のみ採用（1件だけだと単一案件の期間と区別できないため）
   if (experienceYears === null) {
-    const bulletDurationRE = /^[・\-]\s*[^：:\n]{1,40}[：:]\s*((?:\d+\s*年)?\s*(?:\d+\s*[ヶかカ]月)?)\s*$/gm
+    const bulletDurationRE = /^[・\-]\s*[^：:\n]{1,40}[：:]\s*((?:\d+\s*年)?\s*(?:\d+\s*[ヶかカヵｶ]月)?)\s*$/gm
     let totalMonths = 0
     let bulletCount = 0
     let bm: RegExpExecArray | null
@@ -2874,7 +2874,7 @@ function parseDurationToMonths(text: string): number | null {
   const t = text.trim().replace(/^[<【〈《「『](.+)[>】〉》」』]$/, '$1')
   let months = 0
   const yearMatch = t.match(/(\d+)\s*年/)
-  const monthMatch = t.match(/(\d+)\s*[ヶかカ]月/)
+  const monthMatch = t.match(/(\d+)\s*[ヶかカヵｶ]月/)
   if (yearMatch) {
     const y = parseInt(yearMatch[1])
     // 50年超は西暦年（例: 2020年）の誤マッチとして無視
@@ -2889,7 +2889,7 @@ function parseDurationToMonths(text: string): number | null {
     '七': 7, '八': 8, '九': 9, '十': 10, '十一': 11, '十二': 12,
   }
   const kanjiYear = t.match(/([一二三四五六七八九十]+)\s*年/)
-  const kanjiMonth = t.match(/([一二三四五六七八九十]+)\s*[ヶかカ]月/)
+  const kanjiMonth = t.match(/([一二三四五六七八九十]+)\s*[ヶかカヵｶ]月/)
   if (kanjiYear && KANJI_NUM[kanjiYear[1]] !== undefined) months += KANJI_NUM[kanjiYear[1]] * 12
   if (kanjiMonth && KANJI_NUM[kanjiMonth[1]] !== undefined) months += KANJI_NUM[kanjiMonth[1]]
   return months > 0 ? months : null
@@ -2902,7 +2902,7 @@ function parseDurationToMonths(text: string): number | null {
  * セル全体が期間表記のみの場合に限定する。
  */
 function sumStandaloneDurationValues(rows: Array<Record<string, string>>): number {
-  const STANDALONE_DURATION_RE = /^\d+年(?:\d+[ヶかカ]月)?$|^\d+[ヶかカ]月$/
+  const STANDALONE_DURATION_RE = /^\d+年(?:\d+[ヶかカヵｶ]月)?$|^\d+[ヶかカヵｶ]月$/
   let total = 0
   const seen = new Set<string>()
   for (const row of rows) {
@@ -2951,8 +2951,9 @@ function estimateDateSpanMonthsFromRows(rows: Array<Record<string, string>>): nu
 /** Excelシリアル日付（整数）を "YYYY/M" 形式に変換 */
 function excelSerialToDateStr(s: string): string {
   const n = parseInt(s)
-  // 36526〜50000 = 2000年〜2036年の範囲のみ変換（誤認識防止）
-  if (isNaN(n) || n < 36526 || n > 50000) return s
+  // 25569〜50000 = 1970年〜2036年の範囲のみ変換（誤認識防止）。
+  // 旧下限36526(2000年)では1990年代開始のキャリア（F.K型の1987年〜等）が読めなかった
+  if (isNaN(n) || n < 25569 || n > 50000) return s
   const d = new Date(Date.UTC(1899, 11, 30) + n * 86400000)
   return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}`
 }
@@ -3246,21 +3247,45 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
           }
           if (!months && endDateStr) months = calcSpan(startDateStr, endDateStr)
         } else {
+          // 同一行の日付ペアと近傍行の期間テキストを両方求めて突き合わせる（2026-07-20）:
+          //  - 両方あり かつ ±2ヶ月で一致 → 日付ペアを採用（区間になり重複期間マージが効く）
+          //  - 両方あり かつ 乖離 → 本人が明記した期間テキストを信頼（MK型: 日付ペアが実稼働と
+          //    合わない行が実在。区間は信頼できないため日付なし扱い）
+          //  - 片方のみ → ある方を採用（N_Y型: 旧テキスト優先では日付しか無い案件を数え漏れ）
+          const pairMonths = calcSpan(String(row[1] ?? ''), String(row[3] ?? ''))
+            ?? calcSpan(String(row[1] ?? ''), String(row[2] ?? ''))
+          const pairStartYM = rowStartYM
+          const pairEndYM = rowEndYM
+          let textMonths: number | null = null
           const maxDi = durationColIdx >= 0 ? 5 : 3  // durationColIdx あり → 最大5行後まで確認
-          for (let di = 1; di <= maxDi && !months; di++) {
+          for (let di = 1; di <= maxDi && !textMonths; di++) {
             if (i + di < data.length) {
               const subRow = data[i + di]
               // durationColIdx の列も確認（S.K/S.I型: 期間列に "4カ月" / "0年10ヶ月" が別行に入る）
               if (durationColIdx >= 0) {
-                months = parseDurationToMonths(String(subRow[durationColIdx] ?? ''))
+                textMonths = parseDurationToMonths(String(subRow[durationColIdx] ?? ''))
               }
-              if (!months) {
+              if (!textMonths) {
                 // col[0] も確認（HM型: 期間が "1\n(6ヶ月間)" → 次行 col[0] = "(6ヶ月間)"）
-                months = parseDurationToMonths(String(subRow[0] ?? ''))
+                textMonths = parseDurationToMonths(String(subRow[0] ?? ''))
                      ?? parseDurationToMonths(String(subRow[1] ?? ''))
                      ?? parseDurationToMonths(String(subRow[2] ?? ''))
               }
             }
+          }
+          if (pairMonths && textMonths) {
+            if (Math.abs(pairMonths - textMonths) <= 2) {
+              months = pairMonths
+              rowStartYM = pairStartYM
+              rowEndYM = pairEndYM
+            } else {
+              months = textMonths
+              rowStartYM = null  // 区間として信頼できないため日付なし扱い（単純加算）
+              rowEndYM = null
+            }
+          } else if (!months) {
+            months = pairMonths ?? textMonths
+            if (textMonths && !pairMonths) { rowStartYM = null; rowEndYM = null }
           }
         }
       }
@@ -3303,6 +3328,15 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
         if (!months && /^[〜～~]/.test(nextCol1)) {
           const endDate2 = nextCol1.replace(/^[〜～~：:]+/, '').trim()
           if (endDate2) months = calcSpan(String(row[1] ?? ''), endDate2)
+        }
+      }
+      // 縦積み日付型（F.K型）: 開始日付が本行col[1]・終了日付が次行col[1]。
+      // 次行が新しい案件行（col[0]が行番号）の場合は別案件の開始日と誤ペアになるため除外
+      if (!months && i + 1 < data.length) {
+        const nrow = data[i + 1] ?? []
+        const nextNo = String(nrow[0] ?? '').split(/[\r\n]/)[0].trim()
+        if (!/^\d+$/.test(nextNo)) {
+          months = calcSpan(String(row[1] ?? ''), String(nrow[1] ?? ''))
         }
       }
       if (!months || months <= 0) continue
@@ -3960,7 +3994,8 @@ function gridToFieldText(grid: string[][], maxChars = 6000): string {
 
 
 /** 2D グリッド → ヘッダー付き JSON 行配列（後方互換・extractSkillYearsUnified 内部から呼ばれる） */
-function gridToJsonRows(grid: string[][]): Array<Record<string, string>> {
+// 戻り値型は sync_extractors のTS→JS変換の制約により注釈せず推論に任せる
+function gridToJsonRows(grid: string[][]) {
   // 優先: プロジェクト表のヘッダー行（期間 / 開始 / 終了 / 言語 / OS / DB / FW を含む行）
   const PROJECT_HDR = /^(期間|プロジェクト期間|PJ期間|参画期間|在籍期間|作業期間|稼働期間|開始|開始年月|終了|終了年月|FROM|TO|使用言語|使用技術|言語|OS|DB|FW|ツール|フレームワーク|ミドル|作業月数|月数)$/i
   let headerIdx = -1
@@ -4616,7 +4651,9 @@ function spanCellsToJson(cells: SpanCell[], deadline = 0): Array<Record<string, 
 }
 
 /** JSON 行配列（列名ベース）からスキル別経験月数を抽出 */
-function extractSkillYearsFromSheetJson(rows: Array<Record<string, string>>): Record<string, number> {
+// rows の型は Record<string,string>[]（sync_extractors の変換制約により any[] 注釈）
+// deno-lint-ignore no-explicit-any
+function extractSkillYearsFromSheetJson(rows: any[]): Record<string, number> {
   if (rows.length === 0) return {}
   const headers = Object.keys(rows[0])
 
@@ -4970,7 +5007,9 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
   // 勝者選択（2026-07-20変更）: 「件数の多い方式」→「フィルタ後の品質スコアが最高の方式」。
   // 旧実装は (a)ゴミを多く出す方式が正確な方式に勝てる (b)方式2だけフィルタ後件数・他はフィルタ前
   // という不公平があった。全方式をフィルタしてから skill_master 照合の重み付きスコアで比較する
-  const masterSet = _skillNameSet  // 起動時プリフェッチ済みキャッシュ（null時はスコア=件数に退化）
+  // 起動時プリフェッチ済みキャッシュ（null時はスコア=件数に退化）。
+  // typeof 判定は sync_extractors で切り出したローカルテスト実行時（モジュール変数なし）への配慮
+  const masterSet = typeof _skillNameSet === 'undefined' ? null : _skillNameSet
   const candidates: Array<{ sy: Record<string, number>; method: string }> = [
     { sy: sy1, method: 'column' },
     { sy: sy2, method: 'array' },

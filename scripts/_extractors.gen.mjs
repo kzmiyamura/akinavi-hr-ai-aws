@@ -9,7 +9,7 @@ function parseDurationToMonths(text){
   const t = text.trim().replace(/^[<【〈《「『](.+)[>】〉》」』]$/, '$1')
   let months = 0
   const yearMatch = t.match(/(\d+)\s*年/)
-  const monthMatch = t.match(/(\d+)\s*[ヶかカ]月/)
+  const monthMatch = t.match(/(\d+)\s*[ヶかカヵｶ]月/)
   if (yearMatch) {
     const y = parseInt(yearMatch[1])
     // 50年超は西暦年（例: 2020年）の誤マッチとして無視
@@ -24,7 +24,7 @@ function parseDurationToMonths(text){
     '七': 7, '八': 8, '九': 9, '十': 10, '十一': 11, '十二': 12,
   }
   const kanjiYear = t.match(/([一二三四五六七八九十]+)\s*年/)
-  const kanjiMonth = t.match(/([一二三四五六七八九十]+)\s*[ヶかカ]月/)
+  const kanjiMonth = t.match(/([一二三四五六七八九十]+)\s*[ヶかカヵｶ]月/)
   if (kanjiYear && KANJI_NUM[kanjiYear[1]] !== undefined) months += KANJI_NUM[kanjiYear[1]] * 12
   if (kanjiMonth && KANJI_NUM[kanjiMonth[1]] !== undefined) months += KANJI_NUM[kanjiMonth[1]]
   return months > 0 ? months : null
@@ -33,8 +33,9 @@ function parseDurationToMonths(text){
 // ── excelSerialToDateStr ──
 function excelSerialToDateStr(s){
   const n = parseInt(s)
-  // 36526〜50000 = 2000年〜2036年の範囲のみ変換（誤認識防止）
-  if (isNaN(n) || n < 36526 || n > 50000) return s
+  // 25569〜50000 = 1970年〜2036年の範囲のみ変換（誤認識防止）。
+  // 旧下限36526(2000年)では1990年代開始のキャリア（F.K型の1987年〜等）が読めなかった
+  if (isNaN(n) || n < 25569 || n > 50000) return s
   const d = new Date(Date.UTC(1899, 11, 30) + n * 86400000)
   return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}`
 }
@@ -96,6 +97,348 @@ function scoreSkillQuality(sy, masterSet = null){
     else score += 1
   }
   return score
+}
+
+// ── gridToJsonRows ──
+function gridToJsonRows(grid) {
+  // 優先: プロジェクト表のヘッダー行（期間 / 開始 / 終了 / 言語 / OS / DB / FW を含む行）
+  const PROJECT_HDR = /^(期間|プロジェクト期間|PJ期間|参画期間|在籍期間|作業期間|稼働期間|開始|開始年月|終了|終了年月|FROM|TO|使用言語|使用技術|言語|OS|DB|FW|ツール|フレームワーク|ミドル|作業月数|月数)$/i
+  let headerIdx = -1
+  // スコア最大のヘッダー候補行を選択（プロジェクト表ヘッダーを個人情報行より優先）
+  let bestScore = -1
+  for (let i = 0; i < Math.min(80, grid.length); i++) {
+    const row = grid[i]
+    const nonEmpty = row.map(v => v?.trim()).filter(v => v)
+    if (nonEmpty.length < 2 || new Set(nonEmpty).size < 2) continue
+    // プロジェクト表ヘッダースコア: PROJECT_HDR に一致するセル数
+    const score = nonEmpty.filter(v => PROJECT_HDR.test(v.replace(/[\s　]+/g, ''))).length
+    if (score > bestScore) { bestScore = score; headerIdx = i }
+    // スコアが高い行が見つかったら早期終了（スコア≥2で十分）
+    if (score >= 2) break
+  }
+  // フォールバック: 最初の2+ユニーク非空行
+  if (headerIdx < 0) {
+    headerIdx = grid.findIndex(row => {
+      const nonEmpty = row.map(v => v?.trim()).filter(v => v)
+      return nonEmpty.length >= 2 && new Set(nonEmpty).size >= 2
+    })
+  }
+  if (headerIdx < 0) return []
+  const headers = grid[headerIdx]
+  const result= []
+  for (let i = headerIdx + 1; i < grid.length; i++) {
+    const row = grid[i]
+    if (!row?.some(v => v?.trim())) continue
+    const obj= {}
+    for (let j = 0; j < headers.length; j++) {
+      const k = headers[j]?.trim()
+      if (k) obj[k] = row[j]?.trim() ?? ''
+    }
+    if (Object.keys(obj).length > 0) result.push(obj)
+  }
+  return result
+}
+
+// ── extractSkillYearsFromSheetJson ──
+function extractSkillYearsFromSheetJson(rows){
+  if (rows.length === 0) return {}
+  const headers = Object.keys(rows[0])
+
+  // 全角スペースを除去して列名を正規化（「言　語」→「言語」「O　S」→「OS」）
+  const normalizeHeader = (h)=> h.replace(/[\s　]+/g, '').trim()
+
+  // 列名パターン
+  const PERIOD_COL  = /^(期間|プロジェクト期間|PJ期間|参画期間|在籍期間|作業期間|開始.{0,4}終了)$/
+  const START_COL   = /^(開始|開始年月|FROM|開始日)$/i
+  const END_COL     = /^(終了|終了年月|TO|終了日)$/i
+  const DURATION_COL = /^(期間\(月\)|月数|期間月数|経験月数|在籍月数|作業月数|Months?)$/i
+  const SKILL_COL   = /使用言語|使用技術|技術スタック|技術(?!力|的)|言語(?!\s*能)|FW|フレームワーク|ミドル|ツール|DB(?!A)|OS(?!\s*名)|インフラ|skill/i
+
+  const periodCol   = headers.find(h => PERIOD_COL.test(normalizeHeader(h)))
+  const startCol    = headers.find(h => START_COL.test(normalizeHeader(h)))
+  const endCol      = headers.find(h => END_COL.test(normalizeHeader(h)))
+  const durationCol = headers.find(h => DURATION_COL.test(normalizeHeader(h)))
+  const skillCols   = headers.filter(h => SKILL_COL.test(normalizeHeader(h)))
+  // 「期間」列が純整数値（月数）を持つかチェック（H.I 型: 「期間: 22」「期間: 6」等）
+  const rawPeriodColName = headers.find(h => normalizeHeader(h) === '期間')
+  const rawPeriodIsIntMonths = rawPeriodColName && rows.some(r => {
+    const v = String(r[rawPeriodColName] ?? '').trim()
+    const n = parseInt(v, 10)
+    return !isNaN(n) && n > 0 && n <= 600 && String(n) === v
+  })
+
+  if (skillCols.length === 0) return {}
+
+  const skillMonths= {}
+  const projectPeriods= []
+  const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
+
+  const parseYM = (s)=> {
+    const m = s.match(/(\d{2,4})[\/\-年.](\d{1,2})/)
+    if (m) {
+      let year = parseInt(m[1])
+      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+      if (year >= 1970 && year <= 2100) return year * 12 + parseInt(m[2])
+    }
+    // US 日付形式 M/D/YY or M/D/YYYY
+    const usm = s.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
+    if (usm) {
+      const month = parseInt(usm[1])
+      let year = parseInt(usm[3])
+      if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
+      if (month >= 1 && month <= 12 && year >= 1970 && year <= 2100) return year * 12 + month
+    }
+    return null
+  }
+  const resolveEndYM = (s)=> {
+    if (/現在|今|present|継続|在籍中/i.test(s)) return nowYM
+    return parseYM(s)
+  }
+
+  for (const row of rows) {
+    let months = null
+    let startYM = null
+    let endYM = null
+
+    // 優先1: 月数列（「作業月数」「月数」等の明示的な月数列）
+    if (durationCol) months = parseDurationToMonths(row[durationCol] ?? '')
+    // 優先1b: 「期間」列が純整数月数の場合
+    if (!months && rawPeriodIsIntMonths && rawPeriodColName) {
+      const v = String(row[rawPeriodColName] ?? '').trim()
+      const n = parseInt(v, 10)
+      if (!isNaN(n) && n > 0 && n <= 600 && String(n) === v) months = n
+    }
+
+    // 優先2: 期間列（"2020/04〜2023/03" 形式。「2026年2月〜2026年7月」「2026年2月1日〜
+    // 2026年7月31日」のように開始側の年月（＋日）直後に「月」「日」が付く自然な表記
+    // （区切り記号の前）にも対応する）
+    if (!months && periodCol && row[periodCol]) {
+      const ptext = row[periodCol]
+      const m = ptext.match(/(\d{4}[\/年]\d{1,2})月?(?:\d{1,2}日)?\s*[〜～\-〜]\s*(\S+)/)
+      if (m) {
+        startYM = parseYM(m[1])
+        endYM   = resolveEndYM(m[2])
+        if (startYM && endYM) months = endYM - startYM + 1
+      } else {
+        months = parseDurationToMonths(ptext)
+      }
+    }
+
+    // 優先3: 開始列 + 終了列
+    if (!months && startCol && endCol && row[startCol] && row[endCol]) {
+      startYM = parseYM(row[startCol])
+      endYM   = resolveEndYM(row[endCol])
+      if (startYM && endYM) months = endYM - startYM + 1
+    }
+
+    if (!months || months <= 0 || months > 600) continue
+    if (startYM && endYM) projectPeriods.push({ startYM, endYM })
+
+    // スキル抽出
+    for (const col of skillCols) {
+      const val = row[col] ?? ''
+      const JSON_SKILL_BLOCKLIST = /^(自己PR|PR|備考|補足|資格|氏名|年齢|性別|国籍|住所|学歴|経歴|担当|役割|役職|ポジション|立場|評価|合計|スコア|レベル|プロジェクト名|企業名|規模|人数|期間|開始|終了|弊社社員|自社社員|社員|派遣|契約|フリー|なし|特になし|未経験|なし$)$/
+      const skills = val.split(/[\n\r、，,\/・]+/).map(s => s.trim()).filter(s => s && s !== '-' && s !== '－' && s.length >= 2 && !/^\d+$/.test(s) && !JSON_SKILL_BLOCKLIST.test(s))
+      for (const skill of skills) {
+        skillMonths[skill] = (skillMonths[skill] ?? 0) + months
+      }
+    }
+  }
+
+  if (Object.keys(skillMonths).length === 0) return {}
+
+  // _totalProjectMonths / _dateSpanMonths
+  if (projectPeriods.length > 0) {
+    skillMonths['_totalProjectMonths'] = projectPeriods.reduce((s, p) => s + (p.endYM - p.startYM + 1), 0)
+    const allStarts = projectPeriods.map(p => p.startYM)
+    const allEnds   = projectPeriods.map(p => p.endYM)
+    const span = Math.max(...allEnds) - Math.min(...allStarts) + 1
+    if (span > 0) skillMonths['_dateSpanMonths'] = span
+  }
+  return skillMonths
+}
+
+// ── extractSkillYearsUnified ──
+function extractSkillYearsUnified(grid, extraTexts = []){
+  // 方式1: 列名ベース
+  const jsonRows = gridToJsonRows(grid)
+  const sy1 = extractSkillYearsFromSheetJson(jsonRows)
+
+  // 方式2: 2D配列ベース
+  const sy2 = extractSkillYearsFromSheetData(grid)
+
+  // 方式3: テキストパターンベース（「スキル名 X年」）
+  const sy3= {}
+  for (const text of [...grid.flat(), ...extraTexts]) {
+    for (const seg of text.split(/[,、，\n]/)) {
+      const m = seg.trim().match(/^(.+?)\s+(\d+(?:\.\d+)?)年(?:[^\d]|$)/)
+      if (!m) continue
+      let skill = m[1].trim()
+      const colonIdx = Math.max(skill.lastIndexOf(':'), skill.lastIndexOf('：'))
+      if (colonIdx >= 0) skill = skill.slice(colonIdx + 1).trim()
+      const years = parseFloat(m[2])
+      if (skill && years > 0 && years <= 50 && !/^\d/.test(skill)) {
+        sy3[skill] = Math.round(years * 12)
+      }
+    }
+  }
+
+  // 方式4: Word 職務経歴書型（YYYY年MM月~約N年間 + [OS]/[言語]/[DB] パターン）
+  const sy4= {}
+  {
+    let curMonths = 0
+    const parseWordPeriod = (line)=> {
+      // 約N年Mか月 / 約N年Mヶ月間 / 約N年間
+      const m1 = line.match(/約(\d+)年(?:(\d+)[ヵヶか]ヶ?月)?間?/)
+      if (m1) return parseInt(m1[1]) * 12 + parseInt(m1[2] || '0')
+      if (/約半年/.test(line)) return 6
+      // 約N年Mか月（間なし）
+      const m2 = line.match(/約(\d+)年(\d+)か月/)
+      if (m2) return parseInt(m2[1]) * 12 + parseInt(m2[2])
+      // YYYY年MM月~YYYY年MM月
+      const m3 = line.match(/(\d{4})年(\d{1,2})月[〜~～\-]+(\d{4})年(\d{1,2})月/)
+      if (m3) {
+        const sYM = parseInt(m3[1]) * 12 + parseInt(m3[2])
+        const eYM = parseInt(m3[3]) * 12 + parseInt(m3[4])
+        return Math.max(0, eYM - sYM + 1)
+      }
+      // YYYY年MM月~現在
+      const m4 = line.match(/(\d{4})年(\d{1,2})月[〜~～\-]+現在/)
+      if (m4) {
+        const sYM = parseInt(m4[1]) * 12 + parseInt(m4[2])
+        const nowYM = new Date().getFullYear() * 12 + new Date().getMonth() + 1
+        return Math.max(0, nowYM - sYM + 1)
+      }
+      return 0
+    }
+    const SKIP_RE = /^(なし|[-－ー]|特記|注|備考)\s*[：:]?$/
+    const TECH_LBL_RE = /^(OS|DB|言語|ミドルウェア|その他|ツール|クラウド|フレームワーク|FW|MW|サーバ)/i
+    const extractFromSkillLine = (line) => {
+      const markerRE = /[\[【]([^\]】]{1,20})[\]】]\s*([^\[【]*)/g
+      let mm
+      while ((mm = markerRE.exec(line)) !== null) {
+        const label = mm[1].trim()
+        const content = mm[2].replace(/全\d+名.*$/, '').trim()
+        if (!TECH_LBL_RE.test(label)) continue
+        for (const raw of content.split(/[,、，]+/).map(s => s.trim())) {
+          const skill = raw.trim()
+          if (!skill || skill.length < 2 || SKIP_RE.test(skill)) continue
+          if (/^(特記|注|備考)\s*[：:]/.test(skill)) continue
+          if (/^\d+$/.test(skill)) continue // 純粋な数字はOSバージョンなので除外
+          sy4[skill] = (sy4[skill] ?? 0) + curMonths
+        }
+      }
+    }
+    for (const para of extraTexts) {
+      const months = parseWordPeriod(para)
+      if (months > 0) { curMonths = months; continue }
+      if (curMonths > 0 && (para.includes('[') || para.includes('【'))) {
+        extractFromSkillLine(para)
+      }
+    }
+  }
+
+  // 方式5: キャリアシート型（「スキル名 [N] 年 [M] ヶ月」が1行に複数並ぶ形式）
+  // 例: "Win 28 年 2 ヶ月 Java 16 年 4 ヶ月 Oracle 16 年 2 ヶ月"（各トークンが別セル）
+  const sy5= {}
+  {
+    // ヘッダー行に「OS」「経験年数」「言語」が並ぶキャリアシートのみ対象
+    const isCareerSheet = grid.slice(0, 30).some(row => {
+      const joined = row.join('\t')
+      return /OS.*経験年数.*言語|経験年数.*言語.*経験年数|技術.*経験.*OS.*言語/i.test(joined)
+    })
+    if (isCareerSheet) {
+      // 業務スキル・業種名は除外（技術スキルのみ抽出）
+      const BIZ_SKILL_RE = /^(金融|流通|公共|官公庁|人事|給与|医療|保険|製造|販売|管理|保守|業務|マイグレ|マイグレーション|小売|通信|社会保険|不動産|電力|自治体)/
+      for (const row of grid) {
+        // 連続トークンとして「[スキル名] [N] 年 [M?] ヶ月」を全検索
+        // 年・月が別セルで存在するため、行全体をスペース結合してスキャン
+        const line = row.join(' ')
+        const re = /([^\s\d年ヶ月][^\s]{0,19})\s+(\d+)\s+年(?:\s+(\d+)\s+ヶ月|\s+ヶ月)?/g
+        let mm
+        while ((mm = re.exec(line)) !== null) {
+          const skill = mm[1].trim()
+          const years = parseInt(mm[2])
+          const months = parseInt(mm[3] ?? '0')
+          const totalMonths = years * 12 + months
+          if (!skill || years <= 0 || years > 50) continue
+          if (/^\d/.test(skill) || BIZ_SKILL_RE.test(skill)) continue
+          sy5[skill] = Math.max(sy5[skill] ?? 0, totalMonths)
+        }
+      }
+    }
+  }
+
+  // 方式6: 能力評価型（◎/○/△/☆形式のスキルシート）
+  // 例: "VBA ... 〇" → 12ヶ月（実務経験1年以上）、"事務 ... ◎" → 36ヶ月（3年以上）
+  const sy6= {}
+  {
+    const RATING_MARKS= { '◎': 36, '○': 12, '〇': 12, '△': 6, '▲': 6 }
+    const RATING_RE = /^[◎○〇△▲]$/
+    // ヘッダー行に「能力」が3回以上ある行 = 能力評価型スキルシート
+    const isRatingSheet = grid.some(row => row.filter(c => c === '能力').length >= 3)
+    if (isRatingSheet) {
+      const SKIP_CELLS = new Set(['能力', 'スキル', 'その他', '業務', '環境', '言語', 'ライブラリ', 'アピールポイント', '経歴', '資格', 'OS', 'DB', 'フリガナ', '氏名', '最寄駅', '最終学歴'])
+      for (const row of grid) {
+        for (let i = 0; i < row.length - 1; i++) {
+          const cell = row[i].trim()
+          if (!cell || RATING_RE.test(cell)) continue
+          if (cell.length > 25) continue
+          if (SKIP_CELLS.has(cell)) continue
+          if (/^[【≪\d（(]/.test(cell)) continue
+          // 後続セルにレーティングがある（途中は空白セルのみ）
+          for (let j = i + 1; j <= Math.min(i + 14, row.length - 1); j++) {
+            const nc = row[j].trim()
+            if (!nc) continue
+            if (RATING_RE.test(nc)) {
+              const months = RATING_MARKS[nc]
+              if (months) sy6[cell] = Math.max(sy6[cell] ?? 0, months)
+              break
+            } else {
+              break // 空白以外の非レーティングセル → 別ペアの開始
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 勝者選択（2026-07-20変更）: 「件数の多い方式」→「フィルタ後の品質スコアが最高の方式」。
+  // 旧実装は (a)ゴミを多く出す方式が正確な方式に勝てる (b)方式2だけフィルタ後件数・他はフィルタ前
+  // という不公平があった。全方式をフィルタしてから skill_master 照合の重み付きスコアで比較する
+  // 起動時プリフェッチ済みキャッシュ（null時はスコア=件数に退化）。
+  // typeof 判定は sync_extractors で切り出したローカルテスト実行時（モジュール変数なし）への配慮
+  const masterSet = typeof _skillNameSet === 'undefined' ? null : _skillNameSet
+  const candidates= [
+    { sy: sy1, method: 'column' },
+    { sy: sy2, method: 'array' },
+    { sy: sy5, method: 'career-sheet' },
+    { sy: sy6, method: 'rating' },
+    { sy: sy4, method: 'word-narrative' },
+    { sy: sy3, method: 'text' },
+  ]
+  let best= {}
+  let bestMethod = 'none'
+  let bestScore = 0
+  for (const c of candidates) {
+    const filtered = filterSkillYears(c.sy)
+    const score = scoreSkillQuality(filtered, masterSet)
+    // 同点は先勝ち（配列順=従来の優先順位を維持）
+    if (score > bestScore) { best = filtered; bestMethod = c.method; bestScore = score }
+  }
+
+  if (bestMethod !== 'none') {
+    const count = Object.keys(best).filter(k => !k.startsWith('_')).length
+    console.log(`[skillYears-unified] method=${bestMethod} count=${count} score=${bestScore}${masterSet ? '' : ' (master未取得=件数退化)'}`)
+  }
+  // 経路の永続記録（_extractMethod → raw_profile / pipeline_trace の B-SY-METHOD）。
+  // 方式2(array)=extractSkillYearsFromSheetData は内部でより細かい番号
+  // （10=列型 15=項番 16=複数年数列 17=KVブロック 20=近接探索 30=数値一覧）を設定済みのため上書きしない
+  const DISPATCH_CODE= { column: 41, text: 43, 'word-narrative': 44, 'career-sheet': 45, rating: 46 }
+  if (bestMethod !== 'none' && best['_extractMethod'] === undefined && DISPATCH_CODE[bestMethod] !== undefined) {
+    best['_extractMethod'] = DISPATCH_CODE[bestMethod]
+  }
+  return filterSkillYears(best)
 }
 
 // ── calcMonthsFromMultilineCell ──
@@ -254,7 +597,7 @@ function extractSkillYearsFromBodyText(text){
 
   // パターン3b: 「スキル（Nヶ月）」（月数のみ・年なし）
   // 例: Java(2年2ヶ月) は pattern3 で捕捉済み、Springboot(6ヶ月) はこちら
-  const patternMonthsOnly = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15})\s*[（(]\s*([0-9０-９]+)[ヶかカ]月\s*[）)]/g
+  const patternMonthsOnly = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15})\s*[（(]\s*([0-9０-９]+)[ヶかカヵｶ]月\s*[）)]/g
   while ((m = patternMonthsOnly.exec(text)) !== null) {
     const name = cleanSkillName(m[1])
     const mo = parseInt(m[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
@@ -448,8 +791,8 @@ function extractSkillYearsFromBodyText(text){
         // 明示的な期間を探す（N年Nヶ月、Nヶ月間、(Nヶ月)等）
         let blockMonths = 0
         const durPatterns = [
-          /(\d+)年(\d+)[ヶかカ]月/,
-          /(\d+)[ヶかカ]月間/,
+          /(\d+)年(\d+)[ヶかカヵｶ]月/,
+          /(\d+)[ヶかカヵｶ]月間/,
           /（(\d+)ヶ月）/,
           /\((\d+)ヶ月\)/,
           /(\d+)ヶ月/,
@@ -714,21 +1057,45 @@ function extractSkillYearsFromSheetData(data){
           }
           if (!months && endDateStr) months = calcSpan(startDateStr, endDateStr)
         } else {
+          // 同一行の日付ペアと近傍行の期間テキストを両方求めて突き合わせる（2026-07-20）:
+          //  - 両方あり かつ ±2ヶ月で一致 → 日付ペアを採用（区間になり重複期間マージが効く）
+          //  - 両方あり かつ 乖離 → 本人が明記した期間テキストを信頼（MK型: 日付ペアが実稼働と
+          //    合わない行が実在。区間は信頼できないため日付なし扱い）
+          //  - 片方のみ → ある方を採用（N_Y型: 旧テキスト優先では日付しか無い案件を数え漏れ）
+          const pairMonths = calcSpan(String(row[1] ?? ''), String(row[3] ?? ''))
+            ?? calcSpan(String(row[1] ?? ''), String(row[2] ?? ''))
+          const pairStartYM = rowStartYM
+          const pairEndYM = rowEndYM
+          let textMonths = null
           const maxDi = durationColIdx >= 0 ? 5 : 3  // durationColIdx あり → 最大5行後まで確認
-          for (let di = 1; di <= maxDi && !months; di++) {
+          for (let di = 1; di <= maxDi && !textMonths; di++) {
             if (i + di < data.length) {
               const subRow = data[i + di]
               // durationColIdx の列も確認（S.K/S.I型: 期間列に "4カ月" / "0年10ヶ月" が別行に入る）
               if (durationColIdx >= 0) {
-                months = parseDurationToMonths(String(subRow[durationColIdx] ?? ''))
+                textMonths = parseDurationToMonths(String(subRow[durationColIdx] ?? ''))
               }
-              if (!months) {
+              if (!textMonths) {
                 // col[0] も確認（HM型: 期間が "1\n(6ヶ月間)" → 次行 col[0] = "(6ヶ月間)"）
-                months = parseDurationToMonths(String(subRow[0] ?? ''))
+                textMonths = parseDurationToMonths(String(subRow[0] ?? ''))
                      ?? parseDurationToMonths(String(subRow[1] ?? ''))
                      ?? parseDurationToMonths(String(subRow[2] ?? ''))
               }
             }
+          }
+          if (pairMonths && textMonths) {
+            if (Math.abs(pairMonths - textMonths) <= 2) {
+              months = pairMonths
+              rowStartYM = pairStartYM
+              rowEndYM = pairEndYM
+            } else {
+              months = textMonths
+              rowStartYM = null  // 区間として信頼できないため日付なし扱い（単純加算）
+              rowEndYM = null
+            }
+          } else if (!months) {
+            months = pairMonths ?? textMonths
+            if (textMonths && !pairMonths) { rowStartYM = null; rowEndYM = null }
           }
         }
       }
@@ -771,6 +1138,15 @@ function extractSkillYearsFromSheetData(data){
         if (!months && /^[〜～~]/.test(nextCol1)) {
           const endDate2 = nextCol1.replace(/^[〜～~：:]+/, '').trim()
           if (endDate2) months = calcSpan(String(row[1] ?? ''), endDate2)
+        }
+      }
+      // 縦積み日付型（F.K型）: 開始日付が本行col[1]・終了日付が次行col[1]。
+      // 次行が新しい案件行（col[0]が行番号）の場合は別案件の開始日と誤ペアになるため除外
+      if (!months && i + 1 < data.length) {
+        const nrow = data[i + 1] ?? []
+        const nextNo = String(nrow[0] ?? '').split(/[\r\n]/)[0].trim()
+        if (!/^\d+$/.test(nextNo)) {
+          months = calcSpan(String(row[1] ?? ''), String(nrow[1] ?? ''))
         }
       }
       if (!months || months <= 0) continue
@@ -1298,6 +1674,9 @@ export {
   parseYMParts,
   unionIntervalMonths,
   scoreSkillQuality,
+  gridToJsonRows,
+  extractSkillYearsFromSheetJson,
+  extractSkillYearsUnified,
   calcMonthsFromMultilineCell,
   calcMonthsFromDates,
   filterSkillYears,
