@@ -3089,6 +3089,8 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   let startDateColIdx = -1
   let endDateColIdx = -1
   let noColIdx = -1  // 行番号列（通常 col[0] だが "No." ヘッダーが別列にある場合）
+  let langColIdxFallback = -1
+  let headerRowIdxFallback = -1
   for (let i = 0; i < Math.min(60, data.length); i++) {
     const row = data[i]
     for (let j = 0; j < row.length; j++) {
@@ -3107,10 +3109,15 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
            // 全角ASCII含む複合ヘッダー: "ＯＳ/ＤＢ/環境/言語/他" など（TMK-S型）
            || (vNorm.includes('言語') && (vAscii.includes('OS') || vAscii.includes('DB') || vAscii.includes('FW')))
            // "利用技術" / "機種/OS/DB等" / "OS/言語/DB" 等のヘッダー
-           || vNorm.includes('利用技術') || vNorm.includes('開発環境') || /機種.*OS|OS.*言語|言語.*DB|言語.*OS/i.test(vNorm)
+           || vNorm.includes('利用技術') || /機種.*OS|OS.*言語|言語.*DB|言語.*OS/i.test(vNorm)
            // 全角ASCII正規化後の照合
            || /OS.*言語|言語.*OS|言語.*DB/i.test(vAscii)
          ) && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
+      // 「開発環境」は具体列名（言語・使用言語等）が最後まで見つからなかった場合の保険。
+      // 「開発環境」は機種/OS/言語/DB/ツールをまとめた"グループ見出し"であることが多く（H.R型）、
+      // 直接ヒットさせると本物の「言語」列より先にスキャンが打ち切られ、隣の「機種」列
+      // （Win10等のOS名）が言語列として誤採用される実害があった。ループを抜けた後にだけ判定する
+      if (vNorm.includes('開発環境') && langColIdxFallback < 0) { langColIdxFallback = j; headerRowIdxFallback = i }
       if ((vNorm.includes('FW') || vNorm.includes('ツール') || vNorm.includes('フレームワーク') || vNorm.includes('ミドル')) && fwColIdx < 0 && j !== langColIdx) fwColIdx = j
       // 純整数の月数列を検出（「作業月数」「月数」「期間（月）」「期間」等）
       // vFull も使うことで "作業\n月数" → "作業月数" のような改行含みヘッダーも検出できる（ＹＫ型）
@@ -3124,6 +3131,11 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       if ((/^(No\.?|No|№|番号|項目番号)$/i.test(vNorm) || /^(No\.?|No|№|番号|項目番号)$/i.test(vFull)) && noColIdx < 0) noColIdx = j
     }
     if (langColIdx >= 0) break
+  }
+  // 具体列名が最後まで見つからなかった場合のみ「開発環境」保険を採用（K.J型）
+  if (langColIdx < 0 && langColIdxFallback >= 0) {
+    langColIdx = langColIdxFallback
+    headerRowIdx = headerRowIdxFallback
   }
   if (langColIdx >= 0) {
     const skillMonths: Record<string, number> = {}
