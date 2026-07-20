@@ -160,13 +160,28 @@ function extractSkillYearsFromSheetJson(rows){
   const endCol      = headers.find(h => END_COL.test(normalizeHeader(h)))
   const durationCol = headers.find(h => DURATION_COL.test(normalizeHeader(h)))
   const skillCols   = headers.filter(h => SKILL_COL.test(normalizeHeader(h)))
-  // 「期間」列が純整数値（月数）を持つかチェック（H.I 型: 「期間: 22」「期間: 6」等）
+  // 「期間」列が純整数値（月数）を持つかチェック（H.I 型: 「期間: 22」「期間: 6」等）。
+  // ただし gridToJsonRows はヘッダー行に空セルがあると該当列を丸ごと落とすため、
+  // 「期間」の隣に無題の日付列（開始/終了serial）がある表では、本来は行番号でしかない
+  // 1,2,3…が「期間」列の値として残ってしまう。この行番号を月数と誤読すると、
+  // 本当の日付が失われた上に桁違いに小さい月数を「確定値」として作ってしまい、
+  // 件数（スキル数）で選ぶ勝者選択に間違って勝ってしまう実害があった（I.Sさん: Java 288→28ヶ月）。
+  // 行順に厳密に 1,2,3,…,N と並ぶ（＝行番号そのもの）場合は月数として信頼しない
   const rawPeriodColName = headers.find(h => normalizeHeader(h) === '期間')
-  const rawPeriodIsIntMonths = rawPeriodColName && rows.some(r => {
+  // 1案件が複数行（データ行＋補足行）に渡る表では、値が入るのはデータ行だけで
+  // 間に空文字の行を挟む（1, "", "", 2, "", "", 3, ...）。空文字は除外してから連番判定する
+  const rawPeriodIntsAll = rawPeriodColName ? rows.map(r => {
     const v = String(r[rawPeriodColName] ?? '').trim()
     const n = parseInt(v, 10)
-    return !isNaN(n) && n > 0 && n <= 600 && String(n) === v
-  })
+    return !isNaN(n) && n > 0 && n <= 600 && String(n) === v ? n : null
+  }) : []
+  // 「1から始まり、隣接値の差が0(マージセル展開による重複行)か1」なら行番号列とみなす。
+  // 厳密な n===idx+1 判定だと、マージセルの重複展開（1,2,3,…,13,13,14,15）で外れてしまう
+  const rawPeriodIntsNonNull = rawPeriodIntsAll.filter((n)=> n !== null)
+  const looksLikeRowIndex = rawPeriodIntsNonNull.length >= 3
+    && rawPeriodIntsNonNull[0] === 1
+    && rawPeriodIntsNonNull.every((n, idx) => idx === 0 || (n - rawPeriodIntsNonNull[idx - 1] === 0 || n - rawPeriodIntsNonNull[idx - 1] === 1))
+  const rawPeriodIsIntMonths = !looksLikeRowIndex && rawPeriodIntsAll.some(n => n !== null)
 
   if (skillCols.length === 0) return {}
 

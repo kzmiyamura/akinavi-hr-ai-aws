@@ -15,7 +15,7 @@
  *     FAIL を確認 → index.ts を修正 → PASS を確認（テストファースト）
  *   - index.ts 変更後は node scripts/sync_extractors.mjs を忘れずに
  */
-import { extractSkillYearsFromSheetData, scoreSkillQuality } from './_extractors.gen.mjs'
+import { extractSkillYearsFromSheetData, scoreSkillQuality, gridToJsonRows, extractSkillYearsFromSheetJson } from './_extractors.gen.mjs'
 
 const verbose = process.argv.includes('-v')
 let pass = 0
@@ -419,6 +419,30 @@ console.log('=== I. Unified 方式7（文章行の期間×技術語・narrative 
     [[]],
     ['2007年6月〜2009年7月 Javaで開発'],
     {})
+}
+
+console.log('=== J. 方式1（列名ベース・gridToJsonRows）の期間列誤読 ===')
+{
+  const tj = (label, grid, ok) => {
+    const r = extractSkillYearsFromSheetJson(gridToJsonRows(grid))
+    const cond = ok(r)
+    if (cond) { pass++; if (verbose) console.log(`  PASS ${label}`, JSON.stringify(r)) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       got: ${JSON.stringify(r)}`) }
+  }
+  // ヘッダー行の一部セルが空だと、gridToJsonRows は該当列を丸ごと落とす（列位置マッピングのため）。
+  // 実データで「期間」ヘッダーの隣に無題の日付列2本（開始・終了serial）があり、
+  // 「期間」列自体には行番号(1,2,3…)しか入っていないシートが存在した。
+  // rawPeriodIsIntMonths ヒューリスティックがこの行番号を「月数」と誤読し、
+  // Java(実際は複数案件で計200ヶ月超)が28ヶ月という桁違いの過小評価になっていた（I.Sさん実害）
+  tj('J1: 期間列に行番号(1,2,3)が入り、真の日付は無題列で失われる → 誤った月数を作らない',
+    [['期間', '', '', '業務内容', '使用言語'],
+     ['1', '2020/04', '2020/12', '案件A', 'Java'],
+     ['2', '2021/01', '2021/12', '案件B', 'Java'],
+     ['3', '2022/01', '2022/06', '案件C', 'Java']],
+    (r) => r.Java === undefined || r.Java > 9)  // 行番号合算(1+2+3=6ヶ月)のような過小値は不可
+  tj('J2: 正規の月数列（真に1,2,3ヶ月で全て異なる案件）は従来どおり信頼する',
+    [['期間', '業務内容', '使用言語'], ['1', '短期A', 'Ruby'], ['5', '中期B', 'Ruby']],
+    (r) => r.Ruby === 6)
 }
 
 console.log(`\n📊 ${pass} passed / ${fail} failed（全${pass + fail}ケース）`)
