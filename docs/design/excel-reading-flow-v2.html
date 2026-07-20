@@ -549,8 +549,22 @@
       <p class="zone-label">段階4: スキル年数を取り出す（4段構え）</p>
 
       <details class="box" open>
-        <summary><span class="box-title">1〜2段目: ルール2方式を並走 → 多く取れた方を採用</span></summary>
+        <summary><span class="box-title">1〜2段目: 選択の仕組みは3層（直列の先勝ち + 並走の多数勝ち）</span></summary>
         <div class="detail">
+          <p><b>2026-07-20更新 — 実装の正確な構造:</b> 「どの読み方を使うか」は3層で決まる。</p>
+          <pre class="tree"><b>第1層: 直列フォールバック（先に当たった型で確定・以降は走らない）</b>
+  Method 1 列ヘッダー型 → 1.6 複数年数列 → 1.5 項番ブロック
+    → 1.7 KVブロック → 3 数値一覧 → 2 近接探索（最後の受け皿）
+  ※ 確度の高い型から順。経路は _extractMethod（10/16/15/17/30/20）で記録
+
+<b>第2層: 並走して多い方採用（ディスパッチャ）</b>
+  列名ベース ／ 第1層チェーン ／ 文章パターン ／ Word職歴型
+  ／ キャリアシート型 ／ ◎○△評価型 を全部実行 → スキル数最多を採用
+
+<b>第3層: grid vs SpanCell の勝者選択</b>
+  グリッド読み（第2層）と結合セル空間読み（SpanCell）を両方実行
+  → 多く取れた方（同数ならSpanCell優先）</pre>
+          <p>つまり「Method 1と2はどちらも使うのか」の答えは層で異なる: <b>第1層内は排他（Method 1が1件でも取れたらMethod 2は走らない）、第2・3層は併走して多数勝ち</b>。どの経路が採用されたかは候補者ごとに <code>_extractMethod</code>（raw_profile）と <code>B-SY-METHOD</code>（pipeline_trace）で後から確認できる。</p>
           <div class="table-wrap">
             <table class="cmp-table">
               <thead><tr><th>方式</th><th>得意な表</th><th>例</th></tr></thead>
