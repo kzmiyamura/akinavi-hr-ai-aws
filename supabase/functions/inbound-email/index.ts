@@ -3526,16 +3526,53 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       for (let b = 0; b < Math.min(blockHeaderRows.length, 30); b++) {
         const bStart = blockHeaderRows[b] + 1
         const bEnd = b + 1 < blockHeaderRows.length ? blockHeaderRows[b + 1] : Math.min(data.length, bStart + 25)
-        // 期間: ブロック先頭データ行の期間列〜+12列から日付セルを収集（最初=開始・最後=終了）
+        // 期間の検出（優先順）:
+        //  ① ブロック先頭データ行の期間列〜+12列の日付セル（最初=開始・最後=終了。S.I型）
+        //  ② 期間列セル内の日付範囲 "2023/01～2023/05"（1セル型）
+        //  ③ 期間列の縦積み日付（開始行・～行・終了行に分かれる型）
+        //  「現在」「継続中」セルは今日の年月として扱う（現職案件）
         let sYM: number | null = null
         let eYM: number | null = null
         let blockMonths: number | null = null
+        const nowYM = new Date().getFullYear() * 12 + (new Date().getMonth() + 1)
         {
           const dataRow = data[bStart] ?? []
           const ymList: number[] = []
           for (let j = blockPeriodCol; j < Math.min(dataRow.length, blockPeriodCol + 12); j++) {
-            const p = parseYMParts(String(dataRow[j] ?? '').trim())
+            const cell = String(dataRow[j] ?? '').trim()
+            const p = parseYMParts(cell)
             if (p) ymList.push(p.year * 12 + p.month)
+            else if (/^(現在|継続中?|present)$/i.test(cell)) ymList.push(nowYM)
+          }
+          if (ymList.length >= 2 && ymList[ymList.length - 1] >= ymList[0]) {
+            sYM = ymList[0]
+            eYM = ymList[ymList.length - 1]
+          }
+        }
+        // ② 期間列セル内の日付範囲（"2023/01～2023/05" / "2023/01〜現在"）
+        if (sYM === null) {
+          for (let r = bStart; r < bEnd; r++) {
+            const cell = String((data[r] ?? [])[blockPeriodCol] ?? '').trim()
+            const m = cell.match(/(.+?)\s*[〜～~\-－]+\s*(.+)/)
+            if (!m) continue
+            const sP = parseYMParts(m[1])
+            const eP = /現在|継続|present/i.test(m[2]) ? { year: Math.floor((nowYM - 1) / 12), month: ((nowYM - 1) % 12) + 1 } : parseYMParts(m[2])
+            if (sP && eP) {
+              const s2 = sP.year * 12 + sP.month
+              const e2 = eP.year * 12 + eP.month
+              if (e2 >= s2) { sYM = s2; eYM = e2; break }
+            }
+          }
+        }
+        // ③ 期間列の縦積み日付（開始・終了が別行。「～」だけの行を挟む形も可）
+        if (sYM === null) {
+          const ymList: number[] = []
+          for (let r = bStart; r < bEnd; r++) {
+            const cell = String((data[r] ?? [])[blockPeriodCol] ?? '').trim()
+            if (!cell) continue
+            const p = parseYMParts(cell)
+            if (p) ymList.push(p.year * 12 + p.month)
+            else if (/^(現在|継続中?|present)$/i.test(cell)) ymList.push(nowYM)
           }
           if (ymList.length >= 2 && ymList[ymList.length - 1] >= ymList[0]) {
             sYM = ymList[0]
@@ -3557,12 +3594,20 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
         for (let r = bStart; r < bEnd; r++) {
           const row = data[r] ?? []
           for (let j = Math.max(0, blockPeriodCol - 3); j <= blockPeriodCol + 3 && j < row.length; j++) {
-            if (!BLOCK_SKILL_LABEL.test(normCell(String(row[j])))) continue
+            const rawCell = String(row[j] ?? '')
             const candidates: string[] = []
-            if (String(row[j + 1] ?? '').trim()) candidates.push(String(row[j + 1]))
-            for (let r2 = r + 1; r2 < bEnd; r2++) {
-              const v2 = String((data[r2] ?? [])[j] ?? '').trim()
-              if (v2) candidates.push(v2)
+            // インライン型: 「環境：PHP/MySQL」のようにラベルと値が同一セル
+            const inline = rawCell.trim().match(/^(環境|開発環境|使用環境|技術環境|使用言語|言語|使用技術)\s*[：:]\s*([\s\S]+)/)
+            if (inline) {
+              candidates.push(inline[2])
+            } else if (BLOCK_SKILL_LABEL.test(normCell(rawCell))) {
+              if (String(row[j + 1] ?? '').trim()) candidates.push(String(row[j + 1]))
+              for (let r2 = r + 1; r2 < bEnd; r2++) {
+                const v2 = String((data[r2] ?? [])[j] ?? '').trim()
+                if (v2) candidates.push(v2)
+              }
+            } else {
+              continue
             }
             for (const cand of candidates) {
               // 【環境/ツール】のようなセクション見出しは "/" 分割で壊れる前に丸ごと除去する
