@@ -61,7 +61,12 @@ function parseYMParts(s) {
   if (m) {
     let year = parseInt(m[1])
     if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
-    if (year >= 1970 && year <= 2100) return { year, month: parseInt(m[2]) }
+    const month = parseInt(m[2])
+    // 月の妥当性チェック（1〜12）が欠けていたため、日付ではない小数（案件行の参加人数・
+    // 生の月数等。例: "38.53333333333333"）を「年.月」と誤読し、月=53のような無効値を
+    // そのまま year*12+month の計算に使ってしまい、実在しない未来日付（2042年等）を
+    // 作っていた実害があった（H.Rさん: 特許システム終了日が2012→2042に誤爆）
+    if (month >= 1 && month <= 12 && year >= 1970 && year <= 2100) return { year, month }
   }
   // US 日付形式 M/D/YY or M/D/YYYY（Excel が日付セルを M/D/YY で出力するケース）
   const usm = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
@@ -1813,8 +1818,9 @@ function extractSkillYearsFromSheetData(data){
   // ── Method 3: スキル一覧型（経験年数列が数値のみ） ──
   // 例: "スキル名 | 5 | ◎" のように経験年数が整数で表現されている形式
   {
-    const EXP_YEAR_HEADER = /^(経験年数|経験年|経験\(年\)|年数|年|Years?|Exp\.?)$/i
-    const SKILL_COL_HEADER = /^(スキル名?|技術名?|使用技術|言語|技術スタック|item|技術項目)$/i
+    const EXP_YEAR_HEADER = /^(経験年数|経験年|経験\(年\)|年数|年|Years?|Exp\.?|経験期間)$/i
+    // 「ツール・言語・環境」等の複合列名にも対応（M.K型の「保有スキル」表: 分類|ツール・言語・環境|経験期間）
+    const SKILL_COL_HEADER = /^(スキル名?|技術名?|使用技術|言語|技術スタック|item|技術項目|ツール[・･].{0,6}言語|.{0,6}言語[・･].{0,6}環境)$/i
     let expYrCol = -1
     let skillCol3 = -1
     let hdrRow3 = -1
