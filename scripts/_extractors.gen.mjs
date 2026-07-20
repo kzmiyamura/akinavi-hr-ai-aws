@@ -1085,6 +1085,16 @@ function extractSkillYearsFromSheetData(data){
         const durNum = parseInt(durRaw, 10)
         if (!durColIsRowNumCol && !isNaN(durNum) && durNum > 0 && durNum <= 600 && String(durNum) === durRaw) {
           months = durNum
+          // 「期間」列は月数のはずが、実際には開始〜終了の日数が入っている表記が存在する
+          // （H.H型: 例 開始/終了差2557日に対し「期間」列2569。総経験が数百年になる実害）。
+          // 本物の開始・終了列が同じ行にあれば、そこから計算した月数と突き合わせ、
+          // 「期間」列の値が日数（月数の目安20〜40倍）に見えるときはそちらを信頼する
+          if (startDateColIdx >= 0 && endDateColIdx >= 0) {
+            const dateSpan = calcSpan(String(row[startDateColIdx] ?? ''), String(row[endDateColIdx] ?? ''))
+            if (dateSpan && dateSpan > 0 && durNum / dateSpan >= 20 && durNum / dateSpan <= 40) {
+              months = dateSpan
+            }
+          }
         }
         // 期間列が日付範囲 "2017.04 ～ 2019.12" / "2020/04〜2023/03" 形式の場合
         if (!months) {
@@ -1289,7 +1299,7 @@ function extractSkillYearsFromSheetData(data){
         }
       }
       if (!months || months <= 0) continue
-      projectPeriods.push({ start: String(row[1] ?? ''), end: String(row[3] ?? ''), months })
+      projectPeriods.push({ start: String(row[1] ?? ''), end: String(row[3] ?? ''), months, startYM: rowStartYM, endYM: rowEndYM })
       // 【DBツール】等のセクション見出しは除去（IS型Word: 「【DBツール】GCP・BigQuery」対策）。
       // 中点・は「ASCIIを含むトークンのみ」さらに分割する（GCP・BigQuery は分割し、
       // 運用・保守 のような日本語複合語は壊さない）
@@ -1336,7 +1346,17 @@ function extractSkillYearsFromSheetData(data){
         skillMonths['_totalProjectMonths'] = headerTotalMonths
       }
       if (projectPeriods.length > 0) {
-        const totalProjectMonths = projectPeriods.reduce((s, p) => s + p.months, 0)
+        // 総経験は「並行案件の月数を単純合計」ではなく、スキル別と同じくunion-mergeする。
+        // 個人事業主・フリーランスが複数契約を並行稼働するケースで単純合計すると、
+        // 実年齢を大きく超える総経験（H.H型: 588年）になっていた実害があった。
+        // 日付区間のない行（期間テキストのみ）は従来どおり単純加算で埋め合わせる
+        const periodsWithDates = projectPeriods.filter(p => p.startYM !== null && p.endYM !== null && (p.endYM ) >= (p.startYM ))
+        const periodsWithoutDates = projectPeriods.filter(p => !(p.startYM !== null && p.endYM !== null && (p.endYM ) >= (p.startYM )))
+        const unionMonths = periodsWithDates.length > 0
+          ? unionIntervalMonths(periodsWithDates.map(p => [p.startYM , p.endYM ]))
+          : 0
+        const datelessSum = periodsWithoutDates.reduce((s, p) => s + p.months, 0)
+        const totalProjectMonths = unionMonths + datelessSum
         if (!skillMonths['_totalProjectMonths']) skillMonths['_totalProjectMonths'] = totalProjectMonths
         // max日付 − min日付 スパン（空白期間込みのキャリア全体幅）
         const parseYM = (s) => {
