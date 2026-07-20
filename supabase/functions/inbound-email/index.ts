@@ -3145,13 +3145,17 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       const durDateRaw = durationColIdx >= 0 ? String(row[durationColIdx] ?? '').trim() : ''
       const durCellIsDate = durationColIdx >= 0 && noColIdx < 0 &&
         /^\d{4}[\/\-年.]\d{1,2}|^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(durDateRaw)
-      // O.M型: No列が無く行頭が空でも、言語セルが埋まっていて行内に日付があればデータ行
+      // O.M型: No列が無く行頭が空でも、言語セルが埋まっていて行内に日付があればデータ行。
+      // M.N型: [2026][年][4][月] のように年月が別セルに分割される形式は結合してから判定
       const langCellPeek = String(row[langColIdx] ?? '').trim()
-      const rowAnyDate = langCellPeek !== '' && row.some((c, ci) => {
+      const joinRowHead = (rw: string[]) => (rw ?? []).slice(0, 8).map((c) => String(c ?? '').trim()).join('')
+      // 「) : null」で行が終わると sync_extractors が戻り値型注釈と誤認するため null 側を先に書く
+      const joinedRowDate = langCellPeek === '' ? null : parseYMParts(joinRowHead(row))
+      const rowAnyDate = langCellPeek !== '' && (joinedRowDate !== null || row.some((c, ci) => {
         if (ci === langColIdx) return false
         const t = String(c ?? '').trim()
         return t !== '' && t.length <= 40 && (parseYMParts(t) !== null || /^(現在|継続中?)$/.test(t))
-      })
+      }))
       const isDataRow = /^\d+$/.test(noCell) ||
         (startDateColIdx === 0 && /\d/.test(noCell)) || // 開始日付が col[0] の場合
         (noColIdx > 0 && /^\d+$/.test(altNoCell)) || // "No." 列が別にある場合
@@ -3221,8 +3225,9 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
           // parseDuration も試す（"1年6ヶ月" 等）
           if (!months) months = parseDurationToMonths(durRaw)
         }
-        // durationColIdx列が日付(>600)でmonthsがまだ未取得の場合、隣接列の純整数を月数として試用
-        if (!months) {
+        // durationColIdx列が日付(>600)でmonthsがまだ未取得の場合、隣接列の純整数を月数として試用。
+        // ただし [2026][年][4][月] の分割セル日付行（M.N型）では「4」を月数と誤認するため無効化
+        if (!months && !joinedRowDate) {
           for (let adj = 1; adj <= 8 && !months; adj++) {
             const adjIdx = durationColIdx + adj
             if (adjIdx >= row.length) break
@@ -3364,6 +3369,39 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
             rowStartYM = rowYMs[0]
             rowEndYM = rowYMs[rowYMs.length - 1]
           }
+        }
+      }
+      // K.I型: durationCol（作業期間等）の列に日付が縦積み（開始→～→終了/現在）
+      if (!months && durationColIdx >= 0) {
+        const sC = parseYMParts(String(row[durationColIdx] ?? '').trim())
+        if (sC) {
+          for (let dj = 1; dj <= 3 && !months; dj++) {
+            const v = String((data[i + dj] ?? [])[durationColIdx] ?? '').trim()
+            if (!v || /^[〜～~\-－]+$/.test(v)) continue
+            const eC = /^(現在|継続中?)$/.test(v)
+              ? { year: new Date().getFullYear(), month: new Date().getMonth() + 1 }
+              : parseYMParts(v)
+            if (eC) {
+              const sI = sC.year * 12 + sC.month
+              const eI = eC.year * 12 + eC.month
+              if (eI >= sI && eI - sI <= 600) { months = eI - sI + 1; rowStartYM = sI; rowEndYM = eI }
+            }
+            break
+          }
+        }
+      }
+      // M.N型: 分割セル結合日付の縦積み（本行=開始・2〜3行下=終了。間の「～」行はスキップ）
+      if (!months && joinedRowDate) {
+        for (let dj = 1; dj <= 3 && !months; dj++) {
+          const joined = joinRowHead(data[i + dj] ?? [])
+          if (!joined || /^[〜～~\-－]+$/.test(joined)) continue
+          const eJ = parseYMParts(joined)
+          if (eJ) {
+            const sI = joinedRowDate.year * 12 + joinedRowDate.month
+            const eI = eJ.year * 12 + eJ.month
+            if (eI >= sI && eI - sI <= 600) { months = eI - sI + 1; rowStartYM = sI; rowEndYM = eI }
+          }
+          break
         }
       }
       // 縦積み日付型（F.K型）: 開始日付が本行col[1]・終了日付が次行col[1]。
@@ -5204,6 +5242,38 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
     }
   }
 
+  // 方式7: 文章行の期間×技術語（narrative Word: 「2007年6月〜2009年7月（…）…Javaで開発」）。
+  // 期間範囲を含む行が3行以上あるときだけ発動（誤爆防止）。技術語はASCII連続列、期間は行内の範囲
+  const sy7: Record<string, number> = {}
+  {
+    const RANGE7 = /((?:19|20)\d{2}\s*年\s*\d{1,2}\s*月|(?:19|20)\d{2}[\/.]\d{1,2})\s*[〜～~\-－]\s*(現在|継続中?|(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月|(?:19|20)\d{2}[\/.]\d{1,2})/
+    const ROLE7 = /^(PM|PL|PG|SE|PO|PMO|QA|TL|IT|OA|AI|IoT|FX|EC|BtoB|BtoC|SNS|No|OK|NG|ERP)$/i
+    const nowY7 = new Date().getFullYear() * 12 + (new Date().getMonth() + 1)
+    const iv7: Record<string, number[][]> = {}
+    let rangeLines = 0
+    for (const line of [...grid.flat(), ...extraTexts]) {
+      const s = String(line)
+      if (s.length < 12 || s.length > 2000) continue
+      const mm = s.match(RANGE7)
+      if (!mm) continue
+      const a = parseYMParts(mm[1])
+      const z = /現在|継続/.test(mm[2]) ? { year: Math.floor((nowY7 - 1) / 12), month: ((nowY7 - 1) % 12) + 1 } : parseYMParts(mm[2])
+      if (!a || !z) continue
+      const aa = a.year * 12 + a.month
+      const zz = z.year * 12 + z.month
+      if (zz < aa || zz - aa > 600) continue
+      rangeLines++
+      for (const mt of s.matchAll(/[A-Za-z][A-Za-z0-9+.#-]{1,24}/g)) {
+        if (ROLE7.test(mt[0])) continue
+        if (!iv7[mt[0]]) iv7[mt[0]] = []
+        iv7[mt[0]].push([aa, zz])
+      }
+    }
+    if (rangeLines >= 3) {
+      for (const k of Object.keys(iv7)) sy7[k] = unionIntervalMonths(iv7[k])
+    }
+  }
+
   // 勝者選択（2026-07-20変更）: 「件数の多い方式」→「フィルタ後の品質スコアが最高の方式」。
   // 旧実装は (a)ゴミを多く出す方式が正確な方式に勝てる (b)方式2だけフィルタ後件数・他はフィルタ前
   // という不公平があった。全方式をフィルタしてから skill_master 照合の重み付きスコアで比較する
@@ -5216,6 +5286,7 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
     { sy: sy5, method: 'career-sheet' },
     { sy: sy6, method: 'rating' },
     { sy: sy4, method: 'word-narrative' },
+    { sy: sy7, method: 'narrative-range' },
     { sy: sy3, method: 'text' },
   ]
   let best: Record<string, number> = {}
@@ -5235,7 +5306,7 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
   // 経路の永続記録（_extractMethod → raw_profile / pipeline_trace の B-SY-METHOD）。
   // 方式2(array)=extractSkillYearsFromSheetData は内部でより細かい番号
   // （10=列型 15=項番 16=複数年数列 17=KVブロック 20=近接探索 30=数値一覧）を設定済みのため上書きしない
-  const DISPATCH_CODE: Record<string, number> = { column: 41, text: 43, 'word-narrative': 44, 'career-sheet': 45, rating: 46 }
+  const DISPATCH_CODE: Record<string, number> = { column: 41, text: 43, 'word-narrative': 44, 'career-sheet': 45, rating: 46, 'narrative-range': 47 }
   if (bestMethod !== 'none' && best['_extractMethod'] === undefined && DISPATCH_CODE[bestMethod] !== undefined) {
     best['_extractMethod'] = DISPATCH_CODE[bestMethod]
   }

@@ -169,6 +169,19 @@ t('C6: 未来だけの期間（2030/01〜2031/12）も月数としては通る�
   [H, ['1', '2030/01', 'X', '2031/12', 'Java']],
   { Java: 24 })
 
+t('C11: 年・月が別セルに分割（M.N型: [2026][年][4][月] + 縦積み終了）',
+  [['', '開発期間', '', '', '', '業務内容', '環境・言語'],
+   ['', '2026', '年', '4', '月', 'PET-CT制御開発', '【言語】\nVC++\nC#\nWin32API'],
+   ['', '', '～', '', '', '', ''],
+   ['', '2026', '年', '6', '月', '', '']],
+  { 'VC++': 3, 'C#': 3, Win32API: 3 })
+t('C12: 期間列が遠い列で縦積み+現在終了（K.I型）',
+  [['No', '', '業務名', '言語/ツール等', '', '', '', '', '', '', '作業期間'],
+   ['1', '', 'AI講座', 'n8n\nGemini\nSlack', '', '', '', '', '', '', '46023'],
+   ['', '', '', '', '', '', '', '', '', '', '～'],
+   ['', '', '', '', '', '', '', '', '', '', '現在']],
+  { n8n: (v) => v >= 5, Gemini: (v) => v >= 5, Slack: (v) => v >= 5 })
+
 console.log('=== D. スキルセルの異常 ===')
 t('D1: カテゴリラベル形式（言語：Java/SQL）は値だけ抽出',
   [H, ['1', '2020/04', 'X', '2022/03', '言語　：　Java/SQL']],
@@ -383,6 +396,29 @@ console.log('=== H. 品質スコア（方式勝者の選択基準） ===')
       < scoreSkillQuality({ Java: 24, AWS: 12, 独自: 6 }, master))
   sc('H5: 照合はスペース・大小文字を無視',
     scoreSkillQuality({ 'JAVA ': 24 }, new Set(['java'])) === 3)
+}
+
+console.log('=== I. Unified 方式7（文章行の期間×技術語・narrative Word） ===')
+{
+  const { extractSkillYearsUnified } = await import('./_extractors.gen.mjs')
+  const tu = (label, grid, extra, expect) => {
+    const r = extractSkillYearsUnified(grid, extra)
+    const got = Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith('_')))
+    const ok = Object.keys(got).length === Object.keys(expect).length
+      && Object.entries(expect).every(([k, v]) => (typeof v === 'function' ? v(got[k]) : got[k] === v))
+    if (ok) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       expect: ${JSON.stringify(expect)}\n       got   : ${JSON.stringify(got)} method=${r._extractMethod}`) }
+  }
+  tu('I1: 段落文章の「期間（…）会社にて…技術」行から抽出',
+    [[]],
+    ['2007年6月〜2009年7月（2年1か月）某ERP開発会社にて固定資産モジュールをJavaとOracleで開発',
+     '2009年8月〜2010年7月（1年）物流システムの保守。PostgreSQLとSpringを使用',
+     '2010年8月〜2011年7月 社内SE。ExcelVBAでツール作成'],
+    { Java: 26, Oracle: 26, PostgreSQL: 12, Spring: 12, ExcelVBA: 12 })
+  tu('I2: 期間行が2行以下なら発動しない（誤爆防止）',
+    [[]],
+    ['2007年6月〜2009年7月 Javaで開発'],
+    {})
 }
 
 console.log(`\n📊 ${pass} passed / ${fail} failed（全${pass + fail}ケース）`)
