@@ -2724,6 +2724,8 @@ async function extractWordText(base64: string): Promise<{ text: string; totalPro
             if (syCells['_dateSpanMonths'] && !skillYears['_dateSpanMonths']) {
               skillYears['_dateSpanMonths'] = syCells['_dateSpanMonths']
             }
+            // SpanCellベース勝者には経路コード50を付与（gridベースはUnified内で付与済み）
+            if (skillYears['_extractMethod'] === undefined) skillYears['_extractMethod'] = 50
             console.log(`[Word-skillYears-pick] grid=${countGrid} cells=${countCells} winner=${countCells >= countGrid ? 'cells' : 'grid'}`)
           }
           // Word内のハイパーリンク（Excelのrels解析相当・名簿リンク型検出用）
@@ -3344,6 +3346,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
           if (spanMonths > 0) skillMonths['_dateSpanMonths'] = spanMonths
         }
       }
+      skillMonths['_extractMethod'] = 10  // Method 1: プロジェクト経歴型（列ヘッダー）
       return filterSkillYears(skillMonths)
     }
   }
@@ -3402,6 +3405,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       }
       if (Object.keys(SM16).length > 0) {
         if (headerTotalMonths && !SM16['_totalProjectMonths']) SM16['_totalProjectMonths'] = headerTotalMonths
+        SM16['_extractMethod'] = 16  // Method 1.6: 複数年数列テーブル型
         return filterSkillYears(SM16)
       }
     }
@@ -3488,6 +3492,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       }
       if (Object.keys(SM15).filter(k => !k.startsWith('_')).length > 0) {
         if (headerTotalMonths && !SM15['_totalProjectMonths']) SM15['_totalProjectMonths'] = headerTotalMonths
+        SM15['_extractMethod'] = 15  // Method 1.5: 項番ブロック型
         return filterSkillYears(SM15)
       }
     }
@@ -3651,6 +3656,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       if (Object.keys(filtered17).filter(k => !k.startsWith('_')).length >= 3) {
         filtered17['_totalProjectMonths'] = headerTotalMonths
           ?? ((allIntervals.length > 0 ? unionIntervalMonths(allIntervals) : 0) + allDateless)
+        filtered17['_extractMethod'] = 17  // Method 1.7: KVブロック型
         return filtered17
       }
     }
@@ -3689,6 +3695,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       }
       if (Object.keys(SM3).length > 0) {
         if (headerTotalMonths && !SM3['_totalProjectMonths']) SM3['_totalProjectMonths'] = headerTotalMonths
+        SM3['_extractMethod'] = 30  // Method 3: スキル一覧型（数値列）
         return filterSkillYears(SM3)
       }
     }
@@ -3737,6 +3744,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   }
   if (Object.keys(skillMonths2).length > 0) {
     if (headerTotalMonths && !skillMonths2['_totalProjectMonths']) skillMonths2['_totalProjectMonths'] = headerTotalMonths
+    skillMonths2['_extractMethod'] = 20  // Method 2: 近接探索型（最後の受け皿・比率上昇は品質劣化のサイン）
     return filterSkillYears(skillMonths2)
   }
 
@@ -4961,6 +4969,13 @@ function extractSkillYearsUnified(grid: string[][], extraTexts: string[] = []): 
     const count = Object.keys(best).filter(k => !k.startsWith('_')).length
     console.log(`[skillYears-unified] method=${bestMethod} count=${count}`)
   }
+  // 経路の永続記録（_extractMethod → raw_profile / pipeline_trace の B-SY-METHOD）。
+  // 方式2(array)=extractSkillYearsFromSheetData は内部でより細かい番号
+  // （10=列型 15=項番 16=複数年数列 17=KVブロック 20=近接探索 30=数値一覧）を設定済みのため上書きしない
+  const DISPATCH_CODE: Record<string, number> = { column: 41, text: 43, 'word-narrative': 44, 'career-sheet': 45, rating: 46 }
+  if (bestMethod !== 'none' && best['_extractMethod'] === undefined && DISPATCH_CODE[bestMethod] !== undefined) {
+    best['_extractMethod'] = DISPATCH_CODE[bestMethod]
+  }
   return filterSkillYears(best)
 }
 
@@ -5895,6 +5910,8 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
           if (syCells['_dateSpanMonths'] && !skillYears['_dateSpanMonths']) {
             skillYears['_dateSpanMonths'] = syCells['_dateSpanMonths']
           }
+          // SpanCellベース勝者には経路コード50を付与（gridベースはUnified内で付与済み）
+          if (skillYears['_extractMethod'] === undefined) skillYears['_extractMethod'] = 50
           firstJsonRows = jsonRows
           console.log(`[skillYears-pick] grid=${countGrid} cells=${countCells} winner=${countCells >= countGrid ? 'cells' : 'grid'}`)
         } else {
@@ -6276,6 +6293,11 @@ async function extractEntry(entry: SourceEntry, ledger: Ledger): Promise<SourceE
     if (sheetPickedBy === 'gid') ledger.log(entry.entryId, 'B-SHEET-GID')
     if (parseError) ledger.log(entry.entryId, 'B-PARSE-ERR', parseError.slice(0, 80))
     else ledger.log(entry.entryId, text.trim() ? 'B-EXTRACT-OK' : 'B-EXTRACT-EMPTY', `t=${text.length} sy=${Object.keys(skillYears).filter(k => !k.startsWith('_')).length}`)
+    // どの抽出Methodがスキル年数を出したか（10=列型 15=項番 16=複数年数列 17=KVブロック 20=近接探索 30=数値一覧）。
+    // pipeline_trace に残り、「Method 2（最後の受け皿）比率の上昇=上流の劣化」を後から観測できる
+    if (typeof skillYears['_extractMethod'] === 'number') {
+      ledger.log(entry.entryId, 'B-SY-METHOD', `M${skillYears['_extractMethod']}`)
+    }
     if (links && links.length > 0) ledger.log(entry.entryId, 'B-LINKS', `${links.length}件`)
     return {
       ...entry, content: text,
@@ -6288,6 +6310,9 @@ async function extractEntry(entry: SourceEntry, ledger: Ledger): Promise<SourceE
     const { text: rawText, totalProjectMonths, skillYears, grid, links } = await extractWordText(entry.attachment.data)
     const text = rawText.trim() ? cleanseWordText(rawText) : ''
     ledger.log(entry.entryId, text ? 'B-EXTRACT-OK' : 'B-EXTRACT-EMPTY', `t=${text.length}`)
+    if (typeof skillYears?.['_extractMethod'] === 'number') {
+      ledger.log(entry.entryId, 'B-SY-METHOD', `M${skillYears['_extractMethod']}`)
+    }
     if (links && links.length > 0) ledger.log(entry.entryId, 'B-LINKS', `${links.length}件`)
     return { ...entry, content: text, totalProjectMonths, skillYears, grid, links }
   }

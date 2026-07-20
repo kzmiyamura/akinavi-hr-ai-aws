@@ -821,6 +821,7 @@ function extractSkillYearsFromSheetData(data){
           if (spanMonths > 0) skillMonths['_dateSpanMonths'] = spanMonths
         }
       }
+      skillMonths['_extractMethod'] = 10  // Method 1: プロジェクト経歴型（列ヘッダー）
       return filterSkillYears(skillMonths)
     }
   }
@@ -879,6 +880,7 @@ function extractSkillYearsFromSheetData(data){
       }
       if (Object.keys(SM16).length > 0) {
         if (headerTotalMonths && !SM16['_totalProjectMonths']) SM16['_totalProjectMonths'] = headerTotalMonths
+        SM16['_extractMethod'] = 16  // Method 1.6: 複数年数列テーブル型
         return filterSkillYears(SM16)
       }
     }
@@ -965,6 +967,7 @@ function extractSkillYearsFromSheetData(data){
       }
       if (Object.keys(SM15).filter(k => !k.startsWith('_')).length > 0) {
         if (headerTotalMonths && !SM15['_totalProjectMonths']) SM15['_totalProjectMonths'] = headerTotalMonths
+        SM15['_extractMethod'] = 15  // Method 1.5: 項番ブロック型
         return filterSkillYears(SM15)
       }
     }
@@ -1128,6 +1131,7 @@ function extractSkillYearsFromSheetData(data){
       if (Object.keys(filtered17).filter(k => !k.startsWith('_')).length >= 3) {
         filtered17['_totalProjectMonths'] = headerTotalMonths
           ?? ((allIntervals.length > 0 ? unionIntervalMonths(allIntervals) : 0) + allDateless)
+        filtered17['_extractMethod'] = 17  // Method 1.7: KVブロック型
         return filtered17
       }
     }
@@ -1166,6 +1170,7 @@ function extractSkillYearsFromSheetData(data){
       }
       if (Object.keys(SM3).length > 0) {
         if (headerTotalMonths && !SM3['_totalProjectMonths']) SM3['_totalProjectMonths'] = headerTotalMonths
+        SM3['_extractMethod'] = 30  // Method 3: スキル一覧型（数値列）
         return filterSkillYears(SM3)
       }
     }
@@ -1214,6 +1219,7 @@ function extractSkillYearsFromSheetData(data){
   }
   if (Object.keys(skillMonths2).length > 0) {
     if (headerTotalMonths && !skillMonths2['_totalProjectMonths']) skillMonths2['_totalProjectMonths'] = headerTotalMonths
+    skillMonths2['_extractMethod'] = 20  // Method 2: 近接探索型（最後の受け皿・比率上昇は品質劣化のサイン）
     return filterSkillYears(skillMonths2)
   }
 

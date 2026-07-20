@@ -177,6 +177,19 @@ t('E2: 凡例（◎＝業務経験1年以上）を経験宣言と誤認しない
   [['凡例：◎＝業務経験1年以上', '', '', '', ''], H, ['1', '2020/04', 'X', '2022/03', 'Java']],
   { Java: 24 }, { internal: { _totalProjectMonths: 24 } })
 
+t('E3: 経路記録 — プロジェクト経歴型は _extractMethod=10',
+  [H, ['1', '2020/04', 'X', '2022/03', 'Java']],
+  { Java: 24 }, { internal: { _extractMethod: 10 } })
+t('E4: 経路記録 — KVブロック型は _extractMethod=17',
+  [['No.', '', '期間', '', '内容'],
+   ['1', '', '2023/01', '2023/12', '案件A'],
+   ['', '', '環境', '', ''],
+   ['', '', 'PHP\nMySQL\nLinux', '', '']],
+  { PHP: 12, MySQL: 12, Linux: 12 }, { internal: { _extractMethod: 17 } })
+t('E5: 経路記録 — 近接探索型（最後の受け皿）は _extractMethod=20',
+  [['スキル', '経験'], ['Java', '5年'], ['SQL', '3年']],
+  { Java: 60, SQL: 36 }, { internal: { _extractMethod: 20 } })
+
 console.log('=== F. スキル一覧型（Method 2/3） ===')
 t('F1: スキル一覧型（Java | 5年）',
   [['スキル', '経験'], ['Java', '5年'], ['SQL', '3年']],
