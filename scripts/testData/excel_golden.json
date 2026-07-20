@@ -39,11 +39,16 @@
     "PowerPoint": 81,
     "Linux": 2,
     "WordPress": 2,
+    "SQL": 21,
     "JP1/AJS": 30,
     "Oracle": 19,
-    "PostgreSQL": 11
+    "PowerShell ISE": 8,
+    "SnowFlake": 11,
+    "Spark-shell": 11,
+    "PostgreSQL": 11,
+    "shellスクリプト": 11
    },
-   "total": 113
+   "total": 145
   },
   "H_O.xlsx": {
    "sheet": "経歴書",

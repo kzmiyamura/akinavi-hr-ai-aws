@@ -2972,10 +2972,10 @@ function parseYMParts(s: string) {
   // 和暦（昭和/平成/令和・S/H/R）+ 1〜2桁年は西暦に換算する。
   // 従来の「プレフィックス除去だけ」だと H30/4 → "30/4" → 2030年4月 と未来に誤変換されていた
   // （正: 平成30年 = 2018年）。3〜4桁年（R2020/04 等の誤記）は従来どおり除去して西暦扱い
-  const eraM = s.trim().match(/^(昭和|平成|令和|[SsHhRr])\s*(\d{1,2})[\/\-年.](\d{1,2})/)
+  const eraM = s.trim().match(/^(昭和|平成|令和|[SsHhRr])\s*(\d{1,2}|元)\s*[\/\-年.]\s*(\d{1,2})/)
   if (eraM) {
     const offset = /^(?:昭和|[Ss])/.test(eraM[1]) ? 1925 : /^(?:平成|[Hh])/.test(eraM[1]) ? 1988 : 2018
-    const year = offset + parseInt(eraM[2])
+    const year = offset + (eraM[2] === '元' ? 1 : parseInt(eraM[2]))
     const month = parseInt(eraM[3])
     if (month >= 1 && month <= 12 && year >= 1970 && year <= 2100) return { year, month }
   }
@@ -2983,7 +2983,8 @@ function parseYMParts(s: string) {
   const cleaned = s.trim().replace(/^[gGhHrRsS]/, '')
   const normalized = excelSerialToDateStr(cleaned)
   // "/" "-" "年" に加えて "." も区切り文字として許容（例: "1991.10"）
-  const m = normalized.match(/(\d{2,4})[\/\-年.](\d{1,2})/)
+  // 空白許容: mammoth(Word変換)がrun間に空白を挟むため「2008 年 5 月」形式が実在する
+  const m = normalized.match(/(\d{2,4})\s*[\/\-年.]\s*(\d{1,2})/)
   if (m) {
     let year = parseInt(m[1])
     if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
@@ -3101,7 +3102,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
            // 全角ASCII含む複合ヘッダー: "ＯＳ/ＤＢ/環境/言語/他" など（TMK-S型）
            || (vNorm.includes('言語') && (vAscii.includes('OS') || vAscii.includes('DB') || vAscii.includes('FW')))
            // "利用技術" / "機種/OS/DB等" / "OS/言語/DB" 等のヘッダー
-           || vNorm.includes('利用技術') || /機種.*OS|OS.*言語|言語.*DB|言語.*OS/i.test(vNorm)
+           || vNorm.includes('利用技術') || vNorm.includes('開発環境') || /機種.*OS|OS.*言語|言語.*DB|言語.*OS/i.test(vNorm)
            // 全角ASCII正規化後の照合
            || /OS.*言語|言語.*OS|言語.*DB/i.test(vAscii)
          ) && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
@@ -3132,21 +3133,31 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
     for (let i = headerRowIdx + 1; i < data.length; i++) {
       const row = data[i]
       // noCell: col[0] の最初の行だけを使用（マルチライン "1\n(6ヶ月間)\n..." → "1"）
-      const noCell = String(row[0] ?? '').split(/[\r\n]/)[0].trim().replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+      // 丸数字（①②…⑳）も行番号として扱う（K.J型のWord経歴表）
+      const circled = (s: string) => s.replace(/[①-⑳]/g, (c) => String(c.charCodeAt(0) - 0x2460 + 1))
+      const noCell = circled(String(row[0] ?? '').split(/[\r\n]/)[0].trim()).replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
       // 通常: col[0] が行番号（数字）かどうか。
       // 例外1: 開始年月列が col[0] の場合（「開始年月」ヘッダーが検出済み）は日付でもOK
       // 例外2: "No." 列が col[0] 以外にある場合（noColIdx > 0）は該当列の値を確認
-      const altNoCell = noColIdx > 0 ? String(row[noColIdx] ?? '').trim().replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)) : ''
+      const altNoCell = noColIdx > 0 ? circled(String(row[noColIdx] ?? '').trim()).replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)) : ''
       // durationColIdx に日付が入っているケース（行番号なし・noColIdx未検出）:
       // TMK-S型: 行番号なし、作業期間 col[0〜] に日付が直接入っているパターン
       const durDateRaw = durationColIdx >= 0 ? String(row[durationColIdx] ?? '').trim() : ''
       const durCellIsDate = durationColIdx >= 0 && noColIdx < 0 &&
         /^\d{4}[\/\-年.]\d{1,2}|^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(durDateRaw)
+      // O.M型: No列が無く行頭が空でも、言語セルが埋まっていて行内に日付があればデータ行
+      const langCellPeek = String(row[langColIdx] ?? '').trim()
+      const rowAnyDate = langCellPeek !== '' && row.some((c, ci) => {
+        if (ci === langColIdx) return false
+        const t = String(c ?? '').trim()
+        return t !== '' && t.length <= 40 && (parseYMParts(t) !== null || /^(現在|継続中?)$/.test(t))
+      })
       const isDataRow = /^\d+$/.test(noCell) ||
         (startDateColIdx === 0 && /\d/.test(noCell)) || // 開始日付が col[0] の場合
         (noColIdx > 0 && /^\d+$/.test(altNoCell)) || // "No." 列が別にある場合
-        durCellIsDate  // TMK-S型: durationCol に日付がある場合（行番号なし）
-      const effectiveNoCell = noCell || altNoCell || (durCellIsDate ? durDateRaw : '')
+        durCellIsDate ||  // TMK-S型: durationCol に日付がある場合（行番号なし）
+        rowAnyDate  // O.M型
+      const effectiveNoCell = noCell || altNoCell || (durCellIsDate ? durDateRaw : '') || (rowAnyDate ? 'D' : '')
       if (!effectiveNoCell || !isDataRow) continue
       // マージセルで同じ行番号が複数行に展開されている場合の重複スキップ
       // （A.I型: No.列が2,3列ともに"1"として展開される）
@@ -3157,7 +3168,11 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       // この行の期間が日付として特定できたら記録する（スキル別の区間マージ用）
       let rowStartYM: number | null = null
       let rowEndYM: number | null = null
-      const calcSpan = (a: string, b: string): number | null => {
+      const calcSpan = (a: string, bRaw: string): number | null => {
+        // 「現在」「継続中」は今日の年月として扱う（現職案件）
+        const b = /^(現在|継続中?|present)$/i.test(bRaw.trim())
+          ? `${new Date().getFullYear()}/${new Date().getMonth() + 1}`
+          : bRaw
         const m = calcMonthsFromDates(a, b)
         if (m) {
           const sP = parseYMParts(a)
@@ -3328,6 +3343,27 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
         if (!months && /^[〜～~]/.test(nextCol1)) {
           const endDate2 = nextCol1.replace(/^[〜～~：:]+/, '').trim()
           if (endDate2) months = calcSpan(String(row[1] ?? ''), endDate2)
+        }
+      }
+      // 汎用横断走査（RH型）: 日付列の位置が不定でも、行内の日付セル（先頭16列）を集めて
+      // 最初=開始・最後=終了とみなす。誤検出を避けるため2個以上あるときのみ
+      if (!months) {
+        const rowYMs: number[] = []
+        for (let ci = 0; ci < Math.min(row.length, 16); ci++) {
+          if (ci === langColIdx || ci === fwColIdx) continue
+          const t = String(row[ci] ?? '').trim()
+          if (!t || t.length > 40) continue
+          if (/^(現在|継続中?)$/.test(t)) { rowYMs.push(new Date().getFullYear() * 12 + new Date().getMonth() + 1); continue }
+          const p = parseYMParts(t)
+          if (p) rowYMs.push(p.year * 12 + p.month)
+        }
+        if (rowYMs.length >= 2 && rowYMs[rowYMs.length - 1] >= rowYMs[0]) {
+          const spanM = rowYMs[rowYMs.length - 1] - rowYMs[0] + 1
+          if (spanM <= 600) {
+            months = spanM
+            rowStartYM = rowYMs[0]
+            rowEndYM = rowYMs[rowYMs.length - 1]
+          }
         }
       }
       // 縦積み日付型（F.K型）: 開始日付が本行col[1]・終了日付が次行col[1]。
@@ -3560,6 +3596,7 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
     const normCell = (v: string) => String(v ?? '').split(/[\r\n]/)[0].replace(/[\s　]+/g, '').trim()
     // ブロックヘッダー行の検出: No.セルと期間セルが同一行に並ぶ
     const blockHeaderRows: number[] = []
+    const blockSkillCols: number[] = []  // 見出し行の環境/言語系ラベルの列（-1=なし→期間列±3を探索）
     let blockPeriodCol = -1
     for (let i = 0; i < data.length; i++) {
       const row = data[i]
@@ -3570,9 +3607,22 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
         if (/^(No\.?|№|項番|番号)$/i.test(v) && noIdx < 0) noIdx = j
         if (BLOCK_PERIOD_LABEL.test(v) && perIdx < 0) perIdx = j
       }
-      if (noIdx >= 0 && perIdx > noIdx) {
+      // B.S型: 「No.」ラベルではなく行頭セルが整数そのもの + 期間ラベル + プロジェクト名/案件名ラベル
+      let bsForm = false
+      if (noIdx < 0 && perIdx >= 0) {
+        const head = normCell(String(row[0]))
+        const hasPjLabel = row.some((c) => /^【?(プロジェクト名|案件名)】?$/.test(normCell(String(c))))
+        if (/^\d{1,3}$/.test(head) && hasPjLabel) bsForm = true
+      }
+      if ((noIdx >= 0 && perIdx > noIdx) || bsForm) {
         blockHeaderRows.push(i)
         if (blockPeriodCol < 0) blockPeriodCol = perIdx
+        // 見出し行に環境/言語/ソフト系ラベルがあればその列をスキル探索対象として記録
+        let skillCol = -1
+        for (let j = 0; j < row.length; j++) {
+          if (/環境|言語|使用ソフト|ツール/.test(normCell(String(row[j]))) && j !== perIdx) { skillCol = j; break }
+        }
+        blockSkillCols.push(skillCol)
       }
     }
     if (blockHeaderRows.length >= 1 && blockPeriodCol >= 0) {
@@ -3648,8 +3698,22 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
         // 別セクション（能力評価表・個人情報欄）のラベルで、誤発動の原因になる（H_O実害）
         // sync_extractors のTS→JS変換の制約により new Set<string>() 形式は使わない（型は変数側に注釈）
         const blockSkills: Set<string> = new Set()
+        const skillColOfBlock = blockSkillCols[b] ?? -1
         for (let r = bStart; r < bEnd; r++) {
           const row = data[r] ?? []
+          // 見出し行で特定したスキル列（B.S型: 期間列から遠い環境列）の値を直接収集
+          if (skillColOfBlock >= 0) {
+            const v = String(row[skillColOfBlock] ?? '').trim()
+            if (v && !/環境|使用ソフト/.test(v)) {
+              const cleaned = v.replace(/【[^】\n]*】/g, '\n')
+              for (const line of cleaned.split(/[\r\n、，,\/／]+/)) {
+                const t = line.trim().replace(/^[・\-\s　]+/, '').trim()
+                if (!t || t.length < 2 || /^\d+$/.test(t)) continue
+                if (/[：:]\s*$/.test(t) || /^[（(][^）)]*[）)]$/.test(t) || /^[ｦ-ﾟ]+$/.test(t)) continue
+                blockSkills.add(t)
+              }
+            }
+          }
           for (let j = Math.max(0, blockPeriodCol - 3); j <= blockPeriodCol + 3 && j < row.length; j++) {
             const rawCell = String(row[j] ?? '')
             const candidates: string[] = []
@@ -3711,6 +3775,85 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
         filtered17['_extractMethod'] = 17  // Method 1.7: KVブロック型
         return filtered17
       }
+    }
+  }
+
+  // ── Method 1.8: 期間|業務内容の繰り返し表型（M.K型のWord経歴書）──
+  // 「期間|業務内容」だけの小表が案件ごとに繰り返される形式（mammoth変換のWord職歴書に多い）。
+  // 環境ラベルが無いため、スキルは業務内容テキスト中のASCII技術語から拾い、期間はセル内の
+  // 日付範囲から取る。技術語3件未満なら総経験のみ記録して他Methodへ委譲する（誠実な退化）
+  {
+    const PERIOD_H = /^期間$/
+    const CONTENT_H = /^(業務内容|担当業務|作業内容|職務内容|内容)$/
+    const normC = (v: string) => String(v ?? '').split(/[\r\n]/)[0].replace(/[\s　]+/g, '').trim()
+    const hdrs: number[] = []
+    for (let i = 0; i < data.length; i++) {
+      const row = data[i] ?? []
+      if (row.length >= 2 && PERIOD_H.test(normC(String(row[0]))) && row.slice(1).some((c) => CONTENT_H.test(normC(String(c))))) hdrs.push(i)
+    }
+    // ヘッダーが2回以上繰り返される場合のみこの型と認定（1回だけの通常表と誤判定しない）
+    if (hdrs.length >= 2) {
+      const iv18: Record<string, number[][]> = {}
+      const dl18: Record<string, number> = {}
+      const allIv: number[][] = []
+      let allDl = 0
+      const nowYM18 = new Date().getFullYear() * 12 + (new Date().getMonth() + 1)
+      for (let b = 0; b < Math.min(hdrs.length, 30); b++) {
+        const bS = hdrs[b] + 1
+        const bE = b + 1 < hdrs.length ? hdrs[b + 1] : Math.min(data.length, bS + 12)
+        let s18: number | null = null
+        let e18: number | null = null
+        let m18: number | null = null
+        const toks: Set<string> = new Set()
+        for (let r = bS; r < bE; r++) {
+          for (const cRaw of data[r] ?? []) {
+            const cell = String(cRaw)
+            if (!cell.trim()) continue
+            if (s18 === null && !m18) {
+              const rg = cell.match(/([^\s〜～~]+)\s*[〜～~\-－]+\s*([^\s〜～~]+)/)
+              if (rg) {
+                const a = parseYMParts(rg[1])
+                const z = /現在|継続|present/i.test(rg[2]) ? { year: Math.floor((nowYM18 - 1) / 12), month: ((nowYM18 - 1) % 12) + 1 } : parseYMParts(rg[2])
+                if (a && z) {
+                  const aa = a.year * 12 + a.month
+                  const zz = z.year * 12 + z.month
+                  if (zz >= aa) { s18 = aa; e18 = zz }
+                }
+              }
+              if (s18 === null && !m18) m18 = parseDurationToMonths(cell)
+            }
+            // ASCII技術語トークン（日本語の一般語・会社名は対象外。精度はfilter+品質スコアで担保）。
+            // 「TeraTermを使用」のように日本語が密着するため、分割ではなくASCII連続列を直接抽出する
+            for (const mt of cell.matchAll(/[A-Za-z][A-Za-z0-9+.#-]{1,24}/g)) {
+              toks.add(mt[0])
+            }
+          }
+        }
+        const months18 = s18 !== null && e18 !== null ? e18 - s18 + 1 : m18
+        if (!months18 || months18 <= 0 || months18 > 600) continue
+        if (s18 !== null && e18 !== null) allIv.push([s18, e18])
+        else allDl += months18
+        for (const t of toks) {
+          if (s18 !== null && e18 !== null) {
+            if (!iv18[t]) iv18[t] = []
+            iv18[t].push([s18, e18])
+          } else {
+            dl18[t] = (dl18[t] ?? 0) + months18
+          }
+        }
+      }
+      const sm18: Record<string, number> = {}
+      for (const k of Object.keys(iv18)) sm18[k] = (sm18[k] ?? 0) + unionIntervalMonths(iv18[k])
+      for (const k of Object.keys(dl18)) sm18[k] = (sm18[k] ?? 0) + dl18[k]
+      const total18 = (allIv.length > 0 ? unionIntervalMonths(allIv) : 0) + allDl
+      const f18 = filterSkillYears(sm18)
+      if (Object.keys(f18).filter(k => !k.startsWith('_')).length >= 3) {
+        f18['_totalProjectMonths'] = headerTotalMonths ?? total18
+        f18['_extractMethod'] = 18
+        return f18
+      }
+      // スキルが作れなくても総経験だけは残す（関数末尾の最終フォールバックが拾う）
+      if (!headerTotalMonths && total18 > 0) headerTotalMonths = total18
     }
   }
 
@@ -4794,7 +4937,7 @@ function filterSkillYears(sy: Record<string, number>): Record<string, number> {
   const COMPANY_NAME_RE = /株式会社|有限会社|合同会社|合資会社|事務所$|法人|財団|協会$|組合$|センター$|銀行$|信用金庫$/
   // 業務経歴テーブルの「工程」列見出し（要件定義/基本設計/...）・期間セクションのラベルは
   // スキル名ではなく、Excel添付テキストからの本文パターン誤マッチで拾われることがある
-  const PHASE_LABEL_RE = /^(要件|定義|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|受入試験|運用保守|期間|稼働月数|担当範囲|体制|担当|作業内容|業務内容|担当業務|経験技術|作業概要|能力指標|能力判断|得意技術・?分野|得意分野)$/
+  const PHASE_LABEL_RE = /^(要件|定義|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|受入試験|運用保守|期間|稼働月数|担当範囲|体制|担当|作業内容|業務内容|担当業務|経験技術|作業概要|能力指標|能力判断|得意技術・?分野|得意分野|チーム|人数|全体|規模)$/
   // 日付・期間範囲がキーになっている場合を除外（例: "2022/2～2022/9", "2019年〜現在"）
   const DATE_RANGE_RE = /\d{4}[\/年]\d{1,2}/
   // キー自体が「8ヶ月」等の期間表記そのものになっている自己参照的な誤マッチを除外
