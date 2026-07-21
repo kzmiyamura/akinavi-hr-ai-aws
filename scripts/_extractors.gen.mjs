@@ -990,8 +990,11 @@ function extractSkillYearsFromSheetData(data){
       // 開始・終了日付列（"終了年月：システム名" のような複合ヘッダーにも対応）
       if ((/^開始年月$|^開始$/.test(vNorm) || /^開始年月$|^開始$/.test(vFull)) && startDateColIdx < 0) startDateColIdx = j
       if ((/^終了年月$|^終了$/.test(vNorm) || /^終了年月$|^終了$/.test(vFull) || vNorm.startsWith('終了年月') || vNorm.startsWith('終了：')) && endDateColIdx < 0) endDateColIdx = j
-      // 行番号列（"No." "No" "№" 等）
-      if ((/^(No\.?|No|№|番号|項目番号)$/i.test(vNorm) || /^(No\.?|No|№|番号|項目番号)$/i.test(vFull)) && noColIdx < 0) noColIdx = j
+      // 行番号列（"No." "No" "№" "項番" 等）。
+      // 「項番」が未登録だったため noColIdx が見つからず、col[1]の値が日付にも
+      // 継続行の終了日にもなる列でdurCellIsDate判定が誤って有効化され、プロジェクトの
+      // 終了日だけの継続行が独立したデータ行として二重計上される実害があった（S.Y型）
+      if ((/^(No\.?|No|№|番号|項目番号|項番)$/i.test(vNorm) || /^(No\.?|No|№|番号|項目番号|項番)$/i.test(vFull)) && noColIdx < 0) noColIdx = j
     }
     if (langColIdx >= 0) break
   }
