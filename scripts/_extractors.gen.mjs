@@ -1315,12 +1315,14 @@ function extractSkillYearsFromSheetData(data){
         .filter(s => s && s !== '-' && s !== '－' && !/^[\s\-－]+$/.test(s))
       const skillTexts = []
       for (const line of rawSkillLines) {
-        // "OS : Windows NT" / "言語　：　Access/VBA" 等の「カテゴリ: 値」形式を値部分だけ取り出す
+        // "OS : Windows NT" / "言語　：　Access/VBA" / "Server：日立、DELL、HP" 等の
+        // 「カテゴリ: 値」形式を値部分だけ取り出す（F.K型: Server/PC ラベルが未対応で
+        // ラベル込みの値がゴミキー化していた実害）
         const colonIdx = Math.max(line.lastIndexOf('：'), line.lastIndexOf(':'))
         if (colonIdx > 0 && colonIdx < line.length - 1) {
           const prefix = line.slice(0, colonIdx).replace(/[\s　]+/g, '')
           // OS/DB/言語/FW/MW等の短いカテゴリラベルの場合はコロン後を値として使う
-          if (/^(OS|DB|言語|FW|MW|NW|環境|ツール|その他)$/.test(prefix)) {
+          if (/^(OS|DB|言語|FW|MW|NW|環境|ツール|その他|Server|PC|サーバ|サーバー|機種|ハードウェア|HW|クラウド)$/i.test(prefix)) {
             const vals = line.slice(colonIdx + 1).split(/[\s　\/、]+/).map(s => s.trim()).filter(s => s.length >= 2)
             skillTexts.push(...vals)
             continue
