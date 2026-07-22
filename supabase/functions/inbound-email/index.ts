@@ -3173,7 +3173,9 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       // O.M型: No列が無く行頭が空でも、言語セルが埋まっていて行内に日付があればデータ行。
       // M.N型: [2026][年][4][月] のように年月が別セルに分割される形式は結合してから判定
       const langCellPeek = String(row[langColIdx] ?? '').trim()
-      const joinRowHead = (rw: string[]) => (rw ?? []).slice(0, 8).map((c) => String(c ?? '').trim()).join('')
+      // col[0]（行番号列）は結合対象から除外する。含めると行番号("3")が隣接の年("2023")と
+      // 連結され「32023」のような架空の年になる実害があった（N.J型: 1987年に誤爆）
+      const joinRowHead = (rw: string[]) => (rw ?? []).slice(1, 8).map((c) => String(c ?? '').trim()).join('')
       // 「) : null」で行が終わると sync_extractors が戻り値型注釈と誤認するため null 側を先に書く
       const joinedRowDate = langCellPeek === '' ? null : parseYMParts(joinRowHead(row))
       const rowAnyDate = langCellPeek !== '' && (joinedRowDate !== null || row.some((c, ci) => {
@@ -7139,7 +7141,8 @@ async function resolveResumeUrl(
 ): Promise<string | null> {
   const uploadOne = async (name: string | undefined, mimeType: string, data: string, entryId: number | null): Promise<string | null> => {
     const ext = (name ?? 'bin').split('.').pop() ?? 'bin'
-    const safeName = `${(candName ?? 'cand').replace(/[.\s　]/g, '_')}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
+    // 内容ハッシュベースの安定名（再処理での重複複製を防ぐ・stableResumeName のコメント参照）
+    const safeName = await stableResumeName(candName ?? 'cand', data, ext)
     const url = await uploadToStorage(safeName, mimeType, data)
     if (url) ledger.log(entryId, 'E-STO-OK', safeName)
     else ledger.log(entryId, 'E-STO-FAIL', name ?? '')
@@ -7370,6 +7373,22 @@ async function appendToBoxSpreadsheet(boxUrls: string[]): Promise<void> {
 async function sha256Hex(input: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input))
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Storage 保存用の安定ファイル名を生成する。
+ * ファイル名の一意部分に「アップロード時刻(Date.now)」ではなく「ファイル内容のSHA-256」を使う。
+ *  - 同一内容を再処理した場合 → 同じハッシュ = 同じパス = upsert で上書き（重複ファイルを作らない）
+ *  - 別内容（同姓同名の別人など）→ 違うハッシュ = 別パス（衝突して上書きし合う事故を防ぐ）
+ * これにより「poll-email の再処理ループで同じ添付が別名で大量複製される」問題と、
+ * 「同名衝突で別人のファイルを上書きする」問題を同時に防ぐ。
+ * @param prefix 人が読める接頭辞（候補者名や駅名など。無くても正しく動作する）
+ * @param dataB64 添付本体（base64）。ハッシュ計算の対象
+ */
+async function stableResumeName(prefix: string, dataB64: string, ext: string): Promise<string> {
+  const hash = (await sha256Hex(dataB64)).slice(0, 20)
+  const safePrefix = (prefix || 'cand').replace(/[.\s　・]/g, '_').replace(/[^\w]/g, '').slice(0, 40)
+  return `${safePrefix}_${hash}.${ext}`
 }
 
 /**
@@ -8469,14 +8488,10 @@ Deno.serve(async (req: Request) => {
                 const ext = (origAtt.name ?? 'xlsx').split('.').pop() ?? 'xlsx'
                 const safeStation = (blockStationForMatch ?? '').replace(/[^\w\u3040-\u9FFF]/g, '').slice(0, 15)
                 const safeCandName = blockResolvedName.replace(/[.\s　]/g, '_')
-                // uploadToStorage は upsert:true のため、ファイル名が衝突すると既存ファイルが
-                // 無条件に上書きされる。同姓同名の別候補者（同じ名前・同じ駅）が別々の
-                // メールで登録されると同じファイル名になり、後からアップロードした人の
-                // ファイルが先の人のファイルを完全に置き換えてしまう実害が確認された
-                // （複数の別人が同一URLを共有し、Storage上の実体は最後にアップロードされた
-                // 1名分のみが残っている状態）。タイムスタンプ＋ランダム文字列を必ず付与し、
-                // 一意性を保証する。
-                const uploadName = `${safeCandName}_${safeStation}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
+                // ファイル名の一意部分に内容ハッシュを使う（stableResumeName のコメント参照）。
+                // 別内容（同姓同名の別人）は違うハッシュで別パスになり上書き事故を防ぎ、
+                // かつ同一内容の再処理では同じパスになり重複ファイルを作らない。
+                const uploadName = await stableResumeName(`${safeCandName}_${safeStation}`, origAtt.data, ext)
                 blockResumeUrl = await uploadToStorage(uploadName, origAtt.mimeType, origAtt.data)
                 if (blockResumeUrl) console.log(`[multi] Storage upload: ${uploadName} → ${blockResumeUrl}`)
               }
@@ -8500,7 +8515,8 @@ Deno.serve(async (req: Request) => {
                 const contentMentionsOther = myNormNameForSafety.length >= 2 && !entryContent.includes(myNormNameForSafety)
                 if (origAtt?.data && !contentMentionsOther) {
                   const ext = (origAtt.name ?? 'xlsx').split('.').pop() ?? 'xlsx'
-                  const sharedName = `shared_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
+                  // 内容ハッシュベースの安定名（再処理での重複複製を防ぐ・stableResumeName のコメント参照）
+                  const sharedName = await stableResumeName('shared', origAtt.data, ext)
                   caseBSharedResumeUrl = await uploadToStorage(sharedName, origAtt.mimeType, origAtt.data) ?? null
                   if (caseBSharedResumeUrl) console.log(`[multi] Case B single-safe upload: ${sharedName} → ${caseBSharedResumeUrl}`)
                 } else {
