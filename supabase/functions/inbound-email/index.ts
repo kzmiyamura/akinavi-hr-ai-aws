@@ -2022,7 +2022,11 @@ function extractCandidateFieldsRegex(
     if (colonMatch) nearestStation = colonMatch[1].trim()
     // 「線」を持たない公営地下鉄・新交通等の事業者名プレフィックスを剥がす
     // 例:「横浜市営地下鉄岸根公園」→「岸根公園」「埼玉新都市交通伊奈中央」→「伊奈中央」
-    nearestStation = nearestStation.replace(/^.*?(市営地下鉄|地下鉄|新都市交通|モノレール|ゆりかもめ)/, '')
+    // ただし「地下鉄成増」「地下鉄赤塚」「モノレール浜松町」等、事業者名で始まる正式駅名は
+    // 剥がすと別駅名になるため除外する（先頭一致の実駅名を保護）。
+    if (!/^(地下鉄成増|地下鉄赤塚|モノレール[^\s　]|ゆりかもめ[^\s　])/.test(nearestStation)) {
+      nearestStation = nearestStation.replace(/^.*?(市営地下鉄|地下鉄|新都市交通|モノレール|ゆりかもめ)/, '')
+    }
     // ラベルそのものや template text・セクション見出しは除外
     if (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation)
       || nearestStation.includes('イニシャル')
