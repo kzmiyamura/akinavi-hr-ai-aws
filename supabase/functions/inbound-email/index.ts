@@ -4649,6 +4649,37 @@ function classifyContainerType(cells: SpanCell[]): 'skill' | 'project' {
   return rel >= 5 && rel > abs ? 'skill' : 'project'
 }
 
+/**
+ * 空行（内容セルの無い行）を区切りとしてセル群をブロックに分割する。
+ * ユーザーのKVコンテナ設計「空行＝コンテナの切れ目」を踏襲。混在シート（明示スキル表＋
+ * 案件履歴表）を、シート全体の多数決ではなくブロック単位で判定するために使う。案件は
+ * 「1案件＝1ブロック（日付2件ずつ）」に割れ、スキル表だけが「相対期間の塊・絶対日付ゼロ」の
+ * ブロックとして浮かび上がるため、classifyContainerType をブロックに適用すると分離できる。
+ */
+function segmentBlocksByBlankRows(cells: SpanCell[]): SpanCell[][] {
+  if (cells.length === 0) return []
+  const contentRows = new Set<number>()
+  let maxRow = 0
+  for (const c of cells) {
+    if (c.value.trim()) contentRows.add(c.row)
+    if (c.rowEnd > maxRow) maxRow = c.rowEnd
+  }
+  const blocks: SpanCell[][] = []
+  let curRows = new Set<number>()
+  const flush = () => {
+    if (curRows.size === 0) return
+    const rs = curRows
+    blocks.push(cells.filter((c) => rs.has(c.row)))
+    curRows = new Set<number>()
+  }
+  for (let r = 0; r <= maxRow; r++) {
+    if (contentRows.has(r)) curRows.add(r)
+    else flush()
+  }
+  flush()
+  return blocks
+}
+
 /** 相対期間表記(全体一致)のみを厳密に月数へ変換する（曖昧一致を避けるための専用パーサ） */
 function strictDurationToMonths(s: string): number | null {
   const t = s.trim().replace(/\s/g, '')
@@ -4683,7 +4714,13 @@ function extractSkillYearsVisualKV(cells: SpanCell[], styleMap: Map<string, Cell
     fillCount[f] = (fillCount[f] ?? 0) + 1
   }
   const headerColors = new Set(Object.entries(fillCount).filter(([, n]) => n >= 3).map(([f]) => f))
-  const isHeader = (c: (typeof styled)[number]) => !!c.fill && headerColors.has(c.fill.toUpperCase())
+  // 見出し判定は「色」だけに頼らない。本文セルは表の罫線ボックスの中にある（縞・強調で
+  // 色が付いていても罫線は一様）。fill色だけで見出し扱いすると、KS型のゼブラ縞や本人が
+  // 強調のために塗ったスキル行を丸ごと捨ててしまう（実データで確認）。よって「見出し色」は
+  // 罫線ボックスを持たないセルにのみ適用する。真の見出し行（カテゴリ|項目|経験年数 等）は
+  // 期間セルと対にならず strictDurationToMonths が null になるため構造的に除外される。
+  const isHeader = (c: (typeof styled)[number]) =>
+    !!c.fill && headerColors.has(c.fill.toUpperCase()) && !visualHasBorderBox(c.border)
 
   const isSkillCandidate = (name: string): boolean => {
     const n = name.replace(/^[\s　・\-]+/, '').trim()
@@ -4733,11 +4770,23 @@ function extractSkillYearsVisualKV(cells: SpanCell[], styleMap: Map<string, Cell
  * 呼び出し側は必ず既存の grid/cells 方式にフォールバックする（劣化させない安全設計）。
  */
 async function tryVisualSkillExtraction(bytes: Uint8Array, sheetName: string, cells: SpanCell[]): Promise<Record<string, number> | null> {
-  if (classifyContainerType(cells) !== 'skill') return null
   const styleMap = await extractCellStylesFromXlsx(bytes, sheetName)
   if (!styleMap) return null
-  const result = extractSkillYearsVisualKV(cells, styleMap)
-  return Object.keys(result).length > 0 ? result : null
+  // 空行でブロック分割し、skill系ブロックだけを視覚リーダーで読む（混在シート対応）。
+  // シート全体では案件履歴の日付数に負けて 'project' になる表でも、スキル表ブロックは
+  // 単体で 'skill' 判定されるため拾える。複数の skill ブロックがあれば union する。
+  const skillBlocks = segmentBlocksByBlankRows(cells).filter((b) => classifyContainerType(b) === 'skill')
+  // 後方互換: ブロック分割で拾えない単一表(KS型等)はシート全体で従来判定にフォールバック。
+  const targets = skillBlocks.length > 0
+    ? skillBlocks
+    : (classifyContainerType(cells) === 'skill' ? [cells] : [])
+  if (targets.length === 0) return null
+  const merged: Record<string, number> = {}
+  for (const blk of targets) {
+    const r = extractSkillYearsVisualKV(blk, styleMap)
+    for (const [k, v] of Object.entries(r)) merged[k] = Math.max(merged[k] ?? 0, v)
+  }
+  return Object.keys(merged).length > 0 ? merged : null
 }
 
 
@@ -6662,7 +6711,11 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
         const countCells = scoreSkillQuality(syCells, _skillNameSet)
         const countVisual = syVisual ? scoreSkillQuality(syVisual, _skillNameSet) : 0
         if (countGrid > 0 || countCells > 0 || countVisual > 0) {
-          if (syVisual && countVisual >= countCells && countVisual >= countGrid) {
+          // 明示スキル表（本人申告）を第一優先。tryVisualSkillExtraction は空行ブロック単位で
+          // 'skill' 判定・罫線ボックス・列頻度3以上を満たす真の明示スキル表ブロックからしか
+          // 非nullを返さないため、読めた時点でそれを最優先する（案件tech列×期間のunionより、
+          // 本人が申告した「スキル歴N年」を優先するというユーザー方針）。
+          if (syVisual && countVisual > 0) {
             skillYears = syVisual
             skillYears['_extractMethod'] = 60 // 視覚エンジン（罫線・色KV）勝者
           } else {
@@ -6678,7 +6731,7 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
           // SpanCellベース勝者には経路コード50を付与（gridベースはUnified内で付与済み）
           if (skillYears['_extractMethod'] === undefined) skillYears['_extractMethod'] = 50
           firstJsonRows = jsonRows
-          const winner = syVisual && countVisual >= countCells && countVisual >= countGrid ? 'visual' : (countCells >= countGrid ? 'cells' : 'grid')
+          const winner = syVisual && countVisual > 0 ? 'visual' : (countCells >= countGrid ? 'cells' : 'grid')
           console.log(`[skillYears-pick] grid=${countGrid} cells=${countCells} visual=${countVisual} winner=${winner}`)
         } else {
           console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
