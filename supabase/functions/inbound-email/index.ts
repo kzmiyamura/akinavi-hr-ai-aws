@@ -2391,6 +2391,47 @@ const PROSE_WORKSTYLE: Array<{ re: RegExp; label: string }> = [
   { re: /常駐[　 ]?(?:可|OK|あり)|フル常駐/,          label: '常駐可' },
 ]
 
+/**
+ * 本文からワークスタイル（リモート/常駐/出社）の記載文をそのまま抽出する。
+ * 「フルリモート（梅田／神戸は常駐可能）、東京は初日・緊急時出社可」のような拠点別・条件付きの
+ * ニュアンスは分類では潰れるため、生の条件文を残して人が判断できるようにする（設計書:
+ * docs/employment_commercialflow_design.md 同様の思想。ワークスタイルは自由記述が多い）。
+ * 該当キーワードを含む文（改行・句点区切り）を最大60字程度で切り出す。無ければ null。
+ */
+function extractWorkStyleNote(bodyText: string, attachText: string): string | null {
+  const t = (bodyText + '\n' + attachText).replace(/\r/g, '')
+  const KW = /(?:フル)?リモート|在宅|テレワーク|常駐|出社/
+  const m = KW.exec(t)
+  if (!m) return null
+  const idx = m.index
+  let start = idx
+  while (start > 0 && !/[\n。]/.test(t[start - 1]) && idx - start < 60) start--
+  let end = idx
+  while (end < t.length && !/[\n。]/.test(t[end]) && end - idx < 60) end++
+  const phrase = t.slice(start, end).trim().replace(/^[・■※☆\s　>：:【\-]+/, '').replace(/[【】]/g, '').trim()
+  return phrase || null
+}
+
+/**
+ * ワークスタイル文から「客先常駐に出せるか」のざっくりタグを導出する。
+ *   常駐可 / 併用可（ハイブリッド=一部出社可） / リモート希望（常駐は難しい） / null(不明)
+ * あくまでヒント。判断材料の生フレーズ（extractWorkStyleNote）を必ず併記して人が正せる前提。
+ */
+function deriveWorkStyleTag(phrase: string | null): string | null {
+  if (!phrase) return null
+  const p = phrase
+  const hasRemoteWord = /リモート|在宅|テレワーク/.test(p)
+  const hasOnsiteWord = /常駐|出社/.test(p)
+  const strictFullRemote = /フルリモート(?:のみ|必須|限定)|完全リモート|リモートのみ|常駐(?:不可|なし|NG|×)/.test(p)
+  const onsiteOk = /常駐[　 ]?(?:可|OK|あり|可能)|フル常駐|出社[　 ]?(?:可|OK|可能|必須)|週[1-5][〜~－-]?\d?[　 ]?日?[　 ]?(?:出社|リモート)|月[1-9]回?[　 ]?(?:程度)?[　 ]?出社|尚可|相談可|併用|ハイブリッド|(?:初日|緊急時)[^\n]{0,4}出社|出社まで可/.test(p)
+  if (strictFullRemote && !onsiteOk) return 'リモート希望'
+  if (hasRemoteWord && (hasOnsiteWord || onsiteOk)) return '併用可'
+  if (/フルリモート|完全リモート|リモート(?:のみ|必須|希望|優先|限定|前提|頻度高|メイン|ベース)/.test(p)) return 'リモート希望'
+  if (hasOnsiteWord) return '常駐可'
+  if (hasRemoteWord) return '併用可'
+  return null
+}
+
 function extractFromProse(bodyText: string, attachText: string): {
   roles: string[]
   industries: string[]
@@ -8919,6 +8960,8 @@ Deno.serve(async (req: Request) => {
                 availableRegions: null,
                 currentWorkLocation: null,
                 remoteAvailable: blockRemoteAvailable,
+                workStyleNote: extractWorkStyleNote(blockRegexBodyText, blockAttachText),
+                workStyleTag: deriveWorkStyleTag(extractWorkStyleNote(blockRegexBodyText, blockAttachText)),
                 from, subject,
                 emailReceivedAt,
                 attachmentCount: allAttachments.length,
@@ -9381,6 +9424,9 @@ Deno.serve(async (req: Request) => {
         if (resolvedRemoteAvailable) return 'リモート可'
         return null
       })()
+      // 本文のワークスタイル記載文（生フレーズ）＋ざっくりタグ（常駐可否）
+      const workStyleNoteRaw = extractWorkStyleNote(bodyText, attachText)
+      const workStyleTagRaw = deriveWorkStyleTag(workStyleNoteRaw)
       // 英語レベル抽出（ビジネス / 日常会話 / null）
       const englishLevelRaw = (() => {
         const t = bodyText + ' ' + attachText
@@ -9454,6 +9500,8 @@ Deno.serve(async (req: Request) => {
           remoteAvailable: resolvedRemoteAvailable,
           wantsFullRemote: resolvedWantsFullRemote || null,
           remoteWorkStyle: remoteWorkStyleRaw,
+          workStyleNote: workStyleNoteRaw,
+          workStyleTag: workStyleTagRaw,
           hakenOk: hakenOkRaw,
           englishLevel: englishLevelRaw,
           employmentType: employmentTypeRaw,

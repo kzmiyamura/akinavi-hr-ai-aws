@@ -346,14 +346,26 @@ export function CandidateProfileFields({
             </span>
           )}
           {(() => {
+            // 常駐可否タグ（システム判定のヒント）＋本文フレーズ（ホバーで全文）。
+            // タグは目安。判断材料の生フレーズをtitleに必ず併記して人が正せるようにする。
+            const tag = (raw as Record<string, unknown>).workStyleTag as string | null | undefined
+            const note = (raw as Record<string, unknown>).workStyleNote as string | null | undefined
+            // 旧データ（未移行）フォールバック
             const rws = (raw as Record<string, unknown>).remoteWorkStyle as string | null | undefined
-            const label = rws ?? (remoteAvailable ? ((raw as Record<string, unknown>).wantsFullRemote ? 'フルリモート希望' : null) : null)
-            // 「リモート可」は当たり前なので表示しない。出社頻度・希望強度が明確なもののみ表示
-            if (!label || label === 'リモート可') return null
-            const isStrong = label === 'フルリモート希望' || label === 'リモート希望' || label === 'フルリモート'
+            const label = tag ?? (rws && rws !== 'リモート可' ? rws : null)
+            if (!label) return null
+            const cls = label === '常駐可'
+              ? 'bg-emerald-100 text-emerald-800'
+              : label === 'リモート希望'
+                ? 'bg-rose-100 text-rose-700'
+                : 'bg-amber-100 text-amber-800' // 併用可・その他
             return (
-              <span className={`flex items-center gap-1 text-xs rounded px-1.5 py-0.5 ${isStrong ? 'bg-indigo-50 text-indigo-600' : 'bg-blue-50 text-blue-600'}`}>
+              <span
+                className={`flex items-center gap-1 text-xs rounded px-1.5 py-0.5 ${cls} font-medium`}
+                title={note ? `本文: ${note}` : undefined}
+              >
                 <Wifi size={10} />{label}
+                {note && <span className="hidden md:inline text-[10px] font-normal opacity-70 truncate max-w-[16rem]">（{note}）</span>}
               </span>
             )
           })()}
@@ -1624,6 +1636,20 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           }
                           const cls = styles[et] ?? 'bg-gray-50 text-gray-600'
                           return <span className={`text-xs rounded px-2 py-0.5 ${cls}`}>{et}</span>
+                        })()}
+                        {(() => {
+                          const rawP = getRaw(selectedCandidate) as Record<string, unknown>
+                          const tag = rawP.workStyleTag as string | null | undefined
+                          const note = rawP.workStyleNote as string | null | undefined
+                          if (!tag && !note) return null
+                          const label = tag ?? '勤務条件'
+                          const cls = label === '常駐可' ? 'bg-emerald-100 text-emerald-800'
+                            : label === 'リモート希望' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-800'
+                          return (
+                            <span className={`text-xs rounded px-2 py-0.5 font-medium ${cls}`} title={note ? `本文: ${note}` : undefined}>
+                              {label}{note && <span className="font-normal opacity-70">（{note}）</span>}
+                            </span>
+                          )
                         })()}
                         {(selectedCandidate as unknown as { desired_rate?: string }).desired_rate && (
                           <span className="text-xs text-green-700 bg-green-50 rounded px-2 py-0.5 font-medium">
