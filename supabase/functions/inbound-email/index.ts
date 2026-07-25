@@ -352,49 +352,75 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
 }
 
 /**
- * 雇用形態・所属を抽出する。
+ * 雇用形態・所属を「商流位置」と「雇用形態」の2次元に分離して抽出する。
  * 単一候補パス・マルチ候補パス共通で使用。
  * 対応ラベル: 雇用形態 / 就業形態 / 立場 / 所属 / 属性 / 契約形態 / 【 所 属 】等
- * 対応値: 正社員 / フリーランス / 契約社員 / 派遣社員 / 業務委託 / SES / N社先社員 等
+ *
+ * 返り値:
+ *   commercialFlow: 商流位置。'自社' | '1社先' | '2社先' | ... | null(不明)
+ *     → 「うちの会社からの紹介で客先常駐できるか」の判断用（自社=直接可・N社先=N社挟む）
+ *   employmentType: 雇用形態。'正社員' | 'フリーランス' | '契約社員' | '派遣社員' | '業務委託' | null
+ *     → SESは「どこかの正社員が客先常駐する働き方」なので該当商流の正社員に開く（案B）
+ *
+ * 「1社先正社員」のように商流と形態が複合した表記も、両方を保持できる。
  */
-function extractEmploymentType(bodyText: string, attachText: string): string | null {
+const KANJI_TO_NUM: Record<string, string> = {
+  '一': '1', '二': '2', '三': '3', '四': '4', '五': '5',
+  '六': '6', '七': '7', '八': '8', '九': '9', '十': '10',
+}
+function normalizeShaNum(raw: string): string {
+  // 全角数字→半角、漢数字→アラビア数字
+  const zen = raw.replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
+  return KANJI_TO_NUM[zen] ?? zen
+}
+/** 値文字列から {商流位置, 雇用形態} を判定する（内部ヘルパー） */
+function parseEmploymentValue(val: string): { commercialFlow: string | null; employmentType: string | null } {
+  let commercialFlow: string | null = null
+  let employmentType: string | null = null
+  // 商流: N社先（漢数字/全角対応）
+  const nShaM = val.match(/([0-9０-９一二三四五六七八九十]+)[　 ]*社先/)
+  if (nShaM) commercialFlow = `${normalizeShaNum(nShaM[1])}社先`
+  // 雇用形態（SES→正社員に開く。N社先社員/正社員→正社員）
+  if (/フリー(?:ランス)?|個人事業/.test(val)) employmentType = 'フリーランス'
+  else if (/契約社員/.test(val)) employmentType = '契約社員'
+  else if (/派遣社員|派遣/.test(val)) employmentType = '派遣社員'
+  else if (/業務委託/.test(val)) employmentType = '業務委託'
+  else if (/SES/.test(val)) employmentType = '正社員'
+  else if (/正社員|社先[　 ]*社員/.test(val)) employmentType = '正社員'
+  // 商流の記載がなく雇用形態が取れた場合は「自社」とみなす
+  if (!commercialFlow && employmentType) commercialFlow = '自社'
+  return { commercialFlow, employmentType }
+}
+function extractEmploymentType(bodyText: string, attachText: string): { commercialFlow: string | null; employmentType: string | null } {
   const t = bodyText + ' ' + attachText
   // 【 所 属 】形式（スペース区切り全角ラベル）: SES業界の複数人材メールに多い
   const bracketM = t.match(/【[　 ]*所[　 ]*属[　 ]*】[　 ]*([^\n【】]{1,30})/)
   if (bracketM) {
-    const val = bracketM[1].trim()
-    // N社先社員（1社先社員 / 2社先社員 など商流表現）
-    const nShaM = val.match(/^([0-9０-９一二三四五六七八九十]+社先(?:社員|フリー)?)/)
-    if (nShaM) return nShaM[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
-    if (/フリーランス|フリー|個人事業/.test(val)) return 'フリーランス'
-    if (/正社員/.test(val)) return '正社員'
-    if (/契約社員/.test(val)) return '契約社員'
-    if (/派遣社員|派遣/.test(val)) return '派遣社員'
-    if (/業務委託/.test(val)) return '業務委託'
-    if (/SES/.test(val)) return 'SES'
+    const r = parseEmploymentValue(bracketM[1].trim())
+    if (r.commercialFlow || r.employmentType) return r
   }
   // ラベルあり（コロン区切り）: 雇用形態・就業形態・立場・所属・属性等
   const labelM = t.match(/(?:雇用形態|就業形態|立場|エンジニアの立場|現在の立場|契約形態|ご状況|属性|所属)[　 ]*[：:][　 ]*([^\n]{1,30})/)
   if (labelM) {
-    const val = labelM[1].trim()
-    if (/フリーランス|フリー|個人事業/.test(val)) return 'フリーランス'
-    if (/正社員/.test(val)) return '正社員'
-    if (/契約社員/.test(val)) return '契約社員'
-    if (/派遣社員|派遣/.test(val)) return '派遣社員'
-    if (/業務委託/.test(val)) return '業務委託'
-    if (/SES/.test(val)) return 'SES'
-    const nShaM = val.match(/([0-9０-９一二三四五六七八九十]+社先(?:社員|フリー)?)/)
-    if (nShaM) return nShaM[1].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
+    const r = parseEmploymentValue(labelM[1].trim())
+    if (r.commercialFlow || r.employmentType) return r
   }
   // ラベルなし（文脈パターン）
-  if (/弊社[　 ]*(正社員|社員)/.test(t)) return '正社員'
-  if (/[（(]正社員[）)]|正社員として登録|正社員エンジニア/.test(t)) return '正社員'
-  if (/フリーランス(エンジニア|技術者|の方|候補|案件)?|個人事業主/.test(t)) return 'フリーランス'
-  if (/業務委託(契約|のみ|希望|での)?/.test(t)) return '業務委託'
-  if (/弊社SES|SES(?:エンジニア|技術者|正社員|社員)/.test(t)) return 'SES'
-  if (/契約社員/.test(t)) return '契約社員'
-  if (/派遣社員/.test(t)) return '派遣社員'
-  return null
+  // 商流表現（弊社=自社／N社先）は文脈からも拾う
+  const ctxNSha = t.match(/([0-9０-９一二三四五六七八九十]+)[　 ]*社先[　 ]*(正社員|社員|フリー(?:ランス)?)?/)
+  if (ctxNSha) {
+    const flow = `${normalizeShaNum(ctxNSha[1])}社先`
+    const form = ctxNSha[2] ? (/フリー/.test(ctxNSha[2]) ? 'フリーランス' : '正社員') : null
+    return { commercialFlow: flow, employmentType: form }
+  }
+  if (/弊社[　 ]*(正社員|社員)/.test(t)) return { commercialFlow: '自社', employmentType: '正社員' }
+  if (/[（(]正社員[）)]|正社員として登録|正社員エンジニア/.test(t)) return { commercialFlow: '自社', employmentType: '正社員' }
+  if (/フリーランス(エンジニア|技術者|の方|候補|案件)?|個人事業主/.test(t)) return { commercialFlow: '自社', employmentType: 'フリーランス' }
+  if (/業務委託(契約|のみ|希望|での)?/.test(t)) return { commercialFlow: '自社', employmentType: '業務委託' }
+  if (/弊社SES|SES(?:エンジニア|技術者|正社員|社員)/.test(t)) return { commercialFlow: '自社', employmentType: '正社員' }
+  if (/契約社員/.test(t)) return { commercialFlow: '自社', employmentType: '契約社員' }
+  if (/派遣社員/.test(t)) return { commercialFlow: '自社', employmentType: '派遣社員' }
+  return { commercialFlow: null, employmentType: null }
 }
 
 /**
@@ -8925,7 +8951,8 @@ Deno.serve(async (req: Request) => {
                 age: blockRegexFields.age,
                 gender: blockRegexFields.gender,
                 nationality: blockRegexFields.nationality,
-                employmentType: extractEmploymentType(blockRegexBodyText, blockAttachText),
+                employmentType: extractEmploymentType(blockRegexBodyText, blockAttachText).employmentType,
+                commercialFlow: extractEmploymentType(blockRegexBodyText, blockAttachText).commercialFlow,
                 selfPR: extractSelfPR(block, blockAttachText) ?? null,
                 agentComment: extractAgentComment(block, blockAttachText) ?? null,
                 // 添付テキスト（再解析時に skillYears を再抽出できるよう保存）
@@ -9369,8 +9396,10 @@ Deno.serve(async (req: Request) => {
         return null
       })()
 
-      // 雇用形態・立場（正社員/フリーランス/契約社員/派遣社員/業務委託/SES）
-      const employmentTypeRaw = extractEmploymentType(bodyText, attachText)
+      // 雇用形態・立場（商流位置＋雇用形態の2次元）
+      const employmentInfo = extractEmploymentType(bodyText, attachText)
+      const employmentTypeRaw = employmentInfo.employmentType
+      const commercialFlowRaw = employmentInfo.commercialFlow
 
       // ── AI必要性チェック用: フィールドごとの情報源を記録 ──────────────────
       // 'ai'=AI提供, 'regex'=正規表現補完, 'prose'=文章スキャン補完, 'none'=取得不可
@@ -9428,6 +9457,7 @@ Deno.serve(async (req: Request) => {
           hakenOk: hakenOkRaw,
           englishLevel: englishLevelRaw,
           employmentType: employmentTypeRaw,
+          commercialFlow: commercialFlowRaw,
           from, subject,
           emailReceivedAt,
           attachmentCount: allAttachments.length,
