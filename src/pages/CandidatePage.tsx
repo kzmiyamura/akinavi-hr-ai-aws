@@ -230,6 +230,7 @@ export function CandidateProfileFields({
     from: mailFrom, subject: mailSubject, emailReceivedAt,
     age, gender, agentComment, selfPR, skillYears, nationality } = raw as typeof raw & { nationality?: string | null }
   const employmentType = (raw as Record<string, unknown>).employmentType as string | null | undefined
+  const commercialFlow = (raw as Record<string, unknown>).commercialFlow as string | null | undefined
   const emailDomain = mailFrom ? mailFrom.split('@')[1]?.toLowerCase().trim() : null
   const agentInfo = emailDomain && agentDomainMap ? agentDomainMap.get(emailDomain) : null
 
@@ -281,7 +282,7 @@ export function CandidateProfileFields({
       <p className="text-xs text-gray-400 mt-0.5">
         {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年{age != null ? ` ／ ${age}歳` : ''}{gender ? `（${gender}）` : ''}{nationality ? ` ／ ${nationality}` : ''}
       </p>
-      {(c.from_company || employmentType) && (
+      {(c.from_company || employmentType || commercialFlow) && (
         <div className="flex flex-wrap items-center gap-1.5 mt-1">
           {c.from_company && (
             <span className="flex items-center gap-1 text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">
@@ -307,14 +308,25 @@ export function CandidateProfileFields({
           {agentInfo?.license_status === 'none' && c.from_company && (
             <span className="text-xs bg-red-50 text-red-500 rounded px-1.5 py-0.5">許可未確認</span>
           )}
+          {commercialFlow && (() => {
+            // 商流バッジ: 「うちから紹介で客先常駐できるか」を色で一目化。
+            // 自社=直接可(緑)／N社先=N社挟む(深いほど警戒色: 1社先=黄・2社先以上=赤)
+            const num = Number(commercialFlow.match(/^(\d+)社先/)?.[1] ?? 0)
+            const cls = commercialFlow === '自社'
+              ? 'bg-emerald-100 text-emerald-800 font-medium'
+              : num >= 2
+                ? 'bg-red-100 text-red-700 font-medium'
+                : 'bg-amber-100 text-amber-800 font-medium'
+            return <span className={`text-xs rounded px-1.5 py-0.5 ${cls}`} title="商流位置（自社=直接紹介可 / N社先=N社を挟む）">{commercialFlow}</span>
+          })()}
           {employmentType && (() => {
+            // 雇用形態バッジ（縛りの種類）。商流バッジと役割が違うのでグレー系で控えめに
             const styles: Record<string, string> = {
-              '正社員': 'bg-blue-50 text-blue-700',
+              '正社員': 'bg-slate-100 text-slate-700',
               '契約社員': 'bg-purple-50 text-purple-700',
               '派遣社員': 'bg-orange-50 text-orange-700',
-              'フリーランス': 'bg-green-50 text-green-700',
+              'フリーランス': 'bg-sky-50 text-sky-700',
               '業務委託': 'bg-teal-50 text-teal-700',
-              'SES': 'bg-indigo-50 text-indigo-700',
             }
             const cls = styles[employmentType] ?? 'bg-gray-50 text-gray-600'
             return <span className={`text-xs rounded px-1.5 py-0.5 ${cls}`}>{employmentType}</span>
@@ -1592,15 +1604,23 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           </span>
                         )}
                         {(() => {
+                          const cf = (getRaw(selectedCandidate) as Record<string, unknown>).commercialFlow as string | null | undefined
+                          if (!cf) return null
+                          const num = Number(cf.match(/^(\d+)社先/)?.[1] ?? 0)
+                          const cls = cf === '自社'
+                            ? 'bg-emerald-100 text-emerald-800 font-medium'
+                            : num >= 2 ? 'bg-red-100 text-red-700 font-medium' : 'bg-amber-100 text-amber-800 font-medium'
+                          return <span className={`text-xs rounded px-2 py-0.5 ${cls}`} title="商流位置（自社=直接紹介可 / N社先=N社を挟む）">{cf}</span>
+                        })()}
+                        {(() => {
                           const et = (getRaw(selectedCandidate) as Record<string, unknown>).employmentType as string | null | undefined
                           if (!et) return null
                           const styles: Record<string, string> = {
-                            '正社員': 'bg-blue-50 text-blue-700',
+                            '正社員': 'bg-slate-100 text-slate-700',
                             '契約社員': 'bg-purple-50 text-purple-700',
                             '派遣社員': 'bg-orange-50 text-orange-700',
-                            'フリーランス': 'bg-green-50 text-green-700',
+                            'フリーランス': 'bg-sky-50 text-sky-700',
                             '業務委託': 'bg-teal-50 text-teal-700',
-                            'SES': 'bg-indigo-50 text-indigo-700',
                           }
                           const cls = styles[et] ?? 'bg-gray-50 text-gray-600'
                           return <span className={`text-xs rounded px-2 py-0.5 ${cls}`}>{et}</span>
