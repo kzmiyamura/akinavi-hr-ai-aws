@@ -4636,6 +4636,9 @@ const visualHasBorderBox = (b?: CellStyle['border']) => !!b && !!(b.L || b.R || 
 /**
  * コンテナ(シート)の視覚系統を判定する。語彙非依存、期間の書式だけを見る。
  *   - 相対期間(「4年4カ月」等)のセルが5件以上・絶対日付より多い → スキル系（明示スキル表）
+ *   - または相対期間が3件以上で絶対日付がゼロ → スキル系（小さい明示スキル表。M.K型・4件など）。
+ *     案件履歴ブロックは必ず案件期間の絶対日付を持つため、絶対日付ゼロは強いスキル表の証拠。
+ *     誤って通っても視覚リーダー側が罫線ボックス＋列頻度3を要求するため空振り時はnullでgridに戻る。
  *   - それ以外 → 案件系（プロジェクト履歴表。期間は日付レンジで書かれる）
  * KS型（明示スキル表）とI.S型（案件履歴表）はこの書式差だけで実データ上分離できることを確認済み。
  */
@@ -4646,7 +4649,7 @@ function classifyContainerType(cells: SpanCell[]): 'skill' | 'project' {
     if (VISUAL_ABS_DATE_RE.test(v)) abs++
     else if (VISUAL_REL_DUR_RE.test(v)) rel++
   }
-  return rel >= 5 && rel > abs ? 'skill' : 'project'
+  return (rel >= 5 && rel > abs) || (rel >= 3 && abs === 0) ? 'skill' : 'project'
 }
 
 /**
@@ -4786,7 +4789,11 @@ async function tryVisualSkillExtraction(bytes: Uint8Array, sheetName: string, ce
     const r = extractSkillYearsVisualKV(blk, styleMap)
     for (const [k, v] of Object.entries(r)) merged[k] = Math.max(merged[k] ?? 0, v)
   }
-  return Object.keys(merged).length > 0 ? merged : null
+  // 明示スキル表は必ず複数スキルが縦に並ぶ。抽出結果が2件以下の場合は「役割別の経験年数
+  // サマリ（PG:6年 / PG,SE,PM:14年 等）」を誤検出している可能性が高いので採用しない。
+  // 語彙で役割語を弾くのではなく、テーブルの件数（構造）で弾く。実データ上、真のスキル表は
+  // 最小でも4件（M.K型）だったため3件を下限とする。
+  return Object.keys(merged).length >= 3 ? merged : null
 }
 
 
