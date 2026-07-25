@@ -4628,8 +4628,8 @@ async function extractCellStylesFromXlsx(bytes: Uint8Array, sheetName: string): 
 
 /** 絶対日付表記(2025年8月・2025/8等)の検出（案件系シグナル） */
 const VISUAL_ABS_DATE_RE = /(?:19|20)\d{2}[年\/\-.]\d{1,2}/
-/** 相対期間表記(4年4カ月・1カ月等)の検出（スキル系シグナル）。全体一致のみ＝単発日付混入を避ける */
-const VISUAL_REL_DUR_RE = /^\d{1,2}年(?:\d{1,2}[ヶかカヵｶ]?月)?$|^\d{1,3}[ヶかカヵｶ]月$/
+/** 相対期間表記(4年4カ月・1カ月・10年以上・1-2年等)の検出（スキル系シグナル）。全体一致のみ＝単発日付混入を避ける */
+const VISUAL_REL_DUR_RE = /^\d{1,2}年(?:\d{1,2}[ヶかカヵｶ]?月)?$|^\d{1,3}[ヶかカヵｶ]月$|^\d{1,2}年以上$|^\d(?:\.\d)?\s*[-〜～]\s*\d{1,2}(?:\.\d)?年$/
 /** セルの罫線が「箱」を持つか（いずれかの辺に線種がある） */
 const visualHasBorderBox = (b?: CellStyle['border']) => !!b && !!(b.L || b.R || b.T || b.B)
 
@@ -4688,6 +4688,10 @@ function strictDurationToMonths(s: string): number | null {
   const t = s.trim().replace(/\s/g, '')
   const ym = /^(\d{1,2})年(\d{1,2})[ヶかカヵｶ]?月$/.exec(t)
   if (ym) return Number(ym[1]) * 12 + Number(ym[2])
+  const ijou = /^(\d{1,2})年以上$/.exec(t) // 「10年以上」→ 10年（明示スキル表の年数欄に多い）
+  if (ijou) return Number(ijou[1]) * 12
+  const range = /^\d(?:\.\d)?[-〜～](\d{1,2}(?:\.\d)?)年$/.exec(t) // 「1-2年」「0.5-1年」→ 上限を採用
+  if (range) return Math.round(Number(range[1]) * 12)
   const y = /^(\d{1,2})年$/.exec(t)
   if (y) return Number(y[1]) * 12
   const m = /^(\d{1,3})[ヶかカヵｶ]月$/.exec(t)
