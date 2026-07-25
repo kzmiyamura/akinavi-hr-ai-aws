@@ -1079,28 +1079,57 @@ export function inferPrefectureFromStation(station: string | null | undefined): 
 }
 
 /**
- * station_master DB に 1 件だけ問い合わせて都道府県を返す。
- * ハードコードマップにない駅のフォールバック用。
+ * station_master のスナップショット（scripts/export_station_master.mjs で書き出し・
+ * デプロイ物に同梱）。実行時のDB往復（egress・レイテンシ・DB障害時の欠損）を無くすため、
+ * 静的importでバンドルする。DBを更新したら export_station_master.mjs を再実行してから
+ * デプロイすること（sync_extractors.mjsと同じ「DBが正・デプロイ物は生成物」の思想）。
+ *
+ * 駅名は全国で一意ではない（例:「府中」は広島・徳島・東京に実在）ため、
+ * 1駅名につき路線ごとの{line, prefecture}を複数保持する（出典: ekidata.jp実データ）。
+ * 詳細設計: docs/station_prefecture_extraction_design.md
+ */
+import STATION_MASTER_DATA from './station_data.json' with { type: 'json' }
+interface StationMasterEntry { line: string; prefecture: string }
+const STATION_MASTER_MAP = STATION_MASTER_DATA as Record<string, StationMasterEntry[]>
+
+/**
+ * station_master のスナップショットに照合して都道府県を返す。
+ * ハードコードマップ（STATION_TO_PREFECTURE）にない駅のフォールバック用。
+ *
+ * 路線名が区切りなしで駅名の前に直結している入力（例:「小田急小田原線本厚木駅」）に対応するため、
+ * ①クリーニング済みフル文字列 → ②末尾の「線」以降の部分文字列、の順で駅名候補を照合する
+ * （フル文字列を先に試すことで、駅名自体に「線」を含む駅＝相鉄本線・新線新宿等を壊さない）。
+ *
+ * 同名駅（複数都道府県に実在）の場合:
+ *   - 入力から路線名候補が取れていれば、その路線と一致するエントリの都道府県を採用する
+ *   - 路線名が取れず候補が複数県にまたがる場合は、誤った県を入れるより安全側で null を返す
+ *     （station_prefecture_extraction_design.md §3 の方針）
  */
 async function lookupStationPrefectureFromDb(station: string | null | undefined): Promise<string | null> {
   if (!station) return null
   // ヶ（小文字）→ ケ（通常）に統一（保土ヶ谷→保土ケ谷 等、DB は通常ケで登録）
   const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim().replace(/ヶ/g, 'ケ')
   if (!cleaned) return null
-  try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
-    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    if (!supabaseUrl || !serviceKey) return null
-    const res = await fetch(
-      `${supabaseUrl}/rest/v1/station_master?select=prefecture&name=eq.${encodeURIComponent(cleaned)}&limit=1`,
-      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
-    )
-    if (res.ok) {
-      const rows = await res.json() as { prefecture: string }[]
-      return rows[0]?.prefecture ?? null
+
+  const lastLineIdx = cleaned.lastIndexOf('線')
+  const hasLineSplit = lastLineIdx >= 0 && cleaned.length - lastLineIdx - 1 >= 2
+  // 「小田急小田原線」のような路線名候補（同名駅の disambiguation に使う。取れなければ null）
+  const lineNameCandidate = hasLineSplit ? cleaned.slice(0, lastLineIdx + 1) : null
+  const stationCandidates = hasLineSplit ? [cleaned, cleaned.slice(lastLineIdx + 1)] : [cleaned]
+
+  for (const candidate of stationCandidates) {
+    const entries = STATION_MASTER_MAP[candidate]
+    if (!entries || entries.length === 0) continue
+    const distinctPrefs = [...new Set(entries.map((e) => e.prefecture))]
+    if (distinctPrefs.length === 1) return distinctPrefs[0]
+    // 同名駅で複数都道府県にまたがる: 路線名候補があれば一致するものを優先採用
+    if (lineNameCandidate) {
+      const match = entries.find((e) =>
+        e.line && (e.line === lineNameCandidate || e.line.includes(lineNameCandidate) || lineNameCandidate.includes(e.line)))
+      if (match) return match.prefecture
     }
-  } catch {
-    // DB障害時はnullで継続
+    // 判別できない（同名駅・路線不明）: 誤った県を入れるより安全側でnull
+    return null
   }
   return null
 }
@@ -4382,6 +4411,243 @@ const TAG_DICT =
 const PHASE_EVAL_RE =
   /^(計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守)$/
 
+// ═══════════════════════════════════════════════════════════════════════
+// 視覚エンジン（罫線・色・文字の複合信号でスキル年数を読む・語彙非依存）
+// ローカル検証済み（scripts/parse_xlsx_cell_styles.mjs, _color_kv_reader.mjs,
+// _visual_router.mjs / testData/excel 14件で回帰0件・KS 11→28正解に改善）を
+// Deno(fflate)へ忠実に移植。失敗時は必ず null/空 を返し、呼び出し側は既存の
+// grid/cells方式にフォールバックする（劣化させない安全設計）。
+// ═══════════════════════════════════════════════════════════════════════
+
+interface CellStyle {
+  border: { L: string | null; R: string | null; T: string | null; B: string | null }
+  fill: string | null
+  bold: boolean
+  fontColor: string | null
+}
+
+/** xlsx styles.xml をパースして borders/fills/fonts/cellXfs を返す（純関数） */
+function parseXlsxStylesXml(stylesXml: string): {
+  borders: CellStyle['border'][]
+  fills: (string | null)[]
+  fonts: { bold: boolean; color: string | null }[]
+  cellXfs: { borderId: number; fillId: number; fontId: number }[]
+} {
+  const getBlock = (tag: string) => new RegExp(`<${tag}[\\s\\S]*?</${tag}>`).exec(stylesXml)?.[0] ?? ''
+  const bBlock = getBlock('borders')
+  const borderEls = bBlock.match(/<border(?:\s[^>]*)?>[\s\S]*?<\/border>/g) ?? []
+  const getSide = (b: string, side: string) => new RegExp(`<${side}\\s+style="([^"]+)"`).exec(b)?.[1] ?? null
+  const borders = borderEls.map((b) => ({ L: getSide(b, 'left'), R: getSide(b, 'right'), T: getSide(b, 'top'), B: getSide(b, 'bottom') }))
+
+  const fBlock = getBlock('fills')
+  const fillEls = fBlock.match(/<fill>[\s\S]*?<\/fill>/g) ?? []
+  const fills = fillEls.map((f) => {
+    const m = /fgColor rgb="([0-9A-Fa-f]{6,8})"/.exec(f)
+    if (!m) return null
+    return m[1].length === 8 ? m[1].slice(2) : m[1]
+  })
+
+  const fontsBlock = getBlock('fonts')
+  const fontEls = fontsBlock.match(/<font>[\s\S]*?<\/font>/g) ?? []
+  const fonts = fontEls.map((f) => {
+    const bold = /<b\/>|<b\s/.test(f)
+    const m = /<color[^>]*rgb="([0-9A-Fa-f]{6,8})"/.exec(f)
+    let color = m ? m[1] : null
+    if (color && color.length === 8) color = color.slice(2)
+    return { bold, color }
+  })
+
+  const xBlock = getBlock('cellXfs')
+  const xfEls = xBlock.match(/<xf\s[^>]*\/>|<xf\s[^>]*>[\s\S]*?<\/xf>/g) ?? []
+  const cellXfs = xfEls.map((x) => ({
+    borderId: Number(/borderId="(\d+)"/.exec(x)?.[1] ?? 0),
+    fillId: Number(/fillId="(\d+)"/.exec(x)?.[1] ?? 0),
+    fontId: Number(/fontId="(\d+)"/.exec(x)?.[1] ?? 0),
+  }))
+  return { borders, fills, fonts, cellXfs }
+}
+
+/** xl/workbook.xml + xl/_rels/workbook.xml.rels から シート名→実ファイル名(worksheets/sheetN.xml) を解決する（純関数） */
+function resolveSheetXmlFile(workbookXml: string, relsXml: string, sheetName: string): string | null {
+  const sheetEls = workbookXml.match(/<sheet\s[^>]*\/>/g) ?? []
+  let rId: string | null = null
+  for (const s of sheetEls) {
+    const nameM = /name="([^"]*)"/.exec(s)
+    if (nameM && nameM[1] === sheetName) {
+      rId = /r:id="([^"]+)"/.exec(s)?.[1] ?? null
+      break
+    }
+  }
+  if (!rId) return null
+  const relEls = relsXml.match(/<Relationship\s[^>]*\/>/g) ?? []
+  for (const r of relEls) {
+    if (new RegExp(`Id="${rId}"`).test(r)) {
+      const target = /Target="([^"]+)"/.exec(r)?.[1]
+      if (target) return target.startsWith('worksheets') ? `xl/${target}` : target.replace(/^\/?/, '')
+    }
+  }
+  return null
+}
+
+/** セル参照(A1形式)ごとの罫線・色・文字書式マップを構築する（純関数） */
+function buildCellStyleMap(sheetXml: string, styles: ReturnType<typeof parseXlsxStylesXml>): Map<string, CellStyle> {
+  const map = new Map<string, CellStyle>()
+  const rowEls = sheetXml.match(/<row\s[^>]*>[\s\S]*?<\/row>/g) ?? []
+  for (const row of rowEls) {
+    const cellEls = row.match(/<c\s[^>]*\/>|<c\s[^>]*>[\s\S]*?<\/c>/g) ?? []
+    for (const c of cellEls) {
+      const ref = /r="([A-Z]+\d+)"/.exec(c)?.[1]
+      if (!ref) continue
+      const s = Number(/\ss="(\d+)"/.exec(c)?.[1] ?? 0)
+      const xf = styles.cellXfs[s] ?? { borderId: 0, fillId: 0, fontId: 0 }
+      const border = styles.borders[xf.borderId] ?? { L: null, R: null, T: null, B: null }
+      const fill = styles.fills[xf.fillId] ?? null
+      const font = styles.fonts[xf.fontId] ?? { bold: false, color: null }
+      map.set(ref, { border, fill, bold: font.bold, fontColor: font.color })
+    }
+  }
+  return map
+}
+
+/**
+ * xlsxバイト列から、指定シートのセル別スタイル(罫線・色・文字)マップを取得する。
+ * SheetJSは背景色は取れるが罫線・線種・フォントを落とすため zip 直パースが必須。
+ * 失敗時は null（呼び出し側は必ず既存方式にフォールバックする）。
+ */
+async function extractCellStylesFromXlsx(bytes: Uint8Array, sheetName: string): Promise<Map<string, CellStyle> | null> {
+  try {
+    const { unzipSync } = await import('npm:fflate@0.8.2') as { unzipSync: (data: Uint8Array) => Record<string, Uint8Array> }
+    const files = unzipSync(bytes)
+    const decode = (u8?: Uint8Array) => (u8 ? new TextDecoder().decode(u8) : '')
+    const workbookXml = decode(files['xl/workbook.xml'])
+    const relsXml = decode(files['xl/_rels/workbook.xml.rels'])
+    const stylesXml = decode(files['xl/styles.xml'])
+    if (!workbookXml || !relsXml || !stylesXml) return null
+    const sheetPath = resolveSheetXmlFile(workbookXml, relsXml, sheetName)
+    if (!sheetPath || !files[sheetPath]) return null
+    const sheetXml = decode(files[sheetPath])
+    const styles = parseXlsxStylesXml(stylesXml)
+    return buildCellStyleMap(sheetXml, styles)
+  } catch (e) {
+    console.warn('[visual-engine] スタイル取得失敗（既存方式にフォールバック）:', String(e))
+    return null
+  }
+}
+
+/** 絶対日付表記(2025年8月・2025/8等)の検出（案件系シグナル） */
+const VISUAL_ABS_DATE_RE = /(?:19|20)\d{2}[年\/\-.]\d{1,2}/
+/** 相対期間表記(4年4カ月・1カ月等)の検出（スキル系シグナル）。全体一致のみ＝単発日付混入を避ける */
+const VISUAL_REL_DUR_RE = /^\d{1,2}年(?:\d{1,2}[ヶかカヵｶ]?月)?$|^\d{1,3}[ヶかカヵｶ]月$/
+/** セルの罫線が「箱」を持つか（いずれかの辺に線種がある） */
+const visualHasBorderBox = (b?: CellStyle['border']) => !!b && !!(b.L || b.R || b.T || b.B)
+
+/**
+ * コンテナ(シート)の視覚系統を判定する。語彙非依存、期間の書式だけを見る。
+ *   - 相対期間(「4年4カ月」等)のセルが5件以上・絶対日付より多い → スキル系（明示スキル表）
+ *   - それ以外 → 案件系（プロジェクト履歴表。期間は日付レンジで書かれる）
+ * KS型（明示スキル表）とI.S型（案件履歴表）はこの書式差だけで実データ上分離できることを確認済み。
+ */
+function classifyContainerType(cells: SpanCell[]): 'skill' | 'project' {
+  let rel = 0, abs = 0
+  for (const c of cells) {
+    const v = c.value.replace(/\s/g, '')
+    if (VISUAL_ABS_DATE_RE.test(v)) abs++
+    else if (VISUAL_REL_DUR_RE.test(v)) rel++
+  }
+  return rel >= 5 && rel > abs ? 'skill' : 'project'
+}
+
+/** 相対期間表記(全体一致)のみを厳密に月数へ変換する（曖昧一致を避けるための専用パーサ） */
+function strictDurationToMonths(s: string): number | null {
+  const t = s.trim().replace(/\s/g, '')
+  const ym = /^(\d{1,2})年(\d{1,2})[ヶかカヵｶ]?月$/.exec(t)
+  if (ym) return Number(ym[1]) * 12 + Number(ym[2])
+  const y = /^(\d{1,2})年$/.exec(t)
+  if (y) return Number(y[1]) * 12
+  const m = /^(\d{1,3})[ヶかカヵｶ]月$/.exec(t)
+  if (m) return Number(m[1])
+  return null
+}
+
+/**
+ * 視覚色KVリーダー（罫線＋色＋文字の複合信号でスキル年数を直読み。語彙非依存）。
+ * 明示スキル表（KS型: 「スキル名｜年月」が罫線の箱で並ぶ表）専用。案件系コンテナには使わない
+ * （classifyContainerTypeで'skill'と判定された場合のみ呼び出すこと）。
+ *   1. シート内で繰り返し出る「見出し色」を自己学習（非白fillが3セル以上のもの）
+ *   2. 見出し色でない・罫線の箱を持つセルをスキル候補とし、同じ行の右隣で期間セルとペアリング
+ *   3. 列ペア(スキル列,期間列)の出現回数が3行未満（単発）のペアは不採用
+ *      （経験年数/歳/駅名等の単発ラベル誤爆を、語彙ではなく「テーブルの密度」で排除する）
+ */
+function extractSkillYearsVisualKV(cells: SpanCell[], styleMap: Map<string, CellStyle>): Record<string, number> {
+  const styled = cells.map((c) => ({
+    ...c,
+    ...(styleMap.get(encodeXlsxCell(c.row, c.col)) ?? { border: { L: null, R: null, T: null, B: null }, fill: null, bold: false, fontColor: null }),
+  }))
+  const fillCount: Record<string, number> = {}
+  for (const c of styled) {
+    if (!c.fill) continue
+    const f = c.fill.toUpperCase()
+    if (f === 'FFFFFF') continue
+    fillCount[f] = (fillCount[f] ?? 0) + 1
+  }
+  const headerColors = new Set(Object.entries(fillCount).filter(([, n]) => n >= 3).map(([f]) => f))
+  const isHeader = (c: (typeof styled)[number]) => !!c.fill && headerColors.has(c.fill.toUpperCase())
+
+  const isSkillCandidate = (name: string): boolean => {
+    const n = name.replace(/^[\s　・\-]+/, '').trim()
+    if (!n) return false
+    if (/^\d+$/.test(n)) return false
+    if (n.length > 25) return false
+    if (VISUAL_REL_DUR_RE.test(n)) return false
+    if (VISUAL_ABS_DATE_RE.test(n)) return false
+    if (/^[-―ー~〜、。：:／\/]+$/.test(n)) return false
+    return true
+  }
+
+  const pairs: { skillCol: number; durCol: number; skill: string; months: number }[] = []
+  const byRow: Record<number, (typeof styled)> = {}
+  for (const c of styled) (byRow[c.row] ??= []).push(c)
+  for (const rcells of Object.values(byRow)) {
+    rcells.sort((a, b) => a.col - b.col)
+    for (let i = 0; i < rcells.length; i++) {
+      const sc = rcells[i]
+      if (isHeader(sc) || !visualHasBorderBox(sc.border) || !isSkillCandidate(sc.value)) continue
+      for (let j = i + 1; j < rcells.length; j++) {
+        const dc = rcells[j]
+        if (isSkillCandidate(dc.value)) break
+        const months = strictDurationToMonths(dc.value)
+        if (months !== null && months >= 1 && months <= 600 && visualHasBorderBox(dc.border) && !isHeader(dc)) {
+          const skill = sc.value.replace(/^[\s　・\-]+/, '').trim().replace(/\n[\s\S]*/, '')
+          pairs.push({ skillCol: sc.col, durCol: dc.col, skill, months })
+          break
+        }
+      }
+    }
+  }
+  const colFreq: Record<string, number> = {}
+  for (const p of pairs) colFreq[`${p.skillCol},${p.durCol}`] = (colFreq[`${p.skillCol},${p.durCol}`] ?? 0) + 1
+  const result: Record<string, number> = {}
+  for (const p of pairs) {
+    if ((colFreq[`${p.skillCol},${p.durCol}`] ?? 0) < 3) continue
+    if (p.skill.length > 20) continue
+    result[p.skill] = Math.max(result[p.skill] ?? 0, p.months)
+  }
+  return result
+}
+
+/**
+ * 視覚エンジンでの抽出を試みる。スキル系コンテナと判定され、かつ結果が得られた場合のみ
+ * 値を返す。それ以外（判定失敗・案件系・スタイル取得失敗・0件）は null を返し、
+ * 呼び出し側は必ず既存の grid/cells 方式にフォールバックする（劣化させない安全設計）。
+ */
+async function tryVisualSkillExtraction(bytes: Uint8Array, sheetName: string, cells: SpanCell[]): Promise<Record<string, number> | null> {
+  if (classifyContainerType(cells) !== 'skill') return null
+  const styleMap = await extractCellStylesFromXlsx(bytes, sheetName)
+  if (!styleMap) return null
+  const result = extractSkillYearsVisualKV(cells, styleMap)
+  return Object.keys(result).length > 0 ? result : null
+}
+
 
 const _cs = (c: SpanCell) => c.colEnd - c.col + 1   // colSpan
 const _rs = (c: SpanCell) => c.rowEnd - c.row + 1   // rowSpan
@@ -6297,11 +6563,19 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
         console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
         const syGrid = extractSkillYearsUnified(grid)
         const syCells = filterSkillYears(extractSkillYearsFromCells(cells))
+        // 視覚エンジン（罫線・色・文字。明示スキル表と判定された場合のみ・失敗時は必ずnull）
+        const syVisual = await tryVisualSkillExtraction(bytes, sheetName, cells)
         // 品質スコア比較（件数→skill_master照合の重み付き。同点は SpanCell 優先＝空間構造が正確）
         const countGrid = scoreSkillQuality(syGrid, _skillNameSet)
         const countCells = scoreSkillQuality(syCells, _skillNameSet)
-        if (countGrid > 0 || countCells > 0) {
-          skillYears = countCells >= countGrid ? syCells : syGrid
+        const countVisual = syVisual ? scoreSkillQuality(syVisual, _skillNameSet) : 0
+        if (countGrid > 0 || countCells > 0 || countVisual > 0) {
+          if (syVisual && countVisual >= countCells && countVisual >= countGrid) {
+            skillYears = syVisual
+            skillYears['_extractMethod'] = 60 // 視覚エンジン（罫線・色KV）勝者
+          } else {
+            skillYears = countCells >= countGrid ? syCells : syGrid
+          }
           // cells ベースの _totalProjectMonths / _dateSpanMonths を常に保持（grid にはこの情報がない）
           if (syCells['_totalProjectMonths'] && !skillYears['_totalProjectMonths']) {
             skillYears['_totalProjectMonths'] = syCells['_totalProjectMonths']
@@ -6312,7 +6586,8 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
           // SpanCellベース勝者には経路コード50を付与（gridベースはUnified内で付与済み）
           if (skillYears['_extractMethod'] === undefined) skillYears['_extractMethod'] = 50
           firstJsonRows = jsonRows
-          console.log(`[skillYears-pick] grid=${countGrid} cells=${countCells} winner=${countCells >= countGrid ? 'cells' : 'grid'}`)
+          const winner = syVisual && countVisual >= countCells && countVisual >= countGrid ? 'visual' : (countCells >= countGrid ? 'cells' : 'grid')
+          console.log(`[skillYears-pick] grid=${countGrid} cells=${countCells} visual=${countVisual} winner=${winner}`)
         } else {
           console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
           if (!firstJsonRows) firstJsonRows = jsonRows

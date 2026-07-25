@@ -71,6 +71,7 @@
 - `node scripts/test_excel_parsing.mjs --compact` — Excel/Word解析品質メトリクス（Claude読み取り用）
 - `node scripts/test_excel_parsing.mjs --compact --new` — 未分類 xlsx も含めて検証
 - `node scripts/test_excel_parsing.mjs` — 詳細デバッグ出力（人力調査用）
+- `node scripts/test_excel_anomalies.mjs` — 想定異常系の合成テスト（34ケース）。新しい異常フォーマットを発見したらまずここにケースを足してから修正（テストファースト）
 - `node scripts/sync_extractors.mjs` — index.ts の純粋関数を `_extractors.gen.mjs` に再生成（index.ts を変更したら必ず実行）
 
 ### Excel/Word解析 精度改善ループ
@@ -124,8 +125,10 @@ git add -A && git commit -m "fix: ..." && git push
 | `ai_logs` | AI呼び出しログ。`inbound-email` 由来は `model='no-ai'` |
 | `error_logs` | フロントエンドエラーログ。30日自動削除 cron は未実装（要追加） |
 | `skill_master` | ITスキルマスタ（約1,660件）。aliases で表記ゆれ吸収 |
-| `station_master` | 駅名→都道府県マッピング（全国1,797駅）。`inbound-email` 起動時にキャッシュ |
+| `station_master` | 駅名・路線名→都道府県マッピング（ekidata.jp実データ、12,666行・8,443駅名。同名駅は路線で判別）。`scripts/export_station_master.mjs` で `supabase/functions/inbound-email/station_data.json` に書き出し、Edge Functionにビルド時同梱（実行時DB問い合わせなし）。DB更新時は再エクスポート＋再デプロイが必要 |
 | `app_config` | アプリ全体設定・Microsoft OAuthトークン保存 |
+| `notification_rules` | 人材ウォッチ通知ルール（通知タブでCRUD）。7/23復旧日にマイグレーション適用 |
+| `notification_log` | 通知送信済み記録（ルール×人材で一意・二重通知防止） |
 
 ### app_config の主要キー
 | キー | 既定 | 内容 |
@@ -147,6 +150,7 @@ git add -A && git commit -m "fix: ..." && git push
 - **マッチングスコア計算**: `fetch_candidates_for_project` RPC（SQL）でルールスコアを計算 → topN件だけ AI 採点。スコア配点・ウェイト詳細はRPC定義を参照
 - **inbound-email 処理フロー**: `supabase/functions/inbound-email/index.ts` を参照
 - **論理データ環境**: `prod` / `demo` を `data_env` カラムで分離。SettingsPage の「デモモード」スイッチで切替
-- **画面構成**: ナビは4タブ（マッチング/人材/案件/設定）。`src/components/Layout.tsx` の `NAV_ITEMS` を正とする
+- **画面構成**: ナビは5タブ（マッチング/人材/案件/通知/設定）。`src/components/Layout.tsx` の `NAV_ITEMS` を正とする
+- **通知機能**: `notification_rules`（条件: 名前/スキル/駅のAND）に合致する人材が登録・更新されたら `notify-candidates` Edge Function（pg_cron 5分）が Graph sendMail でメール通知。二重通知は `notification_log` で防止。送信には Mail.Send スコープ（Microsoft再連携）が必要
 - **認証なし**: ニックネームを `localStorage` に保存
 - **重複管理**: email一致で自動UPDATE。名前一致 + スキルJaccard ≥ 0.4 で `duplicate_flag=true`
