@@ -4828,16 +4828,33 @@ function projSplitTokens(s: string): string[] {
     .filter((x) => x && x.length >= 2 && x.length <= 24 && !/^[-―ー~〜:：+＋]+$/.test(x) && !/^\d+$/.test(x)
       && !/(作成|開発|設計|テスト|実装|運用|保守|担当|業務|効率|改修|移行|対応|管理)$/.test(x) && !PROJ_JUNK.test(x))
 }
+const PROJ_PREFIX_RE = /(OS|ＯＳ|言語|開発言語|使用言語|DB|ＤＢ|データベース|FW|フレームワーク|ミドル|ミドルウェア|サーバ|MW|役割|規模|担当|工程|人数|チーム)[-－:：]/g
 function projParseKakko(text: string): string[] {
-  const parts = text.split(/【([^】]*)】/)
-  if (parts.length <= 1) return projSplitTokens(text)
   const out: string[] = []
-  for (let i = 1; i < parts.length; i += 2) {
-    const cat = parts[i].trim(); const val = parts[i + 1] || ''
-    if (KAKKO_SKIP.test(cat)) continue
-    if (KAKKO_TECH.test(cat)) out.push(...projSplitTokens(val))
+  // ① 【カテゴリ】値 形式
+  const parts = text.split(/【([^】]*)】/)
+  if (parts.length > 1) {
+    for (let i = 1; i < parts.length; i += 2) {
+      const cat = parts[i].trim(); const val = parts[i + 1] || ''
+      if (KAKKO_SKIP.test(cat)) continue
+      if (KAKKO_TECH.test(cat)) out.push(...projSplitTokens(val))
+    }
+    return out
   }
-  return out
+  // ② 「言語-…」「OS-…」「DB-MySQL」等の接頭辞形式（ハイフン/コロン区切り）
+  const markers = [...text.matchAll(PROJ_PREFIX_RE)]
+  if (markers.length > 0) {
+    for (let i = 0; i < markers.length; i++) {
+      const cat = markers[i][1]
+      const s = markers[i].index! + markers[i][0].length
+      const e = i + 1 < markers.length ? markers[i + 1].index! : text.length
+      if (KAKKO_SKIP.test(cat)) continue
+      if (KAKKO_TECH.test(cat)) out.push(...projSplitTokens(text.slice(s, e)))
+    }
+    return out
+  }
+  // ③ 接頭辞なし→そのまま分割
+  return projSplitTokens(text)
 }
 function projMergeMonths(iv: [number, number][]): number {
   if (!iv.length) return 0
@@ -4867,7 +4884,9 @@ function extractSkillYearsVisualProject(cells: SpanCell[]): Record<string, numbe
     for (const c of byRow[r]) { if (/【\s*(OS|ＯＳ|言語|DB|ＤＢ)/.test(c.value) && !tc.includes(c.col)) tc.push(c.col) }
     if (tc.length === 0) continue
     const below = rows.filter((x) => x > r && x <= r + 30 && dateRow[x]).length
-    const score = tc.length + (pc.length ? 3 : 0) + (below >= 2 ? 10 : 0) + Math.min(below, 5)
+    // tech列数を強めに重み付け（2行ヘッダーで「期間/開発環境」の粗い行より、ＯＳ/ＤＢ/言語と
+    // 細かく分かれた行=本物の列見出しを優先）
+    const score = tc.length * 3 + (pc.length ? 3 : 0) + (below >= 2 ? 10 : 0) + Math.min(below, 5)
     if (score > best) { best = score; hdr = r; tcols = [...new Set(tc)]; pcols = pc }
   }
   if (hdr < 0 || tcols.length < 2) return null // 信頼ゲート①: tech列2本以上
