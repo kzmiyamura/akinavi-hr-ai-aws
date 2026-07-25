@@ -4801,7 +4801,7 @@ async function tryVisualSkillExtraction(bytes: Uint8Array, sheetName: string, ce
 // 認識し、ブロック内の期間(開始〜終了/期間)を、ブロック内の tech(指定列＋【】自由記述)に区間unionで与える。
 // 人間が「罫線で囲まれた塊=1案件」と見るのを再現。gridには無い機能（罫線・結合が見えないため）。
 // 信頼ゲート: tech列2本以上＋案件3件以上＋結果3件以上の時だけ非nullを返す（散らかった表では発火しない）。
-const PROJ_TECHCOL = /(使用言語|開発言語|^言語|ＯＳ|^OS|サーバ|データベース|^DB|フレームワーク|ミドル|ツール|機種|開発環境|環境・言語|環境\/言語|得意技術|利用技術|^技術$|技術・環境|環境等)/
+const PROJ_TECHCOL = /(使用言語|開発言語|^言語|ＯＳ|^OS|サーバ|データベース|^DB|フレームワーク|ミドル|ツール|機種|開発環境|環境・言語|環境\/言語|得意技術|利用技術|^技術$|技術・環境|環境等|ＤＢ|使用ＤＢ|使用DB|DB関連|FW\/Tool|FW\/ツール)/
 const PROJ_PERIODCOL = /(期間|稼働)/
 const KAKKO_TECH = /^(OS|ＯＳ|言語|開発言語|使用言語|DB|ＤＢ|データベース|FW|フレームワーク|ミドル|ミドルウェア|サーバ|MW)/
 const KAKKO_SKIP = /^(役割|規模|担当|フェーズ|工程|人数|チーム|概要|プロジェクト|業務|実績|取り組|備考|ツール|その他|IDE|環境|機材|計測|画像処理)/
@@ -4856,7 +4856,8 @@ function extractSkillYearsVisualProject(cells: SpanCell[]): Record<string, numbe
   let hdr = -1, best = -1, tcols: number[] = [], pcols: number[] = []
   for (const r of rows) {
     const tc: number[] = [], pc: number[] = []
-    for (const c of byRow[r]) { const v = c.value.trim(); if (v.length <= 14 && PROJ_TECHCOL.test(v)) tc.push(c.col); if (v.length <= 10 && PROJ_PERIODCOL.test(v)) pc.push(c.col) }
+    // 見出しは字間スペースを除去してから照合（"O S"→"OS"、"期 間"→"期間" 等の字間空けに対応）
+    for (const c of byRow[r]) { const v = c.value.replace(/\s/g, '').trim(); if (v.length <= 14 && PROJ_TECHCOL.test(v)) tc.push(c.col); if (v.length <= 10 && PROJ_PERIODCOL.test(v)) pc.push(c.col) }
     for (const c of byRow[r]) { if (/【\s*(OS|ＯＳ|言語|DB|ＤＢ)/.test(c.value) && !tc.includes(c.col)) tc.push(c.col) }
     const score = tc.length + (pc.length ? 3 : 0)
     if (tc.length > 0 && score > best) { best = score; hdr = r; tcols = [...new Set(tc)]; pcols = pc }
