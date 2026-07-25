@@ -70,9 +70,11 @@ async function rest(method, path, body) {
 }
 
 // ① station_master に追加（on conflict update）
+// ユニーク制約は (name, line, prefecture)。手動追加は路線不明のため line='' で入れる
+// （export_station_master.mjs は null/'' を同じく '' 扱いするため整合する）。
 console.log(`\n🚉 station_master に追加: "${stationName}" → ${prefecture}`)
 try {
-  const result = await rest('POST', 'station_master', { name: stationName, prefecture })
+  const result = await rest('POST', 'station_master', { name: stationName, line: '', prefecture })
   console.log(`  ✅ 追加/更新完了: ${JSON.stringify(result)}`)
 } catch (e) {
   console.error(`  ❌ 追加失敗: ${e.message}`)
@@ -120,4 +122,7 @@ if (wrongPrefecture) {
 }
 
 console.log('\n完了 ✅')
-console.log('※ inbound-email の station_master キャッシュは次回リクエスト時に自動更新されます')
+console.log('※ 重要: inbound-email は station_master を実行時に問い合わせず、ビルド時同梱の')
+console.log('   station_data.json を使う。DBに追加しただけでは反映されない。以下を必ず実行:')
+console.log('     node scripts/export_station_master.mjs   # DB → station_data.json 再生成')
+console.log('     bash scripts/check-and-deploy-edge.sh inbound-email   # 再デプロイ')

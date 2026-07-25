@@ -2002,18 +2002,34 @@ function extractCandidateFieldsRegex(
   // 後処理: ラベル自体が値になっているケースを除外
   // 例: 「最寄駅」「イニシャル+最寄駅」「最寄：北13条東駅」→ 実駅名のみに修正
   if (nearestStation) {
-    // 路線名カッコを除去: 「綾瀬駅（東京メトロ千代田線 / JR常磐線）」→「綾瀬駅」
-    nearestStation = nearestStation.replace(/（[^）]*）.*$/, '').trim()
+    // 路線名カッコを除去（全角/半角どちらも対応）。
+    // カッコ内が路線名（「線」で終わる）なら、捨てずに先頭へ移す:
+    // DB照合時に路線名から同名駅（例:桜台=東京/福岡）を判別できるようにするため。
+    // 例: 「桜台(西武池袋線)」→「西武池袋線桜台」/「綾瀬駅（東京メトロ千代田線 / JR常磐線）」→「JR常磐線綾瀬駅」
+    const parenLineMatch = nearestStation.match(/^([^\s（(]+)[（(]([^）)]*線)(?:[／/][^）)]*)?[）)].*$/)
+    if (parenLineMatch) {
+      nearestStation = parenLineMatch[2] + parenLineMatch[1]
+    } else {
+      nearestStation = nearestStation.replace(/[（(][^）)]*[）)].*$/, '').trim()
+    }
+    // 「線『駅名』」形式（例:「JR総武線「市川」」「山手線「浜松町」」）: カギ括弧内を駅名候補として取り出す
+    const kagiMatch = nearestStation.match(/線[「『]([^」』]{1,10})[」』]/)
+    if (kagiMatch) nearestStation = kagiMatch[1]
     // 路線名スラッシュ・中点区切りを除去: 「JR京浜東北線／蕨駅」「西武池袋線・東長崎駅」→「蕨駅」「東長崎駅」
     nearestStation = nearestStation.replace(/^.+[/／・]/, '').trim()
     // 「最寄：北13条東駅」のようにコロン区切りで前半がラベルの場合、後半だけ取る
     const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
     if (colonMatch) nearestStation = colonMatch[1].trim()
+    // 「線」を持たない公営地下鉄・新交通等の事業者名プレフィックスを剥がす
+    // 例:「横浜市営地下鉄岸根公園」→「岸根公園」「埼玉新都市交通伊奈中央」→「伊奈中央」
+    nearestStation = nearestStation.replace(/^.*?(市営地下鉄|地下鉄|新都市交通|モノレール|ゆりかもめ)/, '')
     // ラベルそのものや template text・セクション見出しは除外
     if (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation)
       || nearestStation.includes('イニシャル')
       || nearestStation.includes('最寄駅')
-      || /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|スキル|経験|希望|現住所|住所|氏名|年齢|性別|国籍|連絡先|所属|担当|役職)$/.test(nearestStation)) {
+      || /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|スキル|経験|希望|現住所|住所|氏名|年齢|性別|国籍|連絡先|所属|担当|役職)$/.test(nearestStation)
+      // 明らかな非駅名ノイズ（誤抽出）を拒否。文中のどこにあっても対象（先頭一致に限定しない）
+      || /(■|IT経験|経験年数|フルリモート|引っ越し|引越し|転居|首都圏|シリコンバレー)/.test(nearestStation)) {
       nearestStation = null
     }
     // 「西武池袋線　飯能駅」→「飯能駅」（路線名+スペース+駅名 → 駅名だけ取る）
@@ -2027,6 +2043,11 @@ function extractCandidateFieldsRegex(
         const stationStart = nearestStation.match(/^([^\s　]{1,12}駅)/)
         if (stationStart) nearestStation = stationStart[1]
       }
+    }
+    // 末尾の付帯情報を除去（駅サフィックスの有無に関わらず。「都内」等の勤務地修飾も含めて剥がす）
+    // 例:「二子玉川※常駐可能」→「二子玉川」「幸手※都内出勤可」→「幸手」
+    if (nearestStation) {
+      nearestStation = nearestStation.replace(/[※]?(都内|都内へ)?(常駐可能?|出勤可能?|リモート可能?|通勤可能?)$/, '').trim() || null
     }
   }
 
