@@ -4796,6 +4796,102 @@ async function tryVisualSkillExtraction(bytes: Uint8Array, sheetName: string, ce
   return Object.keys(merged).length >= 3 ? merged : null
 }
 
+// ===== 案件系スキル年数 視覚プロジェクトリーダー =====
+// スキル表を持たない「案件履歴フォーマット」向け。縦結合セル(rowspan)で「1案件=複数行ブロック」を
+// 認識し、ブロック内の期間(開始〜終了/期間)を、ブロック内の tech(指定列＋【】自由記述)に区間unionで与える。
+// 人間が「罫線で囲まれた塊=1案件」と見るのを再現。gridには無い機能（罫線・結合が見えないため）。
+// 信頼ゲート: tech列2本以上＋案件3件以上＋結果3件以上の時だけ非nullを返す（散らかった表では発火しない）。
+const PROJ_TECHCOL = /(使用言語|開発言語|^言語|ＯＳ|^OS|サーバ|データベース|^DB|フレームワーク|ミドル|ツール|機種|開発環境|環境・言語|環境\/言語|得意技術|利用技術|^技術$|技術・環境|環境等)/
+const PROJ_PERIODCOL = /(期間|稼働)/
+const KAKKO_TECH = /^(OS|ＯＳ|言語|開発言語|使用言語|DB|ＤＢ|データベース|FW|フレームワーク|ミドル|ミドルウェア|サーバ|MW)/
+const KAKKO_SKIP = /^(役割|規模|担当|フェーズ|工程|人数|チーム|概要|プロジェクト|業務|実績|取り組|備考|ツール|その他|IDE|環境|機材|計測|画像処理)/
+const PROJ_JUNK = /^(SDK|ver|version|v|IDE|pro|＋|拡張機能|既存コード解析|ライブラリ|エディタ|各種|他|その他|等|ＦＷ|Framework|フレームワーク|画像処理ライブラリ|計測器|開発ツール|開発環境)$/i
+const PROJ_MON: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }
+
+function projParsePeriod(text: string, nowMonth: number): { start: number | null; end: number | null; dur: number | null } {
+  const v = text.replace(/\s/g, '')
+  const nums: number[] = []
+  let now = /現在|現時点|継続|至現在/.test(v)
+  for (const m of v.matchAll(/(19|20)(\d{2})[年\/.\-](\d{1,2})/g)) nums.push((+`${m[1]}${m[2]}`) * 12 + +m[3])
+  for (const m of v.matchAll(/(\d{2})年([A-Za-z]{3})/g)) { const mo = PROJ_MON[m[2].toLowerCase()]; if (mo) nums.push((2000 + +m[1]) * 12 + mo) }
+  for (const m of v.matchAll(/\b(\d{2})[\/.](\d{1,2})\b/g)) { if (+m[1] <= 40) nums.push((2000 + +m[1]) * 12 + +m[2]) }
+  let dur: number | null = null
+  const dm = v.match(/(\d{1,2})年(\d{1,2})[ヶかカ]月|(\d{1,2})年(?!\d)|(\d{1,3})[ヶかカ]月/)
+  if (dm) { const mo = dm[1] ? +dm[1] * 12 + +dm[2] : dm[3] ? +dm[3] * 12 : +dm[4]; if (mo >= 1 && mo <= 600) dur = mo }
+  if (nums.length >= 2) return { start: Math.min(...nums), end: now ? nowMonth : Math.max(...nums), dur }
+  if (nums.length === 1 && now) return { start: nums[0], end: nowMonth, dur }
+  return { start: null, end: null, dur }
+}
+function projSplitTokens(s: string): string[] {
+  return s.split(/[\/／、,\n\r・（(）)]|\s{2,}|　| /).map((x) => x.replace(/^[◆■●・\s]+/, '').trim())
+    .map((x) => x.replace(/[\s]*\d+(\.\d+)*[a-z]?$/i, '').replace(/等$|など$/, '').trim())
+    .filter((x) => x && x.length >= 2 && x.length <= 24 && !/^[-―ー~〜:：+＋]+$/.test(x) && !/^\d+$/.test(x)
+      && !/(作成|開発|設計|テスト|実装|運用|保守|担当|業務|効率|改修|移行|対応|管理)$/.test(x) && !PROJ_JUNK.test(x))
+}
+function projParseKakko(text: string): string[] {
+  const parts = text.split(/【([^】]*)】/)
+  if (parts.length <= 1) return projSplitTokens(text)
+  const out: string[] = []
+  for (let i = 1; i < parts.length; i += 2) {
+    const cat = parts[i].trim(); const val = parts[i + 1] || ''
+    if (KAKKO_SKIP.test(cat)) continue
+    if (KAKKO_TECH.test(cat)) out.push(...projSplitTokens(val))
+  }
+  return out
+}
+function projMergeMonths(iv: [number, number][]): number {
+  if (!iv.length) return 0
+  const s = iv.filter(([a, b]) => b >= a).sort((x, y) => x[0] - y[0])
+  if (!s.length) return 0
+  let t = 0, cs = s[0][0], ce = s[0][1]
+  for (let i = 1; i < s.length; i++) { const [a, b] = s[i]; if (a <= ce + 1) { if (b > ce) ce = b } else { t += ce - cs + 1; cs = a; ce = b } }
+  return t + ce - cs + 1
+}
+function extractSkillYearsVisualProject(cells: SpanCell[]): Record<string, number> | null {
+  const nowMonth = new Date().getFullYear() * 12 + (new Date().getMonth() + 1)
+  const byRow: Record<number, SpanCell[]> = {}
+  for (const c of cells) if (c.value.trim()) (byRow[c.row] ??= []).push(c)
+  const rows = Object.keys(byRow).map(Number).sort((a, b) => a - b)
+  // ヘッダー検出: tech列見出し数＋期間見出しがあれば加点（上部サマリ誤認を避ける）
+  let hdr = -1, best = -1, tcols: number[] = [], pcols: number[] = []
+  for (const r of rows) {
+    const tc: number[] = [], pc: number[] = []
+    for (const c of byRow[r]) { const v = c.value.trim(); if (v.length <= 14 && PROJ_TECHCOL.test(v)) tc.push(c.col); if (v.length <= 10 && PROJ_PERIODCOL.test(v)) pc.push(c.col) }
+    for (const c of byRow[r]) { if (/【\s*(OS|ＯＳ|言語|DB|ＤＢ)/.test(c.value) && !tc.includes(c.col)) tc.push(c.col) }
+    const score = tc.length + (pc.length ? 3 : 0)
+    if (tc.length > 0 && score > best) { best = score; hdr = r; tcols = [...new Set(tc)]; pcols = pc }
+  }
+  if (hdr < 0 || tcols.length < 2) return null // 信頼ゲート①: tech列2本以上
+  // 案件ブロック化: tech列で rowspan を持つセル範囲を1ブロック
+  const blocks: { r0: number; r1: number }[] = []
+  const seen = new Set<number>()
+  for (const c of cells) {
+    if (c.row <= hdr || !tcols.includes(c.col) || !c.value.trim() || seen.has(c.row)) continue
+    let r1 = c.rowEnd
+    for (const c2 of cells) if (tcols.includes(c2.col) && c2.row === c.row) r1 = Math.max(r1, c2.rowEnd)
+    blocks.push({ r0: c.row, r1 }); seen.add(c.row)
+  }
+  blocks.sort((a, b) => a.r0 - b.r0)
+  const merged: { r0: number; r1: number }[] = []
+  for (const b of blocks) { const last = merged[merged.length - 1]; if (last && b.r0 <= last.r1) last.r1 = Math.max(last.r1, b.r1); else merged.push({ ...b }) }
+  if (merged.length < 3) return null // 信頼ゲート②: 案件3件以上
+  const minTech = Math.min(...tcols)
+  const colv = (r0: number, r1: number, col: number) => cells.filter((c) => c.col <= col && c.colEnd >= col && c.row >= r0 && c.row <= r1).map((c) => c.value).join(' \n ')
+  const skillIv: Record<string, [number, number][]> = {}, skillFloat: Record<string, number> = {}
+  for (const b of merged) {
+    const perText = cells.filter((c) => c.row >= b.r0 && c.row <= b.r1 && c.col < minTech && !tcols.some((tc) => c.col <= tc && c.colEnd >= tc)).map((c) => c.value).join(' ')
+    const { start, end, dur } = projParsePeriod(perText, nowMonth)
+    const techs = new Set<string>()
+    for (const tc of tcols) for (const t of projParseKakko(colv(b.r0, b.r1, tc))) techs.add(t)
+    if (techs.size === 0) continue
+    if (start !== null && end !== null && end >= start && end - start <= 600) { for (const t of techs) (skillIv[t] ??= []).push([start, end]) }
+    else if (dur !== null) { for (const t of techs) skillFloat[t] = (skillFloat[t] ?? 0) + dur }
+  }
+  const res: Record<string, number> = {}
+  for (const sk of new Set([...Object.keys(skillIv), ...Object.keys(skillFloat)])) res[sk] = projMergeMonths(skillIv[sk] ?? []) + (skillFloat[sk] ?? 0)
+  return Object.keys(res).length >= 3 ? res : null // 信頼ゲート③: 結果3件以上
+}
+
 
 const _cs = (c: SpanCell) => c.colEnd - c.col + 1   // colSpan
 const _rs = (c: SpanCell) => c.rowEnd - c.row + 1   // rowSpan
@@ -6713,18 +6809,27 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
         const syCells = filterSkillYears(extractSkillYearsFromCells(cells))
         // 視覚エンジン（罫線・色・文字。明示スキル表と判定された場合のみ・失敗時は必ずnull）
         const syVisual = await tryVisualSkillExtraction(bytes, sheetName, cells)
+        // 案件系視覚リーダー（スキル表が無い案件履歴向け。縦結合セルで案件ブロック化→期間×tech区間union。
+        // 信頼ゲート＝tech列2本以上＋案件3件以上＋結果3件以上を満たす時のみ非null）
+        const syProject = syVisual ? null : extractSkillYearsVisualProject(cells)
         // 品質スコア比較（件数→skill_master照合の重み付き。同点は SpanCell 優先＝空間構造が正確）
         const countGrid = scoreSkillQuality(syGrid, _skillNameSet)
         const countCells = scoreSkillQuality(syCells, _skillNameSet)
         const countVisual = syVisual ? scoreSkillQuality(syVisual, _skillNameSet) : 0
-        if (countGrid > 0 || countCells > 0 || countVisual > 0) {
+        const countProject = syProject ? scoreSkillQuality(syProject, _skillNameSet) : 0
+        if (countGrid > 0 || countCells > 0 || countVisual > 0 || countProject > 0) {
           // 明示スキル表（本人申告）を第一優先。tryVisualSkillExtraction は空行ブロック単位で
           // 'skill' 判定・罫線ボックス・列頻度3以上を満たす真の明示スキル表ブロックからしか
           // 非nullを返さないため、読めた時点でそれを最優先する（案件tech列×期間のunionより、
           // 本人が申告した「スキル歴N年」を優先するというユーザー方針）。
           if (syVisual && countVisual > 0) {
             skillYears = syVisual
-            skillYears['_extractMethod'] = 60 // 視覚エンジン（罫線・色KV）勝者
+            skillYears['_extractMethod'] = 60 // 視覚エンジン（明示スキル表・罫線色KV）勝者
+          } else if (syProject && countProject >= countGrid) {
+            // スキル表が無い案件履歴。案件系視覚リーダーが信頼ゲートを通り、gridと同等以上に
+            // 取れた時は grid より優先（構造で読む方がノイズが少なく期間×tech対応も正確）。
+            skillYears = syProject
+            skillYears['_extractMethod'] = 61 // 視覚エンジン（案件ブロック区間union）勝者
           } else {
             skillYears = countCells >= countGrid ? syCells : syGrid
           }
@@ -6738,8 +6843,10 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
           // SpanCellベース勝者には経路コード50を付与（gridベースはUnified内で付与済み）
           if (skillYears['_extractMethod'] === undefined) skillYears['_extractMethod'] = 50
           firstJsonRows = jsonRows
-          const winner = syVisual && countVisual > 0 ? 'visual' : (countCells >= countGrid ? 'cells' : 'grid')
-          console.log(`[skillYears-pick] grid=${countGrid} cells=${countCells} visual=${countVisual} winner=${winner}`)
+          const winner = (syVisual && countVisual > 0) ? 'visual'
+            : (syProject && countProject >= countGrid) ? 'project'
+            : (countCells >= countGrid ? 'cells' : 'grid')
+          console.log(`[skillYears-pick] grid=${countGrid} cells=${countCells} visual=${countVisual} project=${countProject} winner=${winner}`)
         } else {
           console.log(`[skillYears-miss] sheet="${sheetName}" totalRows=${grid.length} head=${JSON.stringify(grid.slice(0, 3).map(r => r.slice(0, 8)))}`)
           if (!firstJsonRows) firstJsonRows = jsonRows
