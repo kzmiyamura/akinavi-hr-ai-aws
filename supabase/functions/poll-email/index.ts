@@ -935,6 +935,11 @@ async function pollAccount(
   let processed = 0
   let skipped = 0
   const errors: string[] = []
+  // テスト用: poll_dry_no_delete=true のとき既読化・削除をせず（バグ検証で再実行できるよう）、
+  // かつ1回の処理件数を poll_dry_batch_limit（既定15）に制限する。
+  const dryNoDelete = (await getAppConfigValue(supabase, 'poll_dry_no_delete')) === 'true'
+  const dryBatchLimit = Number((await getAppConfigValue(supabase, 'poll_dry_batch_limit')) ?? '15') || 15
+  const noSideEffect = mode === 'recover' || dryNoDelete
   let fullImportDone = false
 
   try {
@@ -982,8 +987,8 @@ async function pollAccount(
     // ルールでスキップ確定したものを削除
     for (const { email } of ruleSkipped) {
       try {
-        if (mode === 'incremental') await deleteMessage(accessToken, email.id)
-        console.log(`[poll] 事前フィルタースキップ・削除: "${email.subject}"`)
+        if (mode === 'incremental' && !noSideEffect) await deleteMessage(accessToken, email.id)
+        console.log(`[poll] 事前フィルタースキップ${noSideEffect ? '(非削除)' : '・削除'}: "${email.subject}"`)
         skipped++
       } catch { /* ignore */ }
     }
@@ -1012,11 +1017,13 @@ async function pollAccount(
       }),
     ]
 
-    for (const { email, emailType } of toProcess) {
+    // テストモード: 処理件数を上限で打ち切る
+    const toProcessLimited = dryNoDelete ? toProcess.slice(0, dryBatchLimit) : toProcess
+    for (const { email, emailType } of toProcessLimited) {
       try {
         if (emailType === 'other') {
-          if (mode === 'incremental') await deleteMessage(accessToken, email.id)
-          console.log(`[poll] スキップ・削除 (other): "${email.subject}" (${config.configKey})`)
+          if (mode === 'incremental' && !noSideEffect) await deleteMessage(accessToken, email.id)
+          console.log(`[poll] スキップ${noSideEffect ? '(非削除)' : '・削除'} (other): "${email.subject}" (${config.configKey})`)
           skipped++
           continue
         }
@@ -1039,7 +1046,7 @@ async function pollAccount(
 
         // 処理中の二重取得防止のため先に既読マーク（処理完了後に削除）
         // 復旧モードは削除済みアイテムを読むだけなので既読化しない（副作用ゼロ）
-        if (mode !== 'recover') await markAsRead(accessToken, email.id)
+        if (!noSideEffect) await markAsRead(accessToken, email.id)
 
         // 添付取得 → inbound-email へ渡す
         const attachments = email.hasAttachments
@@ -1112,11 +1119,11 @@ async function pollAccount(
         }
         processed++
         // 処理完了後にメールを削除（DB に保存済みのため Outlook 側は不要）
-        // 復旧モードは削除済みアイテムの再処理なので二重削除しない（そのまま残す）
-        if (mode !== 'recover') {
+        // 復旧モード・テストモード(dryNoDelete)は削除しない（再実行できるよう残す）
+        if (!noSideEffect) {
           try { await deleteMessage(accessToken, email.id) } catch { /* ignore */ }
         }
-        console.log(`[poll] 処理完了${mode === 'recover' ? '(復旧・非削除)' : '・削除'}: "${email.subject}" type=${finalType} (${config.configKey})`)
+        console.log(`[poll] 処理完了${noSideEffect ? '(非削除)' : '・削除'}: "${email.subject}" type=${finalType} (${config.configKey})`)
       } catch (e) {
         // 失敗したら未読に戻して次回ポーリングで再試行
         const msg = `メール処理失敗 "${email.subject}": ${String(e)}`
