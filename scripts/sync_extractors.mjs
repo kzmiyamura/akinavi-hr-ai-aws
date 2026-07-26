@@ -31,6 +31,7 @@ const TARGET_FUNCTIONS = [
   'filterSkillYears',
   'extractSkillYearsFromBodyText',
   'extractSkillYearsFromSheetData',
+  'looksLikeRosterName',
 ]
 
 // ── TypeScript → JavaScript 簡易変換 ──────────────────────────────

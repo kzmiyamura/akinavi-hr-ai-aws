@@ -120,6 +120,11 @@ t('B15: 丸数字の行番号（①②）+ 開発環境列（K.J型）',
    ['②', '2013/03 ～ 2013/12', 'サイト開発', 'WordPress\nPHP\nApache']],
   { CakePHP2: 9, MySQL: 9, Linux: 9, WordPress: 10, PHP: 10, Apache: 10 })
 
+t('C14: 行番号セルが分割セル日付の結合に混入しない（N.J型: "3"+"2023"→"32023"誤爆）',
+  [['No', '', '期間', '', '', '業務内容', '使用言語'],
+   ['3', '', '2023', '年', '8', '案件C', 'HTML5'],
+   ['', '', '2024', '年', '3', '', '']],
+  { HTML5: (v) => v !== undefined && v > 0 && v <= 24 })  // 誤爆すると1987年扱いで巨大な値になっていた
 t('C13: 「項番」を行番号列と認識し、継続行の終了日だけの行を二重計上しない（S.Y型）',
   [['項番', '期間', '業務内容', '言語'],
    ['1', '2019/06', '案件A', 'Java'],
@@ -474,6 +479,28 @@ console.log('=== J. 方式1（列名ベース・gridToJsonRows）の期間列誤
   tj('J2: 正規の月数列（真に1,2,3ヶ月で全て異なる案件）は従来どおり信頼する',
     [['期間', '業務内容', '使用言語'], ['1', '短期A', 'Ruby'], ['5', '中期B', 'Ruby']],
     (r) => r.Ruby === 6)
+}
+
+console.log('=== K. looksLikeRosterName（1人スキルシートを名簿と誤検出しない） ===')
+{
+  const { looksLikeRosterName } = await import('./_extractors.gen.mjs')
+  const kr = (label, s, expect) => {
+    const got = looksLikeRosterName(s)
+    if (got === expect) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       looksLikeRosterName(${JSON.stringify(s)})=${got} expect=${expect}`) }
+  }
+  // スキルシートのカテゴリ見出しは人名ではない（Y.M_沼津.xlsx 実害: データベース/ネットワークが人材化）
+  kr('K1: データベースは人名でない', 'データベース', false)
+  kr('K2: ネットワークは人名でない', 'ネットワーク', false)
+  kr('K3: サーバーは人名でない', 'サーバー', false)
+  kr('K4: インフラは人名でない', 'インフラ', false)
+  kr('K5: クラウドは人名でない', 'クラウド', false)
+  kr('K6: セキュリティは人名でない', 'セキュリティ', false)
+  // 正規の人名は従来どおり通す（回帰防止）
+  kr('K7: イニシャル Y.M は人名', 'Y.M', true)
+  kr('K8: OH は人名', 'OH', true)
+  kr('K9: カタカナ氏名(スペース区切り)は人名', 'タナカ タロウ', true)
+  kr('K10: 外国人名 グエン は人名', 'グエン', true)
 }
 
 console.log(`\n📊 ${pass} passed / ${fail} failed（全${pass + fail}ケース）`)
