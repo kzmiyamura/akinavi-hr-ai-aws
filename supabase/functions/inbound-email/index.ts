@@ -4585,10 +4585,11 @@ function resolveSheetXmlFile(workbookXml: string, relsXml: string, sheetName: st
 }
 
 /** セル参照(A1形式)ごとの罫線・色・文字書式マップを構築する（純関数） */
-function buildCellStyleMap(sheetXml: string, styles: ReturnType<typeof parseXlsxStylesXml>): Map<string, CellStyle> {
+function buildCellStyleMap(sheetXml: string, styles: ReturnType<typeof parseXlsxStylesXml>, deadline = 0): Map<string, CellStyle> {
   const map = new Map<string, CellStyle>()
   const rowEls = sheetXml.match(/<row\s[^>]*>[\s\S]*?<\/row>/g) ?? []
   for (const row of rowEls) {
+    if (deadline && Date.now() > deadline) break
     const cellEls = row.match(/<c\s[^>]*\/>|<c\s[^>]*>[\s\S]*?<\/c>/g) ?? []
     for (const c of cellEls) {
       const ref = /r="([A-Z]+\d+)"/.exec(c)?.[1]
@@ -4609,7 +4610,7 @@ function buildCellStyleMap(sheetXml: string, styles: ReturnType<typeof parseXlsx
  * SheetJSは背景色は取れるが罫線・線種・フォントを落とすため zip 直パースが必須。
  * 失敗時は null（呼び出し側は必ず既存方式にフォールバックする）。
  */
-async function extractCellStylesFromXlsx(bytes: Uint8Array, sheetName: string): Promise<Map<string, CellStyle> | null> {
+async function extractCellStylesFromXlsx(bytes: Uint8Array, sheetName: string, deadline = 0): Promise<Map<string, CellStyle> | null> {
   try {
     const { unzipSync } = await import('npm:fflate@0.8.2') as { unzipSync: (data: Uint8Array) => Record<string, Uint8Array> }
     const files = unzipSync(bytes)
@@ -4622,7 +4623,7 @@ async function extractCellStylesFromXlsx(bytes: Uint8Array, sheetName: string): 
     if (!sheetPath || !files[sheetPath]) return null
     const sheetXml = decode(files[sheetPath])
     const styles = parseXlsxStylesXml(stylesXml)
-    return buildCellStyleMap(sheetXml, styles)
+    return buildCellStyleMap(sheetXml, styles, deadline)
   } catch (e) {
     console.warn('[visual-engine] スタイル取得失敗（既存方式にフォールバック）:', String(e))
     return null
@@ -4779,9 +4780,11 @@ function extractSkillYearsVisualKV(cells: SpanCell[], styleMap: Map<string, Cell
  * 値を返す。それ以外（判定失敗・案件系・スタイル取得失敗・0件）は null を返し、
  * 呼び出し側は必ず既存の grid/cells 方式にフォールバックする（劣化させない安全設計）。
  */
-async function tryVisualSkillExtraction(bytes: Uint8Array, sheetName: string, cells: SpanCell[]): Promise<Record<string, number> | null> {
-  const styleMap = await extractCellStylesFromXlsx(bytes, sheetName)
+async function tryVisualSkillExtraction(bytes: Uint8Array, sheetName: string, cells: SpanCell[], deadline = 0): Promise<Record<string, number> | null> {
+  if (deadline && Date.now() > deadline) return null
+  const styleMap = await extractCellStylesFromXlsx(bytes, sheetName, deadline)
   if (!styleMap) return null
+  if (deadline && Date.now() > deadline) return null
   // 空行でブロック分割し、skill系ブロックだけを視覚リーダーで読む（混在シート対応）。
   // シート全体では案件履歴の日付数に負けて 'project' になる表でも、スキル表ブロックは
   // 単体で 'skill' 判定されるため拾える。複数の skill ブロックがあれば union する。
@@ -4793,6 +4796,7 @@ async function tryVisualSkillExtraction(bytes: Uint8Array, sheetName: string, ce
   if (targets.length === 0) return null
   const merged: Record<string, number> = {}
   for (const blk of targets) {
+    if (deadline && Date.now() > deadline) break
     const r = extractSkillYearsVisualKV(blk, styleMap)
     for (const [k, v] of Object.entries(r)) merged[k] = Math.max(merged[k] ?? 0, v)
   }
@@ -4878,7 +4882,8 @@ function projMergeMonths(iv: [number, number][]): number {
   for (let i = 1; i < s.length; i++) { const [a, b] = s[i]; if (a <= ce + 1) { if (b > ce) ce = b } else { t += ce - cs + 1; cs = a; ce = b } }
   return t + ce - cs + 1
 }
-function extractSkillYearsVisualProject(cells: SpanCell[]): Record<string, number> | null {
+function extractSkillYearsVisualProject(cells: SpanCell[], deadline = 0): Record<string, number> | null {
+  if (deadline && Date.now() > deadline) return null
   const nowMonth = new Date().getFullYear() * 12 + (new Date().getMonth() + 1)
   const byRow: Record<number, SpanCell[]> = {}
   for (const c of cells) if (c.value.trim()) (byRow[c.row] ??= []).push(c)
@@ -6347,8 +6352,9 @@ function extractSkillYearsCircledNum(sorted: SpanCell[]): Record<string, number>
  *   - T.K/H.A 型: No.(rs≥3) → 期間(rs≥3) → 日付行 → 「言語 FW」行 → スキル行
  *   - S.Y 型: ①〜⑳始まりセル → 同行の期間セル → 「開発環境」行のスキル（extractSkillYearsCircledNum にフォールバック）
  */
-function extractSkillYearsFromCells(cells: SpanCell[]): Record<string, number> {
+function extractSkillYearsFromCells(cells: SpanCell[], deadline = 0): Record<string, number> {
   if (cells.length === 0) return {}
+  if (deadline && Date.now() > deadline) return {}
   const sorted = [...cells].sort((a, b) => a.row !== b.row ? a.row - b.row : a.col - b.col)
   const _rsC = (c: SpanCell) => c.rowEnd - c.row + 1
 
@@ -6844,18 +6850,21 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
 
       // skillYears 抽出: grid ベースと SpanCell ベースの両方を試し、スキル数が多い方を採用
       if (Object.keys(skillYears).length === 0) {
-        // 5秒の時間予算付き。結合セルの多い経歴書で組合せ爆発し1シート30分以上かかる実害があった
-        const jsonDeadline = Date.now() + 5000
-        const jsonRows = spanCellsToJson(cells, jsonDeadline)
-        if (Date.now() > jsonDeadline) console.warn(`[Excel-json] TIMEOUT sheet="${sheetName}" 5秒予算超過のため部分結果で打ち切り rows=${jsonRows.length}`)
+        // 全抽出で共有する1つの時間予算（合計3.5秒）。各関数に別々の予算を渡すと順次実行で合算され
+        // 13秒以上かかり546リソース超過→候補者消失になる実害があった（1-r.co.jp「展開用」テンプレ）。
+        // 546は6.4秒でも発動するため、抽出以外の処理(~2秒)を足しても6秒未満に収まるよう短めにする。
+        // 超過時は各関数が部分結果/空を返し、最終的に軽量な grid 結果へ退化する（546を根絶）。
+        const sheetDeadline = Date.now() + 3500
+        const jsonRows = spanCellsToJson(cells, sheetDeadline)
+        if (Date.now() > sheetDeadline) console.warn(`[Excel-json] TIMEOUT sheet="${sheetName}" 時間予算超過のため部分結果で打ち切り rows=${jsonRows.length}`)
         console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
         const syGrid = extractSkillYearsUnified(grid)
-        const syCells = filterSkillYears(extractSkillYearsFromCells(cells))
+        const syCells = filterSkillYears(extractSkillYearsFromCells(cells, sheetDeadline))
         // 視覚エンジン（罫線・色・文字。明示スキル表と判定された場合のみ・失敗時は必ずnull）
-        const syVisual = await tryVisualSkillExtraction(bytes, sheetName, cells)
+        const syVisual = Date.now() > sheetDeadline ? null : await tryVisualSkillExtraction(bytes, sheetName, cells, sheetDeadline)
         // 案件系視覚リーダー（スキル表が無い案件履歴向け。縦結合セルで案件ブロック化→期間×tech区間union。
         // 信頼ゲート＝tech列2本以上＋案件3件以上＋結果3件以上を満たす時のみ非null）
-        const syProject = syVisual ? null : extractSkillYearsVisualProject(cells)
+        const syProject = (syVisual || Date.now() > sheetDeadline) ? null : extractSkillYearsVisualProject(cells, sheetDeadline)
         // 品質スコア比較（件数→skill_master照合の重み付き。同点は SpanCell 優先＝空間構造が正確）
         const countGrid = scoreSkillQuality(syGrid, _skillNameSet)
         const countCells = scoreSkillQuality(syCells, _skillNameSet)
