@@ -436,13 +436,24 @@ interface FetchEmailPageResult {
 
 async function fetchEmailPage(
   accessToken: string,
-  mode: 'incremental' | 'full',
+  mode: 'incremental' | 'full' | 'recover',
   since: string,
   nextLink?: string | null,
 ): Promise<FetchEmailPageResult> {
   let url: string
 
-  if (mode === 'incremental') {
+  if (mode === 'recover') {
+    // 復旧モード: 処理後に削除（=削除済みアイテムへ移動）されたメールを、
+    // 「削除済みアイテム」フォルダから since 以降で読み直す。既読/削除の副作用は起こさない。
+    const sinceDate = since || new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+    url = [
+      'https://graph.microsoft.com/v1.0/me/mailFolders/deleteditems/messages',
+      `?$top=${MAX_EMAILS_PER_ACCOUNT_FULL}`,
+      `&$filter=receivedDateTime ge '${sinceDate}T00:00:00Z'`,
+      '&$select=id,subject,from,body,hasAttachments,receivedDateTime,isRead',
+      '&$orderby=receivedDateTime asc',
+    ].join('')
+  } else if (mode === 'incremental') {
     // 既存の未読メール取得（変更なし）
     url = [
       'https://graph.microsoft.com/v1.0/me/messages',
@@ -749,7 +760,7 @@ interface PollAccountResult {
 async function pollAccount(
   supabase: ReturnType<typeof createClient>,
   config: PollConfig,
-  mode: 'incremental' | 'full',
+  mode: 'incremental' | 'full' | 'recover',
   useAiClassification: boolean,
   since: string,
 ): Promise<PollAccountResult> {
@@ -859,7 +870,8 @@ async function pollAccount(
         }
 
         // 処理中の二重取得防止のため先に既読マーク（処理完了後に削除）
-        await markAsRead(accessToken, email.id)
+        // 復旧モードは削除済みアイテムを読むだけなので既読化しない（副作用ゼロ）
+        if (mode !== 'recover') await markAsRead(accessToken, email.id)
 
         // 添付取得 → inbound-email へ渡す
         const attachments = email.hasAttachments
@@ -923,8 +935,11 @@ async function pollAccount(
         }
         processed++
         // 処理完了後にメールを削除（DB に保存済みのため Outlook 側は不要）
-        try { await deleteMessage(accessToken, email.id) } catch { /* ignore */ }
-        console.log(`[poll] 処理完了・削除: "${email.subject}" type=${finalType} (${config.configKey})`)
+        // 復旧モードは削除済みアイテムの再処理なので二重削除しない（そのまま残す）
+        if (mode !== 'recover') {
+          try { await deleteMessage(accessToken, email.id) } catch { /* ignore */ }
+        }
+        console.log(`[poll] 処理完了${mode === 'recover' ? '(復旧・非削除)' : '・削除'}: "${email.subject}" type=${finalType} (${config.configKey})`)
       } catch (e) {
         // 失敗したら未読に戻して次回ポーリングで再試行
         const msg = `メール処理失敗 "${email.subject}": ${String(e)}`
@@ -1000,8 +1015,10 @@ Deno.serve(async (req: Request) => {
 
     // app_config からメール設定を読み込む
     const pollModeRaw = await getAppConfigValue(supabase, 'email_poll_mode')
-    const mode: 'incremental' | 'full' | 'paused' =
-      pollModeRaw === 'full' ? 'full' : pollModeRaw === 'paused' ? 'paused' : 'incremental'
+    const mode: 'incremental' | 'full' | 'recover' | 'paused' =
+      pollModeRaw === 'full' ? 'full'
+        : pollModeRaw === 'recover' ? 'recover'
+          : pollModeRaw === 'paused' ? 'paused' : 'incremental'
 
     // 一時停止中はスキップ
     if (mode === 'paused') {
@@ -1045,6 +1062,12 @@ Deno.serve(async (req: Request) => {
 
     const totalProcessed = summary.reduce((s, r) => s + r.processed, 0)
     const totalErrors    = summary.flatMap(r => r.errors)
+
+    // 復旧モードは1回きり。実行後は必ず incremental に戻す（暴発防止）
+    if (mode === 'recover') {
+      await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
+      console.log('[poll-email] 復旧モード完了 → incremental に戻しました')
+    }
 
     // 全件モード完了チェック: 全アカウントが fullImportDone なら incremental に戻す
     if (mode === 'full') {
