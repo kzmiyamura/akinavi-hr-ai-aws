@@ -8167,10 +8167,10 @@ function assignAttachmentsToBlocks<T extends { label: string; content?: string }
 // 「■MM（石川町）男性・57歳」のように括弧内が駅名で■が付かず「最寄駅：」「希望単金：」等の
 // フィールド行が続く形式もあるため、ビュレット文字は必須にせず・「単金」表記も許容する
 // ※ splitMultiCandidateBody と detectRoster（名簿判定）で共用するためモジュールスコープに置く
-const MULTI_CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]|[■●▪▶]?[ 　]*(?:最寄(?:り?駅?)|希望単価|希望単金|スキル|業務経験|稼働開始|稼働時期|アピール)/
+const MULTI_CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏[ 　]*名)[　 ]*[：:]|[■●▪▶]?[ 　]*(?:最寄(?:り?駅?)|希望単価|希望単金|スキル|業務経験|稼働開始|稼働時期|アピール)/
 // 【 氏 名 】（半角スペース区切り形式）・■氏名：形式・■SI（28歳／男性）形式にも対応
 // 「■MM（石川町）男性・57歳」（括弧内は駅名、性別・年齢は括弧の外に「・」区切りで続く）にも対応
-const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
+const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏[ 　]*名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
 
 function splitMultiCandidateBody(body: string): string[] | null {
   const CANDIDATE_FIELD_RE = MULTI_CANDIDATE_FIELD_RE
@@ -8225,9 +8225,11 @@ function splitMultiCandidateBody(body: string): string[] | null {
   // Pass 1: = と ー のみ（- を除外して laize 形式の内部 ---- による誤分割を防ぐ）
   // Pass 2: - を含む全パターン（ical 等の --- のみの形式に対応）
   // Pass 1: - を除外（laize 内部の ---- による誤分割防止）。━ U+2501 / ─ U+2500 / ― U+2015 / — U+2014 / ー U+30FC を含む
+  //         全角ビュレット ●○■□◆◇ の連続も区切り線として扱う（ai-more 等が候補者間の区切りに使用。
+  //         これが無いと「●●●●…」区切りの複数人名簿が1人目だけの単一候補者に潰れる実害があった）
   // Pass 2: - も含む（ical 等の --- のみ形式に対応）
-  return trySplit(/^[\*=＊＝━ーー─―—]{8,}\s*$/)
-      ?? trySplit(/^[\*\-=＊＝━ーー─―—]{8,}\s*$/)
+  return trySplit(/^[\*=＊＝━ーー─―—●○■□◆◇]{8,}\s*$/)
+      ?? trySplit(/^[\*\-=＊＝━ーー─―—●○■□◆◇]{8,}\s*$/)
 }
 
 Deno.serve(async (req: Request) => {
@@ -9042,11 +9044,15 @@ Deno.serve(async (req: Request) => {
             // 4. extractCandidateCode（件名コード）
             // ※ blockMetas を優先する理由: ケースBで兄弟ブロックの Excel が blockAttachText に混入すると
             //   Phase2a が他人の名前を抽出して上書きする誤りが発生するため（例: M.M ブロックが Y.M と登録される）
-            const blockResolvedName = blockMetas[blockIdx].name
+            const blockResolvedNameRaw = blockMetas[blockIdx].name
               ?? blockRegexFields.name
               ?? extractNameFallback([blockRegexBodyText, blockAttachText].join('\n'))
               ?? extractCandidateCode(subject)
               ?? '不明'
+            // 氏名の全角英数字は半角へ正規化（「ＳＡ」と「SA」を同一人物として dedup させる。
+            // 同一名簿内で同じ人が全角/半角で2ブロックに分かれ重複登録される実害があった: ai-more）
+            const blockResolvedName = blockResolvedNameRaw.replace(/[Ａ-Ｚａ-ｚ０-９]/g, c =>
+              String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
             // 名前が取れないブロックは署名・フッター等とみなしてスキップ
             if (blockResolvedName === '不明' && blockRegexFields.name == null) {
               continue

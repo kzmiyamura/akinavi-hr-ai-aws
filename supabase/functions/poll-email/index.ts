@@ -894,25 +894,32 @@ async function processQueryEmail(
 
     // poll の添付分割モードを忠実に再現（Office添付が2件以上なら1添付=1 inbound呼び出し）。
     // ただし既読化・削除はしない。
-    const officeAtts = attachments.filter(isOfficeAttachment)
-    if (officeAtts.length >= 2) {
-      const nonOfficeAtts = attachments.filter(a => !isOfficeAttachment(a))
-      for (let si = 0; si < officeAtts.length; si++) {
-        if (si > 0) await new Promise(r => setTimeout(r, 3000))
-        await callInboundEmail(email, [...nonOfficeAtts, officeAtts[si]], 'candidate', config.dataEnv, `${email.id}_${officeAtts[si].name ?? si}`)
-        inboundCalls++
+    const reasons: string[] = []
+    const callOnce = async (atts: GraphAttachment[], salt: string) => {
+      const payload = {
+        type: 'candidate', data_env: config.dataEnv,
+        from: email.from?.emailAddress?.address ?? '', subject: email.subject ?? '',
+        body: email.body?.content ?? '', email_received_at: email.receivedDateTime ?? null,
+        skip_relevance: false, dedup_salt: salt,
+        attachments: atts.map(a => ({ name: a.name, mimeType: a.contentType, data: a.contentBytes })),
       }
-    } else {
-      await callInboundEmail(email, attachments, 'candidate', config.dataEnv)
+      const res = await fetch(INBOUND_URL, {
+        method: 'POST', headers: { Authorization: `Bearer ${CALL_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const j = await res.json().catch(() => ({}))
+      reasons.push(`${salt.split('_').pop()}: ${res.status} ${j.reason ?? j.type ?? (j.skipped ? 'skipped' : 'ok')}${j.count != null ? '(count=' + j.count + ')' : ''}`)
       inboundCalls++
     }
+    // 検証: 全添付を1回で渡す（inbound の multi-candidate 路が各添付を各ブロックにマッチする）
+    await callOnce(attachments, `${email.id}_all`)
 
     await supabase.from('ai_logs').insert({
       type: 'proc-query', model: 'no-ai', from_address: config.configKey,
       subject: `procquery "${query}" → ${subjectHit.slice(0, 40)}`,
       status: errors.length ? 'error' : 'success',
-      error_message: errors.length ? errors.join(' | ') : null,
-      ai_result: { query, subject: subjectHit, attachments: attNames, inboundCalls },
+      error_message: reasons.join(' | ').slice(0, 500),
+      ai_result: { query, subject: subjectHit, attachments: attNames, inboundCalls, reasons },
     })
   } catch (e) { errors.push(String(e)) }
   return { account: config.configKey, subject: subjectHit, attachments: attNames, inboundCalls, errors }
@@ -1076,9 +1083,18 @@ async function pollAccount(
           }
         }
 
-        // 人材メールに Office 添付が複数ある場合は1ファイル=1候補者として分割処理
+        // 人材メールに Office 添付が複数ある場合は1ファイル=1候補者として分割処理。
+        // ただし本文自体が「複数人の名簿」（氏名/最寄駅フィールドが2つ以上、または ●●●● 等の
+        // 区切り線で複数ブロック）の場合は、添付分割せず全添付を1回で渡す。inbound の
+        // multi-candidate 路が各添付を各人ブロックにマッチさせる（分割すると本文の全員を添付ごとに
+        // 重複生成し、氏名が共有本文から拾われて全員同一人物に潰れる実害があった: ai-more 名簿）。
+        const bodyForRoster = (email.body?.content ?? '')
+          .replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|tr)>/gi, '\n').replace(/<[^>]+>/g, '')
+        const nameFieldCount = (bodyForRoster.match(/(?:氏\s*名|名\s*前)[　 ]*[：:]/g) ?? []).length
+        const bulletDelimCount = (bodyForRoster.match(/^[ 　]*[●○■□◆◇＊*=\-━─]{8,}[ 　]*$/gm) ?? []).length
+        const isRosterBody = nameFieldCount >= 2 || bulletDelimCount >= 2
         const officeAtts = attachments.filter(isOfficeAttachment)
-        if (finalType === 'candidate' && officeAtts.length >= 2) {
+        if (finalType === 'candidate' && officeAtts.length >= 2 && !isRosterBody) {
           console.log(`[poll] 添付分割モード: Office添付${officeAtts.length}件 → ${officeAtts.length}回 inbound-email 呼び出し`)
           const nonOfficeAtts = attachments.filter(a => !isOfficeAttachment(a))
           for (let si = 0; si < officeAtts.length; si++) {
@@ -1206,6 +1222,19 @@ Deno.serve(async (req: Request) => {
     if (pollModeRaw === 'dumpatt') {
       const query = (await getAppConfigValue(supabase, 'email_dump_query')) ?? ''
       console.log(`[poll-email] 添付ダンプモード query="${query}"`)
+      // 掃除: query='__cleanup__' で dump/ 配下の実PIIファイルを Storage API で全削除
+      if (query === '__cleanup__') {
+        const removed: string[] = []
+        const { data: folders } = await supabase.storage.from('attachments').list('dump')
+        for (const f of folders ?? []) {
+          const { data: files } = await supabase.storage.from('attachments').list(`dump/${f.name}`)
+          const paths = (files ?? []).map(x => `dump/${f.name}/${x.name}`)
+          if (paths.length) { await supabase.storage.from('attachments').remove(paths); removed.push(...paths) }
+        }
+        await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
+        return new Response(JSON.stringify({ ok: true, mode: 'cleanup', removed }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+      }
       const dumpResults = []
       for (const config of POLL_CONFIGS.filter(c => c.dataEnv === 'prod')) {
         dumpResults.push(await dumpAttachmentsForQuery(supabase, config, query))
