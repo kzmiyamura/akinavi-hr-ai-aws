@@ -70,10 +70,13 @@ const SUPPORTED_MIME = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif
 const WORD_MIME = [
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/msword',
+  'application/vnd.ms-word.document.macroEnabled.12',                      // .docm
 ]
 const EXCEL_MIME = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
+  'application/vnd.ms-excel.sheet.macroEnabled.12',                        // .xlsm（マクロ有効）
+  'application/vnd.ms-excel.sheet.binary.macroEnabled.12',                 // .xlsb（バイナリ）
 ]
 
 function getEnv(key: string): string {
@@ -7232,8 +7235,8 @@ async function fetchDriveEntry(link: { id: string; index: number }, body: string
       return null
     }
     const filename = filenameFromDisposition(res) ?? `drive_${link.id}`
-    const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xlsx?|ods)$/i.test(filename)
-    const isWord = WORD_MIME.includes(ct) || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(docx?)$/i.test(filename)
+    const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xls[xmb]?|ods)$/i.test(filename)
+    const isWord = WORD_MIME.includes(ct) || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(doc[xm]?)$/i.test(filename)
     const isPdf = ct.includes('pdf') || /\.pdf$/i.test(filename)
     if (isPdf) {
       const b64 = arrayBufferToBase64(await res.arrayBuffer())
@@ -8429,8 +8432,8 @@ Deno.serve(async (req: Request) => {
       const attNameLower = (att.name ?? '').toLowerCase()
       const isWordByMime = WORD_MIME.includes(att.mimeType)
       const isExcelByMime = EXCEL_MIME.includes(att.mimeType)
-      const isWordByExt = /\.(docx?|doc)$/.test(attNameLower) && !isExcelByMime
-      const isExcelByExt = /\.(xlsx?|xls|ods|csv)$/.test(attNameLower) && !isWordByMime
+      const isWordByExt = /\.(doc[xm]?)$/.test(attNameLower) && !isExcelByMime
+      const isExcelByExt = /\.(xls[xmb]?|ods|csv)$/.test(attNameLower) && !isWordByMime
       if (isWordByMime || isWordByExt) {
         const { text: rawText, totalProjectMonths: wordMonths, skillYears: wordSkillYears, grid: wordGrid, links: wordAttLinks } = await extractWordText(att.data)
         if (rawText.trim()) {

@@ -700,9 +700,15 @@ const OFFICE_MIME_TYPES = new Set([
   'application/vnd.ms-excel',                                               // .xls
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
   'application/msword',                                                     // .doc
+  'application/vnd.ms-excel.sheet.macroEnabled.12',                        // .xlsm（マクロ有効）
+  'application/vnd.ms-excel.sheet.binary.macroEnabled.12',                 // .xlsb（バイナリ）
+  'application/vnd.ms-word.document.macroEnabled.12',                      // .docm（マクロ有効）
 ])
 
-const OFFICE_EXTENSIONS = /\.(xlsx?|docx?)$/i
+// .xlsm/.xlsb（マクロ有効・バイナリExcel）や .docm も経歴書として届く。これらを office 判定から
+// 漏らすと「添付分割」されず全候補者に共通添付として渡り、1人分の経歴書の氏名が他の全員に混入する
+// 事故になる（SA葛西.xlsm が非office扱いで4名全員が"SA"に merged した実害）。
+const OFFICE_EXTENSIONS = /\.(xls[xmb]?|doc[xm]?)$/i
 
 /** ExcelまたはWordの添付ファイルか判定 */
 function isOfficeAttachment(att: GraphAttachment): boolean {
@@ -759,6 +765,157 @@ interface PollAccountResult {
   skipped: number
   errors: string[]
   fullImportDone: boolean
+}
+
+/**
+ * 添付ダンプ: 受信箱＋削除済みアイテムから、query（差出人 or 件名の部分一致）に合致し
+ * 添付を持つメールを探し、全添付を Storage(attachments/dump/...) に保存する。
+ * 候補者作成・既読化・削除はしない（副作用ゼロ・調査/復旧専用）。
+ */
+async function dumpAttachmentsForQuery(
+  supabase: ReturnType<typeof createClient>,
+  config: PollConfig,
+  query: string,
+): Promise<{ account: string; found: number; saved: string[]; errors: string[] }> {
+  const saved: string[] = []
+  const errors: string[] = []
+  let found = 0
+  try {
+    const refreshToken = await getRefreshToken(supabase, config)
+    const { accessToken, newRefreshToken } = await getAccessToken(refreshToken)
+    await saveRefreshToken(supabase, config.configKey, newRefreshToken)
+
+    const q = query.toLowerCase()
+    const folders = ['inbox', 'deleteditems']
+    for (const folder of folders) {
+      // $filter=hasAttachments も $search もこのメールボックスで不安定（400/0件）だったため、
+      // フィルタ無しで新しい順に列挙し、hasAttachments と query 一致はコード側で判定する（recover と同方式）。
+      // 複数ページ辿って query 一致を探す（最大5ページ=1000件）。
+      // 古いバックログ（未読）を探すため受信箱は「古い順」で辿る。ヒットしたら以降のページは打ち切る。
+      let url: string | null = [
+        `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages`,
+        '?$top=200',
+        '&$select=id,subject,from,hasAttachments,receivedDateTime',
+        '&$orderby=receivedDateTime asc',
+      ].join('')
+      const msgs: GraphMessage[] = []
+      for (let page = 0; page < 15 && url; page++) {
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
+        if (!res.ok) { errors.push(`${folder} p${page}: ${res.status} ${(await res.text()).slice(0, 100)}`); break }
+        const json = await res.json()
+        msgs.push(...((json.value ?? []) as GraphMessage[]))
+        url = (json['@odata.nextLink'] as string) ?? null
+      }
+      const matched = msgs.filter(m => m.hasAttachments &&
+        (`${m.subject ?? ''} ${m.from?.emailAddress?.address ?? ''}`.toLowerCase().includes(q)))
+      console.log(`[dump] ${folder}: 検索ヒット${msgs.length}件 うち添付付き一致${matched.length}件`)
+      errors.push(`${folder}: hits=${msgs.length} matched=${matched.length} subjects=${matched.slice(0, 3).map(m => (m.subject ?? '').slice(0, 30)).join(' / ')}`)
+      // タイムアウト回避: 一致メールのうち先頭2通だけ添付をDLする
+      for (const [mi, m] of matched.slice(0, 2).entries()) {
+        found++
+        const atts = await fetchAttachments(accessToken, m.id)
+        for (const [ai, a] of atts.entries()) {
+          try {
+            const bytes = Uint8Array.from(atob(a.contentBytes), c => c.charCodeAt(0))
+            // Storageキーは ASCII のみ安全。メール識別子・ファイル名とも英数字化し拡張子だけ保持。
+            // 元のファイル名は ai_result.savedNames に別途残す（人間が識別できるように）。
+            const safeMsg = m.id.replace(/[^a-zA-Z0-9]/g, '').slice(-16)
+            const ext = (a.name ?? '').includes('.') ? (a.name ?? '').split('.').pop()!.replace(/[^a-zA-Z0-9]/g, '') : 'bin'
+            const path = `dump/${safeMsg}/att${mi}_${ai}.${ext}`
+            const { error } = await supabase.storage.from('attachments')
+              .upload(path, bytes, { contentType: a.contentType, upsert: true })
+            if (error) { errors.push(`upload ${a.name}: ${error.message}`); continue }
+            const { data: pub } = supabase.storage.from('attachments').getPublicUrl(path)
+            saved.push(`${a.name} => ${pub.publicUrl}`)
+            console.log(`[dump] saved: ${folder} "${m.subject}" "${a.name}" → ${path}`)
+          } catch (e) { errors.push(`att ${a.name}: ${String(e)}`) }
+        }
+      }
+    }
+    // 記録
+    await supabase.from('ai_logs').insert({
+      type: 'dump-attach', model: 'no-ai', from_address: config.configKey,
+      subject: `dump query="${query}"`, status: errors.length ? 'error' : 'success',
+      error_message: errors.length ? errors.join(' | ').slice(0, 500) : null,
+      ai_result: { query, found, savedCount: saved.length, saved: saved.slice(0, 50) },
+    })
+  } catch (e) {
+    errors.push(String(e))
+  }
+  return { account: config.configKey, found, saved, errors }
+}
+
+/**
+ * 検証用: 受信箱の query 一致メール（先頭1通）を、修正済みパイプラインに通す。
+ * poll の「添付分割モード」も忠実に再現するが、既読化・削除はしない（副作用ゼロ）。
+ */
+async function processQueryEmail(
+  supabase: ReturnType<typeof createClient>,
+  config: PollConfig,
+  query: string,
+): Promise<{ account: string; subject: string; attachments: string[]; inboundCalls: number; errors: string[] }> {
+  const errors: string[] = []
+  let subjectHit = ''
+  let inboundCalls = 0
+  let attNames: string[] = []
+  try {
+    const refreshToken = await getRefreshToken(supabase, config)
+    const { accessToken, newRefreshToken } = await getAccessToken(refreshToken)
+    await saveRefreshToken(supabase, config.configKey, newRefreshToken)
+
+    const q = query.toLowerCase()
+    // 受信箱を古い順に辿り query 一致（件名/差出人）の添付付きメールを探す
+    let url: string | null = [
+      'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages',
+      '?$top=200',
+      '&$select=id,subject,from,hasAttachments,receivedDateTime',
+      '&$orderby=receivedDateTime asc',
+    ].join('')
+    let target: GraphMessage | null = null
+    for (let page = 0; page < 15 && url && !target; page++) {
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
+      if (!res.ok) { errors.push(`list p${page}: ${res.status}`); break }
+      const json = await res.json()
+      const msgs = (json.value ?? []) as GraphMessage[]
+      target = msgs.find(m => m.hasAttachments &&
+        `${m.subject ?? ''} ${m.from?.emailAddress?.address ?? ''}`.toLowerCase().includes(q)) ?? null
+      url = (json['@odata.nextLink'] as string) ?? null
+    }
+    if (!target) { errors.push('該当メールが見つからない'); return { account: config.configKey, subject: '', attachments: [], inboundCalls: 0, errors } }
+
+    // 本文込みで再取得
+    const fullRes = await fetch(
+      `https://graph.microsoft.com/v1.0/me/messages/${target.id}?$select=id,subject,from,body,hasAttachments,receivedDateTime`,
+      { headers: { Authorization: `Bearer ${accessToken}` } })
+    const email = await fullRes.json() as GraphMessage
+    subjectHit = email.subject ?? ''
+    const attachments = await fetchAttachments(accessToken, email.id)
+    attNames = attachments.map(a => a.name ?? '')
+
+    // poll の添付分割モードを忠実に再現（Office添付が2件以上なら1添付=1 inbound呼び出し）。
+    // ただし既読化・削除はしない。
+    const officeAtts = attachments.filter(isOfficeAttachment)
+    if (officeAtts.length >= 2) {
+      const nonOfficeAtts = attachments.filter(a => !isOfficeAttachment(a))
+      for (let si = 0; si < officeAtts.length; si++) {
+        if (si > 0) await new Promise(r => setTimeout(r, 3000))
+        await callInboundEmail(email, [...nonOfficeAtts, officeAtts[si]], 'candidate', config.dataEnv, `${email.id}_${officeAtts[si].name ?? si}`)
+        inboundCalls++
+      }
+    } else {
+      await callInboundEmail(email, attachments, 'candidate', config.dataEnv)
+      inboundCalls++
+    }
+
+    await supabase.from('ai_logs').insert({
+      type: 'proc-query', model: 'no-ai', from_address: config.configKey,
+      subject: `procquery "${query}" → ${subjectHit.slice(0, 40)}`,
+      status: errors.length ? 'error' : 'success',
+      error_message: errors.length ? errors.join(' | ') : null,
+      ai_result: { query, subject: subjectHit, attachments: attNames, inboundCalls },
+    })
+  } catch (e) { errors.push(String(e)) }
+  return { account: config.configKey, subject: subjectHit, attachments: attNames, inboundCalls, errors }
 }
 
 async function pollAccount(
@@ -1029,6 +1186,34 @@ Deno.serve(async (req: Request) => {
       console.log('[poll-email] 一時停止中のためスキップ')
       return new Response(
         JSON.stringify({ ok: true, mode: 'paused', totalProcessed: 0, totalErrors: [], summary: [] }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
+
+    // 検証モード: query 一致メール(先頭1通)を修正済みパイプラインに通す（既読化・削除なし）
+    if (pollModeRaw === 'procquery') {
+      const query = (await getAppConfigValue(supabase, 'email_dump_query')) ?? ''
+      console.log(`[poll-email] procquery query="${query}"`)
+      const humanProd = POLL_CONFIGS.find(c => c.configKey === 'graph_rt_human_prod')!
+      const r = await processQueryEmail(supabase, humanProd, query)
+      await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
+      return new Response(JSON.stringify({ ok: true, mode: 'procquery', result: r }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+
+    // 添付ダンプモード（調査/復旧専用・候補者作成なし）: email_dump_query に合致する
+    // 添付付きメールを受信箱＋削除済みアイテムから探し、全添付を Storage に保存する
+    if (pollModeRaw === 'dumpatt') {
+      const query = (await getAppConfigValue(supabase, 'email_dump_query')) ?? ''
+      console.log(`[poll-email] 添付ダンプモード query="${query}"`)
+      const dumpResults = []
+      for (const config of POLL_CONFIGS.filter(c => c.dataEnv === 'prod')) {
+        dumpResults.push(await dumpAttachmentsForQuery(supabase, config, query))
+      }
+      // 1回きり。実行後は incremental に戻す
+      await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
+      return new Response(
+        JSON.stringify({ ok: true, mode: 'dumpatt', query, results: dumpResults }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
     }

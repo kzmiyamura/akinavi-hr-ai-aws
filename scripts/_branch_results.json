@@ -176,6 +176,14 @@
   "detail": ""
  },
  {
+  "id": "CF-06",
+  "fn": "fetchCsvFingerprint",
+  "branch": "200+HTML応答 → null（HTMLをCSVとして解析しない）",
+  "data": "csv 200だがtext/html",
+  "ok": true,
+  "detail": ""
+ },
+ {
   "id": "CF-03",
   "fn": "fetchCsvFingerprint",
   "branch": "fetch例外 → null",
@@ -196,6 +204,22 @@
   "fn": "fetchSheetsEntry",
   "branch": "XLSX失敗(HTTP) → CSV保険にフォールバック",
   "data": "xlsx 500 + csv 200",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FS-08",
+  "fn": "fetchSheetsEntry",
+  "branch": "XLSXが200+HTML(レート制限) → 添付にせずCSV保険へ",
+  "data": "xlsx 200だが中身HTML",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FS-09",
+  "fn": "fetchSheetsEntry",
+  "branch": "XLSXもCSVもHTML → null（HTMLを経歴書にしない）",
+  "data": "両経路ともHTML応答",
   "ok": true,
   "detail": ""
  },
@@ -272,6 +296,22 @@
   "detail": ""
  },
  {
+  "id": "FDx-05",
+  "fn": "fetchDocsEntry",
+  "branch": "DOCXが200+HTML → 添付にせずtxt保険へ",
+  "data": "docx 200だが中身HTML",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "FDx-06",
+  "fn": "fetchDocsEntry",
+  "branch": "txt保険もHTML → null",
+  "data": "両経路HTML応答",
+  "ok": true,
+  "detail": ""
+ },
+ {
   "id": "DR-01",
   "fn": "fetchDriveEntry",
   "branch": "直前150字にポートフォリオ語 → スキップ",
@@ -332,6 +372,14 @@
   "fn": "fetchDriveEntry",
   "branch": "fetch例外 → null",
   "data": "ネットワーク例外",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "DR-09",
+  "fn": "fetchDriveEntry",
+  "branch": "200+HTML応答（制限/権限/確認ページ） → null（HTMLをテキスト経歴書にしない）",
+  "data": "drive 200だがtext/html",
   "ok": true,
   "detail": ""
  },
@@ -740,6 +788,22 @@
   "fn": "expandRosterEntries",
   "branch": "行数上限（15行）で打ち切り + C-ROSTER-CAP",
   "data": "20人の名簿",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "ER-08",
+  "fn": "expandRosterEntries",
+  "branch": "本文人材の行を優先して上限適用（16行目以降でも展開される）",
+  "data": "20人名簿・本文に18人目の名前",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "id": "ER-09",
+  "fn": "expandRosterEntries",
+  "branch": "優先名が名簿に不在 → 従来順で先頭15人（C-ROSTER-PRIなし）",
+  "data": "優先名マッチ0件",
   "ok": true,
   "detail": ""
  },

@@ -340,6 +340,32 @@
     <div class="arrow"></div>
 
     <div class="zone">
+      <p class="zone-label">ファイルの取得先を決める優先順位</p>
+
+      <details class="box" open>
+        <summary><span class="box-title">候補者テーブルに保存されたURL情報から、どれを使うか</span></summary>
+        <div class="detail">
+          <p>メール登録時に、候補者の <b>resume_url</b> / <b>box_url</b> / <b>drive_url</b> というカラムにファイルのURL情報が保存されている。AIが読む元ファイルはここから取得する：</p>
+          <pre class="tree"><b>【第1優先】resume_url が Supabase Storage 内の Excel ファイル？</b>
+  └─ YES → Storage からダウンロードして再読み込み（推奨）
+             元ファイルそのものなので、メール処理時の加工を経ていない
+             →表の構造がそのままAIに渡る
+
+<b>【第2優先】resume_url に Google Drive リンク や Word ファイル？</b>
+  └─ YES → DB に保存済みの「テキスト化版」（先頭3,000字）を使う
+             ※ Storage ダウンロード失敗時の保険にもなる
+
+<b>【第3優先】box_url に Box 共有URL あり？</b>
+  └─ 別処理で Box → Google Drive に転送（box-downloader）
+     転送後は drive_url として記録される</pre>
+          <p><b>なぜ優先順位がこうなっているか:</b> Supabase Storage の元ファイル（Excel）が最優先なのは、メール処理時の「テキスト化」の過程で「氏名：保有技術」のような<b>おかしなペアが混ざってしまう</b>弱点が発見されているため。元ファイルをもう一度開き直せば、その加工を経由せず、表の位置関係をそのままAIに読ませられる。</p>
+        </div>
+      </details>
+    </div>
+
+    <div class="arrow"></div>
+
+    <div class="zone">
       <p class="zone-label">AIは何を読むのか</p>
 
       <details class="box fixed" open>
