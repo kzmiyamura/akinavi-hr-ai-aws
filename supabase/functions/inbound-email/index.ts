@@ -4917,7 +4917,9 @@ function extractSkillYearsVisualProject(cells: SpanCell[]): Record<string, numbe
   const colv = (r0: number, r1: number, col: number) => cells.filter((c) => c.col <= col && c.colEnd >= col && c.row >= r0 && c.row <= r1).map((c) => c.value).join(' \n ')
   const skillIv: Record<string, [number, number][]> = {}, skillFloat: Record<string, number> = {}
   for (const b of merged) {
-    const perText = cells.filter((c) => c.row >= b.r0 && c.row <= b.r1 && c.col < minTech && !tcols.some((tc) => c.col <= tc && c.colEnd >= tc)).map((c) => c.value).join(' ')
+    // 期間はブロック内の「tech列でない全セル」から抽出（期間列はtech列の左右どちらにもあり得る。
+    // projParsePeriodが日付/期間だけ拾い他テキストは無視するため、位置を限定しない）
+    const perText = cells.filter((c) => c.row >= b.r0 && c.row <= b.r1 && !tcols.some((tc) => c.col <= tc && c.colEnd >= tc)).map((c) => c.value).join(' ')
     const { start, end, dur } = projParsePeriod(perText, nowMonth)
     const techs = new Set<string>()
     for (const tc of tcols) for (const t of projParseKakko(colv(b.r0, b.r1, tc))) techs.add(t)
