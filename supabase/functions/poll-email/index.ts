@@ -908,7 +908,8 @@ async function processQueryEmail(
         body: JSON.stringify(payload),
       })
       const j = await res.json().catch(() => ({}))
-      reasons.push(`${salt.split('_').pop()}: ${res.status} ${j.reason ?? j.type ?? (j.skipped ? 'skipped' : 'ok')}${j.count != null ? '(count=' + j.count + ')' : ''}`)
+      const label = res.status === 546 ? 'TIMEOUT546' : (j.reason ?? j.type ?? (j.skipped ? 'skipped' : 'ok'))
+      reasons.push(`${salt.split('_').pop()}: ${res.status} ${label}${j.count != null ? '(count=' + j.count + ')' : ''}`)
       inboundCalls++
     }
     // 検証: 全添付を1回で渡す（inbound の multi-candidate 路が各添付を各ブロックにマッチする）
@@ -919,7 +920,8 @@ async function processQueryEmail(
       subject: `procquery "${query}" → ${subjectHit.slice(0, 40)}`,
       status: errors.length ? 'error' : 'success',
       error_message: reasons.join(' | ').slice(0, 500),
-      ai_result: { query, subject: subjectHit, attachments: attNames, inboundCalls, reasons },
+      ai_result: { query, subject: subjectHit, attachments: attNames, inboundCalls, reasons,
+        bodyHead: (email.body?.content ?? '').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/[ \t]+/g,' ').slice(0, 900) },
     })
   } catch (e) { errors.push(String(e)) }
   return { account: config.configKey, subject: subjectHit, attachments: attNames, inboundCalls, errors }

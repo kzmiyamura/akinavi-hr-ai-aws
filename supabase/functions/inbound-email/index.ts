@@ -1204,6 +1204,17 @@ export function isPhaseTableHeader(line: string): boolean {
  *     certContext が見つかれば優先使用。見つからない場合はフォーマット崩れを考慮して
  *     テキスト全体を対象に照合（全文fallback）。
  */
+// スキル照合の正規表現コンパイルキャッシュ。1660スキル×別名ぶんの new RegExp を毎回作り直すと
+// 名簿(複数人)メールでブロック数×1660回コンパイルし546タイムアウトになる実害があった（1-r.co.jp）。
+// パターン文字列は term から決まり決定的なので、コンパイル済み RegExp を使い回す（挙動は不変）。
+const _skillRegexCache = new Map<string, RegExp>()
+function _cachedSkillRegex(pattern: string): RegExp {
+  let re = _skillRegexCache.get(pattern)
+  if (!re) { re = new RegExp(pattern, 'gi'); _skillRegexCache.set(pattern, re) }
+  re.lastIndex = 0 // g フラグ付き .test() は lastIndex を進めるため毎回リセット
+  return re
+}
+
 function extractAndRemoveSkills(
   text: string,
   masterSkills: SkillMasterEntry[],
@@ -1239,11 +1250,11 @@ function extractAndRemoveSkills(
         ? `(?<![a-zA-Z0-9_#])${escaped}(?=[\\s\\u3000-\\u9FFF、。！？）」』]|$)`
         : `(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_.])`
 
-      const regex = new RegExp(pattern, 'gi')
+      const regex = _cachedSkillRegex(pattern)
       if (regex.test(matchTarget)) {
         matched.push({ name: skill.name, category: skill.category })
         if (!isCert) {
-          remaining = remaining.replace(new RegExp(pattern, 'gi'), ' ')
+          remaining = remaining.replace(_cachedSkillRegex(pattern), ' ')
         }
         break
       }
@@ -1256,10 +1267,9 @@ function extractAndRemoveSkills(
     if (skill.name.length > 2) continue
     if (matchedNameSet.has(skill.name)) continue
     const escaped = skill.name.replace(/[.+*?()[\]{}\\|^$]/g, '\\$&')
-    // 区切り文字に挟まれたパターン
-    const delimRe = new RegExp(
+    // 区切り文字に挟まれたパターン（キャッシュ利用・while前に lastIndex=0 リセット済み）
+    const delimRe = _cachedSkillRegex(
       `(?:^|[,，/／・\\t\\n\\r])\\s*(${escaped})\\s*(?=[,，/／・\\t\\n\\r]|$)`,
-      'gi',
     )
     let m: RegExpExecArray | null
     while ((m = delimRe.exec(cleanedText)) !== null) {
@@ -8991,6 +9001,13 @@ Deno.serve(async (req: Request) => {
         // undefined = まだ計算していない / null = アップロード失敗または対象外 / string = URL
         let caseBSharedResumeUrl: string | null | undefined = undefined
 
+        // 同一添付テキストのスキル照合結果をメモ化（ケースC等で全ブロックが同じ attachText を
+        // 照合し、重い extractAndRemoveSkills をブロック数ぶん重複実行して546になるのを防ぐ）
+        const attachSkillCache = new Map<string, { name: string; category: string }[]>()
+        // multi ループ全体の時間予算。超過後のブロックは重い添付スキル照合を省き本文スキルのみで
+        // 登録する（候補者は全員作る＝取りこぼしゼロ、後ろのブロックのスキルが本文由来のみになる劣化）。
+        const multiLoopDeadline = Date.now() + 4000
+
         for (const [blockIdx, block] of multiBlocks.entries()) {
           try {
             // ── Step1: 本文のみから名前・駅名を先行抽出（フィールド抽出側で利用） ──
@@ -9026,9 +9043,16 @@ Deno.serve(async (req: Request) => {
             const blockBodyText = block
             const { matched: blockBodyMatched } = extractAndRemoveSkills(blockBodyText, masterSkills, { looseCert: false })
             const blockBodyMatchedNames = new Set(blockBodyMatched.map(s => s.name))
-            const blockAttachRaw = blockAttachText.trim()
-              ? extractAndRemoveSkills(blockAttachText, masterSkills, { looseCert: true }).matched
-              : []
+            // 添付スキル照合: メモ化で同一テキストの再計算を避け、時間予算超過後は省いて本文スキルのみにする
+            let blockAttachRaw: { name: string; category: string }[] = []
+            if (blockAttachText.trim()) {
+              const cached = attachSkillCache.get(blockAttachText)
+              if (cached) blockAttachRaw = cached
+              else if (Date.now() <= multiLoopDeadline) {
+                blockAttachRaw = extractAndRemoveSkills(blockAttachText, masterSkills, { looseCert: true }).matched
+                attachSkillCache.set(blockAttachText, blockAttachRaw)
+              }
+            }
             const blockAttachRatedLocal = filterBySkillRating(blockAttachText, blockAttachRaw)
             const blockAttachDeduped = blockAttachRatedLocal.filter(s => !blockBodyMatchedNames.has(s.name)).slice(0, 10)
             const blockDbMatchedSkills = [...blockBodyMatched, ...blockAttachDeduped]
