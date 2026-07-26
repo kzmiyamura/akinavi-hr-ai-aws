@@ -449,7 +449,8 @@ async function fetchEmailPage(
     url = [
       'https://graph.microsoft.com/v1.0/me/mailFolders/deleteditems/messages',
       `?$top=${MAX_EMAILS_PER_ACCOUNT_FULL}`,
-      `&$filter=receivedDateTime ge '${sinceDate}T00:00:00Z'`,
+      // receivedDateTime は DateTimeOffset 型。クォートで囲むと文字列扱いになり400になるため囲まない
+      `&$filter=receivedDateTime ge ${sinceDate}T00:00:00Z`,
       '&$select=id,subject,from,body,hasAttachments,receivedDateTime,isRead',
       '&$orderby=receivedDateTime asc',
     ].join('')
@@ -471,7 +472,8 @@ async function fetchEmailPage(
     url = [
       'https://graph.microsoft.com/v1.0/me/messages',
       `?$top=${MAX_EMAILS_PER_ACCOUNT_FULL}`,
-      `&$filter=receivedDateTime ge '${sinceDate}T00:00:00Z'`,
+      // receivedDateTime は DateTimeOffset 型。クォートで囲むと文字列扱いになり400になるため囲まない
+      `&$filter=receivedDateTime ge ${sinceDate}T00:00:00Z`,
       '&$select=id,subject,from,body,hasAttachments,receivedDateTime,isRead',
       '&$orderby=receivedDateTime asc',
     ].join('')
