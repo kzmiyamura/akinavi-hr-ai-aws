@@ -9339,12 +9339,18 @@ Deno.serve(async (req: Request) => {
                 experience_years: blockPayload.experience_years,
                 desired_rate: blockRegexFields.desiredRate ?? null,
                 created_at: new Date().toISOString(),
-                // resume_url は常に上書きする（INSERT側の resume_url: blockResumeUrl と同じ挙動に統一）。
-                // 以前は match したときだけ条件付きで含めていたため、ケースB（添付マッチなし→null）で
-                // 更新すべきなのにキー自体が payload から欠落し、古い誤った resume_url が
-                // 残り続けるバグがあった（Issue #121: 他人の経歴書が紐付いたまま消えない）
-                resume_url: blockResumeUrl,
               }
+              // resume_url の扱い:
+              // - このブロックで添付がマッチした（blockResumeUrl!=null）→ 常に上書き
+              // - マッチ無し（null）→ 既存を「保持」する（キーを payload に含めない）。
+              //   名簿メールで各人の経歴書が別々の添付になっている場合、poll-email の「添付分割
+              //   モード」が添付ごとに inbound を複数回呼ぶ。各呼び出しでは本文の全員ぶんの
+              //   ブロックが作られるが添付は1つだけマッチするため、null で常時上書きすると
+              //   兄弟呼び出しが先に設定した正しい resume_url を後続呼び出しが null で潰し、
+              //   全員 resume_url なしになる実害があった（CyTech/ai・more 名簿メール）。
+              //   ※ Issue #121（古い誤った resume_url が残る）は、名簿誤検出・添付マッチ精度の
+              //     改善で誤マッチ自体が減っているため、全員分を失う害の方が大きいと判断し保持を優先。
+              if (blockResumeUrl) blockUpdatePayload.resume_url = blockResumeUrl
               if (blockPayload.from_company) blockUpdatePayload.from_company = blockPayload.from_company
               const { error: blockUpdateError } = await supabase
                 .from('candidates').update(blockUpdatePayload)
