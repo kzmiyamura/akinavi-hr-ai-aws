@@ -43,7 +43,9 @@ function resolveCallKey(): string {
 const CALL_KEY = resolveCallKey()
 
 // 1回のポーリングで取得するメール上限（AI解析廃止により高速化→50に拡大）
-const MAX_EMAILS_PER_ACCOUNT = 50
+// ★段階公開Phase1(2026-07-26): 13,335件のバックログを安全に消化するため20に設定。
+//   Storage/egress監視で安定を確認したら50へ。異常時は1に戻す
+const MAX_EMAILS_PER_ACCOUNT = 20
 // 全件取り込みモードでの1バッチあたりの取得上限
 const MAX_EMAILS_PER_ACCOUNT_FULL = 50
 
@@ -536,6 +538,31 @@ async function fetchAttachments(
   )
 }
 
+/**
+ * Graph が返す添付の「完全な内訳」をメタデータのみ（contentBytes を落とさない=egress最小）で取得する。
+ * fetchAttachments は fileAttachment だけを通すため、referenceAttachment（OneDrive/SharePoint等の
+ * クラウド添付）やitemAttachmentが「取得前に消える」と原因調査ができない実害があった。
+ * ここで型を含めた台帳をDBに残すことで「Graphが実際に何を何個返したか」を後から必ず確認できる。
+ */
+async function fetchAttachmentManifest(
+  accessToken: string,
+  messageId: string,
+): Promise<Array<{ name: string; contentType: string; odataType: string; size: number }>> {
+  // $select で contentBytes を除外（bytes をダウンロードしないので egress ほぼゼロ）
+  const res = await fetch(
+    `https://graph.microsoft.com/v1.0/me/messages/${messageId}/attachments?$select=id,name,contentType,size,isInline`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  )
+  if (!res.ok) return []
+  const json = await res.json()
+  return ((json.value ?? []) as Array<Record<string, unknown>>).map(a => ({
+    name: String(a.name ?? ''),
+    contentType: String(a.contentType ?? ''),
+    odataType: String(a['@odata.type'] ?? ''),
+    size: Number(a.size ?? 0),
+  }))
+}
+
 // ---- AI 種別判断（Gemini）バッチ版 ----
 // 複数メールをまとめて1回のGeminiコールで分類（コスト削減）
 
@@ -840,6 +867,41 @@ async function pollAccount(
           : []
 
         console.log(`[poll] 添付: hasAttachments=${email.hasAttachments} 取得件数=${attachments.length}`, attachments.map(a => ({ name: a.name, type: a.contentType, bytesLen: a.contentBytes?.length ?? 0 })))
+
+        // ── 添付台帳を DB に恒久記録（Graphが返した完全な内訳・型込み） ──
+        // fetchAttachments が落とす referenceAttachment（クラウド添付）も含めて記録し、
+        // 「何があってもログで確認できる」ようにする。bytes は取得しないので egress は無視できる。
+        if (email.hasAttachments) {
+          try {
+            const manifest = await fetchAttachmentManifest(accessToken, email.id)
+            const fileCount = manifest.filter(m => m.odataType === '#microsoft.graph.fileAttachment').length
+            const refCount = manifest.filter(m => m.odataType === '#microsoft.graph.referenceAttachment').length
+            const itemCount = manifest.filter(m => m.odataType === '#microsoft.graph.itemAttachment').length
+            const droppedCount = manifest.length - attachments.length
+            console.log(`[poll] 添付台帳: total=${manifest.length} file=${fileCount} ref=${refCount} item=${itemCount} 渡した=${attachments.length} 捨てた=${droppedCount}`)
+            await supabase.from('ai_logs').insert({
+              type: 'poll-attach',
+              model: 'no-ai',
+              from_address: email.from?.emailAddress?.address ?? '',
+              subject: email.subject ?? '',
+              // status は CHECK制約で success/error のみ。落とした添付があれば error にして目立たせる
+              status: droppedCount > 0 ? 'error' : 'success',
+              error_message: droppedCount > 0 ? `Graph添付${manifest.length}件中${droppedCount}件をinboundに渡せず（ref/item等）` : null,
+              ai_result: {
+                messageId: email.id,
+                totalReturnedByGraph: manifest.length,
+                fileAttachment: fileCount,
+                referenceAttachment: refCount,
+                itemAttachment: itemCount,
+                passedToInbound: attachments.length,
+                dropped: droppedCount,
+                manifest: manifest.map(m => ({ name: m.name, type: m.odataType.replace('#microsoft.graph.', ''), contentType: m.contentType, size: m.size })),
+              },
+            })
+          } catch (logErr) {
+            console.error(`[poll] 添付台帳の記録失敗: ${String(logErr)}`)
+          }
+        }
 
         // 人材メールに Office 添付が複数ある場合は1ファイル=1候補者として分割処理
         const officeAtts = attachments.filter(isOfficeAttachment)
