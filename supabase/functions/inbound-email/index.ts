@@ -4809,7 +4809,7 @@ const PROJ_TECHCOL = /(使用言語|開発言語|^言語|ＯＳ|^OS|サーバ|�
 const PROJ_PERIODCOL = /(期間|稼働)/
 const KAKKO_TECH = /^(OS|ＯＳ|言語|開発言語|使用言語|DB|ＤＢ|データベース|FW|フレームワーク|ミドル|ミドルウェア|サーバ|MW)/
 const KAKKO_SKIP = /^(役割|規模|担当|フェーズ|工程|人数|チーム|概要|プロジェクト|業務|実績|取り組|備考|ツール|その他|IDE|環境|機材|計測|画像処理)/
-const PROJ_JUNK = /^(SDK|ver|version|v|IDE|pro|＋|拡張機能|既存コード解析|ライブラリ|エディタ|各種|他|その他|等|ＦＷ|Framework|フレームワーク|画像処理ライブラリ|計測器|開発ツール|開発環境)$/i
+const PROJ_JUNK = /^(SDK|ver|version|v|IDE|pro|＋|拡張機能|既存コード解析|ライブラリ|エディタ|各種|他|その他|等|ＦＷ|Framework|フレームワーク|画像処理ライブラリ|計測器|開発ツール|開発環境|Server|Basic|Studio|Code|Cloud|on|Native)$/i
 const PROJ_MON: Record<string, number> = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }
 
 function projParsePeriod(text: string, nowMonth: number): { start: number | null; end: number | null; dur: number | null } {
@@ -4826,9 +4826,15 @@ function projParsePeriod(text: string, nowMonth: number): { start: number | null
   if (nums.length === 1 && now) return { start: nums[0], end: nowMonth, dur }
   return { start: null, end: null, dur }
 }
+// 単一スペースで割ると壊れる複合スキル名（SQL Server, Visual Basic, PL/SQL 等）
+const PROJ_KEEP_WHOLE = /(SQL\s*Server|Visual\s*Basic|Visual\s*Studio|Transact[- ]?SQL|PL\/?SQL|Ruby\s*on\s*Rails|Amazon\s*Web\s*Services|Google\s*Cloud|Windows\s*Server|Objective[- ]?C|Node\.?js|Power\s*Automate|Power\s*BI|Power\s*Query|\.NET\s*Core|ASP\.NET)/gi
 function projSplitTokens(s: string): string[] {
+  // 複合名を退避(KWH記号)→空白分割→復元。実バージョン番号(Windows2012等)と衝突しない
+  const held: string[] = []
+  s = s.replace(PROJ_KEEP_WHOLE, (m) => { held.push(m.replace(/\s+/g, ' ').trim()); return `KWH${held.length - 1}KWH` })
+  const restore = (x: string) => x.replace(/KWH(\d+)KWH/g, (_, i) => held[+i] || '')
   return s.split(/[\/／、,\n\r・（(）)]|\s{2,}|　| /).map((x) => x.replace(/^[◆■●・\s]+/, '').trim())
-    .map((x) => x.replace(/[\s]*\d+(\.\d+)*[a-z]?$/i, '').replace(/等$|など$/, '').trim())
+    .map((x) => /KWH\d+KWH/.test(x) ? restore(x) : restore(x.replace(/[\s]*\d+(\.\d+)*[a-z]?$/i, '').replace(/等$|など$/, '').trim()))
     .filter((x) => x && x.length >= 2 && x.length <= 24 && !/^[-―ー~〜:：+＋]+$/.test(x) && !/^\d+$/.test(x)
       && !/(作成|開発|設計|テスト|実装|運用|保守|担当|業務|効率|改修|移行|対応|管理)$/.test(x) && !PROJ_JUNK.test(x))
 }
@@ -4894,14 +4900,14 @@ function extractSkillYearsVisualProject(cells: SpanCell[]): Record<string, numbe
     if (score > best) { best = score; hdr = r; tcols = [...new Set(tc)]; pcols = pc }
   }
   if (hdr < 0 || tcols.length < 2) return null // 信頼ゲート①: tech列2本以上
-  // 案件ブロック化: tech列で rowspan を持つセル範囲を1ブロック
+  // 案件ブロック化: tech列の結合セル ＋「結合セル(rowspan2〜20)を持つ任意の列」を案件境界に使う。
+  // No列や内容列が縦結合で案件を定義する表(No毎に1案件・c0=Noがrowspanで全行を覆う型)でも、
+  // 結合されていない tech(言語/DB)をその案件範囲に正しく束ねられる。span>20の巨大結合は除外。
   const blocks: { r0: number; r1: number }[] = []
-  const seen = new Set<number>()
   for (const c of cells) {
-    if (c.row <= hdr || !tcols.includes(c.col) || !c.value.trim() || seen.has(c.row)) continue
-    let r1 = c.rowEnd
-    for (const c2 of cells) if (tcols.includes(c2.col) && c2.row === c.row) r1 = Math.max(r1, c2.rowEnd)
-    blocks.push({ r0: c.row, r1 }); seen.add(c.row)
+    if (c.row <= hdr || !c.value.trim()) continue
+    const span = c.rowEnd - c.row + 1
+    if (tcols.includes(c.col) || (span >= 2 && span <= 20)) blocks.push({ r0: c.row, r1: c.rowEnd })
   }
   blocks.sort((a, b) => a.r0 - b.r0)
   const merged: { r0: number; r1: number }[] = []
