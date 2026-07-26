@@ -4844,6 +4844,7 @@ function projParseKakko(text: string): string[] {
   // ① 【カテゴリ】値 形式
   const parts = text.split(/【([^】]*)】/)
   if (parts.length > 1) {
+    out.push(...projSplitTokens(parts[0])) // 最初の【】より前の平文もtechとして拾う(隣の説明セルが横に混入する型)
     for (let i = 1; i < parts.length; i += 2) {
       const cat = parts[i].trim(); const val = parts[i + 1] || ''
       if (KAKKO_SKIP.test(cat)) continue
