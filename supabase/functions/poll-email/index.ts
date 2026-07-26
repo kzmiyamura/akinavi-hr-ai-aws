@@ -446,13 +446,15 @@ async function fetchEmailPage(
     // 復旧モード: 処理後に削除（=削除済みアイテムへ移動）されたメールを、
     // 「削除済みアイテム」フォルダから since 以降で読み直す。既読/削除の副作用は起こさない。
     const sinceDate = since || new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+    // バックログ（受信は過去）を今日処理して削除したメールを拾うため、受信日ではなく
+    // 「削除済みフォルダへ移動した日時 = lastModifiedDateTime」でフィルタする。
+    // DateTimeOffset 型なのでクォートで囲まない。
     url = [
       'https://graph.microsoft.com/v1.0/me/mailFolders/deleteditems/messages',
       `?$top=${MAX_EMAILS_PER_ACCOUNT_FULL}`,
-      // receivedDateTime は DateTimeOffset 型。クォートで囲むと文字列扱いになり400になるため囲まない
-      `&$filter=receivedDateTime ge ${sinceDate}T00:00:00Z`,
-      '&$select=id,subject,from,body,hasAttachments,receivedDateTime,isRead',
-      '&$orderby=receivedDateTime asc',
+      `&$filter=lastModifiedDateTime ge ${sinceDate}T00:00:00Z`,
+      '&$select=id,subject,from,body,hasAttachments,receivedDateTime,lastModifiedDateTime,isRead',
+      '&$orderby=lastModifiedDateTime asc',
     ].join('')
   } else if (mode === 'incremental') {
     // 既存の未読メール取得（変更なし）
