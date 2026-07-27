@@ -6958,7 +6958,7 @@ async function extractExcelText(base64: string): Promise<string> {
 }
 
 /** 10秒タイムアウト付きfetch */
-async function fetchWithTimeout(url: string, timeoutMs = 10000): Promise<Response> {
+async function fetchWithTimeout(url: string, timeoutMs = 1800): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -7164,7 +7164,7 @@ async function fetchSheetsEntry(link: { id: string; gid: string }, ledger: Ledge
   const fp = await fetchCsvFingerprint(link.id, link.gid)
   const sourceUrl = `https://docs.google.com/spreadsheets/d/${link.id}/edit#gid=${link.gid}`
   try {
-    const res = await fetchWithTimeout(`https://docs.google.com/spreadsheets/d/${link.id}/export?format=xlsx`, 20000)
+    const res = await fetchWithTimeout(`https://docs.google.com/spreadsheets/d/${link.id}/export?format=xlsx`, 1800)
     if (res.ok) {
       const ab = await res.arrayBuffer()
       if (!looksLikeZipBytes(ab)) {
@@ -7203,7 +7203,7 @@ async function fetchDocsEntry(link: { id: string }, ledger: Ledger): Promise<Sou
   const entryId = ledger.nextEntryId()
   const sourceUrl = `https://docs.google.com/document/d/${link.id}/edit`
   try {
-    const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=docx`, 20000)
+    const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=docx`, 1800)
     if (res.ok) {
       const ab = await res.arrayBuffer()
       if (!looksLikeZipBytes(ab)) throw new Error('docxがHTML応答(レート制限/権限なし)')
@@ -7221,7 +7221,7 @@ async function fetchDocsEntry(link: { id: string }, ledger: Ledger): Promise<Sou
   } catch (e) { ledger.log(entryId, 'A-FETCH-FAIL', `docs docx ${e instanceof Error ? e.message : String(e)}`) }
   // 保険: txtエクスポート（旧本流）
   try {
-    const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=txt`, 20000)
+    const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=txt`, 1800)
     if (res.ok && !/text\/html/.test(res.headers.get('content-type') ?? '')) {
       ledger.log(entryId, 'A-TXT-FB', `docs ${link.id}`)
       return {
@@ -7245,7 +7245,7 @@ async function fetchDriveEntry(link: { id: string; index: number }, body: string
   const entryId = ledger.nextEntryId()
   const sourceUrl = `https://drive.google.com/file/d/${link.id}/view`
   try {
-    const res = await fetchWithTimeout(`https://drive.google.com/uc?export=download&id=${link.id}`, 20000)
+    const res = await fetchWithTimeout(`https://drive.google.com/uc?export=download&id=${link.id}`, 1800)
     if (!res.ok) { ledger.log(entryId, 'A-FETCH-FAIL', `drive status=${res.status}`); return null }
     const ct = (res.headers.get('content-type') ?? '').split(';')[0].trim()
     if (ct === 'text/html') {
@@ -7345,18 +7345,24 @@ async function extractEntry(entry: SourceEntry, ledger: Ledger): Promise<SourceE
 }
 
 /** ゾーンA+B: 本文中のGoogle系リンクを統一エントリとして取得・抽出するオーケストレータ */
-async function collectGoogleEntries(body: string, ledger: Ledger): Promise<SourceEntry[]> {
+async function collectGoogleEntries(body: string, ledger: Ledger, deadline = 0): Promise<SourceEntry[]> {
   const links = detectGoogleLinks(body)
   const out: SourceEntry[] = []
+  // リンク先取得は外部への同期HTTP。edge の実質制限(~6秒)内に収めるため deadline を超えたら
+  // 残りのリンクは取りに行かず打ち切る（リンクは本文に残るので後段/再解析で拾える）。
+  const overBudget = () => deadline > 0 && Date.now() > deadline
   for (const s of links.sheets) {
+    if (overBudget()) { ledger.log(null, 'A-LINK-BUDGET', 'sheets打ち切り'); break }
     const e = await fetchSheetsEntry(s, ledger)
     if (e) out.push(await extractEntry(e, ledger))
   }
   for (const d of links.docs) {
+    if (overBudget()) { ledger.log(null, 'A-LINK-BUDGET', 'docs打ち切り'); break }
     const e = await fetchDocsEntry(d, ledger)
     if (e) out.push(await extractEntry(e, ledger))
   }
   for (const dr of links.drive) {
+    if (overBudget()) { ledger.log(null, 'A-LINK-BUDGET', 'drive打ち切り'); break }
     const e = await fetchDriveEntry(dr, body, ledger)
     if (e) out.push(await extractEntry(e, ledger))
   }
@@ -7561,7 +7567,7 @@ const ROSTER_MAX_ROWS = 15
  * リンク型の行はリンク先を再取得して本人エントリに差し替える（Google系のみ・深さ1）。
  */
 /** 名簿1通あたりのリンク先取得に使える時間予算（ms）。超過後の行は埋め込み型に降格して継続 */
-const ROSTER_LINK_FETCH_BUDGET_MS = 60_000
+const ROSTER_LINK_FETCH_BUDGET_MS = 2500
 
 async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger, linkBudgetMs = ROSTER_LINK_FETCH_BUDGET_MS, priorityNames: string[] = []): Promise<SourceEntry[]> {
   const linkFetchStart = Date.now()
@@ -8256,6 +8262,8 @@ Deno.serve(async (req: Request) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  // リクエスト開始時刻（リンク取得の共有時間予算 linkFetchDeadline の基準）
+  const _t0 = Date.now()
   let traceRid = ''
   /** 最後に「ここまで進んだ」状態（FATAL 時に記録） */
   let tracePhase = 'none'
@@ -8769,7 +8777,10 @@ Deno.serve(async (req: Request) => {
     // ゾーンA+B: Google Drive / Sheets / Docs リンクを統一エントリとして取得・抽出（設計書v4）
     // 旧fetchGoogleLinksのdriveSheetSkillYears無条件上書きは廃止 — skillYearsは
     // 候補者に割り当てられたエントリからのみ採用する（ゾーンE pickSkillYears）
-    const googleEntries = await collectGoogleEntries(body, ledger)
+    // リンク取得の共有時間予算: 開始から3秒まで。edge の実質制限(~6秒)内に collectGoogle と
+    // expandRoster の2連続リンク取得を収める（超過分のリンクは本文に残るので再解析で拾える）。
+    const linkFetchDeadline = _t0 + 1500
+    const googleEntries = await collectGoogleEntries(body, ledger, linkFetchDeadline)
     const rawAllAttachments = [...supportedAttachments]
     tracePhase = 'drive_links_done'
 
@@ -8824,7 +8835,9 @@ Deno.serve(async (req: Request) => {
     const bodyPriorityNames = (earlyMultiCheck ?? [body])
       .map((t) => extractCandidateFieldsRegex(t, '').name ?? extractNameFallback(t))
       .filter((n): n is string => !!n)
-    const allTextContents: SourceEntry[] = await expandRosterEntries([...googleEntries, ...officeEntries], ledger, undefined, bodyPriorityNames)
+    // 残り予算を名簿リンク取得に渡す（collectGoogle で使い切っていれば 0 = 名簿リンクは取りに行かない）
+    const rosterLinkBudget = Math.max(0, linkFetchDeadline - Date.now())
+    const allTextContents: SourceEntry[] = await expandRosterEntries([...googleEntries, ...officeEntries], ledger, rosterLinkBudget, bodyPriorityNames)
 
     // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
     // 本文と添付を分けて照合し、精度を向上させる。
@@ -8842,8 +8855,12 @@ Deno.serve(async (req: Request) => {
 
     const attachText = allTextContents.map(t => t.content ?? '').join('\n')
     const bodyMatchedNames = new Set(bodyMatched.map(s => s.name))
+    // skill_master 照合の対象テキストは上限で切る。名簿(複数人)では全エントリ結合テキストが
+    // 数百KBになり、1660スキル×別名の照合＋マッチごとの全文replaceで数秒かかり546になる実害があった
+    // （1-r.co.jp 要員メール）。1人分のスキルは先頭側に集まるため 60KB で足りる。複数人ぶんの詳細は
+    // multi-candidate パスの per-block 照合が別途拾う。
     const attachRawMatched = attachText.trim()
-      ? extractAndRemoveSkills(attachText, masterSkills, { looseCert: true }).matched
+      ? extractAndRemoveSkills(attachText.slice(0, 25000), masterSkills, { looseCert: true }).matched
       : []
     // スキルシート形式（A〜E 評価テーブル）を検出し D/E 評価スキルを除外
     const attachRated = filterBySkillRating(attachText, attachRawMatched)
