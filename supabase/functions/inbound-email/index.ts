@@ -319,6 +319,29 @@ function extractAgentComment(body: string, _attachText: string): string | null {
 /** 自社名（受信側）として登録されてしまうことを防ぐ会社名リスト */
 const OWN_COMPANY_NAMES = ['株式会社ボイス', 'i-voice', 'アキナビ', 'akinavi', '株式会社アキナビ']
 
+// ── 法人格（会社等の種別）網羅表 ─────────────────────────────────────────
+// 会社名抽出は必ずこの表を「正」として使う（前株・後株・全角半角括弧の略記・㈱・英語表記まで網羅）。
+// 二度と会社名でバグらせないため、抽出・判定のすべてをこの定数経由に統一する。
+const CORP_PREFIX_FORMS = [
+  '株式会社', '有限会社', '合同会社', '合資会社', '合名会社',
+  '一般社団法人', '一般財団法人', '公益社団法人', '公益財団法人',
+  '社会福祉法人', '医療法人社団', '医療法人財団', '医療法人', '学校法人',
+  '宗教法人', '独立行政法人', '国立大学法人', '公立大学法人',
+  '特定非営利活動法人', 'ＮＰＯ法人', 'NPO法人',
+] // 前株（法人格が名前の前）
+const CORP_ABBR_FORMS = ['㈱', '㈲', '㈾', '（株）', '(株)', '（有）', '(有)', '（同）', '(同)', '（資）', '(資)', '（名）', '(名)']
+const CORP_SUFFIX_JP_FORMS = ['株式会社', '有限会社', '合同会社', '合資会社', '合名会社'] // 後株（名前の後）
+const reEscCorp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** 前に来る法人格（前株＋略記）の選択肢ソース */
+const CORP_PREFIX_SRC = [...CORP_PREFIX_FORMS, ...CORP_ABBR_FORMS].map(reEscCorp).join('|')
+/** 後ろに来る法人格（後株＋略記）の選択肢ソース */
+const CORP_SUFFIX_SRC = [...CORP_SUFFIX_JP_FORMS, ...CORP_ABBR_FORMS].map(reEscCorp).join('|')
+/** 全法人格（日本語）— 判定・除去用 */
+const ANY_CORP_SRC = [...new Set([...CORP_PREFIX_FORMS, ...CORP_ABBR_FORMS, ...CORP_SUFFIX_JP_FORMS])].map(reEscCorp).join('|')
+/** 英語の法人格（名前の後ろ。Co.,Ltd. / Inc. / Corp. / LLC / K.K. 等） */
+// 長い表記を先に（Corporation を Corp より先に等、途中で切れないよう並べる）
+const CORP_SUFFIX_EN_SRC = '(?:Corporation|Incorporated|Company|Holdings|Co\\.?\\s*,?\\s*Ltd\\.?|Co\\.?\\s*,?\\s*Inc\\.?|Pte\\.?\\s*Ltd\\.?|L\\.?L\\.?C\\.?|GmbH|Ltd\\.?|Inc\\.?|Corp\\.?|K\\.?K\\.?|G\\.?K\\.?|LLP|PLC|Co\\.?)'
+
 function sanitizeFromCompany(value: string | null | undefined): string | null {
   if (!value) return null
   let trimmed = value.trim()
@@ -333,24 +356,31 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
   // 「の」なし・漢字姓+丁寧表現: 「株式会社イチアール小島でございます」→「株式会社イチアール」
   // ※ 法人格+会社名(2文字以上)の後に1〜4文字の漢字姓+丁寧表現が続くパターン
   {
-    const politePersonM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人).{2,}?)[一-龯々]{1,4}(?:でございます|です|と申します|でした)/)
+    const politePersonM = trimmed.match(new RegExp(`^((?:${CORP_PREFIX_SRC}).{2,}?)[一-龯々]{1,4}(?:でございます|です|と申します|でした)`))
     if (politePersonM) trimmed = politePersonM[1]
   }
   // 「の〇〇でございます」「の〇〇です」等が残っていれば除去（の付きのフォールバック）
   trimmed = trimmed.replace(/の[^\s　]{1,15}(?:でございます|です|と申します|でした).*$/, '')
+  // 法人格の直後がいきなり短い漢字姓＋強い丁寧表現 = 会社名が無く送信者の自己紹介を拾っている
+  //（例:「株式会社小川でございます」= 小川さんの挨拶。実会社名が無いので null。1-r.co.jp 実害）。
+  // でございます/と申します/でした は個人の自己紹介専用表現でカタカナ社名等には付かないため安全。
+  if (new RegExp(`^(?:${CORP_PREFIX_SRC})[一-龯々]{1,3}(?:でございます|と申します|でした)`).test(trimmed)) return null
   // 前株パターン: 法人格 + 会社名（英語2単語名「Knowledge Technologies」にも対応）
   // ただし「株式会社ヘルスベイシス https://...」のように直後にURLが続く場合、
   // urlの先頭語（https等）を会社名の一部として誤って取り込まないよう除外する
-  const preM = trimmed.match(/^((?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[^\sの　\n、。！（）【】「」]{2,30}(?:[ \t]+(?!https?:)[A-Za-z][A-Za-z \t&.]{0,20})?)/)
+  const preM = trimmed.match(new RegExp(`^((?:${CORP_PREFIX_SRC})[^\\sの　\\n、。！（）【】「」]{2,30}(?:[ \\t]+(?!https?:)[A-Za-z][A-Za-z \\t&.]{0,20})?)`))
   if (preM) { trimmed = preM[1].trim(); }
-  // 後株パターン: 会社名 + 法人格 (以降を除去)
-  const postM = trimmed.match(/^([^\sの　\n、。！（）【】「」]{2,20}(?:株式会社|有限会社|合同会社))/)
+  // 後株パターン: 会社名 + 法人格 (日本語＋略記。以降を除去)
+  const postM = trimmed.match(new RegExp(`^([^\\sの　\\n、。！（）【】「」]{2,20}(?:${CORP_SUFFIX_SRC}))`))
   if (postM) { trimmed = postM[1]; }
+  // 後株パターン(英語): XXX Co., Ltd. / XXX Inc. 等はその範囲までを会社名として保持
+  const postEnM = trimmed.match(new RegExp(`^([A-Za-z][A-Za-z0-9&.\\- ]{1,40}?[ \\t]*,?[ \\t]*${CORP_SUFFIX_EN_SRC})`))
+  if (postEnM) { trimmed = postEnM[1].trim(); }
   // 法人格のみ（識別名なし）は無効 — 例: 「株式会社の小川です」→「株式会社」→ null
-  if (/^(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)$/.test(trimmed)) return null
+  if (new RegExp(`^(?:${ANY_CORP_SRC})$`).test(trimmed)) return null
   // 役職・肩書き略称がそのまま会社名になっているケースは無効
   // 例: 「株式会社CTO」「株式会社CEO」— スキルシートの役職行が誤マッチした場合
-  if (/^(?:株式会社|有限会社|合同会社)(?:CTO|CEO|COO|CFO|CMO|CXO|VP|SVP|EVP|PO|PM|PL|SE|SRE|TL)$/.test(trimmed)) return null
+  if (new RegExp(`^(?:${CORP_PREFIX_SRC})(?:CTO|CEO|COO|CFO|CMO|CXO|VP|SVP|EVP|PO|PM|PL|SE|SRE|TL)$`).test(trimmed)) return null
   return trimmed || null
 }
 
@@ -2277,22 +2307,34 @@ function extractCandidateFieldsRegex(
   }
 
   // 全マッチを収集して宛先以外の最後のマッチを採用（送信者署名は末尾に近いため）
-  const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　の\n（(、。！【】「」]{2,30}(?:[ \t]+(?!https?:)[A-Za-z][A-Za-z \t&.]{0,20})?)/g
+  // 前株（法人格が前）: 網羅表 CORP_PREFIX_SRC を使用（㈱・（株）・各種法人も対象）
+  const CORP_PRE_HEAD = new RegExp(`^(?:${CORP_PREFIX_SRC})`)
+  const PRE_RE = new RegExp(`(?:${CORP_PREFIX_SRC})[　 ]?([^\\s　の\\n（(、。！【】「」]{2,30}(?:[ \\t]+(?!https?:)[A-Za-z][A-Za-z \\t&.]{0,20})?)`, 'g')
   let bestPre: RegExpExecArray | null = null
   let m: RegExpExecArray | null
   while ((m = PRE_RE.exec(sigArea)) !== null) {
     if (!isSalutation(sigArea, m.index, m[0].length)) bestPre = m
   }
-  if (bestPre) fromCompany = sanitizeFromCompany(`${bestPre[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${bestPre[1]}`)
+  if (bestPre) fromCompany = sanitizeFromCompany(`${bestPre[0].match(CORP_PRE_HEAD)?.[0] ?? ''}${bestPre[1]}`)
 
-  // 「XXX株式会社」末尾パターン（前述で取れなかった場合・半角・全角スペース対応）
+  // 後株（法人格が後・日本語＋略記）: 「XXX株式会社」「XXX（株）」等（半角・全角スペース対応）
   if (!fromCompany) {
-    const POST_RE = /([^（(（\s　\n、。！【】「」]{2,20})[　 ]?(?:株式会社|有限会社|合同会社)/g
+    const POST_RE = new RegExp(`([^（(（\\s　\\n、。！【】「」]{2,20})[　 ]?(?:${CORP_SUFFIX_SRC})`, 'g')
     let bestPost: RegExpExecArray | null = null
     while ((m = POST_RE.exec(sigArea)) !== null) {
       if (!isSalutation(sigArea, m.index, m[0].length)) bestPost = m
     }
-    if (bestPost) fromCompany = sanitizeFromCompany(`${bestPost[1]}${bestPost[0].match(/株式会社|有限会社|合同会社/)?.[0]}`)
+    if (bestPost) fromCompany = sanitizeFromCompany(`${bestPost[1]}${bestPost[0].match(new RegExp(`(?:${CORP_SUFFIX_SRC})$`))?.[0] ?? ''}`)
+  }
+
+  // 英語法人格の後株（XXX Co., Ltd. / XXX Inc. / XXX Corporation 等）
+  if (!fromCompany) {
+    const POST_EN_RE = new RegExp(`([A-Za-z][A-Za-z0-9&.\\- ]{1,40}?)[ \\t]*,?[ \\t]*${CORP_SUFFIX_EN_SRC}`, 'g')
+    let bestEn: RegExpExecArray | null = null
+    while ((m = POST_EN_RE.exec(sigArea)) !== null) {
+      if (!isSalutation(sigArea, m.index, m[0].length)) bestEn = m
+    }
+    if (bestEn) fromCompany = sanitizeFromCompany(bestEn[0].trim())
   }
 
   // ③ 本文冒頭の「XXXのXX担当です」パターン（法人格なしのカタカナ社名: フォスターネット等）
@@ -8936,13 +8978,14 @@ Deno.serve(async (req: Request) => {
         // ブロック分割後は各候補者の断片テキストのみになり署名が含まれないため
         const multiBodyCompanyName: string | null = (() => {
           const sig = body.slice(-2000)
-          const PRE_RE = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　の\n（(、。！【】「」]{2,30})/g
+          const PRE_RE = new RegExp(`(?:${CORP_PREFIX_SRC})[　 ]?([^\\s　の\\n（(、。！【】「」]{2,30})`, 'g')
+          const PRE_HEAD = new RegExp(`^(?:${CORP_PREFIX_SRC})`)
           const afterSalutation = (t: string, i: number, l: number) => /^[\r\n　 ]*(?:様|御中|ご担当|担当者様)/.test(t.slice(i + l, i + l + 40))
           // 署名エリアなので最初の非宛先マッチを使う（後続のカッコ内旧社名説明を拾わないように）
           let m: RegExpExecArray | null
           while ((m = PRE_RE.exec(sig)) !== null) {
             if (afterSalutation(sig, m.index, m[0].length)) continue
-            const name = sanitizeFromCompany(`${m[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${m[1]}`)
+            const name = sanitizeFromCompany(`${m[0].match(PRE_HEAD)?.[0] ?? ''}${m[1]}`)
             // "から"/"変更" を含む場合は旧社名説明なのでスキップ
             if (name && !/から|変更|になります/.test(name)) return name
           }
@@ -9479,11 +9522,12 @@ Deno.serve(async (req: Request) => {
           const emailDomain = from ? from.split('@')[1]?.toLowerCase().trim() : null
           // 送信元会社名を末尾2000字から抽出（候補者名でなくエージェント会社名）(#96)
           const sigAreaMulti = body.slice(-2000)
-          const preReMulti = /(?:株式会社|有限会社|合同会社|一般社団法人|一般財団法人)[　 ]?([^\s　の\n（(、。！【】「」]{2,30})/g
+          const preReMulti = new RegExp(`(?:${CORP_PREFIX_SRC})[　 ]?([^\\s　の\\n（(、。！【】「」]{2,30})`, 'g')
+          const preHeadMulti = new RegExp(`^(?:${CORP_PREFIX_SRC})`)
           let bestPreMulti: RegExpExecArray | null = null; let mMulti: RegExpExecArray | null
           const afterMulti = (t: string, i: number, l: number) => /^[\r\n　 ]*(?:様|御中|ご担当|担当者様)/.test(t.slice(i + l, i + l + 40))
           while ((mMulti = preReMulti.exec(sigAreaMulti)) !== null) { if (!afterMulti(sigAreaMulti, mMulti.index, mMulti[0].length)) bestPreMulti = mMulti }
-          const companyName = bestPreMulti ? sanitizeFromCompany(`${bestPreMulti[0].match(/株式会社|有限会社|合同会社|一般社団法人|一般財団法人/)?.[0]}${bestPreMulti[1]}`) : null
+          const companyName = bestPreMulti ? sanitizeFromCompany(`${bestPreMulti[0].match(preHeadMulti)?.[0] ?? ''}${bestPreMulti[1]}`) : null
           const ownDomain = 'i-voice.co.jp'
           if (emailDomain && emailDomain !== ownDomain && !emailDomain.includes('gmail') && !emailDomain.includes('yahoo') && !emailDomain.includes('outlook') && !emailDomain.includes('demo.invalid')) {
             const { haken, shokai } = extractLicenseNumbers(body)
