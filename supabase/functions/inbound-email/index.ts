@@ -2902,6 +2902,8 @@ async function extractWordText(base64: string): Promise<{ text: string; totalPro
             }
             // SpanCellベース勝者には経路コード50を付与（gridベースはUnified内で付与済み）
             if (skillYears['_extractMethod'] === undefined) skillYears['_extractMethod'] = 50
+            // 確定後に必ずフィルタ（40年超・ノイズ語除外。syGrid勝者の巨大値対策）
+            skillYears = filterSkillYears(skillYears)
             console.log(`[Word-skillYears-pick] grid=${countGrid} cells=${countCells} winner=${countCells >= countGrid ? 'cells' : 'grid'}`)
           }
           // Word内のハイパーリンク（Excelのrels解析相当・名簿リンク型検出用）
@@ -6947,6 +6949,9 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
           }
           // SpanCellベース勝者には経路コード50を付与（gridベースはUnified内で付与済み）
           if (skillYears['_extractMethod'] === undefined) skillYears['_extractMethod'] = 50
+          // 勝者が syGrid(未フィルタ)の場合、案件期間の単純合算で「Excel=60年」等の非現実的な
+          // 巨大値が残る実害があった（M.T型）。確定後に必ずフィルタを通し 40年超・ノイズ語を除外する。
+          skillYears = filterSkillYears(skillYears)
           firstJsonRows = jsonRows
           const winner = (syVisual && countVisual > 0) ? 'visual'
             : (syProject && countProject >= countGrid) ? 'project'
