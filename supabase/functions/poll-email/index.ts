@@ -277,6 +277,21 @@ function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' |
   // 件名だけで案件確定のパターン（HR判定前に先にチェック）
   if (/エンド直|直案件|直\s*案件|合う人材|ご紹介をお待ち|エンドユーザー.*直/.test(subject)) return 'project'
 
+  // 人材(要員)プロフィールの優先判定。
+  // 要員メールは「見合う案件がありましたらご紹介いただけますと幸いです」「単価：70万円」等、
+  // 案件判定パターン(/ご紹介いただけますと/・/単価：\d/)に一致する語を普通に含むため、これらだけで
+  // project 判定すると人材メールを案件と誤判定→スキップ→候補者0になる実害があった（alBee/1-r 要員）。
+  // 「氏名：＋最寄/所属/稼働」の個人プロフィールがあり、かつ案件固有の強いシグナル（案件名・必須スキル・
+  // 商流・勤務地・募集人数等）が無ければ、弱い案件パターンより候補者を優先する。
+  const hasCandidateProfile =
+    /(?:氏\s*名|お名前|ご氏名)[　\s]*[：:]/.test(plainBody) &&
+    /(最寄[　\s]*り?駅|最寄[　\s]*[：:]|所属[　\s]*[：:]|稼[働動][　\s]*[：:])/.test(plainBody)
+  const hasStrongProjectSignal =
+    /【案件|案件情報|案件のご紹介|案件ご紹介|開発案件/.test(subject) ||
+    /(案件名|必須スキル|募集人数|就業場所|勤務地|作業場所|参画時期|契約形態|商[\s　]*流|精[\s　]*算幅|清[\s　]*算幅)[　\s]*[：:]/.test(plainBody500) ||
+    /【商[\s　]*流】|【精[\s　]*算】|【人[\s　]*数】|【案件/.test(plainBody500)
+  if (hasCandidateProfile && !hasStrongProjectSignal) return 'candidate'
+
   // ルールベース案件判定（件名＋本文冒頭500文字）
   // → AI分類より前に実施し、明確な案件メールを確実に project と判定
   if (isProjectByRuleBase(subject, plainBody500)) return 'project'
@@ -780,6 +795,9 @@ async function dumpAttachmentsForQuery(
   const saved: string[] = []
   const errors: string[] = []
   let found = 0
+  let peekBody = ''
+  let peekAtt: string[] = []
+  let peekSubj = ''
   try {
     const refreshToken = await getRefreshToken(supabase, config)
     const { accessToken, newRefreshToken } = await getAccessToken(refreshToken)
@@ -792,12 +810,22 @@ async function dumpAttachmentsForQuery(
       // フィルタ無しで新しい順に列挙し、hasAttachments と query 一致はコード側で判定する（recover と同方式）。
       // 複数ページ辿って query 一致を探す（最大5ページ=1000件）。
       // 古いバックログ（未読）を探すため受信箱は「古い順」で辿る。ヒットしたら以降のページは打ち切る。
-      let url: string | null = [
-        `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages`,
-        '?$top=200',
-        '&$select=id,subject,from,hasAttachments,receivedDateTime',
-        '&$orderby=receivedDateTime asc',
-      ].join('')
+      // 受信箱は「未読のみ」で辿る（バッチ=incrementalと同じ集合。既読の古いメールに埋もれるのを防ぐ）。
+      // 削除済みは全件。
+      let url: string | null = folder === 'inbox'
+        ? [
+          `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages`,
+          '?$top=200',
+          '&$filter=isRead eq false',
+          '&$select=id,subject,from,hasAttachments,receivedDateTime',
+          '&$orderby=receivedDateTime asc',
+        ].join('')
+        : [
+          `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages`,
+          '?$top=200',
+          '&$select=id,subject,from,hasAttachments,receivedDateTime',
+          '&$orderby=receivedDateTime asc',
+        ].join('')
       const msgs: GraphMessage[] = []
       for (let page = 0; page < 15 && url; page++) {
         const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
@@ -809,7 +837,22 @@ async function dumpAttachmentsForQuery(
       const matched = msgs.filter(m => m.hasAttachments &&
         (`${m.subject ?? ''} ${m.from?.emailAddress?.address ?? ''}`.toLowerCase().includes(q)))
       console.log(`[dump] ${folder}: 検索ヒット${msgs.length}件 うち添付付き一致${matched.length}件`)
-      errors.push(`${folder}: hits=${msgs.length} matched=${matched.length} subjects=${matched.slice(0, 3).map(m => (m.subject ?? '').slice(0, 30)).join(' / ')}`)
+      // 一致メールの件名を全部（最大40）台帳に残す。どのフォルダ(受信箱/ゴミ箱)に何があるか確定できる。
+      for (const m of matched.slice(0, 40)) {
+        saved.push(`[${folder}] ${(m.subject ?? '').slice(0, 55)} @${(m.from?.emailAddress?.address ?? '').slice(0, 30)} ${m.receivedDateTime ?? ''}`)
+      }
+      errors.push(`${folder}: hits=${msgs.length} matched=${matched.length}`)
+      // peek: 先頭の一致メールを「処理せず」本文＋添付名だけ取得して見る（inbound を呼ばないので落ちない）
+      if (matched.length > 0 && peekBody === '') {
+        const m0 = matched[0]
+        const fr = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${m0.id}?$select=id,subject,from,body,hasAttachments`,
+          { headers: { Authorization: `Bearer ${accessToken}` } })
+        const fj = await fr.json().catch(() => ({}))
+        peekBody = String((fj.body?.content ?? '')).replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/[ \t]+/g, ' ').slice(0, 3000)
+        const attMeta = await fetchAttachmentManifest(accessToken, m0.id)
+        peekAtt = attMeta.map(a => `${a.name}(${a.odataType.replace('#microsoft.graph.', '')})`)
+        peekSubj = m0.subject ?? ''
+      }
       // タイムアウト回避: 一致メールのうち先頭2通だけ添付をDLする
       for (const [mi, m] of matched.slice(0, 2).entries()) {
         found++
@@ -837,7 +880,8 @@ async function dumpAttachmentsForQuery(
       type: 'dump-attach', model: 'no-ai', from_address: config.configKey,
       subject: `dump query="${query}"`, status: errors.length ? 'error' : 'success',
       error_message: errors.length ? errors.join(' | ').slice(0, 500) : null,
-      ai_result: { query, found, savedCount: saved.length, saved: saved.slice(0, 50) },
+      ai_result: { query, found, savedCount: saved.length, saved: saved.slice(0, 50),
+        peekSubj, peekAtt, peekBody },
     })
   } catch (e) {
     errors.push(String(e))
@@ -921,7 +965,8 @@ async function processQueryEmail(
       status: errors.length ? 'error' : 'success',
       error_message: reasons.join(' | ').slice(0, 500),
       ai_result: { query, subject: subjectHit, attachments: attNames, inboundCalls, reasons,
-        bodyHead: (email.body?.content ?? '').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/[ \t]+/g,' ').slice(0, 900) },
+        bodyHead: (email.body?.content ?? '').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/[ \t]+/g,' ').slice(0, 2500),
+        attManifest: attachments.map(a => a.name) },
     })
   } catch (e) { errors.push(String(e)) }
   return { account: config.configKey, subject: subjectHit, attachments: attNames, inboundCalls, errors }
