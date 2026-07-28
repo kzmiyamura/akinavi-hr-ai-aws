@@ -527,11 +527,12 @@ function filterSkillYears(sy){
   const COMPANY_NAME_RE = /株式会社|有限会社|合同会社|合資会社|事務所$|法人|財団|協会$|組合$|センター$|銀行$|信用金庫$/
   // 業務経歴テーブルの「工程」列見出し（要件定義/基本設計/...）・期間セクションのラベルは
   // スキル名ではなく、Excel添付テキストからの本文パターン誤マッチで拾われることがある
-  const PHASE_LABEL_RE = /^(要件|定義|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|受入試験|運用保守|期間|稼働月数|担当範囲|体制|担当|作業内容|業務内容|担当業務|経験技術|作業概要|能力指標|能力判断|得意技術・?分野|得意分野|チーム|人数|全体|規模)$/
+  const PHASE_LABEL_RE = /^(要件|定義|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|受入試験|運用保守|期間|稼働月数|担当範囲|体制|担当|作業内容|業務内容|担当業務|経験技術|作業概要|能力指標|能力判断|得意技術・?分野|得意分野|チーム|人数|全体|規模|開始時期|終了時期|開始|終了|プロジェクト名|チーム人数|ポジション|管理・教育|開発手法)$/
   // 日付・期間範囲がキーになっている場合を除外（例: "2022/2～2022/9", "2019年〜現在"）
   const DATE_RANGE_RE = /\d{4}[\/年]\d{1,2}/
-  // キー自体が「8ヶ月」等の期間表記そのものになっている自己参照的な誤マッチを除外
-  const SELF_DURATION_RE = /^\d+\s*[年ヶかカ]?[月]?$/
+  // キー自体が「8ヶ月」「0年8カ月」等の期間表記そのものになっている自己参照的な誤マッチを除外
+  // （K.F実害: 視覚エンジンが期間セル「0年8カ月」をスキルキーとして返した）
+  const SELF_DURATION_RE = /^(?:\d+\s*[年ヶかカヵ]?[月]?|\d+\s*年\s*\d+\s*[ヶかカヵ]?月)$/
   // Excelの壊れた数式参照（削除されたセル・シートを指す数式が残っている場合）はスキル名として無効
   const FORMULA_ERROR_RE = /^#(?:REF!|VALUE!|NAME\?|DIV\/0!|N\/A|NULL!|NUM!)$/
   // 「【言語】」「【DB】」「【FW】」等、隅付き括弧で囲まれたセクション見出しはスキル名として無効
@@ -793,7 +794,8 @@ function extractSkillYearsFromBodyText(text){
         // スペース/スラッシュ/読点で分割
         const parts = tm[1].split(/[\s　\/／,、・]+/)
         for (const p of parts) {
-          const s = p.replace(/[（(][^）)]*[）)]/g, '').trim()
+          // タグ直後の区切りコロンが先頭に残るケースを除去（「【ツール】：JIRA」→「JIRA」）
+          const s = p.replace(/[（(][^）)]*[）)]/g, '').replace(/^[：:]+/, '').trim()
           if (s.length >= 2 && s.length <= 40 && !/^\d+$/.test(s)) skills.push(s)
         }
       }
@@ -854,6 +856,11 @@ function extractSkillYearsFromBodyText(text){
         for (const dp of durPatterns) {
           const dm = segText.match(dp)
           if (dm) {
+            // 「リーダー経験8ヶ月」「テスト設計歴3年2ヶ月」等の自己申告（役割・スキル別の
+            // 経験期間）はブロックの参画期間ではないため採用しない（JQIT実害:
+            // ツール行のJIRA/slackに「リーダー経験8ヶ月」の8ヶ月が誤付与された）
+            const before = segText.slice(Math.max(0, (dm.index ?? 0) - 6), dm.index ?? 0)
+            if (/経験|歴/.test(before)) continue
             if (dp.toString().includes('年')) {
               blockMonths = parseInt(dm[1]) * 12 + parseInt(dm[2] ?? '0')
             } else {
@@ -1544,6 +1551,9 @@ function extractSkillYearsFromSheetData(data){
   {
     const BLOCK_PERIOD_LABEL = /^(期間|プロジェクト期間|PJ期間|参画期間|在籍期間)$/
     const BLOCK_SKILL_LABEL = /^(環境|開発環境|使用環境|技術環境|使用言語|言語|使用技術)$/
+    // ラベル同列下方の収集打ち切り: 別セクションのラベルが現れたら以降は文章セル等の
+    // 別セクション（K.F型実害: 「開発環境」の下の業務内容の文章がスキルとして混入）
+    const BLOCK_SECTION_STOP = /^(業務内容|開発手法|担当フェーズ|備考|心掛けたこと|アピールポイント|自己PR|ポジション|プロジェクト名)$/
     const normCell = (v) => String(v ?? '').split(/[\r\n]/)[0].replace(/[\s　]+/g, '').trim()
     // ブロックヘッダー行の検出: No.セルと期間セルが同一行に並ぶ
     const blockHeaderRows = []
@@ -1658,9 +1668,11 @@ function extractSkillYearsFromSheetData(data){
             if (v && !/環境|使用ソフト/.test(v)) {
               const cleaned = v.replace(/【[^】\n]*】/g, '\n')
               for (const line of cleaned.split(/[\r\n、，,\/／]+/)) {
-                const t = line.trim().replace(/^[・\-\s　]+/, '').trim()
+                const t = line.trim().replace(/^[・\-‐–—■●▼◆\s　]+/, '').trim()
                 if (!t || t.length < 2 || /^\d+$/.test(t)) continue
                 if (/[：:]\s*$/.test(t) || /^[（(][^）)]*[）)]$/.test(t) || /^[ｦ-ﾟ]+$/.test(t)) continue
+                // 文章断片（長文・句点・敬体）はスキルではない
+                if (t.length > 18 || /[。]/.test(t) || /(?:です|ます|ました|しました)$/.test(t)) continue
                 blockSkills.add(t)
               }
             }
@@ -1676,7 +1688,10 @@ function extractSkillYearsFromSheetData(data){
               if (String(row[j + 1] ?? '').trim()) candidates.push(String(row[j + 1]))
               for (let r2 = r + 1; r2 < bEnd; r2++) {
                 const v2 = String((data[r2] ?? [])[j] ?? '').trim()
-                if (v2) candidates.push(v2)
+                if (!v2) continue
+                // 同列下方に別セクションのラベルが現れたら収集を打ち切る
+                if (BLOCK_SECTION_STOP.test(normCell(v2))) break
+                candidates.push(v2)
               }
             } else {
               continue
@@ -1685,11 +1700,13 @@ function extractSkillYearsFromSheetData(data){
               // 【環境/ツール】のようなセクション見出しは "/" 分割で壊れる前に丸ごと除去する
               const cleaned = cand.replace(/【[^】\n]*】/g, '\n')
               for (const line of cleaned.split(/[\r\n、，,\/／]+/)) {
-                const t = line.trim().replace(/^[・\-\s　]+/, '').trim()
+                const t = line.trim().replace(/^[・\-‐–—■●▼◆\s　]+/, '').trim()
                 if (!t || t.length < 2 || /^\d+$/.test(t)) continue
                 if (/[：:]\s*$/.test(t)) continue          // 「能力指標：」等のラベル残骸
                 if (/^[（(][^）)]*[）)]$/.test(t)) continue  // 「(遠隔操作用)」等の注記のみ
                 if (/^[ｦ-ﾟ]+$/.test(t)) continue           // 半角カナのみ（ﾌﾘｶﾞﾅ等のフォームラベル）
+                // 文章断片（長文・句点・敬体）はスキルではない（K.F型: 業務内容の文章混入対策）
+                if (t.length > 18 || /[。]/.test(t) || /(?:です|ます|ました|しました)$/.test(t)) continue
                 blockSkills.add(t)
               }
             }

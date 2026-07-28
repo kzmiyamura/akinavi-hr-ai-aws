@@ -15,7 +15,7 @@
  *     FAIL を確認 → index.ts を修正 → PASS を確認（テストファースト）
  *   - index.ts 変更後は node scripts/sync_extractors.mjs を忘れずに
  */
-import { extractSkillYearsFromSheetData, scoreSkillQuality, gridToJsonRows, extractSkillYearsFromSheetJson } from './_extractors.gen.mjs'
+import { extractSkillYearsFromSheetData, scoreSkillQuality, gridToJsonRows, extractSkillYearsFromSheetJson, filterSkillYears } from './_extractors.gen.mjs'
 
 const verbose = process.argv.includes('-v')
 let pass = 0
@@ -501,6 +501,42 @@ console.log('=== K. looksLikeRosterName（1人スキルシートを名簿と誤�
   kr('K8: OH は人名', 'OH', true)
   kr('K9: カタカナ氏名(スペース区切り)は人名', 'タナカ タロウ', true)
   kr('K10: 外国人名 グエン は人名', 'グエン', true)
+}
+
+console.log('=== L. Method 1.7 KVブロック型: ラベル同列下方の文章セル混入（K.F型） ===')
+// 実害: 「開発環境」ラベルの同列下方に「開発手法」「業務内容」ラベル→業務内容の文章セルが
+// 並ぶテンプレートで、文章の断片（「また」「■主な業務内容」「‐ 不具合報告」等）が
+// スキル年数キーとして大量混入した（JQIT K.F 実メール）。
+// 同列下方の収集は別セクションラベルで打ち切り、文章セルを吸い込まないこと。
+t('L1: 開発環境ラベル下方の業務内容文章を吸い込まない',
+  [
+    ['No.', '期間', '', '開始時期', '～', '終了時期', 'プロジェクト名'],
+    ['1', '3年0カ月', '', '2023/1/1', '～', '2025/12/31', 'イベント評価'],
+    ['', '開発環境', '', 'OS', 'Windows10', '', ''],
+    ['', '', '', '言語', 'Java', '', ''],
+    ['', '開発手法', '', '', '', '', ''],
+    ['', '業務内容', '', '', '', '', ''],
+    ['', '【業務内容】\n　チケット販売用特設サイト/イベント用特設サイトの運用/VerUPの検証を担当\n　‐ 不具合報告／対応推進\n　■主な業務内容の整理', '', '', '', '', ''],
+  ],
+  // 文章断片が全て除去されるとブロック内の実スキルは Java 1件のみ → Method 1.7 の
+  // 「3件未満は誤発動とみなし委譲」ゲートにより不採用 = 空が正解（誠実な退化）。
+  // ゴミ（開発手法/‐ 不具合報告/■主な業務内容… 等）が1件でも入ったら FAIL になる。
+  {})
+
+console.log('=== M. filterSkillYears: 期間表記・期間ヘッダー語のキー除外（K.F視覚エンジン実害） ===')
+{
+  const fy = (label, input, expectKeys) => {
+    const got = Object.keys(filterSkillYears(input)).filter(k => !k.startsWith('_')).sort()
+    const ok = JSON.stringify(got) === JSON.stringify(expectKeys.sort())
+    if (ok) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       expect=${JSON.stringify(expectKeys)} got=${JSON.stringify(got)}`) }
+  }
+  // 実害: 視覚エンジンが期間セル「0年8カ月」・ヘッダー「終了時期」をスキルキーとして返した
+  fy('M1: 複合期間表記キーを除外', { '0年8カ月': 108, 'Java': 24 }, ['Java'])
+  fy('M2: 期間ヘッダー語キーを除外', { '終了時期': 108, '開始時期': 50, 'Python': 12 }, ['Python'])
+  fy('M3: 単純年・月表記キーを除外', { '3年': 36, '8ヶ月': 8, 'AWS': 24 }, ['AWS'])
+  fy('M4: 構造ヘッダー語キーを除外', { 'プロジェクト名': 40, 'チーム人数': 40, 'ポジション': 40, '管理・教育': 40, 'Go': 18 }, ['Go'])
+  fy('M5: 正規スキルは通す（回帰）', { 'テスト設計': 36, 'テスト実行': 49, 'C言語': 60 }, ['C言語', 'テスト実行', 'テスト設計'])
 }
 
 console.log(`\n📊 ${pass} passed / ${fail} failed（全${pass + fail}ケース）`)
