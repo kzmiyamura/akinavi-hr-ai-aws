@@ -4352,6 +4352,23 @@ type XlsxMerge = { s: { r: number; c: number }; e: { r: number; c: number } }
 type XlsxCell = { v?: unknown; w?: string }
 
 /**
+ * セル値をテキスト化する共通関数。
+ * 書式の無い日付セルは cellDates:true で Date オブジェクトになるが、String(Date) だと
+ * 「Sun Jun 01 2026」の英語文字列に、cellDates 無しだと生シリアル「46143」になり、
+ * 日付パーサ（2026/6・2026年6月・和暦のみ想定）が読めず期間が壊れる実害があった（M.T経歴書:
+ * Excel等が60年になる）。日付は必ず yyyy/M/d に正規化して全抽出経路(grid/cells/視覚)の入力を揃える。
+ */
+function cellToText(cell: XlsxCell | undefined): string {
+  if (!cell) return ''
+  const v = cell.v
+  if (v instanceof Date) {
+    const y = v.getUTCFullYear(), mo = v.getUTCMonth() + 1, d = v.getUTCDate()
+    if (y >= 1900 && y <= 2100) return `${y}/${mo}/${d}`
+  }
+  return String(cell.w ?? (v !== undefined ? v : '')).replace(/\r\n?/g, '\n').trim()
+}
+
+/**
  * SheetJS worksheet から直接 2D グリッド（string[][]）を生成する。
  * sheet_to_html → parseHtmlTableToGrid の代替。HTML 経由をなくして中間変換ノイズを除去。
  * 結合セルの左上セルのみ値を出力し、非左上セルはスキップ（jagged gridになる）。
@@ -4378,8 +4395,7 @@ function worksheetToGrid(sheet: Record<string, unknown>): string[][] {
         continue
       }
       const cell = sheet[encodeXlsxCell(r, c)] as XlsxCell | undefined
-      const val = String(cell?.w ?? (cell?.v !== undefined ? cell.v : '')).replace(/\r\n?/g, '\n').trim()
-      row.push(val)
+      row.push(cellToText(cell))
     }
     if (row.some(v => v)) grid.push(row)
   }
@@ -4530,7 +4546,7 @@ function worksheetToCells(sheet: Record<string, unknown>): SpanCell[] {
       const info = mergeInfo.get(`${r},${c}`)
       const rowEnd = info?.rowEnd ?? r
       const colEnd = info?.colEnd ?? c
-      const val = String(cell?.w ?? (cell?.v !== undefined ? cell.v : '')).replace(/\r\n?/g, '\n').trim()
+      const val = cellToText(cell)
       if (val) cells.push({ row: r, col: c, colEnd, rowEnd, value: val })
     }
   }
@@ -6486,6 +6502,11 @@ function extractSkillYearsFromCells(cells: SpanCell[], deadline = 0): Record<str
 
   // ── Step 2: 各ブロックから期間（月数）とスキルを抽出 ──
   const skillMonths: Record<string, number> = {}
+  // スキル別に「案件の暦区間」を集め、最後に union する（同一スキルが複数案件に跨っても
+  // 実カレンダー上の重複を二重計上しない）。開始/終了年月が取れないブロック（"1年"等の
+  // 期間のみ）は timeline に載せられないので looseMonths として別途加算する。
+  const skillIntervals: Record<string, [number, number][]> = {}
+  const skillLooseMonths: Record<string, number> = {}
   const projectPeriods: Array<{ startYM: number; endYM: number }> = []
   const DATE_RE = /(\d{2,4})[\/\-年](\d{1,2})/
   const SERIAL_MIN = 36526 // 2000-01-01
@@ -6794,8 +6815,15 @@ function extractSkillYearsFromCells(cells: SpanCell[], deadline = 0): Record<str
       }
     }
     for (const sub of blockSkillSet) {
-      skillMonths[sub] = (skillMonths[sub] ?? 0) + months
+      if (startYM && endYM) (skillIntervals[sub] ??= []).push([startYM, endYM])
+      else skillLooseMonths[sub] = (skillLooseMonths[sub] ?? 0) + months
     }
+  }
+
+  // スキル別に暦区間を union（重複期間の二重計上を排除）＋日付の無いブロックの期間を加算
+  for (const sub of new Set([...Object.keys(skillIntervals), ...Object.keys(skillLooseMonths)])) {
+    const unioned = skillIntervals[sub]?.length ? unionIntervalMonths(skillIntervals[sub]) : 0
+    skillMonths[sub] = unioned + (skillLooseMonths[sub] ?? 0)
   }
 
   if (Object.keys(skillMonths).length === 0) return {}
@@ -6831,7 +6859,7 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
       read: (data: Uint8Array, opts: { type: 'array' }) => { SheetNames: string[]; Sheets: Record<string, unknown> }
     }
     const bytes = base64ToUint8Array(base64)
-    const workbook = XLSX.read(bytes, { type: 'array' })
+    const workbook = XLSX.read(bytes, { type: 'array', cellDates: true })
     const PRIORITY_KEYWORDS = ['スキル', '経歴', '職務', 'スキルシート', 'skill', 'career', 'profile', '人材']
     // 「〜（入力後に非表示）」「チェックリスト」等、作成者向けの記入補助・確認用シートは
     // 候補者の実データを含まない（テンプレートの選択肢例や別人の記入例が残っていることがある）ため除外する。

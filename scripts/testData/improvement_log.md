@@ -279,3 +279,10 @@
 - **メモ**: looksLikeRosterName: データベース/ネットワーク等カタカナ分類語を人名判定から除外。1人スキルシート(Y.M_沼津.xlsx)を名簿誤検出しゴミ候補者化＋本物添付のresume_url欠落を招く事故を修正。K1-K10テスト追加
 
 ---
+
+## 2026-07-28 イテレーション（自動記録）
+- **Excel skillYears**: 100.0%（Pass:11 Warn:4 Fail:0/15）
+- **Body skillYears**: 100.0%（Pass:3 Warn:0 Fail:0/3）
+- **メモ**: cells(method50)をunion化: 案件跨ぎの同一スキル月数を単純加算→暦区間unionで二重計上を解消(M.T Excel 7.6→6.4年)。cellToText共通化+cellDates:trueで書式無し日付セルを yyyy/M/d に統一。sync stripper: new Set<T>()破損修正+custom型パラメータ対応。cells系抽出関数をgenに追加(検証可能化)
+
+---

@@ -32,6 +32,10 @@ const TARGET_FUNCTIONS = [
   'extractSkillYearsFromBodyText',
   'extractSkillYearsFromSheetData',
   'looksLikeRosterName',
+  'extractSkillYearsFromCells',
+  'extractSkillYearsPeriodHeader',
+  'extractSkillYearsRepeatPeriodHeader',
+  'extractSkillYearsCircledNum',
 ]
 
 // ── TypeScript → JavaScript 簡易変換 ──────────────────────────────
@@ -141,7 +145,14 @@ function stripTs(code) {
             else if (code[j] === '\n') break  // 行を跨ぐ比較演算子等は対象外
           }
           if (depth === 0 && code[j - 1] === '>') {
-            code = code.slice(0, idx) + '__REMOVED_TYPE__' + code.slice(j)
+            // `new Set<string>()` 等のコンストラクタ呼び出しでは型引数だけ落として
+            // クラス名は残す（型注釈位置なら従来どおり __REMOVED_TYPE__ に置換して後段で除去）
+            const before = code.slice(0, idx).trimEnd()
+            if (/\bnew$/.test(before)) {
+              code = code.slice(0, idx) + name + code.slice(j)
+            } else {
+              code = code.slice(0, idx) + '__REMOVED_TYPE__' + code.slice(j)
+            }
             changed = true
           } else {
             idx += name.length
@@ -180,7 +191,8 @@ function stripTs(code) {
   code = code.replace(/(\b\w+)\s*:\s*number\[\](?=\s*[,)=])/g, '$1')
   // ユニオン型 string | null 等
   code = code.replace(/(\b\w+)\s*:\s*(?:string|number|boolean)\s*\|\s*(?:string|number|boolean|null|undefined)(?=\s*[,)=])/g, '$1')
-
+  // 5b. カスタム型（大文字始まりクラス名）パラメータ: SpanCell[] / XlsxCell | undefined 等
+  code = code.replace(/(\b\w+)\s*:\s*[A-Z]\w*(?:\[\])*(?:\s*\|\s*(?:[A-Z]\w*(?:\[\])*|null|undefined))*(?=\s*[,)=])/g, '$1')
   // 6. 変数型注釈 let/const x: Type  (= あり・なし両方)
   //    シンプルな型 + ユニオン型 + 大文字始まりクラス名 + 空オブジェクト
   code = code.replace(/\b(const|let|var)\s+(\w+)\s*:\s*(?:[A-Z]\w*(?:\s*\|\s*\w+)*|[\w[\]]+(?:\s*\|\s*[\w[\]]+)*)\s*(?=[=\n;])/g, '$1 $2')
