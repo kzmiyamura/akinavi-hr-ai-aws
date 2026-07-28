@@ -286,3 +286,10 @@
 - **メモ**: cells(method50)をunion化: 案件跨ぎの同一スキル月数を単純加算→暦区間unionで二重計上を解消(M.T Excel 7.6→6.4年)。cellToText共通化+cellDates:trueで書式無し日付セルを yyyy/M/d に統一。sync stripper: new Set<T>()破損修正+custom型パラメータ対応。cells系抽出関数をgenに追加(検証可能化)
 
 ---
+
+## 2026-07-28 イテレーション（自動記録）
+- **Excel skillYears**: 100.0%（Pass:11 Warn:4 Fail:0/15）
+- **Body skillYears**: 100.0%（Pass:3 Warn:0 Fail:0/3）
+- **メモ**: 多人数メールの名無しブロック(署名等)が添付から兄弟の名前を拾い既存候補者をnull上書きする汚染を修正(スキップ+UPDATEマージ化)。会社名サニタイズに「で御座います」漢字対応。駅名「路線 駅 X」逆順対応。poll-emailロック未解放修正
+
+---

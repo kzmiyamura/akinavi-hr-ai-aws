@@ -1241,6 +1241,12 @@ Deno.serve(async (req: Request) => {
       }
     }
     await supabase.from('app_config').upsert({ key: LOCK_KEY, value: new Date().toISOString() }, { onConflict: 'key' })
+    // ロック解放ヘルパー: 早期 return する全経路で必ず呼ぶこと。
+    // （procquery/dumpatt/paused の早期 return がロックを残し、次回実行が最大8分間
+    //  LOCKED でスキップされる実害があった）
+    const releaseLock = async () => {
+      await supabase.from('app_config').delete().eq('key', LOCK_KEY)
+    }
 
     console.log('[poll-email] 開始')
 
@@ -1254,6 +1260,7 @@ Deno.serve(async (req: Request) => {
     // 一時停止中はスキップ
     if (mode === 'paused') {
       console.log('[poll-email] 一時停止中のためスキップ')
+      await releaseLock()
       return new Response(
         JSON.stringify({ ok: true, mode: 'paused', totalProcessed: 0, totalErrors: [], summary: [] }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -1267,6 +1274,7 @@ Deno.serve(async (req: Request) => {
       const humanProd = POLL_CONFIGS.find(c => c.configKey === 'graph_rt_human_prod')!
       const r = await processQueryEmail(supabase, humanProd, query)
       await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
+      await releaseLock()
       return new Response(JSON.stringify({ ok: true, mode: 'procquery', result: r }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
@@ -1286,6 +1294,7 @@ Deno.serve(async (req: Request) => {
           if (paths.length) { await supabase.storage.from('attachments').remove(paths); removed.push(...paths) }
         }
         await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
+        await releaseLock()
         return new Response(JSON.stringify({ ok: true, mode: 'cleanup', removed }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
       }
@@ -1295,6 +1304,7 @@ Deno.serve(async (req: Request) => {
       }
       // 1回きり。実行後は incremental に戻す
       await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
+      await releaseLock()
       return new Response(
         JSON.stringify({ ok: true, mode: 'dumpatt', query, results: dumpResults }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },

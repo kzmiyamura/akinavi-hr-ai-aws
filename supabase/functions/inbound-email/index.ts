@@ -356,15 +356,17 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
   // 「の」なし・漢字姓+丁寧表現: 「株式会社イチアール小島でございます」→「株式会社イチアール」
   // ※ 法人格+会社名(2文字以上)の後に1〜4文字の漢字姓+丁寧表現が続くパターン
   {
-    const politePersonM = trimmed.match(new RegExp(`^((?:${CORP_PREFIX_SRC}).{2,}?)[一-龯々]{1,4}(?:でございます|です|と申します|でした)`))
+    // 「で御座います」（漢字表記）も対象（実害: 「株式会社JQIT営業部で御座います」が
+    // 挨拶文からそのまま from_company に入った）
+    const politePersonM = trimmed.match(new RegExp(`^((?:${CORP_PREFIX_SRC}).{2,}?)[一-龯々]{1,4}(?:で(?:ございます|御座います|ご座います)|です|と申します|でした)`))
     if (politePersonM) trimmed = politePersonM[1]
   }
   // 「の〇〇でございます」「の〇〇です」等が残っていれば除去（の付きのフォールバック）
-  trimmed = trimmed.replace(/の[^\s　]{1,15}(?:でございます|です|と申します|でした).*$/, '')
+  trimmed = trimmed.replace(/の[^\s　]{1,15}(?:で(?:ございます|御座います|ご座います)|です|と申します|でした).*$/, '')
   // 法人格の直後がいきなり短い漢字姓＋強い丁寧表現 = 会社名が無く送信者の自己紹介を拾っている
   //（例:「株式会社小川でございます」= 小川さんの挨拶。実会社名が無いので null。1-r.co.jp 実害）。
   // でございます/と申します/でした は個人の自己紹介専用表現でカタカナ社名等には付かないため安全。
-  if (new RegExp(`^(?:${CORP_PREFIX_SRC})[一-龯々]{1,3}(?:でございます|と申します|でした)`).test(trimmed)) return null
+  if (new RegExp(`^(?:${CORP_PREFIX_SRC})[一-龯々]{1,3}(?:で(?:ございます|御座います|ご座います)|と申します|でした)`).test(trimmed)) return null
   // 前株パターン: 法人格 + 会社名（英語2単語名「Knowledge Technologies」にも対応）
   // ただし「株式会社ヘルスベイシス https://...」のように直後にURLが続く場合、
   // urlの先頭語（https等）を会社名の一部として誤って取り込まないよう除外する
@@ -2054,6 +2056,9 @@ function extractCandidateFieldsRegex(
       const c = v.replace(/（[^）]*）.*$/, '').trim()
       // セクション見出しと判定されるラベルは駅名として拒否（#58）
       if (/^(自己PR|PR|アピール|強み|備考|補足|資格|スキル|経験|氏名|年齢|性別|国籍|連絡先|住所|現住所|職歴|学歴|希望|稼働|単価|単金|ご担当|担当者|得意)/.test(c)) return false
+      // 「<路線名> 駅 <駅名>」の順序逆転テンプレートも許容（後処理で駅名部分を取り出す）
+      // 例: 「横浜市営地下鉄ブルーライン　駅 三ツ沢下町」
+      if (/(?:線|ライン)[　 ]+駅[　 ]*[^\x00-\x7F]/.test(c)) return true
       return /[駅線]$/.test(c) || (c.length <= 10 && /[^\x00-\x7F]/.test(c))
     },
     30,
@@ -2084,6 +2089,10 @@ function extractCandidateFieldsRegex(
     // 「線『駅名』」形式（例:「JR総武線「市川」」「山手線「浜松町」」）: カギ括弧内を駅名候補として取り出す
     const kagiMatch = nearestStation.match(/線[「『]([^」』]{1,10})[」』]/)
     if (kagiMatch) nearestStation = kagiMatch[1]
+    // 「<路線名> 駅 <駅名>」形式（「駅」の語が路線名と駅名の間に挟まる逆順テンプレート）:
+    // 例: 「横浜市営地下鉄ブルーライン　駅 三ツ沢下町」→「三ツ沢下町」
+    const ekiMiddleMatch = nearestStation.match(/^.*?(?:線|ライン)[　 ]+駅[　 ]*([^\s　]{1,12})$/)
+    if (ekiMiddleMatch) nearestStation = ekiMiddleMatch[1]
     // 路線名スラッシュ・中点区切りを除去: 「JR京浜東北線／蕨駅」「西武池袋線・東長崎駅」→「蕨駅」「東長崎駅」
     nearestStation = nearestStation.replace(/^.+[/／・]/, '').trim()
     // 「最寄：北13条東駅」のようにコロン区切りで前半がラベルの場合、後半だけ取る
@@ -9183,6 +9192,24 @@ Deno.serve(async (req: Request) => {
             if (blockResolvedName === '不明' && blockRegexFields.name == null) {
               continue
             }
+            // 本文に名前が無いブロック（署名・宣伝等）がケースC（全添付共有フォールバック）で
+            // 添付テキストから兄弟ブロックの名前を拾って「同一人物」と誤解決すると、
+            // 正しく登録済みの候補者を添付のみ由来の劣化データ（単価・年齢・稼働がnull）で
+            // UPDATE 上書きしてしまう（実例: JQIT 2名連名メールのフッター【LAbel】宣伝文が
+            // 候補者ブロック判定を通過 → 添付Excelの「氏名：K.F」を拾い、本文由来の
+            // 単価52万・年齢28・稼働即日等を全て null で潰した）。
+            // 本文由来の名前が無く、解決名が他ブロックの本文名 or 同一バッチ処理済み名と
+            // 一致する場合は添付由来の汚染とみなしてスキップする。
+            if (blockMetas[blockIdx].name == null && !matchedTextContent) {
+              const normalizeAZ = (s: string) => s.replace(/[Ａ-Ｚａ-ｚ０-９]/g, c =>
+                String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+              const dupOfSibling = blockMetas.some((m, i) =>
+                i !== blockIdx && m.name != null && normalizeAZ(m.name) === blockResolvedName)
+              if (dupOfSibling || batchNameToId.has(blockResolvedName)) {
+                console.log(`[multi-candidate] 名無しブロックが兄弟の名前 "${blockResolvedName}" に解決 → 添付汚染とみなしスキップ`)
+                continue
+              }
+            }
             const blockRemoteAvailable = blockProseFields.workStyle === 'フルリモート'
               || blockProseFields.workStyle === 'リモート可'
               || blockProseFields.workStyle === 'リモート希望'
@@ -9468,13 +9495,26 @@ Deno.serve(async (req: Request) => {
 
             let blockSavedId: string
             if (blockExistingId) {
+              // 既存 raw_profile を取得し、今回 null/undefined の項目は既存値を保持するマージを行う。
+              // 後続ブロックや添付分割モードの兄弟呼び出しが持つ劣化データ（本文ブロック無しで
+              // 単価・年齢・駅等が取れていない）が、先に確定した正しい値を null で潰すのを防ぐ。
+              const { data: existingRow } = await supabase
+                .from('candidates').select('raw_profile')
+                .eq('id', blockExistingId).maybeSingle()
+              const existingRp = (existingRow?.raw_profile ?? {}) as Record<string, unknown>
+              const mergedRp: Record<string, unknown> = { ...(blockPayload.raw_profile as Record<string, unknown>) }
+              for (const [k, v] of Object.entries(existingRp)) {
+                if (mergedRp[k] == null && v != null) mergedRp[k] = v
+              }
               const blockUpdatePayload: Record<string, unknown> = {
-                skills: blockSkillNames,
-                raw_profile: blockPayload.raw_profile,
-                experience_years: blockPayload.experience_years,
-                desired_rate: blockRegexFields.desiredRate ?? null,
+                raw_profile: mergedRp,
                 created_at: new Date().toISOString(),
               }
+              // skills / experience_years / desired_rate は「今回取れたときだけ」上書き
+              //（null・空配列で既存の確定値を上書きしない）
+              if (blockSkillNames.length > 0) blockUpdatePayload.skills = blockSkillNames
+              if (blockPayload.experience_years != null) blockUpdatePayload.experience_years = blockPayload.experience_years
+              if (blockRegexFields.desiredRate) blockUpdatePayload.desired_rate = blockRegexFields.desiredRate
               // resume_url の扱い:
               // - このブロックで添付がマッチした（blockResumeUrl!=null）→ 常に上書き
               // - マッチ無し（null）→ 既存を「保持」する（キーを payload に含めない）。
