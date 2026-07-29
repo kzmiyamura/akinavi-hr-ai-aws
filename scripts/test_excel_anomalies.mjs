@@ -15,7 +15,7 @@
  *     FAIL を確認 → index.ts を修正 → PASS を確認（テストファースト）
  *   - index.ts 変更後は node scripts/sync_extractors.mjs を忘れずに
  */
-import { extractSkillYearsFromSheetData, scoreSkillQuality, gridToJsonRows, extractSkillYearsFromSheetJson, filterSkillYears } from './_extractors.gen.mjs'
+import { extractSkillYearsFromSheetData, scoreSkillQuality, gridToJsonRows, extractSkillYearsFromSheetJson, filterSkillYears, extractSkillYearsFromBodyText } from './_extractors.gen.mjs'
 
 const verbose = process.argv.includes('-v')
 let pass = 0
@@ -544,6 +544,38 @@ console.log('=== M. filterSkillYears: 期間表記・期間ヘッダー語のキ
   // 実害: prod実データに「経験年数：」「IT経験年数」「業界経験年数」「総経験年数」等の
   // 総経験ラベルキーが15件残存していた（旧コード産）。剥がし残骸（IT/総/業界）も出さないこと
   fy('M8: 総経験ラベルキーは丸ごと除外', { '経験年数：': 156, 'IT経験年数': 206, '業界経験年数': 180, '総経験年数': 252, 'Ruby': 12 }, ['Ruby'])
+}
+
+console.log('=== N. extractSkillYearsFromBodyText: 本文の年数パターン（IM実メール #123） ===')
+{
+  const bt = (label, text, expect) => {
+    const got = extractSkillYearsFromBodyText(text)
+    const gotSkills = Object.fromEntries(Object.entries(got).filter(([k]) => !k.startsWith('_')))
+    const ok = Object.keys(gotSkills).length === Object.keys(expect).length
+      && Object.entries(expect).every(([k, v]) => gotSkills[k] === v)
+    if (ok) { pass++; if (verbose) console.log(`  PASS ${label}`, JSON.stringify(gotSkills)) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       expect=${JSON.stringify(expect)} got=${JSON.stringify(gotSkills)}`) }
+  }
+  // 実害(#123): アリュートIMメール「・JAVA10年以上 (spring、seaser2、SAstrutsなど)」が
+  // スキル名と数字の間にスペースがなく patternBullet で拾えなかった
+  bt('N1: 箇条書き・名前と年数が密着（・JAVA10年以上）',
+    '■スキル概要：\n・エンジニア歴12年\n・JAVA10年以上 (spring、seaser2、SAstrutsなど)\n・工程に関しては基本設計から対応可能',
+    { JAVA: 120 })
+  // 実害(#123): 「メイン言語のJavaは10年近くの実績がございます」の自然文
+  bt('N2: 自然文「Javaは10年近くの実績」',
+    'メイン言語のJavaは10年近くの実績がございます。',
+    { Java: 120 })
+  bt('N3: 自然文「Pythonも3年以上の経験」',
+    '直近ではPythonも3年以上の経験があります。',
+    { Python: 36 })
+  // 誤爆防止: 単なる「Windows10」等の製品名+数字は年ラベルなしなら拾わない
+  bt('N4: 製品名+数字のみは拾わない',
+    '・Windows10、CentOS7 の環境構築\n・Oracle19c の運用',
+    {})
+  // 既存パターンの回帰: スペースありの箇条書きは従来どおり
+  bt('N5: 既存の箇条書き（スペースあり）回帰',
+    '● Java　5年\n・Python　3年',
+    { Java: 60, Python: 36 })
 }
 
 console.log(`\n📊 ${pass} passed / ${fail} failed（全${pass + fail}ケース）`)

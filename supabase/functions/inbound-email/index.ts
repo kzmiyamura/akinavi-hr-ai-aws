@@ -596,6 +596,28 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
     }
   }
 
+  // パターン4b: 箇条書きでスキル名と年数が密着している形「・JAVA10年以上」(#123)
+  // 英字スキル名に限定（日本語だと名詞と数字の境界が曖昧で誤爆するため）。
+  // 「・Windows10、」のような製品名+数字は直後に「年」が続かないため誤爆しない
+  const patternBulletTight = /^[●•・▪▶◆■○◇►➤※→]\s*([A-Za-z][A-Za-z+#.]{1,19}?)[　 ]*([0-9０-９]{1,2})年(?:以上|超|近く|程度|弱|強)?/gm
+  while ((m = patternBulletTight.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const yrs = parseInt(m[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+    if (!isNaN(yrs) && yrs >= 1 && yrs <= 40 && !isNonSkill(name) && !(name in result)) {
+      result[name] = yrs * 12
+    }
+  }
+
+  // パターン2b: 自然文「Javaは10年近くの実績」「Pythonも3年以上の経験」(#123)
+  const patternProseExp = /([A-Za-z][A-Za-z+#.]{1,19})(?:は|も)\s*約?([0-9０-９]{1,2})年(?:近く|超|以上|程度|弱|強)?の(?:実績|経験)/g
+  while ((m = patternProseExp.exec(text)) !== null) {
+    const name = cleanSkillName(m[1])
+    const yrs = parseInt(m[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
+    if (!isNaN(yrs) && yrs >= 1 && yrs <= 40 && !isNonSkill(name)) {
+      result[name] = Math.max(result[name] ?? 0, yrs * 12)
+    }
+  }
+
   // パターン5: 「スキル名　N年」行（行末が年数・タブ/全角スペース区切り）
   // Word職務経歴書の表形式テキスト化で見られる「Java\t5年」「Python　3年以上」
   // 誤爆防止: 行頭がスキル名のみ（先行テキストなし）かつ後続に余分なテキストがない行に限定
