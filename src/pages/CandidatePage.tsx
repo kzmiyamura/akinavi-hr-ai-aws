@@ -14,6 +14,7 @@ import type { DataEnv } from '../lib/dataEnv'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
 import { DemoMatchingTestPanel } from '../components/DemoMatchingTestPanel'
 import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../lib/fileParser'
+import { findSkillMonths } from '../lib/skillYearsMatch'
 
 interface SkillsByCategory {
   languages: string[]
@@ -235,14 +236,7 @@ export function CandidateProfileFields({
   const agentInfo = emailDomain && agentDomainMap ? agentDomainMap.get(emailDomain) : null
 
   function getSkillMonths(skill: string): number | null {
-    if (!skillYears) return null
-    const lower = skill.toLowerCase().replace(/\s/g, '')
-    for (const [k, v] of Object.entries(skillYears)) {
-      if (k === '_totalProjectMonths') continue
-      const kl = k.toLowerCase().replace(/\s/g, '')
-      if (kl === lower || kl.includes(lower) || lower.includes(kl)) return v
-    }
-    return null
+    return findSkillMonths(skillYears, skill)
   }
 
   function monthsToLabel(months: number): string {
@@ -1012,11 +1006,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
       const skillYears = (c.raw_profile as Record<string, unknown>)?.skillYears as Record<string, number> | null | undefined
       if (!skillYears) return false
       return syFilters.every(({ skill, minYears }) => {
-        const lower = skill.toLowerCase().replace(/\s/g, '')
-        const months = Object.entries(skillYears).find(([k]) => {
-          const kl = k.toLowerCase().replace(/\s/g, '')
-          return kl === lower || kl.includes(lower) || lower.includes(kl)
-        })?.[1] ?? null
+        const months = findSkillMonths(skillYears, skill)
         return months != null && months >= minYears * 12
       })
     })

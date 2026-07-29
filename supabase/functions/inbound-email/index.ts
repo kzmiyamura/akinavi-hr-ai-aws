@@ -412,8 +412,8 @@ function normalizeShaNum(raw: string): string {
 function parseEmploymentValue(val: string): { commercialFlow: string | null; employmentType: string | null } {
   let commercialFlow: string | null = null
   let employmentType: string | null = null
-  // 商流: N社先（漢数字/全角対応）
-  const nShaM = val.match(/([0-9０-９一二三四五六七八九十]+)[　 ]*社先/)
+  // 商流: N社先/N社下/N次請け（漢数字/全角対応）。「一社下正社員」=1社挟んだ先の正社員
+  const nShaM = val.match(/([0-9０-９一二三四五六七八九十]+)[　 ]*(?:社[先下]|次請)/)
   if (nShaM) commercialFlow = `${normalizeShaNum(nShaM[1])}社先`
   // 雇用形態（SES→正社員に開く。N社先社員/正社員→正社員）
   if (/フリー(?:ランス)?|個人事業/.test(val)) employmentType = 'フリーランス'
@@ -442,7 +442,7 @@ function extractEmploymentType(bodyText: string, attachText: string): { commerci
   }
   // ラベルなし（文脈パターン）
   // 商流表現（弊社=自社／N社先）は文脈からも拾う
-  const ctxNSha = t.match(/([0-9０-９一二三四五六七八九十]+)[　 ]*社先[　 ]*(正社員|社員|フリー(?:ランス)?)?/)
+  const ctxNSha = t.match(/([0-9０-９一二三四五六七八九十]+)[　 ]*社[先下][　 ]*(正社員|社員|フリー(?:ランス)?)?/)
   if (ctxNSha) {
     const flow = `${normalizeShaNum(ctxNSha[1])}社先`
     const form = ctxNSha[2] ? (/フリー/.test(ctxNSha[2]) ? 'フリーランス' : '正社員') : null
