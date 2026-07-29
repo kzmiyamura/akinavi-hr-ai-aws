@@ -5763,8 +5763,15 @@ function filterSkillYears(sy: Record<string, number>): Record<string, number> {
   // （経歴書の「担当業務」自由記述欄によくある環境見出しパターン）
   const BRACKET_HEADER_RE = /^【[^】]{1,10}】$/
   const result: Record<string, number> = {}
-  for (const [k, v] of Object.entries(sy)) {
-    if (k.startsWith('_')) { result[k] = v; continue }
+  for (const [kRaw, v] of Object.entries(sy)) {
+    if (kRaw.startsWith('_')) { result[kRaw] = v; continue }
+    // 「経験年数」「IT経験年数」「総経験年数」等の総経験ラベルキーはスキルではない
+    // （prod実データで15件確認。剥がすと「IT」「総」等の無意味な残骸になるため丸ごと落とす）
+    if (/^(?:IT|ＩＴ|業界|総|通算|開発|実務|業務)?経験年数[：:]?$/.test(kRaw.replace(/[　 ]/g, ''))) continue
+    // 「QAエンジニア　経験年数」のように見出し語が末尾に連結された複合キーは
+    // スキル名部分だけ残す（Excelセル「<職種> 経験年数」＋期間セルの組で発生する実害）。
+    // 剥がして空になるキー（「経験年数」単独等）は元のまま後段の PERSONAL_INFO_RE で落とす
+    const k = kRaw.replace(/[　 ]*(?:の)?(?:業務|実務)?経験年数[　 ]*$/, '').trim() || kRaw
     // 単一スキルの経験月数が40年(480ヶ月)を超えるのは非現実的。
     // 「工程」列見出しや期間セルの取り違えでブロック内の全ラベルに同じ
     // 巨大な月数が誤って割り当てられるケース（SQL:518ヶ月＝43年等）を弾く
@@ -5803,7 +5810,8 @@ function filterSkillYears(sy: Record<string, number>): Record<string, number> {
     const openParens = (k.match(/[（(]/g) ?? []).length
     const closeParens = (k.match(/[）)]/g) ?? []).length
     if (openParens !== closeParens) continue
-    result[k] = v
+    // 見出し語剥がしで既存キーと衝突した場合は最大値を採用
+    result[k] = Math.max(result[k] ?? 0, v)
   }
   return result
 }
@@ -9402,8 +9410,11 @@ Deno.serve(async (req: Request) => {
                   // ※ blockAttachText はこのブロック（本人）専用に確実にマッチした添付（matchedTextContent）の
                   //   場合のみ含める。ケースB/C（未割当添付の共有プール・全添付フォールバック）では
                   //   他人の経歴書の文章から年数を誤って拾ってしまうため対象外にする
+                  // ※ 件名は全ブロック共通のため対象外にする（「【グループ要員】PMO(約6年7ヶ月)/…」の
+                  //   ような件名から PMO:72 が名簿展開の兄弟候補者全員に誤付与された実害）
                   const bodyYears = extractSkillYearsFromBodyText(
-                    blockRegexBodyText + (matchedTextContent ? '\n' + blockAttachText : '')
+                    decodeHtmlEntities([block, blockAttachLabel].join('\n'))
+                      + (matchedTextContent ? '\n' + blockAttachText : '')
                   )
                   // 優先順位: bodyYears < nameYears < Excel（後が上書き）
                   // 保存直前に必ずゴミフィルタを通す（抽出経路がgrid/cells/視覚/本文いずれでも、
