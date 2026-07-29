@@ -2488,7 +2488,7 @@ function extractSkillYearsFromCells(cells, deadline = 0){
 
 // ── extractSkillYearsPeriodHeader ──
 function extractSkillYearsPeriodHeader(sorted){
-  const periodHeader = sorted.find(c => /^期間$/.test(c.value.trim()))
+  const periodHeader = sorted.find(c => /^期間$/.test(c.value.replace(/[　 ]/g, '')))  // 「期　間」（全角スペース入り）対応
   if (!periodHeader) return {}
 
   // 同列(c.col === periodHeader.col)の下に数字(1,2,3...)があるか確認
@@ -2496,7 +2496,7 @@ function extractSkillYearsPeriodHeader(sorted){
 
   // R.O 型: 同じ列に「期間」ヘッダーが複数回繰り返す（各プロジェクトが独自ヘッダーを持つ）
   const allPeriodHeaders = sorted.filter(c =>
-    /^期間$/.test(c.value.trim()) && c.col === periodCol
+    /^期間$/.test(c.value.replace(/[　 ]/g, '')) && c.col === periodCol
   ).sort((a, b) => a.row - b.row)
   if (allPeriodHeaders.length >= 2) {
     return extractSkillYearsRepeatPeriodHeader(sorted, allPeriodHeaders)
@@ -2521,7 +2521,7 @@ function extractSkillYearsPeriodHeader(sorted){
 
   // 「期間」列のヘッダー位置（OMT型: 小数値が入る "期間" 列）
   const durationHeaderCell = headerRowCells.find(c =>
-    /^期間$/.test(c.value.trim()) && c !== periodHeader
+    /^期間$/.test(c.value.replace(/[　 ]/g, '')) && c !== periodHeader
   )
 
   const skillMonths= {}
@@ -2685,13 +2685,15 @@ function extractSkillYearsRepeatPeriodHeader(sorted, periodHeaders){
     let startYM = null
     let endYM = null
 
-    // ① 明示的な "X年Yヶ月" / "Xヶ月"
+    // ① 明示的な "X年Yヶ月" / "Xヶ月" / "X年"（K_M型: 月なしの年単位表記）
     for (const bc of blockCells) {
       const v = bc.value.trim()
       const dm = v.match(/(\d+)年(\d+)[ヵヶか]月/)
       if (dm) { months = parseInt(dm[1]) * 12 + parseInt(dm[2]); break }
       const mm = v.match(/^(\d+)[ヵヶか]月$/)
       if (mm) { months = parseInt(mm[1]); break }
+      const ym = v.match(/^(\d{1,2})年$/)
+      if (ym) { months = parseInt(ym[1]) * 12; break }
     }
     // ② シリアル日付（SheetJS が M/D/YY にフォーマットした日付も対象）
     if (!months) {
@@ -2704,6 +2706,13 @@ function extractSkillYearsRepeatPeriodHeader(sorted, periodHeaders){
         if (mdyM) {
           const y = parseInt(mdyM[3]) < 100 ? (parseInt(mdyM[3]) < 50 ? 2000 + parseInt(mdyM[3]) : 1900 + parseInt(mdyM[3])) : parseInt(mdyM[3])
           return y >= 1990 && y <= 2040
+        }
+        // テキスト年月形式: "2020/04" "2020-4" "2020年4月"（K_M型実害: フィルターが弾いて
+        // parseSerial に届かずブロック丸ごと欠落した）
+        const ymM = v.match(/^(\d{4})[\/\-年.](\d{1,2})月?$/)
+        if (ymM) {
+          const y = parseInt(ymM[1]); const mo = parseInt(ymM[2])
+          return y >= 1990 && y <= 2040 && mo >= 1 && mo <= 12
         }
         return false
       })
@@ -2722,7 +2731,7 @@ function extractSkillYearsRepeatPeriodHeader(sorted, periodHeaders){
     if (startYM && endYM) projectPeriods.push({ startYM, endYM })
 
     // スキルの抽出: 「【言語】\n...\n【OS】\n...」形式
-    const ENV_LBL_RE = /^【(言語|OS|FW|フレームワーク|ツール|DB|データベース|ミドルウェア|クラウド|インフラ|その他|NW)】/
+    const ENV_LBL_RE = /^【(言語|OS|FW|フレームワーク|ツール|DB|データベース|ミドルウェア|クラウド|インフラ|その他|NW|環境|開発環境|サーバー?)】/
     for (const bc of blockCells) {
       if (!bc.value.includes('【')) continue
       const lines = bc.value.split(/\r?\n/).map(l => l.replace(/^[　\s・]+/, '').trim()).filter(l => l)
@@ -2875,6 +2884,102 @@ function extractSkillYearsCircledNum(sorted){
   return skillMonths
 }
 
+// ── decodeXlsxRange ──
+function decodeXlsxRange(ref) {
+  const decodeAddr = (addr) => {
+    const m = addr.match(/^([A-Z]+)(\d+)$/)
+    if (!m) return { r: 0, c: 0 }
+    const col = m[1].split('').reduce((acc, ch) => acc * 26 + (ch.charCodeAt(0) - 64), 0) - 1
+    return { r: parseInt(m[2]) - 1, c: col }
+  }
+  const parts = ref.split(':')
+  return { s: decodeAddr(parts[0]), e: decodeAddr(parts[1] || parts[0]) }
+}
+
+// ── encodeXlsxCell ──
+function encodeXlsxCell(r, c){
+  let col = ''
+  let n = c + 1
+  while (n > 0) {
+    col = String.fromCharCode(((n - 1) % 26) + 65) + col
+    n = Math.floor((n - 1) / 26)
+  }
+  return col + (r + 1)
+}
+
+// ── cellToText ──
+function cellToText(cell){
+  if (!cell) return ''
+  const v = cell.v
+  if (v instanceof Date) {
+    const y = v.getUTCFullYear(), mo = v.getUTCMonth() + 1, d = v.getUTCDate()
+    if (y >= 1900 && y <= 2100) return `${y}/${mo}/${d}`
+  }
+  return String(cell.w ?? (v !== undefined ? v : '')).replace(/\r\n?/g, '\n').trim()
+}
+
+// ── worksheetToGrid ──
+function worksheetToGrid(sheet){
+  const ref = sheet['!ref'] 
+  if (!ref) return []
+  const range = decodeXlsxRange(ref)
+  const merges = (sheet['!merges'] ) || []
+  const skipCells = new Set()
+  for (const merge of merges) {
+    for (let r = merge.s.r; r <= merge.e.r; r++) {
+      for (let c = merge.s.c; c <= merge.e.c; c++) {
+        if (r !== merge.s.r || c !== merge.s.c) skipCells.add(`${r},${c}`)
+      }
+    }
+  }
+  const grid = []
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const row = []
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      if (skipCells.has(`${r},${c}`)) {
+        row.push('')  // 結合セル内部は空文字で列位置を保持（sheet_to_json の defval:'' と同等）
+        continue
+      }
+      const cell = sheet[encodeXlsxCell(r, c)] 
+      row.push(cellToText(cell))
+    }
+    if (row.some(v => v)) grid.push(row)
+  }
+  return grid
+}
+
+// ── worksheetToCells ──
+function worksheetToCells(sheet){
+  const cells = []
+  const ref = sheet['!ref'] 
+  if (!ref) return cells
+  const range = decodeXlsxRange(ref)
+  const merges = (sheet['!merges'] ) || []
+  // merge の左上セル → rowEnd/colEnd
+  const mergeInfo = new Map()
+  const skipCells = new Set()
+  for (const merge of merges) {
+    mergeInfo.set(`${merge.s.r},${merge.s.c}`, { rowEnd: merge.e.r, colEnd: merge.e.c })
+    for (let r = merge.s.r; r <= merge.e.r; r++) {
+      for (let c = merge.s.c; c <= merge.e.c; c++) {
+        if (r !== merge.s.r || c !== merge.s.c) skipCells.add(`${r},${c}`)
+      }
+    }
+  }
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      if (skipCells.has(`${r},${c}`)) continue
+      const cell = sheet[encodeXlsxCell(r, c)] 
+      const info = mergeInfo.get(`${r},${c}`)
+      const rowEnd = info?.rowEnd ?? r
+      const colEnd = info?.colEnd ?? c
+      const val = cellToText(cell)
+      if (val) cells.push({ row: r, col: c, colEnd, rowEnd, value: val })
+    }
+  }
+  return cells
+}
+
 
 export {
   parseDurationToMonths,
@@ -2895,4 +3000,9 @@ export {
   extractSkillYearsPeriodHeader,
   extractSkillYearsRepeatPeriodHeader,
   extractSkillYearsCircledNum,
+  decodeXlsxRange,
+  encodeXlsxCell,
+  cellToText,
+  worksheetToGrid,
+  worksheetToCells,
 }

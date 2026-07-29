@@ -6111,13 +6111,15 @@ function extractSkillYearsRepeatPeriodHeader(sorted: SpanCell[], periodHeaders: 
     let startYM: number | null = null
     let endYM: number | null = null
 
-    // ① 明示的な "X年Yヶ月" / "Xヶ月"
+    // ① 明示的な "X年Yヶ月" / "Xヶ月" / "X年"（K_M型: 月なしの年単位表記）
     for (const bc of blockCells) {
       const v = bc.value.trim()
       const dm = v.match(/(\d+)年(\d+)[ヵヶか]月/)
       if (dm) { months = parseInt(dm[1]) * 12 + parseInt(dm[2]); break }
       const mm = v.match(/^(\d+)[ヵヶか]月$/)
       if (mm) { months = parseInt(mm[1]); break }
+      const ym = v.match(/^(\d{1,2})年$/)
+      if (ym) { months = parseInt(ym[1]) * 12; break }
     }
     // ② シリアル日付（SheetJS が M/D/YY にフォーマットした日付も対象）
     if (!months) {
@@ -6130,6 +6132,13 @@ function extractSkillYearsRepeatPeriodHeader(sorted: SpanCell[], periodHeaders: 
         if (mdyM) {
           const y = parseInt(mdyM[3]) < 100 ? (parseInt(mdyM[3]) < 50 ? 2000 + parseInt(mdyM[3]) : 1900 + parseInt(mdyM[3])) : parseInt(mdyM[3])
           return y >= 1990 && y <= 2040
+        }
+        // テキスト年月形式: "2020/04" "2020-4" "2020年4月"（K_M型実害: フィルターが弾いて
+        // parseSerial に届かずブロック丸ごと欠落した）
+        const ymM = v.match(/^(\d{4})[\/\-年.](\d{1,2})月?$/)
+        if (ymM) {
+          const y = parseInt(ymM[1]); const mo = parseInt(ymM[2])
+          return y >= 1990 && y <= 2040 && mo >= 1 && mo <= 12
         }
         return false
       })
@@ -6148,7 +6157,7 @@ function extractSkillYearsRepeatPeriodHeader(sorted: SpanCell[], periodHeaders: 
     if (startYM && endYM) projectPeriods.push({ startYM, endYM })
 
     // スキルの抽出: 「【言語】\n...\n【OS】\n...」形式
-    const ENV_LBL_RE = /^【(言語|OS|FW|フレームワーク|ツール|DB|データベース|ミドルウェア|クラウド|インフラ|その他|NW)】/
+    const ENV_LBL_RE = /^【(言語|OS|FW|フレームワーク|ツール|DB|データベース|ミドルウェア|クラウド|インフラ|その他|NW|環境|開発環境|サーバー?)】/
     for (const bc of blockCells) {
       if (!bc.value.includes('【')) continue
       const lines = bc.value.split(/\r?\n/).map(l => l.replace(/^[　\s・]+/, '').trim()).filter(l => l)
@@ -6186,7 +6195,7 @@ function extractSkillYearsRepeatPeriodHeader(sorted: SpanCell[], periodHeaders: 
  * - スキル列: 「使用言語」「DB」「サーバOS」「ミドルウェア」「FW・MW」等
  */
 function extractSkillYearsPeriodHeader(sorted: SpanCell[]): Record<string, number> {
-  const periodHeader = sorted.find(c => /^期間$/.test(c.value.trim()))
+  const periodHeader = sorted.find(c => /^期間$/.test(c.value.replace(/[　 ]/g, '')))  // 「期　間」（全角スペース入り）対応
   if (!periodHeader) return {}
 
   // 同列(c.col === periodHeader.col)の下に数字(1,2,3...)があるか確認
@@ -6194,7 +6203,7 @@ function extractSkillYearsPeriodHeader(sorted: SpanCell[]): Record<string, numbe
 
   // R.O 型: 同じ列に「期間」ヘッダーが複数回繰り返す（各プロジェクトが独自ヘッダーを持つ）
   const allPeriodHeaders = sorted.filter(c =>
-    /^期間$/.test(c.value.trim()) && c.col === periodCol
+    /^期間$/.test(c.value.replace(/[　 ]/g, '')) && c.col === periodCol
   ).sort((a, b) => a.row - b.row)
   if (allPeriodHeaders.length >= 2) {
     return extractSkillYearsRepeatPeriodHeader(sorted, allPeriodHeaders)
@@ -6219,7 +6228,7 @@ function extractSkillYearsPeriodHeader(sorted: SpanCell[]): Record<string, numbe
 
   // 「期間」列のヘッダー位置（OMT型: 小数値が入る "期間" 列）
   const durationHeaderCell = headerRowCells.find(c =>
-    /^期間$/.test(c.value.trim()) && c !== periodHeader
+    /^期間$/.test(c.value.replace(/[　 ]/g, '')) && c !== periodHeader
   )
 
   const skillMonths: Record<string, number> = {}

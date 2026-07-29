@@ -36,6 +36,11 @@ const TARGET_FUNCTIONS = [
   'extractSkillYearsPeriodHeader',
   'extractSkillYearsRepeatPeriodHeader',
   'extractSkillYearsCircledNum',
+  'decodeXlsxRange',
+  'encodeXlsxCell',
+  'cellToText',
+  'worksheetToGrid',
+  'worksheetToCells',
 ]
 
 // ── TypeScript → JavaScript 簡易変換 ──────────────────────────────
@@ -122,7 +127,31 @@ function stripTs(code) {
   code = code.replace(/^\s*type\s+\w+\s*=\s*.+;\s*\n/gm, '')
 
   // 2. as Type キャスト（"as string", "as any" 等）— 比較演算子の > は含まない
-  code = code.replace(/\bas\s+(?:string|number|boolean|unknown|any|null|undefined|\w+)/g, '')
+  code = code.replace(/\bas\s+(?:string|number|boolean|unknown|any|null|undefined|\w+)(?:\[\])*(?:\s*\|\s*(?:\w+)(?:\[\])*)*/g, '')
+
+  // 2b. オブジェクトリテラル型の戻り値注釈 `): { s: {...}; e: {...} } {` → `) {`
+  //     （decodeXlsxRange 等。ネストした {} を括弧対応で数えて丸ごと除去）
+  {
+    const RE = /\)\s*:\s*\{/g
+    let m2
+    while ((m2 = RE.exec(code)) !== null) {
+      const idx = m2.index
+      const braceStart = code.indexOf('{', code.indexOf(':', idx))
+      let depth = 0
+      let j = braceStart
+      for (; j < code.length; j++) {
+        if (code[j] === '{') depth++
+        else if (code[j] === '}') { depth--; if (depth === 0) { j++; break } }
+      }
+      // 型注釈の閉じ括弧の後に関数本体の `{` か `=>` が続く場合のみ型注釈とみなす
+      const rest = code.slice(j).match(/^\s*(\{|=>)/)
+      if (depth === 0 && rest) {
+        code = code.slice(0, idx + 1) + code.slice(j)
+        RE.lastIndex = idx + 1  // 除去後の位置から再走査
+      }
+      // 型注釈でない場合はそのまま次のマッチへ（lastIndex は正規表現が前進済み）
+    }
+  }
 
   // 3. 既知TypeScript型名に続く <...> を括弧対応を数えて丸ごと除去。
   //    旧実装は [^>]* の非貪欲マッチだったため Array<Record<string, string>> のような
@@ -178,7 +207,7 @@ function stripTs(code) {
 
   // 4. 戻り値型注釈 ): Type {  or ): Type =>  or ): Type\n
   //    コロンの直後が型名（大文字始まりや string|null 等）の場合のみ除去
-  code = code.replace(/\)\s*:\s*(?:string|number|boolean|void|null|undefined)(?:\s*\|\s*(?:string|number|boolean|void|null|undefined))*\s*(?=[\n{(=]|=>)/g, ')')
+  code = code.replace(/\)\s*:\s*(?:string|number|boolean|void|null|undefined)(?:\[\])*(?:\s*\|\s*(?:string|number|boolean|void|null|undefined)(?:\[\])*)*\s*(?=[\n{(=]|=>)/g, ')')
   // ): TypeName { / ): TypeName[] {
   code = code.replace(/\)\s*:\s*[A-Z]\w*(?:\[\])*\s*(?=[{\n]|=>)/g, ')')
 
@@ -205,7 +234,9 @@ function stripTs(code) {
   // 8. 後置 ! (non-null assertion) — !=, !== は保護。
   //    後置断定は必ず直前トークンに密着する（foo! / )!）ため空白は許さない。
   //    旧実装は \s* を挟んでいたため「return !isNaN(x)」の論理否定まで除去する実害があった
-  code = code.replace(/([a-zA-Z0-9_$'")\]])!(?!=)/g, '$1')
+  // 文字列リテラル先頭の ! （'!merges' 等）を壊さないよう、引用符は対象から外す
+  // （obj['key']! のような後置断定は ]! でカバーされる）
+  code = code.replace(/([a-zA-Z0-9_$)\]])!(?!=)/g, '$1')
 
   // 9. 退避した正規表現リテラルを復元
   return unmaskRegexLiterals(code, masked.literals)
@@ -220,9 +251,34 @@ function extractFunction(src, name) {
 
   // 関数開始行から波括弧カウントで終端を探す
   let pos = startMatch.index
-  // 関数シグネチャの最初の { を探す
+  // 関数シグネチャの最初の { を探す。ただし戻り値がオブジェクトリテラル型
+  // （`): { s: {...} } {`）の場合、型注釈の { を本体と誤認しないよう、
+  // パラメータ閉じ括弧後に `: {` が続くなら型注釈の括弧対応をスキップして本体 { を探す
   let braceStart = src.indexOf('{', pos)
   if (braceStart === -1) return null
+  {
+    // パラメータリストの閉じ ) を括弧対応で見つける
+    const parenStart = src.indexOf('(', pos)
+    if (parenStart !== -1 && parenStart < braceStart) {
+      let pd = 0, k = parenStart
+      for (; k < src.length; k++) {
+        if (src[k] === '(') pd++
+        else if (src[k] === ')') { pd--; if (pd === 0) { k++; break } }
+      }
+      const afterParen = src.slice(k)
+      const typeM = afterParen.match(/^\s*:\s*\{/)
+      if (typeM) {
+        // 型注釈オブジェクトの括弧対応を数えて読み飛ばす
+        let td = 0, t = k + typeM[0].length - 1
+        for (; t < src.length; t++) {
+          if (src[t] === '{') td++
+          else if (src[t] === '}') { td--; if (td === 0) { t++; break } }
+        }
+        const bodyBrace = src.indexOf('{', t)
+        if (bodyBrace !== -1) braceStart = bodyBrace
+      }
+    }
+  }
 
   let depth = 0
   let i = braceStart

@@ -16,7 +16,11 @@ import { fileURLToPath } from 'url'
 import { join, dirname } from 'path'
 import {
   extractSkillYearsFromSheetData,
+  extractSkillYearsUnified,
   extractSkillYearsFromBodyText,
+  worksheetToGrid,
+  worksheetToCells,
+  extractSkillYearsFromCells,
 } from './_extractors.gen.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -61,13 +65,27 @@ function scoreResult(result) {
 
 function runExcelFile(filePath, _fileName) {
   try {
-    const wb = XLSX.readFile(filePath)
+    // 本番 extractExcelAll と同じ cellDates:true + worksheetToGrid + cellToText で
+    // グリッドを構築する（旧 sheet_to_json は日付が生シリアルになり本番と乖離していた）
+    const wb = XLSX.readFile(filePath, { cellDates: true })
     for (const sheetName of wb.SheetNames.slice(0, 2)) {
       const ws = wb.Sheets[sheetName]
-      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-        .map(row => row.map(c => String(c ?? '')))
+      const data = worksheetToGrid(ws)
       const result = extractSkillYearsFromSheetData(data)
-      const s = scoreResult(result)
+      let s = scoreResult(result)
+      // SheetData がスキルゼロでも、本番パイプラインの勝者チェーン(Unified: rating/column等)で
+      // 取れていれば誤警報。WARN判定だけ Unified を追試する（Golden比較は SheetData のまま）
+      if (s.status === 'warn') {
+        const unified = extractSkillYearsUnified(data)
+        const uSkills = Object.keys(unified).filter(k => !k.startsWith('_')).length
+        if (uSkills > 0) {
+          s = { status: 'pass', label: `${s.label} → Unified(method=${unified._extractMethod})で${uSkills}スキル` }
+        } else {
+          // cells 経路（SpanCellベース: PeriodHeader/KVブロック等）も本番の勝者候補
+          const cSkills = Object.keys(extractSkillYearsFromCells(worksheetToCells(ws))).filter(k => !k.startsWith('_')).length
+          if (cSkills > 0) s = { status: 'pass', label: `${s.label} → cells経路で${cSkills}スキル` }
+        }
+      }
       if (!COMPACT) {
         const icon = s.status === 'pass' ? '✅' : s.status === 'warn' ? '⚠️ ' : '❌'
         console.log(`  ${icon} [${sheetName}] ${s.label}`)

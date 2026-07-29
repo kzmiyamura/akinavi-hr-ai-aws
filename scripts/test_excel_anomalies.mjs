@@ -578,6 +578,58 @@ console.log('=== N. extractSkillYearsFromBodyText: 本文の年数パターン�
     { Java: 60, Python: 36 })
 }
 
+console.log('=== O. 期間ヘッダー繰り返し型（K_M実ファイル: 「4年」「YYYY/MM」テキスト日付） ===')
+{
+  const { extractSkillYearsPeriodHeader } = await import('./_extractors.gen.mjs')
+  // K_M.xlsx ブロック1の再現: 期間ヘッダー繰り返し・「2020/04」-「2024/03」テキスト日付・
+  // 明示期間「4年」（月なし）・【言語】【環境】縦積みセル
+  const mk = (row, col, value) => ({ row, col, rowEnd: row, colEnd: col, value })
+  const cells = [
+    mk(0, 2, '期間'),
+    mk(1, 0, '1'), mk(1, 2, '2020/04'), mk(1, 6, '-'), mk(1, 7, '2024/03'),
+    mk(2, 2, '4年'),
+    mk(4, 2, '【言語】\n　C言語\n　PHP\n\n【OS】\n　Windows11\n\n【環境】\n　MySQL\n　Excel'),
+    mk(6, 2, '期間'),
+    mk(7, 0, '2'), mk(7, 2, '2024/04'), mk(7, 6, '-'), mk(7, 7, '2024/06'),
+    mk(8, 2, '0年3ヶ月'),
+    mk(10, 2, '【言語】\n　JavaScript\n\n【OS】\n　Windows11'),
+  ].sort((a, b) => a.row - b.row || a.col - b.col)
+  const got = extractSkillYearsPeriodHeader(cells)
+  const skills = Object.fromEntries(Object.entries(got).filter(([k]) => !k.startsWith('_')))
+  const expect = { 'C言語': 48, 'PHP': 48, 'Windows11': 51, 'MySQL': 48, 'Excel': 48, 'JavaScript': 3 }
+  const ok = Object.keys(skills).length === Object.keys(expect).length
+    && Object.entries(expect).every(([k, v]) => skills[k] === v)
+  if (ok) { pass++; if (verbose) console.log('  PASS O1', JSON.stringify(skills)) }
+  else {
+    fail++; failures.push('O1: K_M型 4年+YYYY/MM日付+【環境】')
+    console.log(`  FAIL O1: K_M型 4年+YYYY/MM日付+【環境】\n       expect=${JSON.stringify(expect)}\n       got   =${JSON.stringify(skills)}`)
+  }
+
+  // T.S型実ファイル: 期間ヘッダーが「期　間」（全角スペース入り）で /^期間$/ に不一致だった
+  const cells2 = [
+    mk(0, 1, '期　間'),
+    mk(1, 0, '2023/5/31'), mk(1, 5, '【言語】\n　・HTML\n\n【環境】\n  ・Unity'),
+    mk(2, 0, '~'),
+    mk(3, 0, '2025/3/30'),
+    mk(4, 0, '1年10ヶ月'),
+    mk(6, 1, '期　間'),
+    mk(7, 0, '2020/2/16'), mk(7, 5, '【言語】\n　・SQL'),
+    mk(8, 0, '~'),
+    mk(9, 0, '2023/1/30'),
+    mk(10, 0, '3年'),
+  ].sort((a, b) => a.row - b.row || a.col - b.col)
+  const got2 = extractSkillYearsPeriodHeader(cells2)
+  const skills2 = Object.fromEntries(Object.entries(got2).filter(([k]) => !k.startsWith('_')))
+  const expect2 = { 'HTML': 22, 'Unity': 22, 'SQL': 36 }
+  const ok2 = Object.keys(skills2).length === Object.keys(expect2).length
+    && Object.entries(expect2).every(([k, v]) => skills2[k] === v)
+  if (ok2) { pass++; if (verbose) console.log('  PASS O2', JSON.stringify(skills2)) }
+  else {
+    fail++; failures.push('O2: T.S型 全角スペース入り期間ヘッダー')
+    console.log(`  FAIL O2: T.S型 全角スペース入り期間ヘッダー\n       expect=${JSON.stringify(expect2)}\n       got   =${JSON.stringify(skills2)}`)
+  }
+}
+
 console.log(`\n📊 ${pass} passed / ${fail} failed（全${pass + fail}ケース）`)
 if (fail > 0) console.log('FAILED:', failures.join(' | '))
 process.exit(fail > 0 ? 1 : 0)
