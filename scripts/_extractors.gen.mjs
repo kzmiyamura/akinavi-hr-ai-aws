@@ -539,7 +539,21 @@ function filterSkillYears(sy){
   // （経歴書の「担当業務」自由記述欄によくある環境見出しパターン）
   const BRACKET_HEADER_RE = /^【[^】]{1,10}】$/
   const result= {}
-  for (const [kRaw, v] of Object.entries(sy)) {
+  // ── キー正規化パス（TMK実害: grid抽出の結合セル・ラベル残りが混入）──
+  //   ①「フレームワーク : Flask」等のセクションラベル前置きはスキル名部分だけ残す
+  //   ②「Perl    Ksh」等の連続スペースは別スキルの結合セル → 分割して各々に同月数
+  const SECTION_LABEL_COLON_RE = /^(?:言語|フレームワーク|FW|ツール|DB|OS|環境|開発環境|ミドル(?:ウェア)?|クラウド|インフラ|その他|技術|サーバー?)[　 ]*[：:][　 ]*(.+)$/
+  const entries= []
+  for (const [kRaw0, v0] of Object.entries(sy)) {
+    if (kRaw0.startsWith('_')) { entries.push([kRaw0, v0]); continue }
+    const labelM = kRaw0.match(SECTION_LABEL_COLON_RE)
+    const base = labelM && labelM[1].trim() ? labelM[1].trim() : kRaw0
+    for (const part of base.split(/[　 ]{2,}/)) {
+      const p = part.trim()
+      if (p) entries.push([p, v0])
+    }
+  }
+  for (const [kRaw, v] of entries) {
     if (kRaw.startsWith('_')) { result[kRaw] = v; continue }
     // 「経験年数」「IT経験年数」「総経験年数」等の総経験ラベルキーはスキルではない
     // （prod実データで15件確認。剥がすと「IT」「総」等の無意味な残骸になるため丸ごと落とす）
@@ -553,8 +567,12 @@ function filterSkillYears(sy){
     // 巨大な月数が誤って割り当てられるケース（SQL:518ヶ月＝43年等）を弾く
     if (v > 480) continue
     if (k.length > 30) continue
-    // 純粋な数字（行番号・案件番号等）はスキルとして無効
-    if (/^\d+$/.test(k.trim())) continue
+    // 純粋な数字（行番号・案件番号等）はスキルとして無効。全角・混在数字
+    // （「１０」「20１2」= Windows 10/2012 の断片）も半角化して判定する
+    const kHalf = k.trim().replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30))
+    if (/^\d+$/.test(kHalf)) continue
+    // 数字始まりの短い英字サフィックス（「9i」「11g」= Oracleバージョン断片）も無効
+    if (/^\d+[A-Za-z]{1,2}$/.test(kHalf)) continue
     const kNoSpace = k.replace(/[　 ]/g, '')
     if (NON_SKILL_RE.test(kNoSpace)) continue
     if (MONEY_RE.test(k)) continue
