@@ -402,8 +402,16 @@ export function CandidateProfileFields({
         {(roles ?? []).length > 0 && (
           <div className="flex flex-wrap gap-1 items-center">
             <span className="text-xs text-gray-400 w-12 shrink-0">役割</span>
-            {(roles ?? []).map((r) => (
-              <span key={r} className="text-xs bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5">{r}</span>
+            {/* roles はスコア降順（inbound-email の scoreProseRoles）: 先頭=主役割を強調表示 */}
+            {(roles ?? []).map((r, idx) => (
+              <span
+                key={r}
+                className={idx === 0 && (roles ?? []).length > 1
+                  ? 'text-xs bg-indigo-600 text-white font-medium rounded px-1.5 py-0.5'
+                  : 'text-xs bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5'}
+              >
+                {r}
+              </span>
             ))}
           </div>
         )}

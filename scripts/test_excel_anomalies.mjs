@@ -635,6 +635,40 @@ console.log('=== O. 期間ヘッダー繰り返し型（K_M実ファイル: 「4
   }
 }
 
+console.log('=== Q. scoreProseRoles: 役割の主・副ランキング ===')
+{
+  const { scoreProseRoles } = await import('./_extractors.gen.mjs')
+  const q = (label, prose, fullText, expectOrder) => {
+    const { roles, roleScores } = scoreProseRoles(prose, fullText ?? prose)
+    const ok = JSON.stringify(roles) === JSON.stringify(expectOrder)
+    if (ok) { pass++; if (verbose) console.log(`  PASS ${label}`, JSON.stringify(roleScores)) }
+    else {
+      fail++; failures.push(label)
+      console.log(`  FAIL ${label}\n       expect=${JSON.stringify(expectOrder)}\n       got   =${JSON.stringify(roles)} scores=${JSON.stringify(roleScores)}`)
+    }
+  }
+  // 「として」明示 > 単発言及
+  q('Q1: 「PMOとして6年」が主・PL言及は副',
+    'PMOとして約6年、大規模プロジェクトに携わってきました。直近はプロジェクトリーダーの補佐も経験。',
+    undefined,
+    ['PMO', 'プロジェクトリーダー'])
+  // 営業の"盛り"（対応可）は主の根拠にしない
+  q('Q2: 「PMOとしても対応可能」は主にならずSEが主',
+    'システムエンジニアとして10年の経験があります。PMOとしても対応可能です。',
+    undefined,
+    ['システムエンジニア', 'PMO'])
+  // 冒頭（件名・売り文句）シグナル
+  q('Q3: 件名の【PMO要員】が主・本文後半のSEは副',
+    'ここは20文字を超える文章行として扱われるための前置きの文になります、PMO案件を希望。テスト環境の構築でシステムエンジニア業務も少々。',
+    '【PMO要員】のご紹介\n' + '営業本文の説明が続きます。'.repeat(10) + '\nPMO案件を希望。テスト環境の構築でシステムエンジニア業務も少々。',
+    ['PMO', 'システムエンジニア'])
+  // 経歴表の「ポジション」次行シグナル（TMK型の縦積み）
+  q('Q4: ポジション行の次行の役割が優位',
+    '運用保守の現場経験が長く、チームでの調整業務を担当してきました。テスト設計の経験もあります。',
+    '運用保守の現場経験が長く、チームでの調整業務を担当してきました。テスト設計の経験もあります。\nポジション\n運用保守',
+    ['運用保守', 'テストエンジニア'])
+}
+
 console.log(`\n📊 ${pass} passed / ${fail} failed（全${pass + fail}ケース）`)
 if (fail > 0) console.log('FAILED:', failures.join(' | '))
 process.exit(fail > 0 ? 1 : 0)

@@ -2435,26 +2435,70 @@ function extractCandidateFieldsRegex(
  * AI が空で返した場合のフォールバックとして呼び出す。
  */
 
-const PROSE_ROLES: Array<{ re: RegExp; label: string }> = [
-  { re: /(?<![A-Z])PMO(?![A-Z])|プロジェクト[　 ]?マネジメント[　 ]?オフィス/, label: 'PMO' },
-  { re: /(?<![A-Z])PM(?!O)(?![A-Z])|プロジェクト[　 ]?マネージャー/, label: 'プロジェクトマネージャー' },
-  { re: /(?<![A-Z])PL(?![A-Z])|プロジェクト[　 ]?リーダー/,       label: 'プロジェクトリーダー' },
-  { re: /(?<![A-Z])TL(?![A-Z])|テックリード|テック[　 ]?リード/,   label: 'テックリード' },
-  { re: /(?<![バックエンドフロントクラウドデータML])SE(?![A-Z])|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
-  { re: /PG|プログラマー?/,                            label: 'プログラマー' },
-  { re: /インフラ[　 ]?エンジニア/,                    label: 'インフラエンジニア' },
-  { re: /フロントエンド[　 ]?エンジニア|フロント[　 ]?エンジニア/, label: 'フロントエンドエンジニア' },
-  { re: /バックエンド[　 ]?エンジニア|バック[　 ]?エンジニア/,    label: 'バックエンドエンジニア' },
-  { re: /フルスタック[　 ]?エンジニア/,                label: 'フルスタックエンジニア' },
-  { re: /クラウド[　 ]?エンジニア/,                    label: 'クラウドエンジニア' },
-  { re: /データ[　 ]?エンジニア/,                      label: 'データエンジニア' },
-  { re: /MLエンジニア|機械学習[　 ]?エンジニア/,       label: 'MLエンジニア' },
-  { re: /スクラム[　 ]?マスター/,                      label: 'スクラムマスター' },
-  { re: /アーキテクト/,                                label: 'アーキテクト' },
-  { re: /コンサルタント/,                              label: 'コンサルタント' },
-  { re: /テスト[　 ]?(?:リード|エンジニア|設計)/,      label: 'テストエンジニア' },
-  { re: /運用[　 ]?(?:保守|管理)/,                     label: '運用保守' },
-]
+/**
+ * 役割語の検出とスコアリング（主・副の決定）。
+ * 返り値の roles は「スコア降順」= 先頭が主役割、以降が副役割。
+ * シグナル（重い順）:
+ *   +5 明示ラベル同一行（「職種：SE」「ポジション：PMO」）/「◯◯として」「◯◯の経歴」
+ *      ※「PMOとしても対応可能」等の営業の"盛り"（対応可・も可）は主の根拠にしない
+ *   +3 冒頭200字（件名・売り文句 = 商品としての主役割）
+ *   +2 ラベル行の次行（経歴表の「ポジション」\n「運用プランナー」型）
+ *   +1×出現回数（最大3・弱いタイブレーカー）
+ */
+function scoreProseRoles(prose: string, fullText: string): { roles: string[]; roleScores: Record<string, number> } {
+  const ROLE_DEFS: Array<{ re: RegExp; label: string }> = [
+    { re: /(?<![A-Z])PMO(?![A-Z])|プロジェクト[　 ]?マネジメント[　 ]?オフィス/, label: 'PMO' },
+    { re: /(?<![A-Z])PM(?!O)(?![A-Z])|プロジェクト[　 ]?マネージャー/, label: 'プロジェクトマネージャー' },
+    { re: /(?<![A-Z])PL(?![A-Z])|プロジェクト[　 ]?リーダー/,       label: 'プロジェクトリーダー' },
+    { re: /(?<![A-Z])TL(?![A-Z])|テックリード|テック[　 ]?リード/,   label: 'テックリード' },
+    { re: /(?<![バックエンドフロントクラウドデータML])SE(?![A-Z])|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
+    { re: /PG|プログラマー?/,                            label: 'プログラマー' },
+    { re: /インフラ[　 ]?エンジニア/,                    label: 'インフラエンジニア' },
+    { re: /フロントエンド[　 ]?エンジニア|フロント[　 ]?エンジニア/, label: 'フロントエンドエンジニア' },
+    { re: /バックエンド[　 ]?エンジニア|バック[　 ]?エンジニア/,    label: 'バックエンドエンジニア' },
+    { re: /フルスタック[　 ]?エンジニア/,                label: 'フルスタックエンジニア' },
+    { re: /クラウド[　 ]?エンジニア/,                    label: 'クラウドエンジニア' },
+    { re: /データ[　 ]?エンジニア/,                      label: 'データエンジニア' },
+    { re: /MLエンジニア|機械学習[　 ]?エンジニア/,       label: 'MLエンジニア' },
+    { re: /スクラム[　 ]?マスター/,                      label: 'スクラムマスター' },
+    { re: /アーキテクト/,                                label: 'アーキテクト' },
+    { re: /コンサルタント/,                              label: 'コンサルタント' },
+    { re: /テスト[　 ]?(?:リード|エンジニア|設計)/,      label: 'テストエンジニア' },
+    { re: /運用[　 ]?(?:保守|管理)/,                     label: '運用保守' },
+  ]
+  const roles: string[] = []
+  const roleScores: Record<string, number> = {}
+  if (!prose.trim()) return { roles, roleScores }
+  const head = fullText.slice(0, 200)
+  const lines = fullText.split(/\r?\n/)
+  for (const { re, label } of ROLE_DEFS) {
+    if (!re.test(prose)) continue
+    let score = 0
+    // 出現回数（最大3）
+    const g = new RegExp(re.source, 'g')
+    let count = 0
+    while (g.exec(prose) !== null && count < 3) count++
+    score += count
+    // 冒頭（件名・営業の売り文句）
+    if (re.test(head)) score += 3
+    // 明示ラベル同一行 /「として」「の経歴」（対応可・も可の"盛り"文脈は除外）
+    const labelLineRE = new RegExp(`(?:職種|ポジション|役割|役職)[　 ]*[：:][　 ]*[^\\n]{0,20}?(?:${re.source})`)
+    const asRoleRE = new RegExp(`(?:${re.source})(?:として|を担当|の経歴|がメイン)(?![^\\n。]{0,15}(?:対応可|も可))`)
+    if (labelLineRE.test(fullText) || asRoleRE.test(fullText)) score += 5
+    // ラベル行の次行（経歴表の縦積み: 「ポジション」\n「PMO」）
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (!/^[　 ]*(?:職種|ポジション|役割|役職)[　 ]*[：:]?[　 ]*$/.test(lines[i])) continue
+      let j = i + 1
+      while (j < lines.length && !lines[j].trim()) j++
+      if (j < lines.length && re.test(lines[j])) { score += 2; break }
+    }
+    roles.push(label)
+    roleScores[label] = score
+  }
+  // スコア降順（同点は辞書定義順を維持 = sort の安定性に依拠）
+  roles.sort((a, b) => roleScores[b] - roleScores[a])
+  return { roles, roleScores }
+}
 
 // 業界判定の false positive を避けるため、複合語や明示語のみマッチさせる。
 // 例:
@@ -2532,6 +2576,7 @@ function extractFromProse(bodyText: string, attachText: string): {
   roles: string[]
   industries: string[]
   workStyle: string | null
+  roleScores: Record<string, number>
 } {
   // URL を除去（"https://example.com/cc.php" 等が PHP/HTTPS に誤マッチするのを防ぐ）
   const cleanedBody = stripUrlsForSkillMatching(bodyText)
@@ -2549,12 +2594,8 @@ function extractFromProse(bodyText: string, attachText: string): {
   )
   const prose = proseLines.join('\n')
 
-  const roles: string[] = []
-  if (prose.trim()) {
-    for (const { re, label } of PROSE_ROLES) {
-      if (re.test(prose) && !roles.includes(label)) roles.push(label)
-    }
-  }
+  // 役割: スコアリングして主（先頭）・副（以降）の順に並べる
+  const { roles, roleScores } = scoreProseRoles(prose, allText)
 
   // 業界判定もフェーズ表ヘッダー行を除外したテキストを対象にする
   // （以前は短い単語も拾うため全文対象だったが、誤検出が多いためフィルタ済みテキストに変更）
@@ -2569,7 +2610,7 @@ function extractFromProse(bodyText: string, attachText: string): {
     if (re.test(allText)) { workStyle = label; break }
   }
 
-  return { roles, industries, workStyle }
+  return { roles, industries, workStyle, roleScores }
 }
 
 
@@ -9405,6 +9446,8 @@ Deno.serve(async (req: Request) => {
                   return acc
                 }, {} as Record<string, string[]>),
                 roles: blockProseFields.roles,
+                // 役割スコア（先頭=主の根拠。UI・デバッグ用）
+                _roleScores: Object.keys(blockProseFields.roleScores).length > 0 ? blockProseFields.roleScores : undefined,
                 industries: blockProseFields.industries,
                 nearestStation: blockRegexFields.nearestStation,
                 prefecture: blockRegexFields.prefecture,
@@ -9968,6 +10011,8 @@ Deno.serve(async (req: Request) => {
             return acc
           }, {} as Record<string, string[]>),
           roles: resolvedRoles,
+          // 役割スコア（先頭=主の根拠。UI・デバッグ用）
+          _roleScores: Object.keys(proseFields.roleScores).length > 0 ? proseFields.roleScores : undefined,
           industries: resolvedIndustries,
           nearestStation: resolvedStation,
           prefecture: resolvedPrefecture,

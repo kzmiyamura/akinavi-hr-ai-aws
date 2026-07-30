@@ -41,6 +41,7 @@ const TARGET_FUNCTIONS = [
   'cellToText',
   'worksheetToGrid',
   'worksheetToCells',
+  'scoreProseRoles',
 ]
 
 // ── TypeScript → JavaScript 簡易変換 ──────────────────────────────

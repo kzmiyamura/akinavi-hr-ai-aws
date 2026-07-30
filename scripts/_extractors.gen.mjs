@@ -2998,6 +2998,62 @@ function worksheetToCells(sheet){
   return cells
 }
 
+// ── scoreProseRoles ──
+function scoreProseRoles(prose, fullText) {
+  const ROLE_DEFS= [
+    { re: /(?<![A-Z])PMO(?![A-Z])|プロジェクト[　 ]?マネジメント[　 ]?オフィス/, label: 'PMO' },
+    { re: /(?<![A-Z])PM(?!O)(?![A-Z])|プロジェクト[　 ]?マネージャー/, label: 'プロジェクトマネージャー' },
+    { re: /(?<![A-Z])PL(?![A-Z])|プロジェクト[　 ]?リーダー/,       label: 'プロジェクトリーダー' },
+    { re: /(?<![A-Z])TL(?![A-Z])|テックリード|テック[　 ]?リード/,   label: 'テックリード' },
+    { re: /(?<![バックエンドフロントクラウドデータML])SE(?![A-Z])|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
+    { re: /PG|プログラマー?/,                            label: 'プログラマー' },
+    { re: /インフラ[　 ]?エンジニア/,                    label: 'インフラエンジニア' },
+    { re: /フロントエンド[　 ]?エンジニア|フロント[　 ]?エンジニア/, label: 'フロントエンドエンジニア' },
+    { re: /バックエンド[　 ]?エンジニア|バック[　 ]?エンジニア/,    label: 'バックエンドエンジニア' },
+    { re: /フルスタック[　 ]?エンジニア/,                label: 'フルスタックエンジニア' },
+    { re: /クラウド[　 ]?エンジニア/,                    label: 'クラウドエンジニア' },
+    { re: /データ[　 ]?エンジニア/,                      label: 'データエンジニア' },
+    { re: /MLエンジニア|機械学習[　 ]?エンジニア/,       label: 'MLエンジニア' },
+    { re: /スクラム[　 ]?マスター/,                      label: 'スクラムマスター' },
+    { re: /アーキテクト/,                                label: 'アーキテクト' },
+    { re: /コンサルタント/,                              label: 'コンサルタント' },
+    { re: /テスト[　 ]?(?:リード|エンジニア|設計)/,      label: 'テストエンジニア' },
+    { re: /運用[　 ]?(?:保守|管理)/,                     label: '運用保守' },
+  ]
+  const roles = []
+  const roleScores= {}
+  if (!prose.trim()) return { roles, roleScores }
+  const head = fullText.slice(0, 200)
+  const lines = fullText.split(/\r?\n/)
+  for (const { re, label } of ROLE_DEFS) {
+    if (!re.test(prose)) continue
+    let score = 0
+    // 出現回数（最大3）
+    const g = new RegExp(re.source, 'g')
+    let count = 0
+    while (g.exec(prose) !== null && count < 3) count++
+    score += count
+    // 冒頭（件名・営業の売り文句）
+    if (re.test(head)) score += 3
+    // 明示ラベル同一行 /「として」「の経歴」（対応可・も可の"盛り"文脈は除外）
+    const labelLineRE = new RegExp(`(?:職種|ポジション|役割|役職)[　 ]*[：:][　 ]*[^\\n]{0,20}?(?:${re.source})`)
+    const asRoleRE = new RegExp(`(?:${re.source})(?:として|を担当|の経歴|がメイン)(?![^\\n。]{0,15}(?:対応可|も可))`)
+    if (labelLineRE.test(fullText) || asRoleRE.test(fullText)) score += 5
+    // ラベル行の次行（経歴表の縦積み: 「ポジション」\n「PMO」）
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (!/^[　 ]*(?:職種|ポジション|役割|役職)[　 ]*[：:]?[　 ]*$/.test(lines[i])) continue
+      let j = i + 1
+      while (j < lines.length && !lines[j].trim()) j++
+      if (j < lines.length && re.test(lines[j])) { score += 2; break }
+    }
+    roles.push(label)
+    roleScores[label] = score
+  }
+  // スコア降順（同点は辞書定義順を維持 = sort の安定性に依拠）
+  roles.sort((a, b) => roleScores[b] - roleScores[a])
+  return { roles, roleScores }
+}
+
 
 export {
   parseDurationToMonths,
@@ -3023,4 +3079,5 @@ export {
   cellToText,
   worksheetToGrid,
   worksheetToCells,
+  scoreProseRoles,
 }
