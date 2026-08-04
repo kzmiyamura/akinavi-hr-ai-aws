@@ -472,14 +472,33 @@ async function fetchEmailPage(
       '&$orderby=lastModifiedDateTime asc',
     ].join('')
   } else if (mode === 'incremental') {
-    // 既存の未読メール取得（変更なし）
-    url = [
-      'https://graph.microsoft.com/v1.0/me/messages',
-      '?$filter=isRead eq false',
-      `&$top=${MAX_EMAILS_PER_ACCOUNT}`,
-      '&$select=id,subject,from,body,hasAttachments,receivedDateTime,isRead',
-      '&$orderby=receivedDateTime asc',
-    ].join('')
+    // 未読メール取得: 受信トレイ + 迷惑メールの両フォルダを明示的に取得する。
+    // Outlookの迷惑メールフィルタがSES営業メールを大量にjunkへ振り分けるため、
+    // inboxのみだとjunkに人材メールが堆積し続け、無料5GBを溢れさせる実害があった(2026-08-04)。
+    // フォルダ明示なら /me/messages のフォルダ横断仕様の曖昧さにも依存しない。
+    const folders = ['inbox', 'junkemail']
+    const all: GraphMessage[] = []
+    for (const folder of folders) {
+      const fUrl = [
+        `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages`,
+        '?$filter=isRead eq false',
+        `&$top=${MAX_EMAILS_PER_ACCOUNT}`,
+        '&$select=id,subject,from,body,hasAttachments,receivedDateTime,isRead',
+        '&$orderby=receivedDateTime asc',
+      ].join('')
+      const fRes = await fetch(fUrl, { headers: { Authorization: `Bearer ${accessToken}` } })
+      if (!fRes.ok) {
+        const body = await fRes.text()
+        throw new Error(`メール取得失敗 ${folder} (${fRes.status}): ${body}`)
+      }
+      const fJson = await fRes.json()
+      const got = (fJson.value ?? []) as GraphMessage[]
+      all.push(...got)
+      console.log(`[poll] fetchEmailPage(${folder}): ${got.length}件`)
+    }
+    // 受信日時昇順にマージし、1バッチ上限で打ち切り
+    all.sort((a, b) => String(a.receivedDateTime ?? '').localeCompare(String(b.receivedDateTime ?? '')))
+    return { emails: all.slice(0, MAX_EMAILS_PER_ACCOUNT), nextLink: null }
   } else if (nextLink) {
     // 全件モード: 続きのページ
     url = nextLink
