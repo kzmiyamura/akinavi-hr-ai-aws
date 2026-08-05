@@ -376,13 +376,17 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
   const postM = trimmed.match(new RegExp(`^([^\\sの　\\n、。！（）【】「」]{2,20}(?:${CORP_SUFFIX_SRC}))`))
   if (postM) { trimmed = postM[1]; }
   // 後株パターン(英語): XXX Co., Ltd. / XXX Inc. 等はその範囲までを会社名として保持
-  const postEnM = trimmed.match(new RegExp(`^([A-Za-z][A-Za-z0-9&.\\- ]{1,40}?[ \\t]*,?[ \\t]*${CORP_SUFFIX_EN_SRC})`))
+  const postEnM = trimmed.match(new RegExp(`^([A-Za-z][A-Za-z0-9&.\\- ]{1,40}?[ \\t]*,?[ \\t]*${CORP_SUFFIX_EN_SRC})(?![A-Za-z])`))
   if (postEnM) { trimmed = postEnM[1].trim(); }
   // 法人格のみ（識別名なし）は無効 — 例: 「株式会社の小川です」→「株式会社」→ null
   if (new RegExp(`^(?:${ANY_CORP_SRC})$`).test(trimmed)) return null
   // 役職・肩書き略称がそのまま会社名になっているケースは無効
   // 例: 「株式会社CTO」「株式会社CEO」— スキルシートの役職行が誤マッチした場合
   if (new RegExp(`^(?:${CORP_PREFIX_SRC})(?:CTO|CEO|COO|CFO|CMO|CXO|VP|SVP|EVP|PO|PM|PL|SE|SRE|TL)$`).test(trimmed)) return null
+  // 対応する開き括弧のない閉じ括弧の残骸を除去（「株式会社ハイウェル)」実害）
+  if (/[)）]$/.test(trimmed) && !/[（(]/.test(trimmed)) trimmed = trimmed.replace(/[)）]+$/, '').trim()
+  // 文字（英字・かな・漢字）を1つも含まない値は社名ではない（「1～2」実害）
+  if (!/[A-Za-zＡ-Ｚａ-ｚぁ-んァ-ヶ一-龯]/.test(trimmed)) return null
   return trimmed || null
 }
 
@@ -2370,7 +2374,7 @@ function extractCandidateFieldsRegex(
 
   // 英語法人格の後株（XXX Co., Ltd. / XXX Inc. / XXX Corporation 等）
   if (!fromCompany) {
-    const POST_EN_RE = new RegExp(`([A-Za-z][A-Za-z0-9&.\\- ]{1,40}?)[ \\t]*,?[ \\t]*${CORP_SUFFIX_EN_SRC}`, 'g')
+    const POST_EN_RE = new RegExp(`([A-Za-z][A-Za-z0-9&.\\- ]{1,40}?)[ \\t]*,?[ \\t]*${CORP_SUFFIX_EN_SRC}(?![A-Za-z])`, 'g')
     let bestEn: RegExpExecArray | null = null
     while ((m = POST_EN_RE.exec(sigArea)) !== null) {
       if (!isSalutation(sigArea, m.index, m[0].length)) bestEn = m
@@ -9149,12 +9153,17 @@ Deno.serve(async (req: Request) => {
         // ブロック分割後は各候補者の断片テキストのみになり署名が含まれないため
         const multiBodyCompanyName: string | null = (() => {
           const sig = body.slice(-2000)
-          const PRE_RE = new RegExp(`(?:${CORP_PREFIX_SRC})[　 ]?([^\\s　の\\n（(、。！【】「」]{2,30})`, 'g')
+          // ※本体の PRE_RE と同じ「スペース+英単語」続き取りを持つこと（複製ドリフトで
+          //   「株式会社UNITE NEO」→「株式会社UNITE」に切り詰められた実害 2026-08-05）
+          const PRE_RE = new RegExp(`(?:${CORP_PREFIX_SRC})[　 ]?([^\\s　の\\n（(、。！【】「」]{2,30}(?:[ \\t]+(?!https?:)[A-Za-z][A-Za-z \\t&.]{0,20})?)`, 'g')
           const PRE_HEAD = new RegExp(`^(?:${CORP_PREFIX_SRC})`)
           const afterSalutation = (t: string, i: number, l: number) => /^[\r\n　 ]*(?:様|御中|ご担当|担当者様)/.test(t.slice(i + l, i + l + 40))
           // 署名エリアなので最初の非宛先マッチを使う（後続のカッコ内旧社名説明を拾わないように）
           let m: RegExpExecArray | null
           while ((m = PRE_RE.exec(sig)) !== null) {
+            // 直前が社名構成文字なら後株の一部（ＷｅａＬｉｖｅ株式会社等）なのでスキップ
+            const prevCh = m.index > 0 ? sig[m.index - 1] : ''
+            if (prevCh && /[A-Za-zＡ-Ｚａ-ｚ0-9０-９ァ-ヶーｦ-ﾟ一-龯々]/.test(prevCh)) continue
             if (afterSalutation(sig, m.index, m[0].length)) continue
             const name = sanitizeFromCompany(`${m[0].match(PRE_HEAD)?.[0] ?? ''}${m[1]}`)
             // "から"/"変更" を含む場合は旧社名説明なのでスキップ
