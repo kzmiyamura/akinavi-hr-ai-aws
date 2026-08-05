@@ -4,7 +4,7 @@
 import { spawn } from 'child_process'
 
 /** stdin にプロンプトを流して claude -p を実行（execFileのinputはSync専用のためspawnで） */
-function spawnWithStdin(cmd, args, input, timeoutMs = 600_000) {
+function spawnWithStdin(cmd, args, input, timeoutMs = 180_000) {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] })
     let out = '', err = ''

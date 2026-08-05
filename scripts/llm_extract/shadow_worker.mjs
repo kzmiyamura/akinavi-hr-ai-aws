@@ -40,7 +40,9 @@ async function rest(pathq, opts = {}) {
     },
   })
   if (!res.ok) throw new Error(`${pathq} -> ${res.status}: ${(await res.text()).slice(0, 200)}`)
-  return res.status === 204 ? null : res.json()
+  // PostgREST のPOST(upsert)は 201 + 空ボディを返す。空はnull扱いにする
+  const text = await res.text()
+  return text.trim() ? JSON.parse(text) : null
 }
 
 async function saveShadow(row) {
@@ -71,7 +73,8 @@ async function processCandidate(c) {
   if (url && /\.xlsx?$/i.test(url)) {
     const fp = path.join(TMP, `${c.id}.xlsx`)
     try {
-      const res = await fetch(url)
+      let res = await fetch(url).catch(() => null)
+      if (!res || !res.ok) { await new Promise(r => setTimeout(r, 3000)); res = await fetch(url) }
       if (!res.ok) throw new Error(`resume DL ${res.status}`)
       fs.writeFileSync(fp, Buffer.from(await res.arrayBuffer()))
       const grid = buildGridInput(fp)
