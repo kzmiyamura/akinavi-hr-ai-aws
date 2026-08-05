@@ -2540,16 +2540,23 @@ const PROSE_WORKSTYLE: Array<{ re: RegExp; label: string }> = [
  */
 function extractWorkStyleNote(bodyText: string, attachText: string): string | null {
   const t = (bodyText + '\n' + attachText).replace(/\r/g, '')
-  const KW = /(?:フル)?リモート|在宅|テレワーク|常駐|出社/
-  const m = KW.exec(t)
-  if (!m) return null
-  const idx = m.index
-  let start = idx
-  while (start > 0 && !/[\n。]/.test(t[start - 1]) && idx - start < 60) start--
-  let end = idx
-  while (end < t.length && !/[\n。]/.test(t[end]) && end - idx < 60) end++
-  const phrase = t.slice(start, end).trim().replace(/^[・■※☆\s　>：:【\-]+/, '').replace(/[【】]/g, '').trim()
-  return phrase || null
+  const KW = /(?:フル)?リモート|在宅|テレワーク|常駐|出社/g
+  let m: RegExpExecArray | null
+  while ((m = KW.exec(t)) !== null) {
+    const idx = m.index
+    let start = idx
+    while (start > 0 && !/[\n。]/.test(t[start - 1]) && idx - start < 60) start--
+    let end = idx
+    while (end < t.length && !/[\n。]/.test(t[end]) && end - idx < 60) end++
+    const rawLine = t.slice(start, end)
+    // 件名・条件列挙行（「★要員即日／PMO／経験7年／…」等）は勤務形態の説明文ではない。
+    // ／や/が3個以上連なる列挙・件名装飾（★【 件名:）を含む行はスキップして次の出現を探す
+    const seps = (rawLine.match(/[／/｜|]/g) ?? []).length
+    if (seps >= 3 || /[★]|件名[:：]/.test(rawLine)) continue
+    const phrase = rawLine.trim().replace(/^[・■※☆\s　>：:【\-]+/, '').replace(/[【】]/g, '').trim()
+    if (phrase) return phrase
+  }
+  return null
 }
 
 /**
@@ -7581,8 +7588,11 @@ async function collectGoogleEntries(body: string, ledger: Ledger, deadline = 0):
 function looksLikeRosterName(s: string): boolean {
   const t = s.trim()
   if (t.length < 1 || t.length > 25) return false
-  // 経歴書・スキルシートの見出し語/セクション語は人名ではない
-  if (/生年月日|年月日|学歴|学　*歴|住所|住　*所|期間|概要|案件|要件|作業|工程|役割|人数|規模|環境|備考|資格|スキル|言語|OS\b|フレームワーク|ツール|自己PR|経験|年数|性別|年齢|最寄|駅|単価|金額|稼働|開始|終了|合計|小計|通勤|沿線|会社|所属|部署|電話|メール|mail|TEL|FAX|プロジェクト|システム|開発|設計|テスト|運用|保守|担当|内容|詳細|日付|時期|現在|以上|以下|合否|評価|№|No\.?|保有|得意|分野|技術|職種|職務|要約|サマリ|紹介|実績|成果|履歴/i.test(t)) return false
+  // 経歴書・スキルシートの見出し語/セクション語は人名ではない。
+  // 「年　数」「期　間」のような全角スペース入り見出しがすり抜けた実害があるため、
+  // 判定はスペースを除去した文字列に対して行う（eyebrains 2026-08-05）
+  const tNoSpace = t.replace(/[　 ]/g, '')
+  if (/生年月日|年月日|学歴|住所|期間|概要|案件|要件|作業|工程|役割|人数|規模|環境|備考|資格|スキル|言語|OS\b|フレームワーク|ツール|自己PR|経験|年数|性別|年齢|最寄|駅|単価|金額|稼働|開始|終了|合計|小計|通勤|沿線|会社|所属|部署|電話|メール|mail|TEL|FAX|プロジェクト|システム|開発|設計|テスト|運用|保守|担当|内容|詳細|日付|時期|現在|以上|以下|合否|評価|№|No\.?|保有|得意|分野|技術|職種|職務|要約|サマリ|紹介|実績|成果|履歴/i.test(tNoSpace)) return false
   // スキルシートのカテゴリ見出し（データベース/ネットワーク等のカタカナ分類語）は人名ではない。
   // 1人分のスキルシートを名簿と誤検出し、分類セルを人名行として展開する事故を防ぐ（Y.M_沼津.xlsx 実害）
   if (/^(?:データベース|ネットワーク|サーバ(?:ー)?|ミドルウェア|インフラ(?:ストラクチャ)?|クラウド|セキュリティ|ストレージ|プラットフォーム|アプリケーション|オペレーティングシステム|ハードウェア|ソフトウェア|プログラミング|マネジメント|コミュニケーション|プログラム|アーキテクチャ)$/.test(t)) return false
