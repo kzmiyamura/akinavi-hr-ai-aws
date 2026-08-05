@@ -43,9 +43,9 @@ function resolveCallKey(): string {
 const CALL_KEY = resolveCallKey()
 
 // 1回のポーリングで取得するメール上限（AI解析廃止により高速化→50に拡大）
-// ★段階公開Phase1(2026-07-26): 13,335件のバックログを安全に消化するため20に設定。
-//   Storage/egress監視で安定を確認したら50へ。異常時は1に戻す
-const MAX_EMAILS_PER_ACCOUNT = 20
+// ★2026-08-05: 取り込み再開後、毎サイクル20件フル+未読滞留を確認したためPhase2の50へ。
+//   1サイクル(5分)の実行時間が伸びて546が出るようなら30へ戻す
+const MAX_EMAILS_PER_ACCOUNT = 50
 // 全件取り込みモードでの1バッチあたりの取得上限
 const MAX_EMAILS_PER_ACCOUNT_FULL = 50
 
