@@ -9570,8 +9570,9 @@ Deno.serve(async (req: Request) => {
             // ② 同エージェント（同一 from）から同名が既に登録済み → UPDATE 判定
             // 　 件名一致 → 同一メール確定。件名違い → 駅・都道府県・年齢・経験年数の2つ以上一致で同一人物
             if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明') {
+              // raw_profile 全体（1件20〜60KB）は取らず、判定に使うキーだけJSON射影で取る（egress削減）
               const { data: sameAgent } = await supabase
-                .from('candidates').select('id, raw_profile, experience_years')
+                .from('candidates').select('id, experience_years, subject:raw_profile->>subject, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture, age:raw_profile->age')
                 .eq('data_env', inboundDataEnv)
                 .eq('name', blockResolvedName)
                 .eq('duplicate_flag', false)
@@ -9580,18 +9581,17 @@ Deno.serve(async (req: Request) => {
                 .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
                 .limit(5)
               if (sameAgent && sameAgent.length > 0) {
-                for (const s of sameAgent) {
-                  const theirRp = s.raw_profile as any
-                  const sameSubject = theirRp?.subject === subject
+                for (const s of sameAgent as any[]) {
+                  const sameSubject = s.subject === subject
                   let attrMatches = 0
                   const myStation = blockRegexFields.nearestStation ?? null
-                  const theirStation = theirRp?.nearestStation ?? null
+                  const theirStation = s.nearestStation ?? null
                   if (myStation && theirStation && myStation === theirStation) attrMatches++
                   const myPref = blockRegexFields.prefecture ?? null
-                  const theirPref = theirRp?.prefecture ?? null
+                  const theirPref = s.prefecture ?? null
                   if (myPref && theirPref && myPref === theirPref) attrMatches++
                   const myAge = blockRegexFields.age ?? null
-                  const theirAge = theirRp?.age ?? null
+                  const theirAge = s.age ?? null
                   if (myAge != null && theirAge != null && myAge === theirAge) attrMatches++
                   const myExp = toExperienceYears(blockRegexFields.experienceYears)
                   const theirExp = (s as any).experience_years ?? null
@@ -9606,7 +9606,7 @@ Deno.serve(async (req: Request) => {
             // ③ DBに同名が存在するか確認（Jaccard類似度による同一人物判定）
             if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明') {
               const { data: similar } = await supabase
-                .from('candidates').select('id, name, skills, raw_profile, experience_years')
+                .from('candidates').select('id, skills, experience_years, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture')
                 .eq('data_env', inboundDataEnv)
                 .eq('name', blockResolvedName)
                 .eq('duplicate_flag', false)
@@ -9614,13 +9614,13 @@ Deno.serve(async (req: Request) => {
                 .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
                 .limit(5)
               if (similar && similar.length > 0) {
-                for (const s of similar) {
+                for (const s of similar as any[]) {
                   const myStation = blockRegexFields.nearestStation ?? null
-                  const theirStation = (s.raw_profile as any)?.nearestStation ?? null
+                  const theirStation = s.nearestStation ?? null
                   if (myStation && theirStation && myStation !== theirStation) continue
                   // 都道府県が両方存在して異なる場合は別人と判断
                   const myBlockPref = blockRegexFields.prefecture ?? null
-                  const theirBlockPref = (s.raw_profile as any)?.prefecture ?? null
+                  const theirBlockPref = s.prefecture ?? null
                   if (myBlockPref && theirBlockPref && myBlockPref !== theirBlockPref) continue
                   // 経験年数の差が5年以上の場合は別人と判断
                   const myBlockExp = toExperienceYears(blockRegexFields.experienceYears)
@@ -9682,7 +9682,7 @@ Deno.serve(async (req: Request) => {
               blockSavedId = blockExistingId
             } else {
               const { data: blockData, error: blockError } = await supabase
-                .from('candidates').insert(blockPayload).select().single()
+                .from('candidates').insert(blockPayload).select('id').single()
               if (blockError) {
                 console.error(`[multi-candidate] 保存エラー "${blockResolvedName}":`, blockError.message)
                 continue
@@ -10184,9 +10184,10 @@ Deno.serve(async (req: Request) => {
       if (!existingCandidateId && resolvedName && resolvedName !== '不明') {
         // ステップ①: 同エージェント（同一 from）優先チェック
         // 　件名一致 → 同一メール確定。件名違い → 駅・都道府県・年齢・経験年数の2つ以上一致で同一人物
+        // raw_profile 全体（1件20〜60KB）は取らず、判定に使うキーだけJSON射影で取る（egress削減）
         const { data: sameAgentSingle } = await supabase
           .from('candidates')
-          .select('id, raw_profile, experience_years')
+          .select('id, experience_years, subject:raw_profile->>subject, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture, age:raw_profile->age')
           .eq('data_env', inboundDataEnv)
           .eq('name', resolvedName)
           .eq('duplicate_flag', false)
@@ -10195,18 +10196,17 @@ Deno.serve(async (req: Request) => {
           .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
           .limit(5)
         if (sameAgentSingle && sameAgentSingle.length > 0) {
-          for (const s of sameAgentSingle) {
-            const theirRp = s.raw_profile as any
-            const sameSubject = theirRp?.subject === subject
+          for (const s of sameAgentSingle as any[]) {
+            const sameSubject = s.subject === subject
             let attrMatches = 0
             const myStation = resolvedStation ?? null
-            const theirStation = theirRp?.nearestStation ?? null
+            const theirStation = s.nearestStation ?? null
             if (myStation && theirStation && myStation === theirStation) attrMatches++
             const myPref = resolvedPrefecture ?? null
-            const theirPref = theirRp?.prefecture ?? null
+            const theirPref = s.prefecture ?? null
             if (myPref && theirPref && myPref === theirPref) attrMatches++
             const myAge = regexFields.age ?? null
-            const theirAge = theirRp?.age ?? null
+            const theirAge = s.age ?? null
             if (myAge != null && theirAge != null && myAge === theirAge) attrMatches++
             const myExp = toExperienceYears(resolvedExperienceYears)
             const theirExp = (s as any).experience_years ?? null
@@ -10222,7 +10222,7 @@ Deno.serve(async (req: Request) => {
       if (existingCandidateId === null && resolvedName && resolvedName !== '不明') {
         const { data: similar } = await supabase
           .from('candidates')
-          .select('id, name, skills, raw_profile, experience_years')
+          .select('id, skills, experience_years, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture')
           .eq('data_env', inboundDataEnv)
           .eq('name', resolvedName)
           .eq('duplicate_flag', false)
@@ -10230,16 +10230,16 @@ Deno.serve(async (req: Request) => {
           .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
           .limit(5)
         if (similar && similar.length > 0) {
-          for (const s of similar) {
+          for (const s of similar as any[]) {
             const myStation = resolvedStation ?? null
-            const theirStation = (s.raw_profile as any)?.nearestStation ?? null
+            const theirStation = s.nearestStation ?? null
             // 駅が両方存在して異なる場合は別人と判断
             if (myStation && theirStation && myStation !== theirStation) {
               continue
             }
             // 都道府県が両方存在して異なる場合は別人と判断
             const myPref = resolvedPrefecture ?? null
-            const theirPref = (s.raw_profile as any)?.prefecture ?? null
+            const theirPref = s.prefecture ?? null
             if (myPref && theirPref && myPref !== theirPref) {
               continue
             }
@@ -10284,7 +10284,7 @@ Deno.serve(async (req: Request) => {
         savedCandidateId = existingCandidateId
       } else {
         // 新規 INSERT
-        const { data, error } = await supabase.from('candidates').insert(dbPayload).select().single()
+        const { data, error } = await supabase.from('candidates').insert(dbPayload).select('id').single()
         if (error) throw new Error(`候補者保存エラー: ${error.message}`)
         savedCandidateId = data.id
       }
