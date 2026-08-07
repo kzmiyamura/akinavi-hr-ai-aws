@@ -1,15 +1,38 @@
 // llm_extract/caller.mjs — モデル呼び出し
 // 既定: claude -p (サブスク枠・検証用)。ANTHROPIC_API_KEY があれば API直(本番想定・Batch移行前提)。
 // どちらも同じ contract: callModel(model, prompt) -> {data, costUsd, ms, raw}
-import { spawn } from 'child_process'
+import { spawn, execFileSync } from 'child_process'
+import fs from 'fs'
+import path from 'path'
+
+const IS_WIN = process.platform === 'win32'
+
+/** Windows の `claude` は npm の .cmd/.ps1 シム。shell 経由で起動すると
+ *  呼び出しのたびにコンソール窓が点滅する（windowsHide が shell:true では効かない）。
+ *  実体の claude.exe を1度だけ解決して直接起動する。見つからなければ shell 経由にフォールバック。 */
+const resolveClaudeExe = () => {
+  if (!IS_WIN) return null
+  const guess = path.join(process.env.APPDATA || '', 'npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe')
+  if (fs.existsSync(guess)) return guess
+  try {
+    for (const line of execFileSync('where', ['claude'], { encoding: 'utf8' }).split(/\r?\n/)) {
+      if (line.trim().toLowerCase().endsWith('.exe') && fs.existsSync(line.trim())) return line.trim()
+    }
+  } catch { /* where が無い環境 */ }
+  return null
+}
+const CLAUDE_EXE = resolveClaudeExe()
 
 /** stdin にプロンプトを流して claude -p を実行（execFileのinputはSync専用のためspawnで）
- *  Windows では claude が npm の .cmd/.ps1 シムのため shell 経由で起動し、
- *  タイムアウト時は taskkill でプロセスツリーごと落とす */
-const IS_WIN = process.platform === 'win32'
+ *  タイムアウト時は Windows なら taskkill でプロセスツリーごと落とす */
 function spawnWithStdin(cmd, args, input, timeoutMs = 180_000) {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: IS_WIN })
+    const useExe = cmd === 'claude' && CLAUDE_EXE
+    const p = spawn(useExe ? CLAUDE_EXE : cmd, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: IS_WIN && !useExe,
+      windowsHide: true,
+    })
     let out = '', err = ''
     const timer = setTimeout(() => {
       if (IS_WIN) spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'])
@@ -65,14 +88,15 @@ async function callViaApi(modelId, prompt) {
   return { data: parseJsonLoose(text), costUsd: null, ms: Date.now() - t0, raw: text, usage: j.usage }
 }
 
-/** 1回パース失敗したら同モデルでリトライ(1回)。それでもダメなら throw */
+/** パース失敗・タイムアウトは同モデルで1回リトライ。それでもダメなら throw
+ *  （タイムアウトはシャドー運転の失敗要因の最多。放置すると該当人材だけ上書きされず取り残される） */
 export async function callModel(modelKey, prompt) {
   const modelId = MODELS[modelKey] ?? modelKey
   const impl = process.env.ANTHROPIC_API_KEY ? callViaApi : callViaClaudeP
   try {
     return await impl(modelId, prompt)
   } catch (e) {
-    if (e instanceof SyntaxError) return await impl(modelId, prompt)
+    if (e instanceof SyntaxError || /timeout/i.test(String(e.message))) return await impl(modelId, prompt)
     throw e
   }
 }

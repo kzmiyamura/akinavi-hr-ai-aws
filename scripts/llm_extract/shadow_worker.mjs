@@ -11,8 +11,9 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { buildGridInput } from './lib.mjs'
+import { buildGridInput, normTech } from './lib.mjs'
 import { extractProjects, extractBodyFields } from './run.mjs'
+import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE } from './apply.mjs'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const KEY = process.env.SUPABASE_SERVICE_KEY
@@ -23,6 +24,8 @@ const CYCLE_MS = 5 * 60 * 1000
 const MAX_PER_CYCLE = 15        // 1サイクルのLLM対象候補者上限
 const MAX_PER_DAY = 400         // 日次上限（サブスク枠保護）
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'akinavi-shadow-'))
+// 本番 candidates への上書き。SHADOW_APPLY=0 で記録のみ（シャドー運転）に戻せる
+const APPLY = process.env.SHADOW_APPLY !== '0'
 
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 const state = fs.existsSync(STATE_FILE)
@@ -51,7 +54,52 @@ async function saveShadow(row) {
   })
 }
 
+/** skill_master 全件を正規化キー集合として1度だけ読み込む（skills 追加判定用） */
+let _skillMaster = null
+async function skillMasterSet() {
+  if (_skillMaster) return _skillMaster
+  const s = new Set()
+  for (let from = 0; ; from += 1000) {
+    const rows = await rest(`skill_master?select=name,aliases&limit=1000&offset=${from}`)
+    if (!rows?.length) break
+    for (const r of rows) {
+      for (const n of [r.name, ...(r.aliases || [])]) { const k = normTech(n); if (k) s.add(k) }
+    }
+    if (rows.length < 1000) break
+  }
+  _skillMaster = s
+  log(`skill_master 読み込み ${s.size}語`)
+  return s
+}
+
+/** LLM の抽出結果を本番 candidates に反映する */
+async function applyToCandidate(c, { bodyFields, attachment }) {
+  const { patch, changes } = buildPatch(c, { bodyFields, attachment })
+  if (!patch) { log(`  [${c.name}] 変更なし（DB更新スキップ）`); return }
+
+  // skills は skill_master にある未登録スキルの追加のみ（工程スキル等を消さないため）
+  if (attachment?.projects?.length) {
+    const techs = techsFromProjects(attachment.projects)
+    if (SKILLS_REPLACE) {
+      patch.skills = techs
+      changes.push('skills(全置換)')
+    } else {
+      const merged = mergeSkills(c.skills, techs, await skillMasterSet())
+      if (merged) { patch.skills = merged; changes.push(`skills(+${merged.length - (c.skills?.length ?? 0)})`) }
+    }
+  }
+
+  await rest(`candidates?id=eq.${c.id}`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: JSON.stringify(patch),
+  })
+  log(`  [${c.name}] 上書き: ${changes.join(', ')}`)
+}
+
 async function processCandidate(c) {
+  let bodyFields = null, attachment = null
+
   // 本文フィールド（常にHaiku）
   const bodyText = c.raw_profile?.text ?? ''
   if (bodyText.length > 50) {
@@ -63,6 +111,11 @@ async function processCandidate(c) {
         body_fields: bf.candidates, cost_usd: bf.costUsd, ms: Date.now() - t0,
       })
       state.dayCost += bf.costUsd || 0
+      // 複数人メールでは自分の行だけを選ぶ。特定できなければ本文由来は上書きしない
+      bodyFields = pickBodyFieldsFor(c.name, bf.candidates)
+      if (!bodyFields && (bf.candidates?.length ?? 0) > 1) {
+        log(`  [${c.name}] 本文に複数人・特定不可のため本文フィールドは上書きせず`)
+      }
     } catch (e) {
       await saveShadow({ candidate_id: c.id, source: 'body', status: 'error', reasons: [String(e).slice(0, 200)] })
     }
@@ -86,11 +139,17 @@ async function processCandidate(c) {
         cost_usd: r.costUsd, ms: r.ms,
       })
       state.dayCost += r.costUsd || 0
+      attachment = { projects: r.projects, skill_years: r.skillYears, model: r.model, status: r.status }
     } catch (e) {
       await saveShadow({ candidate_id: c.id, source: 'attachment', status: 'error', reasons: [String(e).slice(0, 200)] })
     } finally {
       fs.rmSync(fp, { force: true })
     }
+  }
+
+  if (APPLY && (bodyFields || attachment)) {
+    try { await applyToCandidate(c, { bodyFields, attachment }) }
+    catch (e) { log(`  [${c.name}] 上書き失敗:`, String(e).slice(0, 200)) }
   }
 }
 
@@ -116,7 +175,7 @@ async function cycle() {
   log(`サイクル完了 day=${state.dayCount}件 cost=$${state.dayCost.toFixed(2)}`)
 }
 
-log(`シャドーワーカー起動 watermark=${state.watermark} 上限=${MAX_PER_CYCLE}/cycle, ${MAX_PER_DAY}/day`)
+log(`ワーカー起動 mode=${APPLY ? '本番上書き' : 'シャドー記録のみ'} watermark=${state.watermark} 上限=${MAX_PER_CYCLE}/cycle, ${MAX_PER_DAY}/day`)
 while (true) {
   try { await cycle() } catch (e) { log('cycle error:', String(e).slice(0, 300)) }
   await new Promise(r => setTimeout(r, CYCLE_MS))
