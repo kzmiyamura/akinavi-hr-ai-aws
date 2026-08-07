@@ -86,8 +86,19 @@ ThinkCentre側で正常サイクルを確認したら、**ユーザーに「Mac�
 Mac側での停止コマンド: `pkill -f shadow_worker`
 （両方動いていると同じ候補者を二重処理してMax枠を無駄に消費する。データは upsert なので壊れはしない）
 
+## 移設完了メモ（2026-08-07・ThinkCentre = Windows 11 で実施済み）
+- ThinkCentre は Windows だったため systemd/nohup ではなく **pm2** で常駐化した
+  （既存の motion-lab が pm2 + スタートアップの `motion-lab-pm2-resurrect.cmd` で
+  常駐しており、同じ仕組みに相乗り。`pm2 save` 済みなのでログオン時に自動復元される）
+- プロセス名: `akinavi-shadow`。操作: `pm2 stop|restart|logs akinavi-shadow`
+- ログ: `C:\Users\admin\akinavi_shadow.log`（stdout/stderr とも）
+- `caller.mjs` に Windows 対応を追加（claude が npm の .cmd シムのため
+  `spawn(..., {shell: true})`、タイムアウト時は taskkill でツリーごと停止）。
+  Mac/Linux の挙動は不変
+
 ## 運用メモ
-- 停止: `systemctl --user stop akinavi-shadow`（nohup なら `pkill -f shadow_worker`）
+- 停止: `systemctl --user stop akinavi-shadow`（nohup なら `pkill -f shadow_worker`、
+  Windows/pm2 なら `pm2 stop akinavi-shadow`）
 - 上限: 15件/サイクル・400件/日（`shadow_worker.mjs` 冒頭の定数）
 - ログの `cost=$N` はAPI換算の参考値であり**実課金ではない**（サブスク枠）
 - このワーカーと対話的な Claude Code 利用は同じMax枠を食い合う。上限に当たったら時間経過で回復する

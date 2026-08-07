@@ -3,12 +3,19 @@
 // どちらも同じ contract: callModel(model, prompt) -> {data, costUsd, ms, raw}
 import { spawn } from 'child_process'
 
-/** stdin にプロンプトを流して claude -p を実行（execFileのinputはSync専用のためspawnで） */
+/** stdin にプロンプトを流して claude -p を実行（execFileのinputはSync専用のためspawnで）
+ *  Windows では claude が npm の .cmd/.ps1 シムのため shell 経由で起動し、
+ *  タイムアウト時は taskkill でプロセスツリーごと落とす */
+const IS_WIN = process.platform === 'win32'
 function spawnWithStdin(cmd, args, input, timeoutMs = 180_000) {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    const p = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], shell: IS_WIN })
     let out = '', err = ''
-    const timer = setTimeout(() => { p.kill('SIGKILL'); reject(new Error('timeout')) }, timeoutMs)
+    const timer = setTimeout(() => {
+      if (IS_WIN) spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'])
+      else p.kill('SIGKILL')
+      reject(new Error('timeout'))
+    }, timeoutMs)
     p.stdout.on('data', d => { out += d })
     p.stderr.on('data', d => { err += d })
     p.on('error', e => { clearTimeout(timer); reject(e) })
