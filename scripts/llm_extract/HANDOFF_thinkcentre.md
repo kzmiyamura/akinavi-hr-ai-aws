@@ -96,6 +96,41 @@ Mac側での停止コマンド: `pkill -f shadow_worker`
   `spawn(..., {shell: true})`、タイムアウト時は taskkill でツリーごと停止）。
   Mac/Linux の挙動は不変
 
+## 本番上書きモードへ移行（2026-08-07・ユーザー判断）
+
+シャドー記録のみだった運用を「新規登録人材の candidates を AI で上書きする」に変更した。
+過去データには遡及しない（ユーザー指示「きりがいいから今からの新規人材からやってみよう」）。
+
+- 実装: `apply.mjs`（`FIELD_POLICY` で項目ごとに overwrite / fill を指定）
+- **既定は fill（安全側）**。`'overwrite'` と明記した項目だけが既存値を置き換える
+- 上書き前の regex 値は `raw_profile._regex_backup` に退避。適用情報は `raw_profile._llm_applied`
+- 記録のみに戻す: `SHADOW_APPLY=0` を環境変数に入れて `pm2 restart akinavi-shadow --update-env`
+
+### なぜ「全上書き」にしなかったか（実データ60件のドライラン結果）
+全項目を無条件に AI で置き換えると以下が劣化することが判明したため、項目ごとに分けた。
+
+| 項目 | 方針 | 根拠 |
+|---|---|---|
+| name | overwrite | regex が「年　数」「項番」「Frame」を氏名として登録していた。ただし AI 側も「KM」→「KM29蕨」と年齢・駅を巻き込む例があり、数字を含む名前は `isUsableName` で棄却 |
+| from_company | overwrite | regex「Visual StudioCo」→ AI「株式会社ai・more」 |
+| age / gender | overwrite | 主に空欄の補完。gender は「男」「男性」を同一視して無駄な更新を回避 |
+| experience_years | overwrite | 案件期間の暦 union から算出。重複期間の二重計上を排除 |
+| skillYears / projects | overwrite | regex は「※項番4」「5同時稼働」「会議体の調整：7名」等を技術名として登録していた（KY で実証） |
+| desired_rate | **fill のみ** | AI が「61～65万円」→「65万円」と範囲の下限を落とす |
+| nearestStation | **fill のみ** | AI が「月～都営大江戸線　西新宿五丁目駅」等のゴミを混ぜる。駅名→都道府県の逆引きにも影響 |
+| employmentType | **fill のみ** | AI「1社先個人事業主」は商流と雇用形態の混在。商流は `raw_profile.commercialFlow` が別に保持しており、かつ `MatchingPage` が `employmentType === '派遣社員'` の完全一致で派遣許可チェックを分岐するため壊せない |
+| skills | 追加のみ | skill_master 照合済みで既にきれい。全置換すると営業が意図的に含めた工程スキル（テスト/要件定義/保守運用）が消える |
+
+### 未対応（次回検討・ユーザーから提起）
+- **Supabase への書き込みが1人あたり2回になる**（regex が登録 → AI が更新）。対策候補:
+  1. 変更が無ければ PATCH を投げない … **実装済み**
+  2. サイクル内の PATCH をまとめて1リクエストにする（最大15人 → 1回）
+  3. `llm_shadow` への記録をやめる … `raw_profile._regex_backup` / `_llm_applied` に
+     同等情報が入るようになったため、答え合わせ目的では概ね代替可能。監視用の
+     model / status / reasons / cost をどこまで残すか要判断
+- 経歴書読み取りの 180s タイムアウト（1日約42件）。1回リトライを入れたが要経過観察
+- 過去データへの遡及適用は未実施
+
 ## 運用メモ
 - 停止: `systemctl --user stop akinavi-shadow`（nohup なら `pkill -f shadow_worker`、
   Windows/pm2 なら `pm2 stop akinavi-shadow`）
