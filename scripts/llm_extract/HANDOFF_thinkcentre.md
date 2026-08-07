@@ -2,6 +2,83 @@
 
 **この文書は ThinkCentre 上の Claude Code に読ませて実行させるための手順書。**
 2026-08-07 作成。移設対象は LLM シャドーワーカー（`scripts/llm_extract/shadow_worker.mjs`）。
+移設は完了済み。以降の未完了事項は次節を参照。
+
+---
+
+# 次回やること（2026-08-08 時点・やり残し）
+
+## ⚠️ 最優先: 本番上書きが「まだ1件も実地検証できていない」
+
+コードとドライラン（実データ60件）までは確認済みだが、**実際に新規人材1人を
+上書きするところをログで見ていない**。watermark を現在時刻にリセットした直後で
+新規人材の登録待ちのまま作業を中断したため。次回まずこれを確認すること。
+
+```bash
+# 1. 上書きが走ったか
+grep -E "上書き:|上書き失敗|本文に複数人" ~/akinavi_shadow.log | tail
+
+# 2. 実際のレコードが意図通りか（_regex_backup に旧値、本体に新値が入っていること）
+source ~/.akinavi_shadow.env
+curl -s "$SUPABASE_URL/rest/v1/candidates?select=name,experience_years,raw_profile&data_env=eq.prod&raw_profile->>_llm_applied=not.is.null&limit=5" \
+  -H "apikey: $SUPABASE_SERVICE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_KEY"
+```
+
+**問題があれば即停止**（データは `_regex_backup` から戻せる）:
+```bash
+pm2 stop akinavi-shadow
+# または記録のみモードで継続: SHADOW_APPLY=0 を入れて pm2 restart akinavi-shadow --update-env
+```
+
+## 未着手・要判断の項目
+
+1. **答え合わせ用スクリプトが無い**
+   ユーザーの主目的は「後で答え合わせを見る」こと。既存の `shadow_report.mjs` は
+   `llm_shadow` と `candidates` を比較する作りで、**上書き後は candidates 側が
+   AI 値になるため比較にならない**。`raw_profile._regex_backup`（旧regex値）と
+   現在値を比較するスクリプトを新規に作る必要がある。
+
+2. **滞留していた507件は意図的にスキップした**
+   ユーザー指示「きりがいいから今からの新規人材から」に従い watermark を
+   2026-08-07T02:16 → 現在時刻へジャンプさせた。この507件は AI 処理されないまま
+   7日で archive される。遡及処理したい場合は watermark を戻す。
+
+3. **Supabase への書き込みが1人2回になる問題**（ユーザーから提起・「後で対策」）
+   - 案1: 変更が無ければ PATCH しない … **実装済み**
+   - 案2: サイクル内の PATCH をまとめて1リクエストに（最大15人 → 1回）… 未着手
+   - 案3: `llm_shadow` への記録をやめる（`_regex_backup` / `_llm_applied` で概ね代替可）… 未判断
+
+4. **経歴書読み取りの180sタイムアウト**（シャドー運転時 1日約42件＝約12%）
+   `callModel` に1回リトライを追加したが効果を測っていない。要経過観察。
+   なお `claude.exe` 直叩きに変えた分は速くなっているはず（窓生成のオーバーヘッド解消）。
+
+5. **`experience_years` の上書きが妥当かは未検証**
+   ドライランで13件が変化（7→10 / 1→2 / 5→6 / 17→16 等）。案件期間の暦unionで
+   算出しており理屈は通っているが、**どちらが正しいかの裏取りをしていない**。
+   `HANDOFF_EXCEL_VERIFICATION.md` の保留事項（IS/IT/KK の3名で自己PR記載の
+   前職経験が合算されない問題）は、この暦union方式で自然解決する可能性がある。
+   答え合わせの際に併せて確認するとよい。
+
+6. **日次上限400件に張り付いていた**
+   実流量は約250〜300人/日。移設直後は過去分の消化で上限に到達していた。
+   定常運用でも上限に当たるようなら `shadow_worker.mjs` 冒頭の `MAX_PER_DAY` を要調整。
+
+7. **`skills` 列は現状「追加のみ」**
+   skill_master 照合済みで既にきれいなため全置換していない（`apply.mjs` の
+   `SKILLS_REPLACE = false`）。AI の techs を skill_master 経由で正規化して
+   完全移行するかは未判断。
+
+## この作業で分かった重要な事実（判断の前提）
+
+- **regex は「取りこぼす」だけでなく「ゴミを混ぜる」**。候補者KYの実ファイル照合で、
+  regex が `※項番4` `5同時稼働` `会議体の調整：7名` 等を技術名として登録していたことを確認
+- **ただし AI も万能ではない**。氏名に年齢・駅を巻き込む（`KM` → `KM29蕨`）、
+  単価の範囲下限を落とす（`61～65万円` → `65万円`）等の劣化が実データで出た。
+  「AI で全部上書き」は成立せず、項目ごとの方針分けが必須（`FIELD_POLICY`）
+- **費用ゼロ制約のため AI は Edge Function 内では回せない**（Max枠は CLI 専用）。
+  したがって「regex が先に登録 → この PC の AI が後から直す」構造は今後も変わらない
+
+---
 
 ## 背景（ThinkCentre側のClaudeへ）
 - このワーカーは、本番regexパイプラインが登録した新規候補者を5分おきにポーリングし、
