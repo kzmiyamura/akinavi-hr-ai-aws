@@ -125,7 +125,7 @@ git add -A && git commit -m "fix: ..." && git push
 | `ai_logs` | AI呼び出しログ。`inbound-email` 由来は `model='no-ai'` |
 | `error_logs` | フロントエンドエラーログ。30日自動削除 cron は未実装（要追加） |
 | `skill_master` | ITスキルマスタ（約1,660件）。aliases で表記ゆれ吸収 |
-| `station_master` | 駅名・路線名→都道府県マッピング（ekidata.jp実データ、12,666行・8,443駅名。同名駅は路線で判別）。`scripts/export_station_master.mjs` で `supabase/functions/inbound-email/station_data.json` に書き出し、Edge Functionにビルド時同梱（実行時DB問い合わせなし）。DB更新時は再エクスポート＋再デプロイが必要 |
+| `station_master` | 駅名・路線名→都道府県マッピング（ekidata.jp実データ、12,666行・8,443駅名。同名駅は路線で判別。路線不明時は首都圏の県を優先採用＝2026-08-08ユーザー判断、首都圏同士で割れたらnull）。`scripts/export_station_master.mjs` で `supabase/functions/inbound-email/station_data.json` に書き出し、Edge Functionにビルド時同梱（実行時DB問い合わせなし）。DB更新時は再エクスポート＋再デプロイが必要 |
 | `app_config` | アプリ全体設定・Microsoft OAuthトークン保存 |
 | `notification_rules` | 人材ウォッチ通知ルール（通知タブでCRUD）。7/23復旧日にマイグレーション適用 |
 | `notification_log` | 通知送信済み記録（ルール×人材で一意・二重通知防止） |
@@ -154,3 +154,22 @@ git add -A && git commit -m "fix: ..." && git push
 - **通知機能**: `notification_rules`（条件: 名前/スキル/駅のAND）に合致する人材が登録・更新されたら `notify-candidates` Edge Function（pg_cron 5分）が Graph sendMail でメール通知。二重通知は `notification_log` で防止。送信には Mail.Send スコープ（Microsoft再連携）が必要
 - **認証なし**: ニックネームを `localStorage` に保存
 - **重複管理**: email一致で自動UPDATE。名前一致 + スキルJaccard ≥ 0.4 で `duplicate_flag=true`
+
+## Supabase の調査クエリ
+
+**`source ~/.akinavi_shadow.env && node -e "..."` は使わないこと。**
+`source` も `node -e` も allowlist に登録できないため、実行のたびに承認ダイアログが出て
+セッションが停止する。代わりに `scripts/llm_extract/sb-query.mjs` を使う。
+
+```bash
+node scripts/llm_extract/sb-query.mjs "candidates?id=eq.<uuid>&select=name,raw_profile"
+node scripts/llm_extract/sb-query.mjs "candidates?select=id,name&limit=5" --raw
+```
+
+- env はスクリプト内で `~/.akinavi_shadow.env` から読むので `source` は不要
+- GET 固定・書き込み不可（読み取り専用）
+- 既定は要約表示。生 JSON が要るときは `--raw`
+- 恒久許可済み: `Bash(node scripts/llm_extract/sb-query.mjs *)`
+
+このスクリプトで足りない調査が出たら、その場限りの `node -e` を書くのではなく
+sb-query.mjs に機能を足すか、新しいスクリプトファイルを作って引数化すること。

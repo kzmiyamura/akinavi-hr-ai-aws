@@ -247,6 +247,9 @@ async function processBoxCandidate(c) {
       }),
     })
     if (!resp.ok) throw new Error(`inbound-email ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
+    // inbound-email が本文の Box URL を再抽出して box_status を 'pending' に戻すため、
+    // LLM解析中に UI の「AI取込」ボタンが復活して二重依頼できてしまう → 'fetching' に戻す
+    await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'fetching' }) })
     // regex再解析後の最新状態で LLM 再解析（resume_url が付いている）
     const [fresh] = await rest(`candidates?select=${CAND_SELECT}&id=eq.${c.id}`)
     if (fresh) {
