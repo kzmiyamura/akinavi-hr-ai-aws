@@ -14,6 +14,7 @@ import path from 'path'
 import { buildGridInput, buildTextGridInput, normTech } from './lib.mjs'
 import { extractProjects, extractBodyFields } from './run.mjs'
 import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE } from './apply.mjs'
+import { downloadBoxFile } from './box_fetch.mjs'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const KEY = process.env.SUPABASE_SERVICE_KEY
@@ -187,8 +188,56 @@ async function cycle() {
   log(`サイクル完了 day=${state.dayCount}件 cost=$${state.dayCost.toFixed(2)}`)
 }
 
+// ── Box経歴書ワンクリック再解析キュー ──
+// UI が box_status='fetch_requested' にした人材を拾い、Box からDL →
+// inbound-email Edge Function に添付として投入（regex再解析・storage保存・resume_url付与）→
+// 続けて LLM 再解析（processCandidate）→ box_status='enriched'。
+// UI応答性のため本サイクル(5分)とは別に30秒間隔でポーリングする。
+const BOX_POLL_MS = 30 * 1000
+const CAND_SELECT = 'id,name,resume_url,raw_profile,created_at,desired_rate,from_company,experience_years,skills'
+
+async function boxQueue() {
+  if (state.dayCount >= MAX_PER_DAY) return
+  const rows = await rest(
+    `candidates?select=id,name,box_url,data_env,mailfrom:raw_profile->>from` +
+    `&box_status=eq.fetch_requested&order=created_at.asc&limit=3`)
+  for (const c of rows ?? []) {
+    log(`Box取得: ${c.name} (${c.id})`)
+    await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'fetching' }) })
+    try {
+      const f = await downloadBoxFile(c.box_url)
+      log(`  [box:${c.name}] DL完了 ${f.name} (${f.buf.length}B)`)
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/inbound-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: KEY, Authorization: `Bearer ${KEY}` },
+        body: JSON.stringify({
+          subject: `【Box経歴書】${c.name ?? ''}`,
+          body: `Box経歴書ファイル取込: ${f.name}`,
+          from: c.mailfrom || `box+${c.id}@upload.invalid`,
+          attachments: [{ data: f.buf.toString('base64'), mimeType: f.mimeType, name: f.name }],
+          mode: c.data_env, type: 'candidate', force: true, target_candidate_id: c.id,
+        }),
+      })
+      if (!resp.ok) throw new Error(`inbound-email ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
+      // regex再解析後の最新状態で LLM 再解析（resume_url が付いている）
+      const [fresh] = await rest(`candidates?select=${CAND_SELECT}&id=eq.${c.id}`)
+      if (fresh) { await processCandidate(fresh); state.dayCount++; saveState() }
+      await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'enriched' }) })
+      log(`  [box:${c.name}] 完了`)
+    } catch (e) {
+      log(`  [box:${c.name}] 失敗:`, String(e).slice(0, 200))
+      await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'failed' }) }).catch(() => {})
+    }
+  }
+}
+
 log(`ワーカー起動 mode=${APPLY ? '本番上書き' : 'シャドー記録のみ'} watermark=${state.watermark} 上限=${MAX_PER_CYCLE}/cycle, ${MAX_PER_DAY}/day`)
+// 前回クラッシュで 'fetching' のまま残った依頼を復帰させる
+await rest(`candidates?box_status=eq.fetching`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'fetch_requested' }) }).catch(() => {})
 while (true) {
   try { await cycle() } catch (e) { log('cycle error:', String(e).slice(0, 300)) }
-  await new Promise(r => setTimeout(r, CYCLE_MS))
+  for (let i = 0; i < CYCLE_MS / BOX_POLL_MS; i++) {
+    try { await boxQueue() } catch (e) { log('box queue error:', String(e).slice(0, 200)) }
+    await new Promise(r => setTimeout(r, BOX_POLL_MS))
+  }
 }

@@ -935,6 +935,21 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     }
   }
 
+  // Box経歴書ワンクリック取込: box_status='fetch_requested' にするだけで、
+  // ThinkCentre常駐ワーカーが Boxダウンロード → inbound-email 再解析 → AI上書き まで裏で行う
+  const requestBoxFetch = async (c: Candidate) => {
+    setBoxUploadMsg(null)
+    const { error } = await supabase
+      .from('candidates')
+      .update({ box_status: 'fetch_requested' })
+      .eq('id', c.id)
+    if (error) {
+      setBoxUploadMsg({ id: c.id, text: `取込依頼に失敗しました: ${error.message}`, ok: false })
+      return
+    }
+    queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
+  }
+
   const { data: isImportActive } = useQuery({
     queryKey: ['importActive'],
     queryFn: getIsImportActive,
@@ -1094,6 +1109,26 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         .gte('created_at', since)
         .limit(5)
       return (data ?? []) as Candidate[]
+    },
+  })
+
+  // Box取込中はワーカーの進捗をポーリングして画面に反映する
+  // （処理本体はサーバー側の常駐ワーカーなので、タブ移動・リロードしても継続する）
+  const boxWorking = selectedCandidate?.box_status === 'fetch_requested' || selectedCandidate?.box_status === 'fetching'
+  useQuery({
+    queryKey: ['box-fetch-poll', selectedCandidate?.id],
+    enabled: boxWorking,
+    refetchInterval: 5_000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('candidates')
+        .select('id, box_status, resume_url')
+        .eq('id', selectedCandidate!.id)
+        .single()
+      if (data && (data.box_status !== selectedCandidate!.box_status || data.resume_url !== selectedCandidate!.resume_url)) {
+        queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
+      }
+      return data
     },
   })
 
@@ -1689,22 +1724,41 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                             <ExternalLink size={14} />
                             Box{selectedCandidate.box_status === 'pending' ? '（処理待ち）' : ''}
                           </a>
-                          {selectedCandidate.box_status === 'pending' && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                boxUploadTargetRef.current = selectedCandidate
-                                boxFileInputRef.current?.click()
-                              }}
-                              disabled={boxUploadingId === selectedCandidate.id}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-300 rounded-lg text-orange-700 hover:bg-orange-50 transition-colors disabled:opacity-50"
-                              title="Boxからダウンロードしたファイルをアップロードして解析"
+                          {boxWorking ? (
+                            <span
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-300 rounded-lg text-orange-700 bg-orange-50"
+                              title="サーバー側で処理中です。他の画面に移動しても継続します"
                             >
-                              {boxUploadingId === selectedCandidate.id
-                                ? <Loader2 size={14} className="animate-spin" />
-                                : <Paperclip size={14} />}
-                              ファイルで更新
-                            </button>
+                              <Loader2 size={14} className="animate-spin" />
+                              {selectedCandidate.box_status === 'fetching' ? 'Box取込・AI解析中…' : '取込待機中…'}
+                            </span>
+                          ) : (selectedCandidate.box_status === 'pending' || selectedCandidate.box_status === 'failed') && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => requestBoxFetch(selectedCandidate)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-400 rounded-lg text-white bg-orange-500 hover:bg-orange-600 transition-colors"
+                                title="Boxから経歴書を自動ダウンロードして再解析（AI上書きまで自動）"
+                              >
+                                <RefreshCw size={14} />
+                                {selectedCandidate.box_status === 'failed' ? 'AI取込 再試行' : 'AI取込'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  boxUploadTargetRef.current = selectedCandidate
+                                  boxFileInputRef.current?.click()
+                                }}
+                                disabled={boxUploadingId === selectedCandidate.id}
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-300 rounded-lg text-orange-700 hover:bg-orange-50 transition-colors disabled:opacity-50"
+                                title="Boxからダウンロードしたファイルをアップロードして解析"
+                              >
+                                {boxUploadingId === selectedCandidate.id
+                                  ? <Loader2 size={14} className="animate-spin" />
+                                  : <Paperclip size={14} />}
+                                ファイルで更新
+                              </button>
+                            </>
                           )}
                         </>
                       )}

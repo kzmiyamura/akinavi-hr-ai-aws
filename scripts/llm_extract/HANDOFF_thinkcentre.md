@@ -36,6 +36,26 @@ pm2 stop akinavi-shadow
   `bodyFields._model` を渡すよう修正済み（初回3件の TK/OG は model 欄が空のまま）
 - `.docx` の経歴書は添付抽出の対象外（OG が該当）。xlsx のみ対応は従来仕様
 
+## ✅ 追加機能（2026-08-08 実装・実地検証済み）
+
+1. **docx/PDF 経歴書の LLM 抽出対応**（直近1000件の28%が未対応だった）
+   `textract.mjs`（mammoth / pdfjs-dist）でテキスト化 → 疑似グリッドで既存の機械検証を共用。
+   OG(docx・コンサル系6案件) / Y.K(pdf) の実ファイルで検証済み。旧 .doc(0.8%) のみ未対応
+2. **Box経歴書ワンクリック再解析**
+   UI の「AI取込」ボタン → `box_status='fetch_requested'` → ワーカーが30秒間隔で検知 →
+   Box共有リンクからDL（`box_fetch.mjs`・認証不要スクレイプ）→ inbound-email へ添付投入
+   （regex再解析・storage保存・resume_url付与）→ LLM再解析・上書き → `enriched`。
+   H,I（元L2）で実地検証: 依頼から約2分で完了、経験年数9年はメール記載と一致。
+   処理はサーバー側なのでタブ移動・リロードでも継続。失敗時は `failed` → ボタンで再試行可
+
+## ⚠️ 2026-08-08 に発見・修正した重大バグ（教訓）
+
+worker の SELECT に `desired_rate, from_company, experience_years, skills` が無く、
+buildPatch が「既存値なし」と誤認 → fill 項目の上書き・skills 全置換が起きていた。
+実害は NH / OG の skills 列のみで `candidate_skills` テーブルから復元済み。
+**教訓: FIELD_POLICY / mergeSkills が参照する列と worker の select は必ず同期させる**
+（初回3件の答え合わせで TK の再上書きに気づいて発覚。実地検証は複数サイクル見るべき）
+
 ## 未着手・要判断の項目
 
 1. **答え合わせ用スクリプト → 作成済み**: `scripts/llm_extract/apply_report.mjs`。
