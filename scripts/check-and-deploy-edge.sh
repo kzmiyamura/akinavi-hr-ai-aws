@@ -25,4 +25,9 @@ ERROR_COUNT=$(echo "$CHECK_OUTPUT" | grep -c "ERROR" || true)
 echo "✅ 未定義変数エラーなし（既存の型互換エラーは無視: ${ERROR_COUNT}件）"
 echo ""
 echo "=== supabase functions deploy: ${FUNCTION} ==="
-supabase functions deploy "$FUNCTION"
+# supabase CLI がPATHに無い環境（ThinkCentre等）は npx 経由にフォールバック
+if command -v supabase >/dev/null 2>&1; then
+  supabase functions deploy "$FUNCTION"
+else
+  npx supabase functions deploy "$FUNCTION"
+fi
