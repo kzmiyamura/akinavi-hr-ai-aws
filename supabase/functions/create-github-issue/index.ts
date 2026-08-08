@@ -49,6 +49,8 @@ Deno.serve(async (req) => {
       state: i.state,
       html_url: i.html_url,
       created_at: i.created_at,
+      // 報告の詳細（どの画面か等の環境情報を含む）。Claude Code の Issue 監視運用で必要
+      body: i.body,
     }))
     return json(result, 200)
   }
