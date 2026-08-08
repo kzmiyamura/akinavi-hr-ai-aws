@@ -298,7 +298,9 @@ function extractSectionsByLabels(text: string, labels: string[]): string | null 
  * スプレッドシート等の添付データは対象外（誤マッチ防止）。 */
 function extractSelfPR(body: string, _attachText: string): string | null {
   // 'PR' 単体は短すぎてURL中・一般テキスト（PR会社等）に誤マッチするため除外
-  return extractSectionsByLabels(body, [
+  // body は生HTML由来で &#26684; 等の数値文字参照が残ることがあるためデコードしてから抽出
+  // （実害: エージェントコメントの「性格」が「性&#26684;」で保存された・2026-08-08）
+  return extractSectionsByLabels(decodeHtmlEntities(body), [
     '自己PR', 'アピールポイント', '特徴・強み', '強み', '紹介文', '本人PR',
   ])
 }
@@ -307,7 +309,8 @@ function extractSelfPR(body: string, _attachText: string): string | null {
  * スプレッドシート等の添付データは対象外（誤マッチ防止）。
  * 「備考」はメール内での用途が曖昧（候補者自身のメモにも使われる）ため除外。 */
 function extractAgentComment(body: string, _attachText: string): string | null {
-  return extractSectionsByLabels(body, [
+  // selfPR と同様、数値文字参照をデコードしてから抽出（「性&#26684;」対策）
+  return extractSectionsByLabels(decodeHtmlEntities(body), [
     '弊社コメント', 'エージェントコメント', '担当者コメント', 'コーディネーターコメント',
     '営業コメント', '推薦コメント', '所感', '推薦理由', '特記事項',
     '人物像', '人物', '所見', '印象', '弊社担当者から一言',
