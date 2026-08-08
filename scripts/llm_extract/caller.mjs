@@ -60,9 +60,15 @@ function parseJsonLoose(txt) {
   return JSON.parse(m ? m[0] : t)
 }
 
+/** 大型経歴書（数十案件のグリッド）は出力も長く180秒では足りない（AT 33案件PDF /
+ *  AH 1.2MB PDF がリトライ込みでも timeout した実害・2026-08-08）。
+ *  10KB を超えた分は 200文字あたり+1秒、上限480秒。通常サイズは従来どおり180秒 */
+const timeoutForPrompt = (prompt) =>
+  Math.min(480_000, 180_000 + Math.max(0, prompt.length - 10_000) * 5)
+
 async function callViaClaudeP(modelId, prompt) {
   const t0 = Date.now()
-  const stdout = await spawnWithStdin('claude', ['-p', '--model', modelId, '--output-format', 'json'], prompt)
+  const stdout = await spawnWithStdin('claude', ['-p', '--model', modelId, '--output-format', 'json'], prompt, timeoutForPrompt(prompt))
   const wrap = JSON.parse(stdout)
   return { data: parseJsonLoose(wrap.result), costUsd: wrap.total_cost_usd ?? null, ms: Date.now() - t0, raw: wrap.result }
 }
