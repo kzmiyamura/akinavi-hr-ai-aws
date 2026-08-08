@@ -1224,7 +1224,13 @@ async function lookupStationPrefectureFromDb(station: string | null | undefined)
         e.line && (e.line === lineNameCandidate || e.line.includes(lineNameCandidate) || lineNameCandidate.includes(e.line)))
       if (match) return match.prefecture
     }
-    // 判別できない（同名駅・路線不明）: 誤った県を入れるより安全側でnull
+    // 路線不明の同名駅: 候補に首都圏があればそれを採用（2026-08-08 ユーザー判断）。
+    // 案件・人材の大半が首都圏のため実用性を優先（実害例: 三田駅=東京/兵庫 で null になり
+    // NH の県が空になった）。首都圏同士で割れる場合（例: 同名駅が東京と埼玉）は従来どおり null
+    const KANTO_PREFS = ['東京都', '神奈川県', '埼玉県', '千葉県']
+    const kantoHits = distinctPrefs.filter((p) => KANTO_PREFS.includes(p))
+    if (kantoHits.length === 1) return kantoHits[0]
+    // 判別できない（同名駅・路線不明・首都圏でも複数）: 誤った県を入れるより安全側でnull
     return null
   }
   return null
