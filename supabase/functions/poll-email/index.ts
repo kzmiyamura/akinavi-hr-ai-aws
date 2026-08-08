@@ -931,22 +931,33 @@ async function processQueryEmail(
     // 通常ポーリングは処理後にメールを削除するため、受信箱に無ければ
     // 削除済みアイテムも検索する（処理済みメールの再処理＝復旧が主用途のため）
     let target: GraphMessage | null = null
-    for (const folder of ['inbox', 'deleteditems']) {
+    // recoverableitemsdeletions = 削除済みアイテムから消えた後も14〜30日残る回復可能アイテム
+    for (const folder of ['inbox', 'deleteditems', 'recoverableitemsdeletions']) {
+      // 削除済みアイテムは過去メールが大量にあるため新しい順に辿る
+      // （復旧対象＝直近の処理済みメール。古い順だとページ上限内に到達しない）
       let url: string | null = [
         `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages`,
         '?$top=200',
         '&$select=id,subject,from,hasAttachments,receivedDateTime',
-        '&$orderby=receivedDateTime asc',
+        `&$orderby=receivedDateTime ${folder === 'inbox' ? 'asc' : 'desc'}`,
       ].join('')
+      let scanned = 0, newest = '', oldest = ''
       for (let page = 0; page < 15 && url && !target; page++) {
         const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
         if (!res.ok) { errors.push(`list ${folder} p${page}: ${res.status}`); break }
         const json = await res.json()
         const msgs = (json.value ?? []) as GraphMessage[]
+        scanned += msgs.length
+        for (const m of msgs) {
+          const d = m.receivedDateTime ?? ''
+          if (!newest || d > newest) newest = d
+          if (!oldest || (d && d < oldest)) oldest = d
+        }
         target = msgs.find(m => m.hasAttachments &&
           `${m.subject ?? ''} ${m.from?.emailAddress?.address ?? ''}`.toLowerCase().includes(q)) ?? null
         url = (json['@odata.nextLink'] as string) ?? null
       }
+      errors.push(`[debug] ${folder}: scanned=${scanned} range=${oldest.slice(0, 10)}..${newest.slice(0, 10)}`)
       if (target) break
     }
     if (!target) { errors.push('該当メールが見つからない'); return { account: config.configKey, subject: '', attachments: [], inboundCalls: 0, errors } }
@@ -1291,15 +1302,20 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    // 検証モード: query 一致メール(先頭1通)を修正済みパイプラインに通す（既読化・削除なし）
+    // 検証モード: query 一致メール(先頭1通)を修正済みパイプラインに通す（既読化・削除なし）。
+    // 候補者メールは分類設定次第で human/project どちらの受信箱にも入るため prod 全アカウントを探す
     if (pollModeRaw === 'procquery') {
       const query = (await getAppConfigValue(supabase, 'email_dump_query')) ?? ''
       console.log(`[poll-email] procquery query="${query}"`)
-      const humanProd = POLL_CONFIGS.find(c => c.configKey === 'graph_rt_human_prod')!
-      const r = await processQueryEmail(supabase, humanProd, query)
+      const results = []
+      for (const config of POLL_CONFIGS.filter(c => c.dataEnv === 'prod')) {
+        const r = await processQueryEmail(supabase, config, query)
+        results.push(r)
+        if (r.inboundCalls > 0) break // 1通処理したら終了（同一メールの二重処理防止）
+      }
       await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
       await releaseLock()
-      return new Response(JSON.stringify({ ok: true, mode: 'procquery', result: r }),
+      return new Response(JSON.stringify({ ok: true, mode: 'procquery', result: results.find(r => r.inboundCalls > 0) ?? results[0], results }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
