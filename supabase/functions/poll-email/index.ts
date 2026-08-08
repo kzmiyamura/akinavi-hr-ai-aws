@@ -927,22 +927,27 @@ async function processQueryEmail(
     await saveRefreshToken(supabase, config.configKey, newRefreshToken)
 
     const q = query.toLowerCase()
-    // 受信箱を古い順に辿り query 一致（件名/差出人）の添付付きメールを探す
-    let url: string | null = [
-      'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages',
-      '?$top=200',
-      '&$select=id,subject,from,hasAttachments,receivedDateTime',
-      '&$orderby=receivedDateTime asc',
-    ].join('')
+    // query 一致（件名/差出人）の添付付きメールを古い順に探す。
+    // 通常ポーリングは処理後にメールを削除するため、受信箱に無ければ
+    // 削除済みアイテムも検索する（処理済みメールの再処理＝復旧が主用途のため）
     let target: GraphMessage | null = null
-    for (let page = 0; page < 15 && url && !target; page++) {
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
-      if (!res.ok) { errors.push(`list p${page}: ${res.status}`); break }
-      const json = await res.json()
-      const msgs = (json.value ?? []) as GraphMessage[]
-      target = msgs.find(m => m.hasAttachments &&
-        `${m.subject ?? ''} ${m.from?.emailAddress?.address ?? ''}`.toLowerCase().includes(q)) ?? null
-      url = (json['@odata.nextLink'] as string) ?? null
+    for (const folder of ['inbox', 'deleteditems']) {
+      let url: string | null = [
+        `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages`,
+        '?$top=200',
+        '&$select=id,subject,from,hasAttachments,receivedDateTime',
+        '&$orderby=receivedDateTime asc',
+      ].join('')
+      for (let page = 0; page < 15 && url && !target; page++) {
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
+        if (!res.ok) { errors.push(`list ${folder} p${page}: ${res.status}`); break }
+        const json = await res.json()
+        const msgs = (json.value ?? []) as GraphMessage[]
+        target = msgs.find(m => m.hasAttachments &&
+          `${m.subject ?? ''} ${m.from?.emailAddress?.address ?? ''}`.toLowerCase().includes(q)) ?? null
+        url = (json['@odata.nextLink'] as string) ?? null
+      }
+      if (target) break
     }
     if (!target) { errors.push('該当メールが見つからない'); return { account: config.configKey, subject: '', attachments: [], inboundCalls: 0, errors } }
 
