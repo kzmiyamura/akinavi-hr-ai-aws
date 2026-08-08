@@ -8,21 +8,22 @@
 
 # 次回やること（2026-08-08 時点・やり残し）
 
-## ⚠️ 最優先: 本番上書きが「まだ1件も実地検証できていない」
+## ✅ 実地検証 完了（2026-08-08 午前・新規3名で確認）
 
-コードとドライラン（実データ60件）までは確認済みだが、**実際に新規人材1人を
-上書きするところをログで見ていない**。watermark を現在時刻にリセットした直後で
-新規人材の登録待ちのまま作業を中断したため。次回まずこれを確認すること。
+初回の本番上書き3件（TK / OG / NH）をログとDBで確認した。**破壊的な上書きなし・停止不要**。
 
-```bash
-# 1. 上書きが走ったか
-grep -E "上書き:|上書き失敗|本文に複数人" ~/akinavi_shadow.log | tail
-
-# 2. 実際のレコードが意図通りか（_regex_backup に旧値、本体に新値が入っていること）
-source ~/.akinavi_shadow.env
-curl -s "$SUPABASE_URL/rest/v1/candidates?select=name,experience_years,raw_profile&data_env=eq.prod&raw_profile->>_llm_applied=not.is.null&limit=5" \
-  -H "apikey: $SUPABASE_SERVICE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_KEY"
-```
+- **TK / OG**: 本文由来の fill のみ（空欄→単価・会社名・稼働時期等）。意図通り
+- **NH**: フル機能ケース。経歴書27案件を sonnet 昇格で抽出し、projects /
+  experience_years(空→23) / skillYears(44語→71語) / skills(+44) を上書き
+- **NH の実ファイル答え合わせ**で regex の重大な誤りを AI が修正していたことを確認:
+  スキルシートの行 `Java | Mac 27年 | Oracle Database(年数空欄)` で、regex は
+  **Mac の27年を Oracle に誤帰属**（Oracle:324ヶ月）。AI は案件履歴から Oracle=2ヶ月と算出
+- **AI 側の課題も1件発見**: 案件表の表記 `Js` を `JavaScript` に正規化せず別キーで
+  記録するため、skillYears が `Js`（実年数）と `JavaScript:2` に分裂する。
+  skillYears のキー正規化（normTech / skill_master alias 経由）は今後の検討課題
+- **AI は資格シートの自己申告年数（例: JavaScript 23年）を使わず案件表から計算する**。
+  自己申告 vs 実案件のどちらを正とするかは思想の問題（自己申告は往々にして過大）
+- 答え合わせコマンド: `node scripts/llm_extract/apply_report.mjs [日数|--id <id>]`
 
 **問題があれば即停止**（データは `_regex_backup` から戻せる）:
 ```bash
@@ -30,13 +31,16 @@ pm2 stop akinavi-shadow
 # または記録のみモードで継続: SHADOW_APPLY=0 を入れて pm2 restart akinavi-shadow --update-env
 ```
 
+補足（2026-08-08 に判明・対応済み）:
+- 本文のみ由来の上書きで `_llm_applied.model` が null になっていた → `shadow_worker.mjs` で
+  `bodyFields._model` を渡すよう修正済み（初回3件の TK/OG は model 欄が空のまま）
+- `.docx` の経歴書は添付抽出の対象外（OG が該当）。xlsx のみ対応は従来仕様
+
 ## 未着手・要判断の項目
 
-1. **答え合わせ用スクリプトが無い**
-   ユーザーの主目的は「後で答え合わせを見る」こと。既存の `shadow_report.mjs` は
-   `llm_shadow` と `candidates` を比較する作りで、**上書き後は candidates 側が
-   AI 値になるため比較にならない**。`raw_profile._regex_backup`（旧regex値）と
-   現在値を比較するスクリプトを新規に作る必要がある。
+1. **答え合わせ用スクリプト → 作成済み**: `scripts/llm_extract/apply_report.mjs`。
+   `raw_profile._regex_backup`（旧regex値）と現在値を突き合わせ、skillYears は
+   消えた/追加/年数差、projects は件数・期間で要約表示する。`--json` で機械読み取り可
 
 2. **滞留していた507件は意図的にスキップした**
    ユーザー指示「きりがいいから今からの新規人材から」に従い watermark を
@@ -51,6 +55,7 @@ pm2 stop akinavi-shadow
 4. **経歴書読み取りの180sタイムアウト**（シャドー運転時 1日約42件＝約12%）
    `callModel` に1回リトライを追加したが効果を測っていない。要経過観察。
    なお `claude.exe` 直叩きに変えた分は速くなっているはず（窓生成のオーバーヘッド解消）。
+   → **2026-08-08 計測: ThinkCentre 移設後はタイムアウト0件 / 経歴書抽出148件**。ほぼ解消とみてよい
 
 5. **`experience_years` の上書きが妥当かは未検証**
    ドライランで13件が変化（7→10 / 1→2 / 5→6 / 17→16 等）。案件期間の暦unionで

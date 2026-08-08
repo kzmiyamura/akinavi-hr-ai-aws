@@ -113,6 +113,7 @@ async function processCandidate(c) {
       state.dayCost += bf.costUsd || 0
       // 複数人メールでは自分の行だけを選ぶ。特定できなければ本文由来は上書きしない
       bodyFields = pickBodyFieldsFor(c.name, bf.candidates)
+      if (bodyFields) bodyFields._model = bf.model  // _llm_applied.model 記録用（buildPatch が参照）
       if (!bodyFields && (bf.candidates?.length ?? 0) > 1) {
         log(`  [${c.name}] 本文に複数人・特定不可のため本文フィールドは上書きせず`)
       }
