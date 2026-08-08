@@ -10,17 +10,31 @@
 
 ## 現在の稼働状態（全て正常・push済み）
 - ワーカー: pm2 `akinavi-shadow` が本番上書きモードで稼働中。
-  本サイクル(5分・新規人材のLLM上書き) + Box取込キュー(30秒)の2本立て
+  本サイクル(5分・新規人材のLLM上書き) + Box取込キュー(30秒・手動依頼＋全自動)の2本立て
 - フロント: 「AI取込」ボタン（Boxワンクリック再解析）を main に push 済み → Vercel 自動デプロイ
 - 答え合わせ: `node scripts/llm_extract/apply_report.mjs [日数|--id <id>]`
 
-## 次回の最初に判断すること: Box取込の全自動化（ユーザー回答待ちで中断）
-現状はボタンを押した人だけ処理される。全自動化するか質問したところで exit したため未回答。
-- 対象規模: pending は prod で約10人（1日約5人ペース。7日でアーカイブされるため溜まらない）→ Max枠影響は軽微
-- 実装方針（合意済みではない・提案段階）:
-  1. ワーカーの boxQueue の検索条件に `pending` を追加
-  2. ただし `resume_url` が空の人だけ（添付経歴書持ちは Box の方が古い可能性があるため触らない）
-  3. 本サイクルとの競合回避に「created_at < watermark（本サイクル通過済み）」ガードを入れる
+## ✅ Box取込の全自動化 実施済み（2026-08-08 昼・ユーザー承認）
+`box_status='pending'` かつ `resume_url` なし（prod・created_at < watermark）を
+ボタン不要で自動処理する。1ポーリング2人まで・手動依頼（fetch_requested）優先。
+実装は `shadow_worker.mjs` の boxQueue / processBoxCandidate を参照。
+
+## ⚠️ 2026-08-08 昼に発見・修正した Box取込の重大バグ（教訓）
+旧実装は inbound-email に**合成本文**（`Box経歴書ファイル取込: <ファイル名>`・件名`【Box経歴書】名前`）を
+送っていたため、(1) regex が「Box経歴書」を会社名として抽出して from_company を破壊、
+(2) inbound-email の dedup UPDATE が `desired_rate` を null で潰し `raw_profile` ごと差し替え
+（元メール本文・_llm_applied・age・availableFrom 等が消失）していた。
+実害は H,I の1名のみで、llm_shadow の body_fields から復元済み（元メール本文のみ復元不可）。
+
+対策（実装済み）:
+1. **元メール本文・元件名を送る**（UI再解析ボタンと同じ流儀）。元本文が無い場合のみ
+   合成本文＋ from_company / desired_rate の退避・復元
+2. **二重処理ガード**: 再解析は created_at を now にリセットするため（7日延命の仕様）、
+   本サイクルが処理済み候補者を「新規」と誤認して LLM を二重に回していた。
+   `_llm_applied.at >= created_at` ならスキップするガードを cycle() に追加
+3. **複数人メール由来はスキップ**: target_candidate_id は block[0] に強制適用される仕様のため、
+   全文再送で別人のデータが混ざる。同一 from+件名 の兄弟レコードがいたら failed にする。
+   **なお UI の手動「再解析」ボタンにも同じ混線リスクが残っている（未対応・要検討）**
 
 # やり残し（2026-08-08 朝 時点）
 

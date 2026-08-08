@@ -179,6 +179,15 @@ async function cycle() {
   log(`新規候補者 ${rows.length}件`)
 
   for (const c of rows) {
+    // 再解析（Box取込・UI再解析ボタン）は created_at を now にリセットするため、
+    // 処理済み候補者が「新規」として再登場する。LLM適用が created_at より後なら処理済み
+    const ap = c.raw_profile?._llm_applied
+    if (ap?.at && new Date(ap.at) >= new Date(c.created_at)) {
+      log(`スキップ（再解析後LLM適用済み）: ${c.name}`)
+      state.watermark = c.created_at
+      saveState()
+      continue
+    }
     log(`処理: ${c.name} (${c.id})`)
     await processCandidate(c)
     state.watermark = c.created_at
@@ -188,46 +197,96 @@ async function cycle() {
   log(`サイクル完了 day=${state.dayCount}件 cost=$${state.dayCost.toFixed(2)}`)
 }
 
-// ── Box経歴書ワンクリック再解析キュー ──
-// UI が box_status='fetch_requested' にした人材を拾い、Box からDL →
-// inbound-email Edge Function に添付として投入（regex再解析・storage保存・resume_url付与）→
-// 続けて LLM 再解析（processCandidate）→ box_status='enriched'。
+// ── Box経歴書再解析キュー ──
+// 対象: ①UI「AI取込」ボタン（box_status='fetch_requested'、全env）
+//       ②全自動取込（box_status='pending' かつ resume_url なし、prodのみ・2026-08-08ユーザー判断）
+// 流れ: Box からDL → inbound-email Edge Function に「元メール本文＋添付」で再解析依頼
+// （regex再解析・storage保存・resume_url付与）→ LLM 再解析（processCandidate）→ 'enriched'。
 // UI応答性のため本サイクル(5分)とは別に30秒間隔でポーリングする。
+//
+// 注意（2026-08-08 の実害から）:
+// - 合成本文（Box経歴書ファイル取込:...）を送ると regex が「Box経歴書」を会社名として抽出し、
+//   さらに inbound-email の UPDATE が desired_rate 等の本文由来フィールドを消す。
+//   必ず元メール本文・元件名を送る（UI再解析ボタンと同じ流儀）。
+// - 複数人メール由来の人材は再解析すると block[0] が target_candidate_id に強制適用され
+//   別人のデータが混ざるためスキップする（同一 from+件名 の兄弟レコードで判定）
 const BOX_POLL_MS = 30 * 1000
 const CAND_SELECT = 'id,name,resume_url,raw_profile,created_at,desired_rate,from_company,experience_years,skills'
+const BOX_SELECT = 'id,name,box_url,data_env,from_company,desired_rate,' +
+  'mailfrom:raw_profile->>from,subject:raw_profile->>subject,body:raw_profile->>text'
+const AUTO_BOX_PER_POLL = 2   // 全自動取込は1ポーリング2人まで（手動依頼を優先）
+
+/** 同一メール（from+件名）から複数人が登録されていたら true（再解析でデータ混線するため除外） */
+async function hasSiblings(c) {
+  if (!c.mailfrom || !c.subject) return false
+  const q = `candidates?select=id&raw_profile->>from=eq.${encodeURIComponent(c.mailfrom)}` +
+    `&raw_profile->>subject=eq.${encodeURIComponent(c.subject)}&data_env=eq.${c.data_env}&limit=2`
+  const rows = await rest(q)
+  return (rows?.length ?? 0) > 1
+}
+
+async function processBoxCandidate(c) {
+  log(`Box取得: ${c.name} (${c.id})`)
+  await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'fetching' }) })
+  try {
+    if (await hasSiblings(c)) throw new Error('複数人メール由来のためBox再解析不可（データ混線防止）')
+    const f = await downloadBoxFile(c.box_url)
+    log(`  [box:${c.name}] DL完了 ${f.name} (${f.buf.length}B)`)
+    // 過去の合成本文・合成件名（旧実装の残骸）は元本文扱いしない
+    const origBody = c.body && !c.body.startsWith('Box経歴書ファイル取込') ? c.body : null
+    const origSubject = c.subject && !c.subject.startsWith('【Box経歴書】') ? c.subject : null
+    const resp = await fetch(`${SUPABASE_URL}/functions/v1/inbound-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: KEY, Authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({
+        subject: origSubject ?? `Box経歴書取込 ${c.name ?? ''}`,
+        body: origBody ?? '',
+        from: c.mailfrom || `box+${c.id}@upload.invalid`,
+        attachments: [{ data: f.buf.toString('base64'), mimeType: f.mimeType, name: f.name }],
+        mode: c.data_env, type: 'candidate', force: true, target_candidate_id: c.id,
+      }),
+    })
+    if (!resp.ok) throw new Error(`inbound-email ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
+    // regex再解析後の最新状態で LLM 再解析（resume_url が付いている）
+    const [fresh] = await rest(`candidates?select=${CAND_SELECT}&id=eq.${c.id}`)
+    if (fresh) {
+      // 元本文が無い場合、空本文の再解析で本文由来フィールドが消えるため元の値を復元する
+      if (!origBody) {
+        const restore = {}
+        if (c.from_company && fresh.from_company !== c.from_company) restore.from_company = c.from_company
+        if (c.desired_rate && !fresh.desired_rate) restore.desired_rate = c.desired_rate
+        if (Object.keys(restore).length) {
+          await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(restore) })
+          Object.assign(fresh, restore)
+          log(`  [box:${c.name}] 本文由来フィールド復元: ${Object.keys(restore).join(', ')}`)
+        }
+      }
+      await processCandidate(fresh)
+      state.dayCount++
+      saveState()
+    }
+    await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'enriched' }) })
+    log(`  [box:${c.name}] 完了`)
+  } catch (e) {
+    log(`  [box:${c.name}] 失敗:`, String(e).slice(0, 200))
+    await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'failed' }) }).catch(() => {})
+  }
+}
 
 async function boxQueue() {
   if (state.dayCount >= MAX_PER_DAY) return
-  const rows = await rest(
-    `candidates?select=id,name,box_url,data_env,mailfrom:raw_profile->>from` +
-    `&box_status=eq.fetch_requested&order=created_at.asc&limit=3`)
-  for (const c of rows ?? []) {
-    log(`Box取得: ${c.name} (${c.id})`)
-    await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'fetching' }) })
-    try {
-      const f = await downloadBoxFile(c.box_url)
-      log(`  [box:${c.name}] DL完了 ${f.name} (${f.buf.length}B)`)
-      const resp = await fetch(`${SUPABASE_URL}/functions/v1/inbound-email`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: KEY, Authorization: `Bearer ${KEY}` },
-        body: JSON.stringify({
-          subject: `【Box経歴書】${c.name ?? ''}`,
-          body: `Box経歴書ファイル取込: ${f.name}`,
-          from: c.mailfrom || `box+${c.id}@upload.invalid`,
-          attachments: [{ data: f.buf.toString('base64'), mimeType: f.mimeType, name: f.name }],
-          mode: c.data_env, type: 'candidate', force: true, target_candidate_id: c.id,
-        }),
-      })
-      if (!resp.ok) throw new Error(`inbound-email ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
-      // regex再解析後の最新状態で LLM 再解析（resume_url が付いている）
-      const [fresh] = await rest(`candidates?select=${CAND_SELECT}&id=eq.${c.id}`)
-      if (fresh) { await processCandidate(fresh); state.dayCount++; saveState() }
-      await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'enriched' }) })
-      log(`  [box:${c.name}] 完了`)
-    } catch (e) {
-      log(`  [box:${c.name}] 失敗:`, String(e).slice(0, 200))
-      await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'failed' }) }).catch(() => {})
-    }
+  // ① 手動依頼（UIボタン）を最優先
+  const manual = await rest(
+    `candidates?select=${BOX_SELECT}&box_status=eq.fetch_requested&order=created_at.asc&limit=3`) ?? []
+  // ② 全自動取込: 経歴書未取得（resume_url なし）の pending prod 人材。
+  //    created_at < watermark で「本サイクル通過済み」を保証（本文LLM処理との競合回避）
+  const auto = manual.length >= 3 ? [] : (await rest(
+    `candidates?select=${BOX_SELECT}&box_status=eq.pending&resume_url=is.null&box_url=not.is.null` +
+    `&data_env=eq.prod&created_at=lt.${encodeURIComponent(state.watermark)}` +
+    `&order=created_at.desc&limit=${AUTO_BOX_PER_POLL}`)) ?? []
+  for (const c of [...manual, ...auto]) {
+    if (state.dayCount >= MAX_PER_DAY) return
+    await processBoxCandidate(c)
   }
 }
 
