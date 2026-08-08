@@ -27,10 +27,17 @@ export async function extractProjects(gridInput, { log = () => {}, kind = 'grid'
 
   let final = { model: 'haiku', output: h.data, verify: vh, costUsd: h.costUsd ?? 0 }
   if (vh.escalate) {
-    const s = await callModel('sonnet', prompt)
-    const vs = verifyOutput(gridInput, s.data, 'final')
-    log(`sonnet: proj=${s.data?.projects?.length} verify=${vs.escalate ? 'NEEDS_REVIEW' : 'pass'} ${vs.reasons.join('|')}`)
-    final = { model: 'sonnet', output: s.data, verify: vs, costUsd: (h.costUsd ?? 0) + (s.costUsd ?? 0) }
+    try {
+      const s = await callModel('sonnet', prompt)
+      const vs = verifyOutput(gridInput, s.data, 'final')
+      log(`sonnet: proj=${s.data?.projects?.length} verify=${vs.escalate ? 'NEEDS_REVIEW' : 'pass'} ${vs.reasons.join('|')}`)
+      final = { model: 'sonnet', output: s.data, verify: vs, costUsd: (h.costUsd ?? 0) + (s.costUsd ?? 0) }
+    } catch (e) {
+      // 超大型経歴書では sonnet だけタイムアウトすることがある（AT・33案件PDF 実害）。
+      // haiku の部分結果を捨てて全滅させるより、needs_review 付きで採用する方が価値がある
+      log(`sonnet失敗(${String(e.message).slice(0, 40)}) → haiku結果を採用 proj=${h.data?.projects?.length}`)
+      final = { model: 'haiku', output: h.data, verify: { ...vh, escalate: true }, costUsd: h.costUsd ?? 0 }
+    }
   }
 
   return {
