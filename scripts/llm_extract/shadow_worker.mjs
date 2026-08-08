@@ -12,8 +12,9 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { buildGridInput, buildTextGridInput, normTech } from './lib.mjs'
-import { extractProjects, extractBodyFields } from './run.mjs'
+import { extractProjects, extractBodyFields, extractProjectFields } from './run.mjs'
 import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE } from './apply.mjs'
+import { buildProjectPatch } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
@@ -197,6 +198,51 @@ async function cycle() {
   log(`サイクル完了 day=${state.dayCount}件 cost=$${state.dayCost.toFixed(2)}`)
 }
 
+// ── 案件のLLM補正サイクル ──
+// UI「新規登録」や（将来有効化する）メール由来で作られた新規案件を後追いで補正し、
+// 人材と同じ品質にする（2026-08-08 ユーザー依頼「入力画面からの取り込みも人材レベルに」）。
+// 方針は project_apply.mjs（既定 fill・required_skills は skill_master 照合の追加のみ）。
+// 複数案件が1本文にまとまっている行（batchSize>1）は対応付けを誤ると壊すためスキップ。
+const PROJ_MAX_PER_CYCLE = 10
+const PROJ_SELECT = 'id,title,client,required_skills,budget_min,budget_max,start_date,work_location,' +
+  'remote_policy,contract_type,headcount,workload,settlement_min,settlement_max,role_summary,industry,raw_data,created_at'
+
+async function projectCycle() {
+  if (state.dayCount >= MAX_PER_DAY) return
+  if (!state.projWatermark) { state.projWatermark = new Date().toISOString(); saveState() }
+  const rows = await rest(
+    `projects?select=${PROJ_SELECT}&data_env=eq.prod&created_at=gt.${encodeURIComponent(state.projWatermark)}` +
+    `&order=created_at.asc&limit=${PROJ_MAX_PER_CYCLE}`)
+  if (!rows?.length) return
+  log(`新規案件 ${rows.length}件`)
+  for (const p of rows) {
+    try {
+      const text = String(p.raw_data?.text ?? '')
+      const batchSize = p.raw_data?.batchSize ?? 1
+      if (text.length < 50) log(`案件[${p.title}] 本文なし・スキップ`)
+      else if (batchSize > 1) log(`案件[${p.title}] 複数案件メール由来(${batchSize}件)・対応付け不能のためスキップ`)
+      else {
+        const r = await extractProjectFields(text.slice(0, 8000))
+        state.dayCost += r.costUsd || 0
+        if ((r.projects?.length ?? 0) !== 1) {
+          log(`案件[${p.title}] LLM検出${r.projects?.length ?? 0}件（1件でないためスキップ）`)
+        } else if (APPLY) {
+          const { patch, changes } = buildProjectPatch(p, { ...r.projects[0], _model: r.model }, await skillMasterSet())
+          if (patch) {
+            await rest(`projects?id=eq.${p.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(patch) })
+            log(`案件[${p.title}] 上書き: ${changes.join(', ')}`)
+          } else log(`案件[${p.title}] 変更なし`)
+        }
+      }
+    } catch (e) {
+      log(`案件[${p.title}] 失敗:`, String(e).slice(0, 200))
+    }
+    state.projWatermark = p.created_at
+    state.dayCount++
+    saveState()
+  }
+}
+
 // ── Box経歴書再解析キュー ──
 // 対象: ①UI「AI取込」ボタン（box_status='fetch_requested'、全env）
 //       ②全自動取込（box_status='pending' かつ resume_url なし、prodのみ・2026-08-08ユーザー判断）
@@ -298,6 +344,7 @@ log(`ワーカー起動 mode=${APPLY ? '本番上書き' : 'シャドー記録�
 await rest(`candidates?box_status=eq.fetching`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'fetch_requested' }) }).catch(() => {})
 while (true) {
   try { await cycle() } catch (e) { log('cycle error:', String(e).slice(0, 300)) }
+  try { await projectCycle() } catch (e) { log('project cycle error:', String(e).slice(0, 300)) }
   for (let i = 0; i < CYCLE_MS / BOX_POLL_MS; i++) {
     try { await boxQueue() } catch (e) { log('box queue error:', String(e).slice(0, 200)) }
     await new Promise(r => setTimeout(r, BOX_POLL_MS))

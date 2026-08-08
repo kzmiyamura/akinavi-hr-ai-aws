@@ -10,9 +10,21 @@
 
 ## 現在の稼働状態（全て正常・push済み）
 - ワーカー: pm2 `akinavi-shadow` が本番上書きモードで稼働中。
-  本サイクル(5分・新規人材のLLM上書き) + Box取込キュー(30秒・手動依頼＋全自動)の2本立て
+  本サイクル(5分・新規人材のLLM上書き) + 案件サイクル(5分・新規案件のLLM補正) +
+  Box取込キュー(30秒・手動依頼＋全自動)の3本立て
 - フロント: 「AI取込」ボタン（Boxワンクリック再解析）を main に push 済み → Vercel 自動デプロイ
 - 答え合わせ: `node scripts/llm_extract/apply_report.mjs [日数|--id <id>]`
+
+## ✅ 案件のLLM補正 実施済み（2026-08-08 夕・ユーザー依頼「入力画面の取り込みも人材レベルに」）
+- UI「新規登録」やメール由来（現在は無効）で作られた**新規 prod 案件**をワーカーが後追い補正
+- 方針は `project_apply.mjs`: **全項目 fill（既存値は触らない）** + required_skills は
+  skill_master 照合の追加のみ + title はフォールバック「案件」のみ置換 +
+  remote_policy はリモート関連語を含むときだけ受理（「派遣が必要」誤転記の実害ガード）
+- 複数案件が1本文の行（raw_data.batchSize>1）は対応付け不能のためスキップ
+- 既存 prod 案件8件へは 2026-08-08 に一括適用済み（8/8で補完・破壊ゼロ・
+  `raw_data._regex_backup` に退避あり）。ドライラン: `node scripts/llm_extract/project_dryrun.mjs [N] [--apply]`
+- 単体テスト: `node scripts/llm_extract/project_apply.test.mjs`（16ケース）
+- **overwrite への昇格はドライラン実証が取れてから**（人材の FIELD_POLICY と同じ進め方）
 
 ## ✅ Box取込の全自動化 実施済み（2026-08-08 昼・ユーザー承認）
 `box_status='pending'` かつ `resume_url` なし（prod・created_at < watermark）を

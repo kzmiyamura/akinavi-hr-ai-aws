@@ -8,7 +8,7 @@
 //   環境変数 ANTHROPIC_API_KEY があればAPI直、なければ claude -p (サブスク枠)
 import fs from 'fs'
 import { buildGridInput, buildTextGridInput, skillYearsFromProjects } from './lib.mjs'
-import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES } from './prompts.mjs'
+import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES, PROJECT_FIELDS_RULES } from './prompts.mjs'
 import { callModel } from './caller.mjs'
 import { verifyOutput } from './verify.mjs'
 
@@ -55,6 +55,17 @@ export async function extractProjects(gridInput, { log = () => {}, kind = 'grid'
 export async function extractBodyFields(bodyText) {
   const r = await callModel('haiku', BODY_FIELDS_RULES + bodyText)
   return { model: 'haiku', candidates: r.data?.candidates ?? [], costUsd: r.costUsd ?? 0 }
+}
+
+/** 案件テキストのフィールド抽出（常にHaiku。転記タスクのため昇格なし） */
+export async function extractProjectFields(bodyText) {
+  const r = await callModel('haiku', PROJECT_FIELDS_RULES + bodyText)
+  return {
+    model: 'haiku',
+    projects: r.data?.projects ?? [],
+    confidence: r.data?.confidence ?? 'low',
+    costUsd: r.costUsd ?? 0,
+  }
 }
 
 // ── CLI ──

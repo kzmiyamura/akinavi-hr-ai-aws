@@ -46,6 +46,34 @@ export const TRANSCRIBE_RULES_TEXT = `あなたはIT技術者の経歴書(Word�
 --- 以下経歴書テキスト ---
 `
 
+export const PROJECT_FIELDS_RULES = `あなたはSES営業の案件紹介文の読み取り係です。以下のテキスト（メール本文または手入力）から案件情報を転記してください。
+
+ルール:
+- 書かれている値の転記のみ。推測で埋めない。記載がない項目は null（配列項目は []）
+- title: 案件名・タイトルの表記そのまま（【】等の飾りは外してよい）。無ければ作業内容から20字以内で要約
+- client: エンド企業・元請け企業名（記載時のみ。送信元の営業会社と混同しない）
+- requiredSkills: 必須スキル・歓迎ではなく必須と読める技術名を1つずつ（見出し語・工程名は含めない）
+- niceToHaveSkills: 尚可・歓迎・あれば尚良のスキル
+- requiredSkillYears: 「Java 5年以上」等の年数条件がある技術のみ {"技術名":[年数]} 形式
+- rateMin/rateMax: 月額単価の数値（万円）。「60〜70万」→ rateMin=60, rateMax=70。単一値なら両方に同じ値。時給・日額は null
+- startDate: 開始時期の表記そのまま（「即日」「9月〜」「2026/10」等）
+- workLocation: 勤務地・最寄駅の表記そのまま
+- remotePolicy: リモート/出社に関する表記そのまま（「フルリモート」「週2出社」等）
+- contractType: 商流・契約形態の表記そのまま（「請負」「準委任」「一社先」等）
+- headcount: 募集人数の数値
+- workload: 稼働率・稼働日数の表記そのまま（「週5」「100%」等）
+- settlementMin/settlementMax: 精算幅の時間数値（「140-180h」→ 140, 180）
+- roleSummary: 役割・ポジションの表記そのまま（「PM」「バックエンドエンジニア」等）
+- industry: 業界の表記（「金融」「EC」等、記載時のみ）
+- 複数案件が記載されている場合は projects 配列に全件分
+- 読み取りに自信が持てない場合は confidence を "low" にする
+
+出力は次のJSONのみ（説明文・コードフェンス禁止）:
+{"projects":[{"title":"","client":null,"requiredSkills":[],"niceToHaveSkills":[],"requiredSkillYears":{},"rateMin":null,"rateMax":null,"startDate":null,"workLocation":null,"remotePolicy":null,"contractType":null,"headcount":null,"workload":null,"settlementMin":null,"settlementMax":null,"roleSummary":null,"industry":null}],"confidence":"high または low"}
+
+--- 以下案件テキスト ---
+`
+
 export const BODY_FIELDS_RULES = `あなたはSES営業メールの読み取り係です。以下のメール本文から候補者(要員)の基本情報を転記してください。
 
 ルール:
