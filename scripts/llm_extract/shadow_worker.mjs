@@ -168,7 +168,9 @@ async function cycle() {
   if (state.day !== today) { state.day = today; state.dayCount = 0; state.dayCost = 0 }
   if (state.dayCount >= MAX_PER_DAY) { log(`日次上限${MAX_PER_DAY}到達、スキップ`); return }
 
-  const q = `candidates?select=id,name,resume_url,raw_profile,created_at` +
+  // buildPatch / mergeSkills が参照するトップレベル列は必ず select に含めること。
+  // 欠けると「既存値なし」と誤認して fill 項目まで上書き・skills 全置換になる（2026-08-08 に実害）
+  const q = `candidates?select=id,name,resume_url,raw_profile,created_at,desired_rate,from_company,experience_years,skills` +
     `&data_env=eq.prod&created_at=gt.${encodeURIComponent(state.watermark)}` +
     `&order=created_at.asc&limit=${MAX_PER_CYCLE}`
   const rows = await rest(q)
