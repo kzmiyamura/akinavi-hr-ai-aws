@@ -106,11 +106,24 @@ ${memo.trim()}
     }, 201)
   }
 
-  // PATCH: Issue クローズ
+  // PATCH: Issue クローズ / コメント投稿
+  // comment があれば先にコメントを付ける（外出先ユーザーへの回答用・Claude Code の Issue 監視運用）。
+  // state を省略して comment だけの投稿も可（{number, comment, state: 'open'} 相当）
   if (req.method === 'PATCH') {
     const body = await req.json().catch(() => ({}))
-    const { number, state } = body as { number?: number; state?: string }
+    const { number, state, comment } = body as { number?: number; state?: string; comment?: string }
     if (!number) return json({ error: 'number is required' }, 400)
+    if (comment?.trim()) {
+      const cres = await fetch(`${GITHUB_API}/repos/${REPO}/issues/${number}/comments`, {
+        method: 'POST',
+        headers: githubHeaders(token),
+        body: JSON.stringify({ body: comment }),
+      })
+      if (!cres.ok) return json({ error: await cres.text() }, cres.status)
+      if (state === 'open') {
+        return json({ number, state: 'open', commented: true }, 200)
+      }
+    }
     const res = await fetch(`${GITHUB_API}/repos/${REPO}/issues/${number}`, {
       method: 'PATCH',
       headers: githubHeaders(token),
