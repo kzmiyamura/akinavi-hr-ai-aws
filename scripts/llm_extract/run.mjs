@@ -7,14 +7,18 @@
 //   node scripts/llm_extract/run.mjs --grid <グリッドJSON>     # 整形済みグリッドを直接
 //   環境変数 ANTHROPIC_API_KEY があればAPI直、なければ claude -p (サブスク枠)
 import fs from 'fs'
-import { buildGridInput, skillYearsFromProjects } from './lib.mjs'
-import { TRANSCRIBE_RULES, BODY_FIELDS_RULES } from './prompts.mjs'
+import { buildGridInput, buildTextGridInput, skillYearsFromProjects } from './lib.mjs'
+import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES } from './prompts.mjs'
 import { callModel } from './caller.mjs'
 import { verifyOutput } from './verify.mjs'
 
-/** 経歴グリッド抽出のルーター本体。他モジュールからも利用可 */
-export async function extractProjects(gridInput, { log = () => {} } = {}) {
-  const prompt = TRANSCRIBE_RULES + JSON.stringify(gridInput)
+/** 経歴グリッド抽出のルーター本体。他モジュールからも利用可。
+ *  kind='text' は docx/pdf 由来の疑似グリッド（1行=1セル）。プロンプトだけ変え、
+ *  機械検証(verify.mjs)は行集合ベースなのでそのまま共用する */
+export async function extractProjects(gridInput, { log = () => {}, kind = 'grid' } = {}) {
+  const prompt = kind === 'text'
+    ? TRANSCRIBE_RULES_TEXT + gridInput.rows.map(r => r[1].join(' ')).join('\n')
+    : TRANSCRIBE_RULES + JSON.stringify(gridInput)
   const t0 = Date.now()
 
   const h = await callModel('haiku', prompt)
@@ -48,18 +52,24 @@ export async function extractBodyFields(bodyText) {
 
 // ── CLI ──
 const arg = process.argv[2]
-if (arg && import.meta.url === `file://${process.argv[1]}`) {
+const { pathToFileURL } = await import('url')
+if (arg && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const log = m => console.error('[llm-extract]', m)
   if (arg === '--body') {
     const res = await extractBodyFields(fs.readFileSync(process.argv[3], 'utf8'))
     console.log(JSON.stringify(res, null, 2))
   } else {
-    const gridInput = arg === '--grid'
-      ? JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
-      : buildGridInput(arg)
+    let gridInput, kind = 'grid'
+    if (arg === '--grid') gridInput = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
+    else if (/\.(docx|pdf)$/i.test(arg)) {
+      const { extractResumeText } = await import('./textract.mjs')
+      const ext = arg.toLowerCase().endsWith('.pdf') ? 'pdf' : 'docx'
+      gridInput = buildTextGridInput(await extractResumeText(arg, ext), ext)
+      kind = 'text'
+    } else gridInput = buildGridInput(arg)
     if (!gridInput) { console.error('経歴グリッドが見つかりません（日付セルなし）'); process.exit(1) }
     log(`sheet="${gridInput.sheet}" rows=${gridInput.rows.length}`)
-    const res = await extractProjects(gridInput, { log })
+    const res = await extractProjects(gridInput, { log, kind })
     console.log(JSON.stringify(res, null, 2))
   }
 }

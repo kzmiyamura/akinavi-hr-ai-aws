@@ -22,6 +22,22 @@ export function buildGridInput(xlsxPath) {
   return { sheet: best.sn, rows, merges, dateCells: best.n }
 }
 
+/** テキスト（docx/pdf抽出結果）→ buildGridInput と同形の疑似グリッド。
+ *  1行=1セルの行集合にすることで verify.mjs の機械検証をそのまま流用する。
+ *  日付が1つも無ければ経歴書とみなさず null（xlsx 側の「日付セルなし」と同じ扱い） */
+export function buildTextGridInput(text, label = 'text') {
+  const rows = []
+  let dateCells = 0
+  String(text ?? '').split(/\r?\n/).forEach((line, i) => {
+    const s = line.trim()
+    if (!s) return
+    if (/(19|20)\d{2}[\/年.\-]\d{1,2}/.test(s)) dateCells++
+    rows.push([i, [s]])
+  })
+  if (dateCells < 1) return null
+  return { sheet: label, rows, merges: [], dateCells }
+}
+
 export const normTech = s => String(s).toLowerCase().replace(/[\s　]/g, '')
   .replace(/[Ａ-Ｚａ-ｚ０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
 

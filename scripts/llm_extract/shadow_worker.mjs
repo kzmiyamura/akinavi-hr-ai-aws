@@ -11,7 +11,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { buildGridInput, normTech } from './lib.mjs'
+import { buildGridInput, buildTextGridInput, normTech } from './lib.mjs'
 import { extractProjects, extractBodyFields } from './run.mjs'
 import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE } from './apply.mjs'
 
@@ -122,18 +122,27 @@ async function processCandidate(c) {
     }
   }
 
-  // 経歴書（Haiku→検証→Sonnet）
+  // 経歴書（Haiku→検証→Sonnet）。xlsx系はグリッド、docx/pdfはテキスト行で抽出
   const url = c.resume_url
-  if (url && /\.xlsx?$/i.test(url)) {
-    const fp = path.join(TMP, `${c.id}.xlsx`)
+  const extMatch = url ? url.toLowerCase().match(/\.(xlsx?|xlsm|docx|pdf)$/) : null
+  if (extMatch) {
+    const ext = extMatch[1]
+    const fp = path.join(TMP, `${c.id}.${ext}`)
     try {
       let res = await fetch(url).catch(() => null)
       if (!res || !res.ok) { await new Promise(r => setTimeout(r, 3000)); res = await fetch(url) }
       if (!res.ok) throw new Error(`resume DL ${res.status}`)
       fs.writeFileSync(fp, Buffer.from(await res.arrayBuffer()))
-      const grid = buildGridInput(fp)
-      if (!grid) throw new Error('no date cells in workbook')
-      const r = await extractProjects(grid, { log: m => log(`  [${c.name}]`, m) })
+      let grid, kind = 'grid'
+      if (ext === 'docx' || ext === 'pdf') {
+        const { extractResumeText } = await import('./textract.mjs')
+        grid = buildTextGridInput(await extractResumeText(fp, ext), ext)
+        kind = 'text'
+      } else {
+        grid = buildGridInput(fp)
+      }
+      if (!grid) throw new Error(`no date cells in ${ext}`)
+      const r = await extractProjects(grid, { log: m => log(`  [${c.name}]`, m), kind })
       await saveShadow({
         candidate_id: c.id, source: 'attachment', model: r.model, status: r.status,
         reasons: r.reasons, projects: r.projects, skill_years: r.skillYears,
