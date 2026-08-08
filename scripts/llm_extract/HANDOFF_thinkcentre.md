@@ -19,6 +19,12 @@
 ボタン不要で自動処理する。1ポーリング2人まで・手動依頼（fetch_requested）優先。
 実装は `shadow_worker.mjs` の boxQueue / processBoxCandidate を参照。
 
+初回バックログ10人の実績（2026-08-08 昼に完走）:
+- 8人成功（YE/TS/HH/T.N/TA/DS/TK + 手動先行のH,I。docx/PDF/xlsx 全経路OK）
+- AT/AH: 経歴書は取得済みだが大型PDFで sonnet timeout → projects 未取得（下記項目4の例外）
+- NK: Box共有リンクが404 → `failed`（UIの「AI取込 再試行」で人が再依頼可能。リンク自体が
+  死んでいるので営業に新リンクをもらうしかない）
+
 ## ⚠️ 2026-08-08 昼に発見・修正した Box取込の重大バグ（教訓）
 旧実装は inbound-email に**合成本文**（`Box経歴書ファイル取込: <ファイル名>`・件名`【Box経歴書】名前`）を
 送っていたため、(1) regex が「Box経歴書」を会社名として抽出して from_company を破壊、
@@ -106,6 +112,9 @@ buildPatch が「既存値なし」と誤認 → fill 項目の上書き・skill
    `callModel` に1回リトライを追加したが効果を測っていない。要経過観察。
    なお `claude.exe` 直叩きに変えた分は速くなっているはず（窓生成のオーバーヘッド解消）。
    → **2026-08-08 計測: ThinkCentre 移設後はタイムアウト0件 / 経歴書抽出148件**。ほぼ解消とみてよい
+   → **例外: 超大型経歴書は今も落ちる**（AT・33案件PDF / AH・1.2MB PDF で sonnet が
+   リトライ込みでも timeout。regexデータは無傷・box_status=enriched のため
+   実害は「projects が付かない」のみ）
 
 5. **`experience_years` の上書きが妥当かは未検証**
    ドライランで13件が変化（7→10 / 1→2 / 5→6 / 17→16 等）。案件期間の暦unionで
