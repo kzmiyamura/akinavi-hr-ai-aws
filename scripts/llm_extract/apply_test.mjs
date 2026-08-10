@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   experienceYearsFromProjects, pickBodyFieldsFor, buildPatch, mergeSkills, techsFromProjects, unionMonths,
-  isUsableName, genderMeaning,
+  isUsableName, genderMeaning, pickExperienceYears, sanitizeClaimedYears,
 } from './apply.mjs'
 
 test('isUsableName: 年齢・駅名を巻き込んだ氏名を弾く', () => {
@@ -146,4 +146,57 @@ test('techsFromProjects: 案件横断で重複排除', () => {
     techsFromProjects([{ techs: ['Java', 'SQL'] }, { techs: ['Java', ' Kotlin '] }]),
     ['Java', 'SQL', 'Kotlin'],
   )
+})
+
+// ── 総経験年数: 案件表の計算値と自己PRの申告値の大きい方を採る（2026-08-10 ユーザー判断）──
+// 案件表は前職・研修期間が載らず過小評価になる。HANDOFF_EXCEL_VERIFICATION.md の実例で
+// IS 6年 vs 12年 / IT 2年 vs 6年 / KK 11年 vs 17年 と、いずれも案件表側が取りこぼしていた
+test('sanitizeClaimedYears: 妥当な範囲だけ受け入れる', () => {
+  assert.equal(sanitizeClaimedYears(6), 6)
+  assert.equal(sanitizeClaimedYears('6年'), 6)      // 表記ゆれ
+  assert.equal(sanitizeClaimedYears('業界6年目'), 6)
+  assert.equal(sanitizeClaimedYears(0), null)        // 0年は読み違い
+  assert.equal(sanitizeClaimedYears(61), null)       // 人の職歴として非現実的
+  assert.equal(sanitizeClaimedYears(null), null)
+  assert.equal(sanitizeClaimedYears('未記載'), null)
+})
+
+test('pickExperienceYears: 大きい方を採り、採用元を返す', () => {
+  assert.deepEqual(pickExperienceYears(6, 12), { years: 12, source: 'claimed' })   // IS
+  assert.deepEqual(pickExperienceYears(2, 6), { years: 6, source: 'claimed' })     // IT
+  assert.deepEqual(pickExperienceYears(11, 17), { years: 17, source: 'claimed' })  // KK
+  // 案件表の方が大きければそちら（申告が控えめなケース）
+  assert.deepEqual(pickExperienceYears(20, 5), { years: 20, source: 'projects' })
+  // 同値なら計算値を採用（根拠が明確な方）
+  assert.deepEqual(pickExperienceYears(8, 8), { years: 8, source: 'projects' })
+  // 片方しか無い場合
+  assert.deepEqual(pickExperienceYears(null, 7), { years: 7, source: 'claimed' })
+  assert.deepEqual(pickExperienceYears(9, null), { years: 9, source: 'projects' })
+  assert.deepEqual(pickExperienceYears(null, null), { years: null, source: null })
+  // 範囲外の申告は無視して計算値を残す
+  assert.deepEqual(pickExperienceYears(5, 99), { years: 5, source: 'projects' })
+})
+
+test('buildPatch: 添付が無くても本文の申告値で経験年数を入れる', () => {
+  const cand = { name: 'A.B', experience_years: 2, raw_profile: {} }
+  const { patch, changes } = buildPatch(cand, {
+    bodyFields: { experienceYears: 6 },
+    attachment: null,
+  })
+  assert.equal(patch.experience_years, 6)
+  assert.ok(changes.includes('experience_years'))
+  assert.equal(patch.raw_profile._experience_source.source, 'claimed')
+})
+
+test('buildPatch: 案件表の方が大きければ申告値で下げない', () => {
+  const cand = { name: 'A.B', experience_years: null, raw_profile: {} }
+  const projects = [
+    { start: '2006/01', end: '2025/12', techs: ['Java'] },   // 20年
+  ]
+  const { patch } = buildPatch(cand, {
+    bodyFields: { experienceYears: 3 },
+    attachment: { projects },
+  })
+  assert.equal(patch.experience_years, 20)
+  assert.equal(patch.raw_profile._experience_source.source, 'projects')
 })

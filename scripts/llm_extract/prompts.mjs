@@ -64,12 +64,15 @@ export const BODY_FIELDS_BATCH_RULES = `あなたはSES営業メールの読み�
 - availability: 稼働可能時期の表記そのまま（「即日〜」等）
 - company: 送信元(所属営業)会社の正式名。宛先会社・挨拶の人名と混同しない
 - employment: 所属の表記そのまま（「弊社正社員」等）
+- experienceYears: 本人の「総経験年数」として明示された数値(年)のみ。
+  「業界6年目です」→6 /「IT経験15年」→15。特定案件・特定業務だけの年数は含めない。
+  明示がなければ null。推測・合算はしない
 - 1つのメールに複数人いる場合は candidates 配列に全員分
 - mailType: そのメールの種別。人材紹介なら "candidate"、案件紹介なら "project"、
   それ以外は "other"
 
 出力は次のJSONのみ（説明文・コードフェンス禁止）:
-{"results":[{"no":1,"mailType":"candidate","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null}]}]}
+{"results":[{"no":1,"mailType":"candidate","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null,"experienceYears":null}]}]}
 
 --- 以下、番号付きのメール本文 ---
 `
@@ -111,13 +114,17 @@ export const BODY_FIELDS_RULES = `あなたはSES営業メールの読み取り�
 - availability: 稼働可能時期の表記そのまま（「即日〜」等）
 - company: 送信元(所属営業)会社の正式名。宛先会社・挨拶の人名と混同しない。「◯◯株式会社 △△です」は会社=◯◯株式会社
 - employment: 所属の表記そのまま（「弊社正社員」「一社下正社員」等）
+- experienceYears: 本人の「総経験年数」として明示された数値(年)のみ。
+  「業界6年目です」→6 /「IT経験15年」→15 /「経験年数：8年」→8。
+  特定案件・特定業務だけの年数（「Javaを3年」「金融で2年」等）は含めない。
+  明示がなければ null。推測・合算はしない（計算はJS側で行う）
 - 複数人が記載されている場合は candidates 配列に全員分
 - mailType: このメールの種別。人材(要員・エンジニア)の紹介なら "candidate"、
   案件(仕事・プロジェクト)の紹介なら "project"、営業・お知らせ等どちらでもなければ "other"。
   案件メールには個人プロフィールが無く、案件名・必須スキル・募集人数・商流等が書かれている
 
 出力は次のJSONのみ（説明文・コードフェンス禁止）:
-{"mailType":"candidate または project または other","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null}]}
+{"mailType":"candidate または project または other","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null,"experienceYears":null}]}
 
 --- 以下メール本文 ---
 `

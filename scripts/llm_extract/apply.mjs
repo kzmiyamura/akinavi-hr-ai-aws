@@ -123,6 +123,32 @@ const parseYM = s => {
   return m ? (+m[1]) * 12 + (+m[2]) : null
 }
 
+/** 申告年数として妥当な範囲か（1〜60年）。範囲外は読み違いとみなして捨てる */
+export function sanitizeClaimedYears(v) {
+  const n = typeof v === 'number' ? v : Number(String(v ?? '').match(/\d+/)?.[0])
+  return Number.isFinite(n) && n >= 1 && n <= 60 ? Math.round(n) : null
+}
+
+/**
+ * 総経験年数を決める。案件表の計算値と自己PR等の申告値の「大きい方」を採る
+ * （2026-08-10 ユーザー判断）。
+ *
+ * 根拠: 案件表は前職・研修期間・別フェーズの経験が載らないことが多く、
+ * 過小評価になる。実例（HANDOFF_EXCEL_VERIFICATION.md）:
+ *   IS 案件表6年 vs 自己PR12年 / IT 2年 vs 6年 / KK 11年 vs 17年
+ * いずれも案件表側が取りこぼしており、マッチングの母数を不当に狭めていた。
+ *
+ * @returns {{ years:number|null, source:'projects'|'claimed'|null }}
+ */
+export function pickExperienceYears(fromProjects, claimedRaw) {
+  const claimed = sanitizeClaimedYears(claimedRaw)
+  const calc = Number.isFinite(fromProjects) ? fromProjects : null
+  if (calc == null && claimed == null) return { years: null, source: null }
+  if (calc == null) return { years: claimed, source: 'claimed' }
+  if (claimed == null) return { years: calc, source: 'projects' }
+  return claimed > calc ? { years: claimed, source: 'claimed' } : { years: calc, source: 'projects' }
+}
+
 /** 案件の暦unionから総経験年数を算出。長年の課題だった「案件表の期間合計」をここで担う */
 export function experienceYearsFromProjects(projects) {
   const iv = []
@@ -213,15 +239,24 @@ export function buildPatch(cand, { bodyFields, attachment }) {
     if (projects.length) {
       stash('projects', rp.projects ?? null)
       rp.projects = projects; changes.push('projects')
-      const ey = experienceYearsFromProjects(projects)
-      if (ey != null && ey !== cand.experience_years) {
-        stash('experience_years', cand.experience_years)
-        top.experience_years = ey; changes.push('experience_years')
-      }
     }
     if (Object.keys(sy).length) {
       stash('skillYears', rp.skillYears ?? null)
       rp.skillYears = sy; changes.push('skillYears')
+    }
+  }
+
+  // 総経験年数は本文の申告値と案件表の計算値の大きい方を採る。
+  // 添付が無い人材でも本文に「業界6年目」等があれば拾えるよう attachment の外で判定する
+  {
+    const calc = attachment?.projects?.length ? experienceYearsFromProjects(attachment.projects) : null
+    const { years, source } = pickExperienceYears(calc, bodyFields?.experienceYears)
+    if (years != null && years !== cand.experience_years) {
+      stash('experience_years', cand.experience_years)
+      top.experience_years = years
+      changes.push('experience_years')
+      // どちらを採ったかを残す（後から妥当性を検証できるようにする）
+      rp._experience_source = { source, fromProjects: calc ?? null, claimed: bodyFields?.experienceYears ?? null }
     }
   }
 
