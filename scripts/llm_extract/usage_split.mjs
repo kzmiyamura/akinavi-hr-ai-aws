@@ -43,6 +43,7 @@ const firstUserText = (text) => {
 }
 const byDay = new Map()
 const sessions = new Map()
+const rawModels = new Map()
 let files = 0, workerFiles = 0
 for (const name of readdirSync(dir)) {
   if (!name.endsWith('.jsonl')) continue
@@ -70,9 +71,13 @@ for (const name of readdirSync(dir)) {
     const t = new Date(o.timestamp).getTime()
     if (t < sinceMs) continue
     const d = jstDay(o.timestamp)
-    const model = /haiku/.test(o.message.model ?? '') ? 'haiku'
-      : /sonnet/.test(o.message.model ?? '') ? 'sonnet'
-        : /opus|fable/.test(o.message.model ?? '') ? 'opus/fable' : 'other'
+    const rawModel = o.message.model ?? '(model不明)'
+    // 実モデル名の実測（「ワーカーはhaikuと言いつつ実はopus換算では？」の検証用）
+    const rk = `${who}/${rawModel}`
+    rawModels.set(rk, (rawModels.get(rk) ?? 0) + 1)
+    const model = /haiku/.test(rawModel) ? 'haiku'
+      : /sonnet/.test(rawModel) ? 'sonnet'
+        : /opus|fable/.test(rawModel) ? 'opus/fable' : 'other'
     const key = `${who}/${model}`
     if (!byDay.has(d)) byDay.set(d, {})
     const day = byDay.get(d)
@@ -124,5 +129,9 @@ console.log('日付        開発  ワーカー')
 for (const [d, s] of [...sessions.entries()].sort()) {
   console.log(`${d}  ${String(s['開発'] ?? 0).padStart(4)}  ${String(s['ワーカー'] ?? 0).padStart(8)}`)
 }
+console.log('\n=== 実際に動いたモデル（用途別・生のmodel名）===')
+for (const [k, n] of [...rawModels.entries()].sort()) console.log(`  ${k.padEnd(45)} ${n}件`)
+console.log('※ ワーカー行に opus/fable が無ければ、対話がOpusでもワーカーはHaiku/Sonnetで動いている')
+
 console.log('\n※ ワーカーのセッション数 ≒ claude -p の起動回数（本文1回＋経歴書1回＋昇格1回）')
 console.log('※ 1起動で usage 記録は複数出るため「呼出」列とは一致しない')
