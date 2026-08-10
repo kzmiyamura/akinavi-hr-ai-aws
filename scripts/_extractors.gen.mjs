@@ -1035,8 +1035,6 @@ function extractSkillYearsFromSheetData(data){
       const vNorm = v.replace(/[\s　]+/g, '')
       // 複数行セルを結合した正規化ヘッダー（"作業\n月数" → "作業月数"）
       const vFull = String(row[j] ?? '').replace(/[\r\n]+/g, '').replace(/[\s　]+/g, '')
-      // 全角ASCII→半角ASCII正規化（"ＯＳ/ＤＢ/言語" → "OS/DB/言語"）: TMK-S型対応
-      const vAscii = vNorm.replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
       // 言語列ヘッダーの判定。先頭行(vNorm)と全行連結(vFull)の両方で照合する。
       // 以前は先頭行しか見ておらず、"機器\nﾊﾟｯｹｰｼﾞ\nﾂｰﾙ類\nPG言語" のように
       // 目的の語が2行目以降にある縦積みヘッダーで言語列が見つからず、Method 1 全体が
@@ -2321,7 +2319,8 @@ function extractSkillYearsFromCells(cells, deadline = 0){
   const sameRowLabels = sorted.filter(c => c.row === firstNo.row && c !== firstNo)
   const isHeaderRow = sameRowLabels.some(c => /^(期間|内容|案件名|業務内容|システム名|業種)$/.test(c.value.trim()))
 
-  // プロジェクト境界の行範囲を決定  const blocks = []
+  // プロジェクト境界の行範囲を決定
+  const blocks = []
 
   // D.U 型: ヘッダー行(rs=1) の下に No.=1,2,3... が来るのではなく、
   //          ヘッダー行が繰り返される（各プロジェクトが独立したヘッダー+データ構造）

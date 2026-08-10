@@ -3475,8 +3475,6 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       const vNorm = v.replace(/[\s　]+/g, '')
       // 複数行セルを結合した正規化ヘッダー（"作業\n月数" → "作業月数"）
       const vFull = String(row[j] ?? '').replace(/[\r\n]+/g, '').replace(/[\s　]+/g, '')
-      // 全角ASCII→半角ASCII正規化（"ＯＳ/ＤＢ/言語" → "OS/DB/言語"）: TMK-S型対応
-      const vAscii = vNorm.replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
       // 言語列ヘッダーの判定。先頭行(vNorm)と全行連結(vFull)の両方で照合する。
       // 以前は先頭行しか見ておらず、"機器\nﾊﾟｯｹｰｼﾞ\nﾂｰﾙ類\nPG言語" のように
       // 目的の語が2行目以降にある縦積みヘッダーで言語列が見つからず、Method 1 全体が
