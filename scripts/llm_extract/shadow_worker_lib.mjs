@@ -25,3 +25,17 @@ export function trimBodyForLlm(text) {
   t = t.replace(/https?:\/\/\S+/g, '(URL)')      // URLは判断に使わない
   return t.slice(0, 6000)
 }
+
+/**
+ * 案件の主要項目が既に埋まっていれば LLM を省く（候補者側 bodyLooksComplete と同思想）。
+ * 案件サイクルには充足ゲートが無く、全項目が埋まっていても毎回 Haiku を呼んでいた（2026-08-10）。
+ *
+ * 判定を厳しめ（＝省略しにくい）にしてあるのは、取りこぼしよりコストの方が安いため:
+ * - title は inbound-email のフォールバック値 DEFAULT_TITLE のとき未入力扱い（project_apply.mjs と同じ）
+ * - required_skills はマッチング精度に直結するので、空なら必ず LLM を通す
+ */
+export function projectLooksComplete(p, defaultTitle = '案件') {
+  return !!(p?.title && p.title !== defaultTitle && p.client &&
+    p.budget_min && p.budget_max && p.work_location && p.contract_type &&
+    p.required_skills?.length)
+}

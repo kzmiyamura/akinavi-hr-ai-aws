@@ -14,9 +14,9 @@ import path from 'path'
 import { buildGridInput, buildTextGridInput, normTech } from './lib.mjs'
 import { extractProjects, extractBodyFields, extractBodyFieldsBatch, extractProjectFields } from './run.mjs'
 import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE, isUsableName } from './apply.mjs'
-import { buildProjectPatch } from './project_apply.mjs'
+import { buildProjectPatch, DEFAULT_TITLE } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
-import { trimBodyForLlm } from './shadow_worker_lib.mjs'
+import { trimBodyForLlm, projectLooksComplete } from './shadow_worker_lib.mjs'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const KEY = process.env.SUPABASE_SERVICE_KEY
@@ -383,6 +383,7 @@ async function projectCycle() {
       const batchSize = p.raw_data?.batchSize ?? 1
       if (text.length < 50) log(`案件[${p.title}] 本文なし・スキップ`)
       else if (batchSize > 1) log(`案件[${p.title}] 複数案件メール由来(${batchSize}件)・対応付け不能のためスキップ`)
+      else if (projectLooksComplete(p, DEFAULT_TITLE)) log(`案件[${p.title}] 主要項目は充足済み → LLMを省略`)
       else {
         const r = await extractProjectFields(text.slice(0, 8000))
         state.dayCost += r.costUsd || 0

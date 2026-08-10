@@ -31,8 +31,9 @@ export const PROJECT_FIELD_POLICY = {
   requiredSkillYears: 'fill',
 }
 
-/** inbound-email が title を取れなかったときのフォールバック値 */
-const DEFAULT_TITLE = '案件'
+/** inbound-email が title を取れなかったときのフォールバック値
+ *  （shadow_worker_lib の projectLooksComplete も「未入力」の判定に使う） */
+export const DEFAULT_TITLE = '案件'
 
 const isEmpty = (v) => v == null || (typeof v === 'string' && !v.trim()) ||
   (Array.isArray(v) && v.length === 0) ||
