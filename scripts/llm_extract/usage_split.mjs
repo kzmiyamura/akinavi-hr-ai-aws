@@ -19,13 +19,48 @@ const jstDay = (iso) => new Date(new Date(iso).getTime() + 9 * 3600000).toISOStr
 
 // ── ① ローカル記録からトークンを集計（モデル別・日別）──
 const dir = join(homedir(), '.claude/projects/C--Users-admin-Desktop-projects-akinavi-hr-ai-aws')
+// ワーカーの claude -p も同じ project ディレクトリに記録されるため、
+// プロンプトの特徴語でセッションを「ワーカー」「開発（対話）」に分類する。
+// これをしないと Claude Code が内部で使う haiku まで混ざり、ワーカーの消費を過大評価する
+// 判定は「セッション最初のユーザーメッセージ」で行う。ワーカーは claude -p に
+// 転記プロンプトを丸ごと渡すため先頭が必ずこの文言になる。
+// ファイル全文で探すと、開発中にプロンプト定義ファイルを読んだ対話ログまで
+// ワーカー扱いになる（最初の実装での誤り・2026-08-10）
+const WORKER_SIGNATURE = /^あなたは(?:IT技術者の経歴書|SES営業)/
+const firstUserText = (text) => {
+  for (const line of text.split('\n')) {
+    if (!line.includes('"user"')) continue
+    try {
+      const o = JSON.parse(line)
+      if (o.type !== 'user' && o.message?.role !== 'user') continue
+      const cont = o.message?.content
+      const s = typeof cont === 'string' ? cont
+        : Array.isArray(cont) ? (cont.find((p) => p.type === 'text')?.text ?? '') : ''
+      if (s) return s.trim()
+    } catch { /* 壊れた行は無視 */ }
+  }
+  return ''
+}
 const byDay = new Map()
-let files = 0
+const sessions = new Map()
+let files = 0, workerFiles = 0
 for (const name of readdirSync(dir)) {
   if (!name.endsWith('.jsonl')) continue
   files++
   let text
   try { text = readFileSync(join(dir, name), 'utf8') } catch { continue }
+  const who = WORKER_SIGNATURE.test(firstUserText(text)) ? 'ワーカー' : '開発'
+  if (who === 'ワーカー') workerFiles++
+  // セッション数＝claude -p の起動回数。usage 記録は1起動で複数出るため別に数える
+  {
+    const m = text.match(/"timestamp":"([^"]+)"/)
+    if (m && new Date(m[1]).getTime() >= sinceMs) {
+      const d = jstDay(m[1])
+      sessions.set(d, sessions.get(d) ?? {})
+      const s = sessions.get(d)
+      s[who] = (s[who] ?? 0) + 1
+    }
+  }
   for (const line of text.split('\n')) {
     if (!line.includes('"usage"')) continue
     let o
@@ -38,22 +73,25 @@ for (const name of readdirSync(dir)) {
     const model = /haiku/.test(o.message.model ?? '') ? 'haiku'
       : /sonnet/.test(o.message.model ?? '') ? 'sonnet'
         : /opus|fable/.test(o.message.model ?? '') ? 'opus/fable' : 'other'
+    const key = `${who}/${model}`
     if (!byDay.has(d)) byDay.set(d, {})
     const day = byDay.get(d)
-    day[model] ??= { calls: 0, out: 0, inp: 0, cache: 0 }
-    day[model].calls++
-    day[model].out += u.output_tokens ?? 0
-    day[model].inp += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
-    day[model].cache += u.cache_read_input_tokens ?? 0
+    day[key] ??= { calls: 0, out: 0, inp: 0, cache: 0 }
+    day[key].calls++
+    day[key].out += u.output_tokens ?? 0
+    day[key].inp += (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+    day[key].cache += u.cache_read_input_tokens ?? 0
   }
 }
 
 const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(0)}k` : String(n))
-console.log(`=== Max枠の消費（ローカル記録 ${files}ファイル・直近${DAYS}日・JST）===`)
-console.log('日付        モデル       呼出   出力tok   入力tok  キャッシュ読み')
+console.log(`=== Max枠の消費（ローカル記録 ${files}ファイル中ワーカー${workerFiles}・直近${DAYS}日・JST）===`)
+console.log('日付        用途/モデル        呼出   出力tok   入力tok  キャッシュ読み')
 for (const [d, models] of [...byDay.entries()].sort()) {
+  const tot = Object.values(models).reduce((n, v) => n + v.out, 0)
   for (const [m, v] of Object.entries(models).sort((a, b) => b[1].out - a[1].out)) {
-    console.log(`${d}  ${m.padEnd(11)}${String(v.calls).padStart(5)}  ${k(v.out).padStart(8)}  ${k(v.inp).padStart(8)}  ${k(v.cache).padStart(12)}`)
+    const share = tot ? (v.out / tot * 100).toFixed(0) : '0'
+    console.log(`${d}  ${m.padEnd(17)}${String(v.calls).padStart(5)}  ${k(v.out).padStart(8)}  ${k(v.inp).padStart(8)}  ${k(v.cache).padStart(12)}  出力${share}%`)
   }
 }
 
@@ -81,5 +119,10 @@ console.log('日付        haiku  sonnet  実処理時間')
 for (const [d, v] of [...wDay.entries()].sort()) {
   console.log(`${d}  ${String(v.haiku).padStart(5)}  ${String(v.sonnet).padStart(6)}  ${(v.ms / 3600000).toFixed(2)}h`)
 }
-console.log('\n※ ローカル記録の出力tok が「開発（対話）＋ワーカー」の合計。')
-console.log('※ ワーカーは claude -p で1回あたり数千tok程度。出力tokの大半が opus/fable なら開発分が支配的。')
+console.log('\n=== セッション数（claude の起動回数）===')
+console.log('日付        開発  ワーカー')
+for (const [d, s] of [...sessions.entries()].sort()) {
+  console.log(`${d}  ${String(s['開発'] ?? 0).padStart(4)}  ${String(s['ワーカー'] ?? 0).padStart(8)}`)
+}
+console.log('\n※ ワーカーのセッション数 ≒ claude -p の起動回数（本文1回＋経歴書1回＋昇格1回）')
+console.log('※ 1起動で usage 記録は複数出るため「呼出」列とは一致しない')
