@@ -325,6 +325,17 @@ export async function fetchPrioritySkills(): Promise<string[] | null> {
   return list.length ? list : null
 }
 
+/** 優先スキルを保存する。空配列（＝絞り込み解除）も明示的に保存できる。
+ *  egress 逼迫時や Claude の利用制限に当たったときだけ絞る「非常用レバー」なので、
+ *  平時は空のまま運用する想定 */
+export async function savePrioritySkills(skills: string[]): Promise<void> {
+  const clean = skills.map((s) => s.trim()).filter(Boolean)
+  const { error } = await supabase
+    .from('app_config')
+    .upsert([{ key: 'llm_filter_skills', value: clean }], { onConflict: 'key' })
+  if (error) throw new Error(`優先スキルの保存に失敗しました: ${error.message}`)
+}
+
 /** 詳細表示用: 特定候補の raw_profile 全体（text・parsedGrid を含む）を取得 */
 export async function fetchCandidateRawProfile(id: string): Promise<Record<string, unknown> | null> {
   const { data, error } = await supabase.rpc('fetch_candidate_raw_profile', { p_id: id })

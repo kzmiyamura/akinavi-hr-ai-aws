@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Save, RefreshCw, CheckCircle, Circle, FileText, Trash2, GitPullRequest, ExternalLink } from 'lucide-react'
-import { deleteAllCandidates } from '../lib/db/candidates'
+import { deleteAllCandidates, fetchPrioritySkills, savePrioritySkills } from '../lib/db/candidates'
 import { deleteAllProjects } from '../lib/db/projects'
 import { deleteAllSubmissions } from '../lib/db/submissions'
 import {
@@ -94,6 +94,21 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
   const retentionMutation = useMutation({
     mutationFn: (days: number) => saveCandidateRetentionDays(days),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['candidateRetentionDays'] }),
+  })
+
+  // AI校正の優先スキル（非常用レバー。空なら絞り込みなし＝全件が対象）
+  const { data: prioritySkills } = useQuery({
+    queryKey: ['priority-skills'],
+    queryFn: fetchPrioritySkills,
+  })
+  const [prioritySkillsInput, setPrioritySkillsInput] = useState('')
+  useEffect(() => { setPrioritySkillsInput((prioritySkills ?? []).join(', ')) }, [prioritySkills])
+  const prioritySkillsMutation = useMutation({
+    mutationFn: (raw: string) => savePrioritySkills(raw.split(',').map(s => s.trim()).filter(Boolean)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['priority-skills'] })
+      queryClient.invalidateQueries({ queryKey: ['candidates-paged'] })
+    },
   })
 
   // マッチング設定
@@ -718,6 +733,41 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
             {retentionMutation.isSuccess && <span className="text-sm text-green-600">保存しました</span>}
             {retentionMutation.isError && <span className="text-sm text-red-600">保存に失敗しました</span>}
           </div>
+        </section>
+
+        {/* ---- AI校正の優先スキル（非常用レバー） ---- */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">AI校正の優先スキル</h2>
+          <p className="text-xs text-gray-400 mb-1">
+            指定したスキルを持つ人材だけを常駐AIの校正対象にし、人材一覧の初期表示も同じ条件で絞ります。
+          </p>
+          <p className="text-xs text-gray-400 mb-4">
+            <strong className="text-gray-500">空欄なら絞り込みなし（全員が対象）。</strong>
+            通信量やAIの利用制限が逼迫したときだけ絞る想定です。カンマ区切りで入力してください。
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="text"
+              value={prioritySkillsInput}
+              onChange={e => setPrioritySkillsInput(e.target.value)}
+              placeholder="例: Java, C#（空欄＝絞り込みなし）"
+              className="flex-1 min-w-[240px] rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              type="button"
+              onClick={() => prioritySkillsMutation.mutate(prioritySkillsInput)}
+              disabled={prioritySkillsMutation.isPending}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+            >
+              {prioritySkillsMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              保存
+            </button>
+            {prioritySkillsMutation.isSuccess && <span className="text-sm text-green-600">保存しました</span>}
+            {prioritySkillsMutation.isError && <span className="text-sm text-red-600">保存に失敗しました</span>}
+          </div>
+          <p className="text-xs text-gray-400 mt-3">
+            現在: {prioritySkills?.length ? prioritySkills.join('・') : '絞り込みなし（全員が対象）'}
+          </p>
         </section>
 
         {/* ---- マッチング設定 ---- */}
