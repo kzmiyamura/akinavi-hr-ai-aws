@@ -30,9 +30,11 @@ CREATE TABLE IF NOT EXISTS notification_log (
 );
 
 -- 通知チェックの状態管理
+-- app_config.value は json 型のため、空文字は '""'（JSONの空文字列）で入れる。
+-- '' のままだと invalid input syntax for type json で失敗する（2026-08-10 適用時に判明）
 INSERT INTO app_config (key, value) VALUES ('notify_enabled', 'true')
   ON CONFLICT (key) DO NOTHING;
-INSERT INTO app_config (key, value) VALUES ('notify_last_checked_at', '')
+INSERT INTO app_config (key, value) VALUES ('notify_last_checked_at', '""')
   ON CONFLICT (key) DO NOTHING;
-INSERT INTO app_config (key, value) VALUES ('notify_last_error', '')
+INSERT INTO app_config (key, value) VALUES ('notify_last_error', '""')
   ON CONFLICT (key) DO NOTHING;

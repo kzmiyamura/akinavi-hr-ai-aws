@@ -71,9 +71,15 @@ function formatDate(iso: string) {
  *   'sonnet'   … 添付Haikuが不合格→Sonnet中  → 「AI校正中」 */
 type AiStage = { label: string; cls: string; title: string } | null
 
-function aiCorrectionStage(c: { raw_profile?: Record<string, unknown> }): AiStage {
-  if (c.raw_profile?._llm_checked_at) return null
-  const stage = c.raw_profile?._llm_stage as string | undefined
+function aiCorrectionStage(c: {
+  raw_profile?: Record<string, unknown>
+  llm_checked_at?: string | null
+  llm_stage?: string | null
+}): AiStage {
+  // 一覧は raw_profile を取らず JSON パスで取り出した llm_checked_at / llm_stage を持つ。
+  // 検索・絞り込み経由（candidates_lite）は raw_profile を持つ。どちらでも動くようにする
+  if (c.llm_checked_at ?? c.raw_profile?._llm_checked_at) return null
+  const stage = (c.llm_stage ?? c.raw_profile?._llm_stage) as string | undefined
   if (stage === 'sonnet') {
     return { label: 'AI校正中', cls: 'bg-amber-50 text-amber-700 border-amber-200',
       title: '添付経歴書の再解析中（Haikuの結果が基準未満のためSonnetへ引き継ぎ）' }

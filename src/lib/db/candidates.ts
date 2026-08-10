@@ -15,6 +15,10 @@ export interface Candidate {
   skills: string[]
   experience_years: number | null
   raw_profile: Record<string, unknown>
+  // AI校正の状態。一覧では通信量削減のため raw_profile 全体を取らないので
+  // JSON パス指定でこの2キーだけを別途取得する（fetchCandidatesPage 参照）
+  llm_checked_at?: string | null
+  llm_stage?: string | null
   duplicate_flag: boolean
   merged_into: string | null
   created_by: string
@@ -273,7 +277,10 @@ export async function fetchCandidatesPage(
   const { data, error, count } = await supabase
     .from('candidates')
     .select(
-      'id, name, email, phone, skills, experience_years, desired_rate, from_company, resume_url, drive_url, box_url, box_status, created_at, updated_at, duplicate_flag, merged_into, data_env, created_by',
+      // AI校正の状態は raw_profile 内にあるが、一覧では通信量削減のため raw_profile 全体を
+      // 取得していない。必要な2キーだけを JSON パス指定で取り出す（2026-08-10）
+      'id, name, email, phone, skills, experience_years, desired_rate, from_company, resume_url, drive_url, box_url, box_status, created_at, updated_at, duplicate_flag, merged_into, data_env, created_by, ' +
+      'llm_checked_at:raw_profile->>_llm_checked_at, llm_stage:raw_profile->>_llm_stage',
       selectOpts,
     )
     .eq('data_env', dataEnv)
