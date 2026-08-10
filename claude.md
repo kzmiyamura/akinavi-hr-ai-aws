@@ -59,7 +59,9 @@
   1. `node scripts/test_excel_parsing.mjs --compact --new` で WARN・FAIL・誤抽出（案件名をスキルと誤認識 等）を洗い出す
   2. 仮説立案 → `supabase/functions/inbound-email/index.ts` の抽出関数を修正
   3. `node scripts/sync_extractors.mjs` で再生成
-  4. 再テストし、既存回帰（`testData/excel/*.xlsx` 14件・`testData/failures/*.txt` 3件）が **0件劣化** であることを確認してから次へ進む（劣化していたら修正をやり直す）
+  4. 再テストし、既存回帰（`testData/excel/*.xlsx` 10件・`testData/failures/*.txt` 3件）が **0件劣化** であることを確認してから次へ進む（劣化していたら修正をやり直す）
+     ※ `testData/excel/` は PII のため git 管理外。**空だと Total 0 で空回りする**（2026-08-10 に発覚）。
+       空なら `node scripts/download_failing_excels.mjs` で実データを再取得してから測ること
   5. `--log` で改善内容を記録 → `check-and-deploy-edge.sh inbound-email` でデプロイ → commit & push
   6. 新規 WARN/FAIL/誤抽出が無くなるまで 1〜5 を繰り返す
 
@@ -99,7 +101,9 @@ git add -A && git commit -m "fix: ..." && git push
 
 **注意**:
 - 修正対象は常に `supabase/functions/inbound-email/index.ts`。`_extractors.gen.mjs` は自動生成なので直接編集しない
-- `testData/excel/*.xlsx`（14件）がリグレッションテスト用。`testData/failures/*.txt`（3件）がテキスト抽出テスト用
+- `testData/excel/*.xlsx`（10件）がリグレッションテスト用。`testData/failures/*.txt`（3件）がテキスト抽出テスト用
+- `excel_golden.json` は **`_verified: 未確認` のスナップショット**であって「正解」ではない。
+  回帰検出には使えるが精度保証にはならない（詳細は `testData/excel_golden_review.md`）
 - 新しい問題 Excel は `testData/excel/` に追加して再テスト
 - 改善履歴は `scripts/testData/improvement_log.md` を参照
 
