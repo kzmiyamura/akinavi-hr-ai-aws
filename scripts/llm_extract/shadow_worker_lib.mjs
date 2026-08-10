@@ -27,6 +27,24 @@ export function trimBodyForLlm(text) {
 }
 
 /**
+ * その時刻までに使ってよい処理件数（日次上限を24時間に均したもの）。
+ *
+ * 上限だけを置くと、ワーカーは能力いっぱいで走って朝の数時間で使い切る
+ * （実測 1件あたり約123秒＝100件で約3.4時間）。すると営業時間中に届いた人材が
+ * 当日中に処理されず、「新しい順に処理して価値を上げる」という設計の利点が消える。
+ *
+ * 日境界は state.day と同じ UTC 0時。経過割合に比例した上限を返す。
+ * ワーカーが停止していた場合は経過時間ぶんの余裕が自然に溜まるので、再開後に追いつける。
+ */
+export function pacedAllowance(maxPerDay, now = new Date()) {
+  const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  const ratio = (now.getTime() - dayStart) / 86_400_000
+  const clamped = Math.min(1, Math.max(0, ratio))
+  // 起動直後（ratio≒0）でも1件は動かす。完全に止まっていると障害と区別できないため
+  return Math.max(1, Math.min(maxPerDay, Math.ceil(maxPerDay * clamped)))
+}
+
+/**
  * app_config.llm_filter_skills の値をスキル名の配列に解く。
  * value は jsonb だが '"true"' のように文字列で二重に入っている実例があるため2回まで解く。
  * 配列として解けなければ null（＝絞り込みなし・全件対象）。

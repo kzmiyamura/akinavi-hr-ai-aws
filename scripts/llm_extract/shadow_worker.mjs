@@ -17,7 +17,7 @@ import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_R
 import { buildProjectPatch, DEFAULT_TITLE } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
 import {
-  trimBodyForLlm, projectLooksComplete, parseSkillFilterValue, buildSkillFilterClause,
+  trimBodyForLlm, projectLooksComplete, parseSkillFilterValue, buildSkillFilterClause, pacedAllowance,
 } from './shadow_worker_lib.mjs'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
@@ -347,6 +347,13 @@ async function cycle() {
   const today = new Date().toISOString().slice(0, 10)
   if (state.day !== today) { state.day = today; state.dayCount = 0; state.dayCost = 0 }
   if (state.dayCount >= MAX_PER_DAY) { log(`日次上限${MAX_PER_DAY}到達、スキップ`); return }
+  // 上限を24時間に均す。均さないと能力いっぱいで走って朝の数時間で使い切り、
+  // 営業時間中に届いた人材が当日処理されない（新しい順にした意味が消える）
+  const allowed = pacedAllowance(MAX_PER_DAY)
+  if (state.dayCount >= allowed) {
+    log(`ペース配分により待機（この時刻の上限${allowed}件・処理済${state.dayCount}件）`)
+    return
+  }
 
   // buildPatch / mergeSkills が参照するトップレベル列は必ず select に含めること。
   // 欠けると「既存値なし」と誤認して fill 項目まで上書き・skills 全置換になる（2026-08-08 に実害）
@@ -397,6 +404,8 @@ async function cycle() {
 
   for (const c of rows) {
     if (state.dayCount >= MAX_PER_DAY) { log(`日次上限${MAX_PER_DAY}到達、以降は次回`); break }
+    // サイクル内でもペース上限を超えたら止める（1サイクル15件で使い切らないため）
+    if (state.dayCount >= pacedAllowance(MAX_PER_DAY)) { log('ペース配分により中断、以降は次回'); break }
     if (givenUp(c)) {
       log(`打ち切り（${MAX_ATTEMPTS}回失敗）: ${c.name}`)
       await markLlmChecked(c).catch(() => {})
