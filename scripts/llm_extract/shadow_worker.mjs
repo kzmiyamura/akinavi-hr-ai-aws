@@ -16,7 +16,9 @@ import { extractProjects, extractBodyFields, extractBodyFieldsBatch, extractProj
 import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE, isUsableName } from './apply.mjs'
 import { buildProjectPatch, DEFAULT_TITLE } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
-import { trimBodyForLlm, projectLooksComplete } from './shadow_worker_lib.mjs'
+import {
+  trimBodyForLlm, projectLooksComplete, parseSkillFilterValue, buildSkillFilterClause,
+} from './shadow_worker_lib.mjs'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const KEY = process.env.SUPABASE_SERVICE_KEY
@@ -320,6 +322,27 @@ async function processCandidate(c, preBody = null) {
   }
 }
 
+/**
+ * AI校正の対象を絞る条件を組み立てる（app_config.llm_filter_skills）。
+ * 未設定・空配列なら絞り込みなし＝全件が対象（既定・後方互換）。
+ *
+ * 一致判定は2本立て:
+ *   ① skills 列 … regex抽出済みで skill_master 照合を通っているため表記ゆれに強い
+ *   ② メール本文 … skills が空（regexが取れなかった）人材を落とさないための保険
+ *
+ * ②は部分一致なので "Java" は "JavaScript" にも当たる。絞りが甘くなるが、
+ * 該当者を落とすと営業機会を失うため多めに拾う側に倒している。
+ * サーバー側で絞るので Supabase の転送量も同時に減る。
+ */
+async function skillFilterClause() {
+  let list = null
+  try {
+    const rows = await rest('app_config?select=value&key=eq.llm_filter_skills')
+    list = parseSkillFilterValue(rows?.[0]?.value)
+  } catch { /* 設定が読めないときは絞らない（安全側） */ }
+  return { clause: buildSkillFilterClause(list), list }
+}
+
 async function cycle() {
   const today = new Date().toISOString().slice(0, 10)
   if (state.day !== today) { state.day = today; state.dayCount = 0; state.dayCost = 0 }
@@ -338,14 +361,17 @@ async function cycle() {
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
   // buildPatch / mergeSkills が参照するトップレベル列は必ず select に含めること。
   // 欠けると「既存値なし」と誤認して fill 項目まで上書き・skills 全置換になる（2026-08-08 に実害）
+  const { clause: skillClause, list: skillList } = await skillFilterClause()
   const q = `candidates?select=id,name,resume_url,raw_profile,created_at,desired_rate,from_company,experience_years,skills` +
     `&data_env=eq.prod&merged_into=is.null` +
     `&raw_profile->>_llm_checked_at=is.null` +
     `&created_at=gte.${encodeURIComponent(since)}` +
+    skillClause +
     `&order=created_at.desc&limit=${MAX_PER_CYCLE}`
   const rows = await rest(q)
-  if (!rows.length) { log(`未処理なし（直近${LOOKBACK_DAYS}日）`); return }
-  log(`未処理 ${rows.length}件（新しい順・直近${LOOKBACK_DAYS}日）`)
+  const filterNote = skillList ? `・スキル絞込[${skillList.join(',')}]` : ''
+  if (!rows.length) { log(`未処理なし（直近${LOOKBACK_DAYS}日${filterNote}）`); return }
+  log(`未処理 ${rows.length}件（新しい順・直近${LOOKBACK_DAYS}日${filterNote}）`)
 
   // 失敗を繰り返すレコードは打ち切る。印が付かないまま残ると永久に再処理される
   const givenUp = (c) => (c.raw_profile?._llm_attempts ?? 0) >= MAX_ATTEMPTS

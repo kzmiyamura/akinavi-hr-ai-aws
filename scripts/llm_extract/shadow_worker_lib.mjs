@@ -27,6 +27,42 @@ export function trimBodyForLlm(text) {
 }
 
 /**
+ * app_config.llm_filter_skills の値をスキル名の配列に解く。
+ * value は jsonb だが '"true"' のように文字列で二重に入っている実例があるため2回まで解く。
+ * 配列として解けなければ null（＝絞り込みなし・全件対象）。
+ */
+export function parseSkillFilterValue(value) {
+  let v = value
+  for (let i = 0; i < 2 && typeof v === 'string'; i++) {
+    try { v = JSON.parse(v) } catch { break }
+  }
+  if (!Array.isArray(v)) return null
+  const list = v.map((s) => String(s ?? '').trim()).filter(Boolean)
+  return list.length ? list : null
+}
+
+/**
+ * スキル絞り込みの PostgREST 条件を組み立てる。
+ *
+ * 一致判定は2本立て:
+ *   ① skills 列 … regex抽出済みで skill_master 照合を通っているため表記ゆれに強い
+ *   ② メール本文 … skills が空（regexが取れなかった）人材を落とさないための保険
+ *
+ * ②は部分一致なので "Java" は "JavaScript" にも当たる。絞りが甘くなるが、
+ * 該当者を落とすと営業機会を失うため多めに拾う側に倒している。
+ * 値だけを encode する（カンマ・括弧・ドットは PostgREST の構文なので壊さない）。
+ */
+export function buildSkillFilterClause(list) {
+  if (!list?.length) return ''
+  const terms = []
+  for (const s of list) {
+    terms.push(`skills.cs.${encodeURIComponent(JSON.stringify([s]))}`)
+    terms.push(`raw_profile->>text.ilike.${encodeURIComponent(`*${s}*`)}`)
+  }
+  return `&or=(${terms.join(',')})`
+}
+
+/**
  * 案件の主要項目が既に埋まっていれば LLM を省く（候補者側 bodyLooksComplete と同思想）。
  * 案件サイクルには充足ゲートが無く、全項目が埋まっていても毎回 Haiku を呼んでいた（2026-08-10）。
  *
