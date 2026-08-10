@@ -470,12 +470,23 @@ function extractEmploymentType(bodyText: string, attachText: string): { commerci
  * 署名欄の「派 13-317179」「13-ユ-123456」等に対応。
  */
 function extractLicenseNumbers(text: string): { haken: string | null; shokai: string | null } {
-  // 派遣許可番号: 「派 13-317179」「派13-317179」→「派13-317179」
-  const hakenM = text.match(/派\s*(\d{2}-\d{6})/)
-  const haken = hakenM ? `派${hakenM[1]}` : null
-  // 職業紹介許可番号: 「13-ユ-123456」「13-ユ123456」
-  const shokaiM = text.match(/(\d{2}-ユ[-ー]?\d{6})/)
-  const shokai = shokaiM ? shokaiM[1] : null
+  // 全角の数字・記号・空白を半角へ寄せてから照合する。
+  // 署名欄は全角で書かれることが多く、半角前提だと丸ごと取りこぼしていた（2026-08-10）
+  const t = String(text ?? '')
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[－ー−―‐]/g, '-')
+    .replace(/[　]/g, ' ')
+
+  // 派遣許可番号。2015年の法改正前は「般」(一般労働者派遣)「特」(特定労働者派遣)で、
+  // 古い署名にはこれらが残っている。取りこぼすと verify-agent-license の照合が回らない。
+  // 「派 13-317179」「派13-317179」「(派)13-317179」「般13-317179」「特13-317179」
+  // 「派遣事業許可番号：派13-317179」のようなラベル付きも同じ形に収まる
+  const hakenM = t.match(/[（(]?\s*([派般特])\s*[）)]?\s*[:：]?\s*(\d{2}\s*-\s*\d{6})/)
+  const haken = hakenM ? `${hakenM[1]}${hakenM[2].replace(/\s+/g, '')}` : null
+
+  // 職業紹介許可番号: 「13-ユ-123456」「13-ユ123456」「13ーユー123456」
+  const shokaiM = t.match(/(\d{2})\s*-?\s*ユ\s*-?\s*(\d{6})/)
+  const shokai = shokaiM ? `${shokaiM[1]}-ユ${shokaiM[2]}` : null
   return { haken, shokai }
 }
 

@@ -40,6 +40,7 @@ const TARGET_FUNCTIONS = [
   'stationNameCandidates',
   'extractWorkStyleNote',
   'findWorkStyleIn',        // extractWorkStyleNote が呼ぶ（本文優先・添付は案件説明を弾く）
+  'extractLicenseNumbers',  // 派遣・職業紹介の許可番号（旧表記 般/特・全角に対応）
   'deriveWorkStyleTag',
   'extractSkillYearsFromCells',
   'extractSkillYearsPeriodHeader',
