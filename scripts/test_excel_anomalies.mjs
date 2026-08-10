@@ -624,6 +624,22 @@ console.log('=== K5. 本文フィールドの誤抽出（#132/#133/#134） ===')
     extractWorkStyleNote('週5日リモート可（出社は月1回程度）', ''), '週5日リモート可（出社は月1回程度）')
 }
 
+console.log('=== K6. deriveWorkStyleTag（例外的な出社は併用可にしない・#135） ===')
+{
+  const { deriveWorkStyleTag } = await import('./_extractors.gen.mjs')
+  const w = (label, input, expect) => {
+    const got = deriveWorkStyleTag(input)
+    if (got === expect) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       got=${JSON.stringify(got)} expect=${JSON.stringify(expect)}`) }
+  }
+  w('K6-1: フルリモート希望＋初週出社OK はリモート希望',
+    'フルリモート希望　※初週や緊急時の出社は問題ございません', 'リモート希望')
+  w('K6-2: フルリモート＋緊急時出社 はリモート希望', 'フルリモート（緊急時のみ出社）', 'リモート希望')
+  w('K6-3: 週2出社は併用可のまま', 'リモート中心・週2日出社', '併用可')
+  w('K6-4: 常駐可は常駐可のまま', '客先常駐可能', '常駐可')
+  w('K6-5: フルリモートのみ はリモート希望', 'フルリモートのみ希望', 'リモート希望')
+}
+
 console.log('=== L. Method 1.7 KVブロック型: ラベル同列下方の文章セル混入（K.F型） ===')
 // 実害: 「開発環境」ラベルの同列下方に「開発手法」「業務内容」ラベル→業務内容の文章セルが
 // 並ぶテンプレートで、文章の断片（「また」「■主な業務内容」「‐ 不具合報告」等）が

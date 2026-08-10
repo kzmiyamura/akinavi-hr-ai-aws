@@ -38,6 +38,7 @@ const TARGET_FUNCTIONS = [
   'extractNationalityMark',
   'stationNameCandidates',
   'extractWorkStyleNote',
+  'deriveWorkStyleTag',
   'extractSkillYearsFromCells',
   'extractSkillYearsPeriodHeader',
   'extractSkillYearsRepeatPeriodHeader',

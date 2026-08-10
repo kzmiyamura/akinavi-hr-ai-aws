@@ -2194,6 +2194,26 @@ function extractWorkStyleNote(bodyText, attachText){
   return null
 }
 
+// ── deriveWorkStyleTag ──
+function deriveWorkStyleTag(phrase){
+  if (!phrase) return null
+  const p = phrase
+  const hasRemoteWord = /リモート|在宅|テレワーク/.test(p)
+  const hasOnsiteWord = /常駐|出社/.test(p)
+  const strictFullRemote = /フルリモート(?:のみ|必須|限定|希望)|完全リモート|リモートのみ|常駐(?:不可|なし|NG|×)/.test(p)
+  // 「フルリモート希望　※初週や緊急時の出社は問題ございません」のように、出社が例外扱い
+  // （初週・緊急時・必要時のみ）と明記されている場合は併用ではなくリモート希望とする（#135）
+  const onsiteIsException = /(?:初週|初日|初回|緊急時|必要時|有事|たまに|稀に|月[1-2]回)[^\n]{0,12}(?:出社|常駐)/.test(p)
+  if (/フルリモート|完全リモート/.test(p) && onsiteIsException) return 'リモート希望'
+  const onsiteOk = /常駐[　 ]?(?:可|OK|あり|可能)|フル常駐|出社[　 ]?(?:可|OK|可能|必須)|週[1-5][〜~－-]?\d?[　 ]?日?[　 ]?(?:出社|リモート)|月[1-9]回?[　 ]?(?:程度)?[　 ]?出社|尚可|相談可|併用|ハイブリッド|(?:初日|緊急時)[^\n]{0,4}出社|出社まで可/.test(p)
+  if (strictFullRemote && !onsiteOk) return 'リモート希望'
+  if (hasRemoteWord && (hasOnsiteWord || onsiteOk)) return '併用可'
+  if (/フルリモート|完全リモート|リモート(?:のみ|必須|希望|優先|限定|前提|頻度高|メイン|ベース)/.test(p)) return 'リモート希望'
+  if (hasOnsiteWord) return '常駐可'
+  if (hasRemoteWord) return '併用可'
+  return null
+}
+
 // ── extractSkillYearsFromCells ──
 function extractSkillYearsFromCells(cells, deadline = 0){
   if (cells.length === 0) return {}
@@ -3184,6 +3204,7 @@ export {
   extractNationalityMark,
   stationNameCandidates,
   extractWorkStyleNote,
+  deriveWorkStyleTag,
   extractSkillYearsFromCells,
   extractSkillYearsPeriodHeader,
   extractSkillYearsRepeatPeriodHeader,
