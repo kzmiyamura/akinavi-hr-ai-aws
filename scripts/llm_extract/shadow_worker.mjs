@@ -132,12 +132,23 @@ async function applyToCandidate(c, { bodyFields, attachment }) {
 /** 非人材（案件メール等の誤登録）を一覧から隔離し、GitHub Issue で通知する。
  *  merged_into を自己参照にすると全一覧クエリ（merged_into IS NULL 前提）から消える。
  *  復活: node scripts/restore_candidate.mjs <id>（2026-08-10 ユーザー判断「隔離＋通知」） */
+// 同じメールから複数の幽霊が出ると Issue が乱立するため、メール単位で最初の1件だけ通知する
+// （実害: 1通のメールから4件のIssueが飛んだ・2026-08-10）。再起動でリセットされるが、
+// 通知は「気づくため」のものなので取りこぼしより重複抑制を優先する
+const notifiedSources = new Set()
+
 async function quarantineCandidate(c, reason, detail) {
   const rp = { ...(c.raw_profile || {}), _quarantine: { reason, detail, at: new Date().toISOString() } }
   await rest(`candidates?id=eq.${c.id}`, {
     method: 'PATCH', headers: { Prefer: 'return=minimal' },
     body: JSON.stringify({ merged_into: c.id, raw_profile: rp }),
   })
+  const srcKey = `${c.raw_profile?.from ?? ''}|${c.raw_profile?.subject ?? ''}`
+  if (notifiedSources.has(srcKey)) {
+    log(`  [${c.name}] ${detail} → 隔離（同一メールの通知は送信済みのため省略）`)
+    return
+  }
+  notifiedSources.add(srcKey)
   log(`  [${c.name}] ${detail} → 隔離・Issue通知`)
   try {
     await fetch(`${SUPABASE_URL}/functions/v1/create-github-issue`, {
@@ -145,7 +156,10 @@ async function quarantineCandidate(c, reason, detail) {
       headers: { 'Content-Type': 'application/json', apikey: KEY, Authorization: `Bearer ${KEY}` },
       body: JSON.stringify({
         memo: `非人材検知: 「${c.name}」（${c.from_company ?? '会社不明'}）を一覧から隔離しました\n\n` +
-          `判定: ${detail}\nid: ${c.id}\n\n` +
+          `判定: ${detail}\nid: ${c.id}\n` +
+          `元メール: ${c.raw_profile?.subject ?? '(件名不明)'}\n\n` +
+          `※ 同じメールから他にも隔離された人材がいる場合、通知はこの1件にまとめています。\n` +
+          `　 一覧確認: node scripts/audit_quarantined.mjs\n\n` +
           `- 削除する場合: node scripts/delete_candidate.mjs ${c.id}\n` +
           `- 誤検知で復活する場合: node scripts/restore_candidate.mjs ${c.id}`,
         nickname: 'shadow-worker',
