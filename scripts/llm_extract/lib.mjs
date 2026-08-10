@@ -29,7 +29,9 @@ export function buildTextGridInput(text, label = 'text') {
   const rows = []
   let dateCells = 0
   String(text ?? '').split(/\r?\n/).forEach((line, i) => {
-    const s = line.trim()
+    // PDFのテキスト抽出は「2025 年 9 月」のように空白が混入し日付検出に失敗する
+    // （HE実PDFで dateCells=0 → 抽出全滅の実害・2026-08-08 Issue #126）。空白を除去して正規化
+    const s = line.trim().replace(/((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月/g, '$1年$2月')
     if (!s) return
     if (/(19|20)\d{2}[\/年.\-]\d{1,2}/.test(s)) dateCells++
     rows.push([i, [s]])
