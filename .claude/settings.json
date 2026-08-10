@@ -1,0 +1,47 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude -p --model claude-haiku-4-5)",
+      "Bash(pm2 start *)",
+      "Bash(pm2 stop *)",
+      "Bash(pm2 restart *)",
+      "Bash(pm2 delete *)",
+      "Bash(pm2 logs *)",
+      "Bash(pm2 list)",
+      "Bash(npm install *)",
+      "Bash(node scripts/llm_extract/sb-query.mjs *)",
+
+      "Bash(node scripts/*)",
+      "Bash(npx tsc *)",
+      "Bash(npx vitest run *)",
+      "Bash(npm test *)",
+      "Bash(npx supabase functions deploy *)",
+      "Bash(bash scripts/check-and-deploy-edge.sh *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push)",
+      "Bash(git push origin main)",
+      "Bash(tail * akinavi_shadow.log)",
+      "Bash(tail -c * ~/akinavi_shadow.log)",
+      "Bash(tail -f -n 0 ~/akinavi_shadow.log *)",
+      "Bash(grep * ~/akinavi_shadow.log)",
+      "Bash(grep -a * ~/akinavi_shadow.log)",
+      "Bash(grep -ac * ~/akinavi_shadow.log)",
+      "Bash(cat ~/.akinavi_shadow_state.json)",
+      "Bash(deno check *)",
+
+      "PowerShell(pm2 start *)",
+      "PowerShell(pm2 stop *)",
+      "PowerShell(pm2 restart *)",
+      "PowerShell(pm2 delete *)",
+      "PowerShell(pm2 logs *)",
+      "PowerShell(pm2 list)",
+      "PowerShell(pm2 save)",
+      "PowerShell(Start-Sleep *)",
+      "PowerShell(npm install *)"
+    ]
+  }
+}
