@@ -132,10 +132,12 @@ async function applyToCandidate(c, { bodyFields, attachment }) {
 /** 非人材（案件メール等の誤登録）を一覧から隔離し、GitHub Issue で通知する。
  *  merged_into を自己参照にすると全一覧クエリ（merged_into IS NULL 前提）から消える。
  *  復活: node scripts/restore_candidate.mjs <id>（2026-08-10 ユーザー判断「隔離＋通知」） */
-// 同じメールから複数の幽霊が出ると Issue が乱立するため、メール単位で最初の1件だけ通知する
-// （実害: 1通のメールから4件のIssueが飛んだ・2026-08-10）。再起動でリセットされるが、
-// 通知は「気づくため」のものなので取りこぼしより重複抑制を優先する
-const notifiedSources = new Set()
+// 隔離の通知は1件ごとに出すと Issue が乱立する（実害: 3時間で20件・2026-08-10）。
+// 溜めておき、1時間に1回だけ「まとめ」を1本投げる。データ自体は隔離済みで
+// audit_quarantined.mjs からいつでも全件確認できるため、通知は気づきのきっかけで足りる。
+const QUARANTINE_NOTIFY_INTERVAL_MS = 60 * 60 * 1000
+const pendingQuarantines = []
+let lastQuarantineNotifyAt = 0
 
 async function quarantineCandidate(c, reason, detail) {
   const rp = { ...(c.raw_profile || {}), _quarantine: { reason, detail, at: new Date().toISOString() } }
@@ -143,29 +145,43 @@ async function quarantineCandidate(c, reason, detail) {
     method: 'PATCH', headers: { Prefer: 'return=minimal' },
     body: JSON.stringify({ merged_into: c.id, raw_profile: rp }),
   })
-  const srcKey = `${c.raw_profile?.from ?? ''}|${c.raw_profile?.subject ?? ''}`
-  if (notifiedSources.has(srcKey)) {
-    log(`  [${c.name}] ${detail} → 隔離（同一メールの通知は送信済みのため省略）`)
-    return
+  log(`  [${c.name}] ${detail} → 隔離`)
+  pendingQuarantines.push({
+    name: c.name, company: c.from_company ?? '会社不明', id: c.id, detail,
+    subject: c.raw_profile?.subject ?? '(件名不明)',
+  })
+}
+
+/** 溜まった隔離をまとめて1本のIssueで通知する（サイクル末に呼ぶ） */
+async function flushQuarantineNotice() {
+  if (!pendingQuarantines.length) return
+  if (Date.now() - lastQuarantineNotifyAt < QUARANTINE_NOTIFY_INTERVAL_MS) return
+  const items = pendingQuarantines.splice(0)
+  lastQuarantineNotifyAt = Date.now()
+  // 元メール（件名）ごとにまとめる。1通の名簿誤検出から何人も出るため
+  const byMail = new Map()
+  for (const q of items) {
+    const k = `${q.company}｜${q.subject.slice(0, 50)}`
+    if (!byMail.has(k)) byMail.set(k, [])
+    byMail.get(k).push(q)
   }
-  notifiedSources.add(srcKey)
-  log(`  [${c.name}] ${detail} → 隔離・Issue通知`)
+  const body = [...byMail.entries()]
+    .map(([k, list]) => `■ ${k}（${list.length}件）\n　 ${list.map((q) => q.name).join(', ')}\n　 判定: ${list[0].detail}`)
+    .join('\n\n')
   try {
     await fetch(`${SUPABASE_URL}/functions/v1/create-github-issue`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: KEY, Authorization: `Bearer ${KEY}` },
       body: JSON.stringify({
-        memo: `非人材検知: 「${c.name}」（${c.from_company ?? '会社不明'}）を一覧から隔離しました\n\n` +
-          `判定: ${detail}\nid: ${c.id}\n` +
-          `元メール: ${c.raw_profile?.subject ?? '(件名不明)'}\n\n` +
-          `※ 同じメールから他にも隔離された人材がいる場合、通知はこの1件にまとめています。\n` +
-          `　 一覧確認: node scripts/audit_quarantined.mjs\n\n` +
-          `- 削除する場合: node scripts/delete_candidate.mjs ${c.id}\n` +
-          `- 誤検知で復活する場合: node scripts/restore_candidate.mjs ${c.id}`,
+        memo: `非人材検知まとめ: ${items.length}件を一覧から隔離しました（元メール${byMail.size}通）\n\n${body}\n\n` +
+          `全件確認: node scripts/audit_quarantined.mjs\n` +
+          `一括削除: node scripts/audit_quarantined.mjs 7 --delete\n` +
+          `誤検知の復活: node scripts/restore_candidate.mjs <id>`,
         nickname: 'shadow-worker',
       }),
     })
-  } catch (e) { log(`  [${c.name}] Issue通知失敗:`, String(e).slice(0, 100)) }
+    log(`隔離まとめ通知: ${items.length}件（元メール${byMail.size}通）`)
+  } catch (e) { log('隔離まとめ通知に失敗:', String(e).slice(0, 100)) }
 }
 
 /** 幽霊レコード検知（ルールベースの名簿誤検出で生まれた実在しない人材）。
@@ -303,6 +319,7 @@ async function cycle() {
     state.dayCount++
     saveState()
   }
+  await flushQuarantineNotice()
   log(`サイクル完了 day=${state.dayCount}件 cost=$${state.dayCost.toFixed(2)}`)
 }
 
