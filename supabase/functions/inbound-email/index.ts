@@ -3405,6 +3405,23 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
   }
 
   // ── Method 1: プロジェクト経歴型 ──
+  /** 空白除去済みのヘッダー文字列が「言語/技術の列」を指すか。
+   *  縦積みヘッダーにも当てられるよう、先頭行・全行連結の双方から呼ぶ */
+  const isLangHeaderText = (h: string): boolean => {
+    // 全角ASCII→半角ASCII正規化（"ＯＳ/ＤＢ/言語" → "OS/DB/言語"）: TMK-S型対応
+    const a = h.replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    return h.includes('使用言語') || h === '言語' || h.includes('使用技術') || h.includes('技術スタック')
+      || h === '技術' || h === '言語/技術'
+      || h.includes('開発言語') || h.includes('PG言語')  // "OS・DB・開発言語" / "PG言語" 等の複合ヘッダー対応
+      // 複合列ヘッダー対応: "言語　FW" / "言語/FW" / "言語・FW" / "言語 ツール" / "言語/DB" 等
+      || (h.includes('言語') && (h.includes('FW') || h.includes('ツール') || h.includes('技術') || h.includes('DB') || h.includes('OS') || h.includes('環境') || h.includes('その他')))
+      // 全角ASCII含む複合ヘッダー: "ＯＳ/ＤＢ/環境/言語/他" など（TMK-S型）
+      || (h.includes('言語') && (a.includes('OS') || a.includes('DB') || a.includes('FW')))
+      // "利用技術" / "機種/OS/DB等" / "OS/言語/DB" 等のヘッダー
+      || h.includes('利用技術') || /機種.*OS|OS.*言語|言語.*DB|言語.*OS/i.test(h)
+      // 全角ASCII正規化後の照合
+      || /OS.*言語|言語.*OS|言語.*DB/i.test(a)
+  }
   let langColIdx = -1
   let fwColIdx = -1
   let headerRowIdx = -1
@@ -3430,17 +3447,13 @@ function extractSkillYearsFromSheetData(data: string[][]): Record<string, number
       const vFull = String(row[j] ?? '').replace(/[\r\n]+/g, '').replace(/[\s　]+/g, '')
       // 全角ASCII→半角ASCII正規化（"ＯＳ/ＤＢ/言語" → "OS/DB/言語"）: TMK-S型対応
       const vAscii = vNorm.replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-      if ((vNorm.includes('使用言語') || vNorm === '言語' || vNorm.includes('使用技術') || vNorm.includes('技術スタック') || vNorm === '技術' || vNorm === '言語/技術'
-           || vNorm.includes('開発言語') || vNorm.includes('PG言語')  // "OS・DB・開発言語" / "PG言語" 等の複合ヘッダー対応
-           // 複合列ヘッダー対応: "言語　FW" / "言語/FW" / "言語・FW" / "言語 ツール" / "言語/DB" 等
-           || (vNorm.includes('言語') && (vNorm.includes('FW') || vNorm.includes('ツール') || vNorm.includes('技術') || vNorm.includes('DB') || vNorm.includes('OS') || vNorm.includes('環境') || vNorm.includes('その他')))
-           // 全角ASCII含む複合ヘッダー: "ＯＳ/ＤＢ/環境/言語/他" など（TMK-S型）
-           || (vNorm.includes('言語') && (vAscii.includes('OS') || vAscii.includes('DB') || vAscii.includes('FW')))
-           // "利用技術" / "機種/OS/DB等" / "OS/言語/DB" 等のヘッダー
-           || vNorm.includes('利用技術') || /機種.*OS|OS.*言語|言語.*DB|言語.*OS/i.test(vNorm)
-           // 全角ASCII正規化後の照合
-           || /OS.*言語|言語.*OS|言語.*DB/i.test(vAscii)
-         ) && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
+      // 言語列ヘッダーの判定。先頭行(vNorm)と全行連結(vFull)の両方で照合する。
+      // 以前は先頭行しか見ておらず、"機器\nﾊﾟｯｹｰｼﾞ\nﾂｰﾙ類\nPG言語" のように
+      // 目的の語が2行目以降にある縦積みヘッダーで言語列が見つからず、Method 1 全体が
+      // 動かずスキル年数が0件になっていた（回帰10件中6件がこの形・2026-08-10）。
+      // vFull は同じループ内で月数列・No列の判定に既に使われていたものを流用する。
+      if ((isLangHeaderText(vNorm) || (vFull.length <= 30 && isLangHeaderText(vFull)))
+         && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
       // 「開発環境」は具体列名（言語・使用言語等）が最後まで見つからなかった場合の保険。
       // 「開発環境」は機種/OS/言語/DB/ツールをまとめた"グループ見出し"であることが多く（H.R型）、
       // 直接ヒットさせると本物の「言語」列より先にスキャンが打ち切られ、隣の「機種」列

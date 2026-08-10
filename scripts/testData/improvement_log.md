@@ -335,3 +335,10 @@
 - **メモ**: 役割の主・副ランキング実装(scoreProseRoles): シグナル加重(明示ラベル+5/冒頭+3/ポジション行+2/頻度+1x3)・盛り文脈ガード・_roleScores保存・UI主バッジ強調
 
 ---
+
+## 2026-08-10 イテレーション（自動記録）
+- **Excel skillYears**: 100.0%（Pass:8 Warn:2 Fail:0/10）
+- **Body skillYears**: 100.0%（Pass:3 Warn:0 Fail:0/3）
+- **メモ**: 言語列ヘッダーの判定を全行連結(vFull)でも行うよう修正。縦積みヘッダー(機器/ﾊﾟｯｹｰｼﾞ/ﾂｰﾙ類/PG言語)で目的語が2行目以降にあると先頭行しか見ずMethod1全体が不発→skillYears0件だった。回帰 2Pass7Warn1Fail → 8Pass2Warn0Fail
+
+---
