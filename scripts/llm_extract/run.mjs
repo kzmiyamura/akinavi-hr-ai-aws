@@ -12,6 +12,9 @@ import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES, BODY_FIELDS
 import { callModel } from './caller.mjs'
 import { verifyOutput } from './verify.mjs'
 
+/** Sonnet 昇格の一時停止スイッチ。1 で昇格せず haiku 結果を needs_review 付きで採用する */
+const NO_ESCALATE = process.env.SHADOW_NO_ESCALATE === '1'
+
 /** 経歴グリッド抽出のルーター本体。他モジュールからも利用可。
  *  kind='text' は docx/pdf 由来の疑似グリッド（1行=1セル）。プロンプトだけ変え、
  *  機械検証(verify.mjs)は行集合ベースなのでそのまま共用する */
@@ -26,7 +29,13 @@ export async function extractProjects(gridInput, { log = () => {}, kind = 'grid'
   log(`haiku: proj=${h.data?.projects?.length} verify=${vh.escalate ? 'ESCALATE' : 'pass'} ${vh.reasons.join('|')}`)
 
   let final = { model: 'haiku', output: h.data, verify: vh, costUsd: h.costUsd ?? 0 }
-  if (vh.escalate) {
+  if (vh.escalate && NO_ESCALATE) {
+    // 昇格の一時停止（2026-08-10）。実測で昇格の約半分は needs_review のまま終わり、
+    // 昇格1回あたり $0.27 の上乗せが回収できていなかった（escalation_report.mjs 参照）。
+    // 下の「sonnet失敗→haiku結果を採用」と同じ着地点なので、抽出結果が失われることはない。
+    log(`昇格停止中(SHADOW_NO_ESCALATE=1) → haiku結果を採用 proj=${h.data?.projects?.length} ${vh.reasons.join('|')}`)
+    final = { model: 'haiku', output: h.data, verify: { ...vh, escalate: true }, costUsd: h.costUsd ?? 0 }
+  } else if (vh.escalate) {
     // 昇格の開始を呼び出し側に通知する（UI に「AI校正中」を出すため）
     if (onEscalate) { try { await onEscalate() } catch { /* 通知失敗は処理を止めない */ } }
     try {
