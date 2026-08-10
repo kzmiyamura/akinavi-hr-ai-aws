@@ -28,7 +28,17 @@ const MAX_PER_CYCLE = 15        // 1サイクルのLLM対象候補者上限
 // 本文抽出をまとめて処理する人数。大きいほど固定費は下がるが、
 // 1回のプロンプトが長くなり取り違え・出力切れのリスクが増えるため中庸にする
 const BODY_BATCH_SIZE = Number(process.env.SHADOW_BODY_BATCH ?? 5)
-const MAX_PER_DAY = 400         // 日次上限（サブスク枠保護）
+// 日次上限（サブスク枠保護）。到着は約750件/日で処理能力を大きく上回るため、
+// この上限が実質的な支出コントロールになる。2026-08-10 に 400→100。
+// 根拠: 同日 regex 側の skillYears を修正（回帰 2Pass→8Pass）して素の品質が上がり、
+// AI補正の限界効用が下がった。新しい順に処理するので少数でも価値は落ちにくい
+const MAX_PER_DAY = Number(process.env.SHADOW_MAX_PER_DAY ?? 100)
+// 何日前までを処理対象にするか。7日で archive-candidates がアーカイブへ移すため、
+// それより手前で切る。古いものを掘り返して予算を使い切らないための足切り
+const LOOKBACK_DAYS = Number(process.env.SHADOW_LOOKBACK_DAYS ?? 3)
+// 失敗を繰り返すレコードの打ち切り回数。キュー方式は「未処理のもの」を拾い続けるため、
+// 失敗を記録しないと同じレコードを永久に再処理して費用が出続ける
+const MAX_ATTEMPTS = 3
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'akinavi-shadow-'))
 // 本番 candidates への上書き。SHADOW_APPLY=0 で記録のみ（シャドー運転）に戻せる
 const APPLY = process.env.SHADOW_APPLY !== '0'
@@ -99,6 +109,18 @@ async function markLlmChecked(c) {
   await rest(`candidates?id=eq.${c.id}`, {
     method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ raw_profile: rp }),
   })
+}
+
+/** 処理に失敗した回数を raw_profile._llm_attempts に積む。
+ *  キュー方式は「_llm_checked_at が無いもの」を拾い続けるため、失敗を記録しないと
+ *  同じレコードを永久に再処理して費用が出続ける。MAX_ATTEMPTS で打ち切る。 */
+async function markAttempt(c, err) {
+  const n = (c.raw_profile?._llm_attempts ?? 0) + 1
+  const rp = { ...(c.raw_profile || {}), _llm_attempts: n, _llm_last_error: String(err).slice(0, 200) }
+  log(`  [${c.name}] 失敗(${n}/${MAX_ATTEMPTS}):`, String(err).slice(0, 160))
+  await rest(`candidates?id=eq.${c.id}`, {
+    method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ raw_profile: rp }),
+  }).catch(() => {})
 }
 
 /** LLM の抽出結果を本番 candidates に反映する */
@@ -305,23 +327,32 @@ async function cycle() {
 
   // buildPatch / mergeSkills が参照するトップレベル列は必ず select に含めること。
   // 欠けると「既存値なし」と誤認して fill 項目まで上書き・skills 全置換になる（2026-08-08 に実害）
+  // キュー方式（2026-08-10 に watermark から変更）。
+  // 旧方式は created_at 昇順に前進するカーソルで、到着(約750件/日)が処理能力を
+  // 上回るため遅れが伸び続け、予算を「3〜5日前の、まもなくアーカイブされる人材」に
+  // 使っていた（実測: 未処理839件・最古5日前）。
+  //   ・新しい順に処理する      … 同じ支出で価値の高い人材から埋まる
+  //   ・LOOKBACK_DAYS で足切り  … 古い在庫を掘り返して予算を溶かさない
+  //   ・「印が無いもの」を拾う    … カーソルが詰まらず取りこぼしも自然に回収される
+  // 再解析(inbound-email)は raw_profile を差し替えるため印も消え、自然に再入する
+  const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
+  // buildPatch / mergeSkills が参照するトップレベル列は必ず select に含めること。
+  // 欠けると「既存値なし」と誤認して fill 項目まで上書き・skills 全置換になる（2026-08-08 に実害）
   const q = `candidates?select=id,name,resume_url,raw_profile,created_at,desired_rate,from_company,experience_years,skills` +
-    `&data_env=eq.prod&created_at=gt.${encodeURIComponent(state.watermark)}` +
-    `&order=created_at.asc&limit=${MAX_PER_CYCLE}`
+    `&data_env=eq.prod&merged_into=is.null` +
+    `&raw_profile->>_llm_checked_at=is.null` +
+    `&created_at=gte.${encodeURIComponent(since)}` +
+    `&order=created_at.desc&limit=${MAX_PER_CYCLE}`
   const rows = await rest(q)
-  if (!rows.length) { log('新規なし'); return }
-  log(`新規候補者 ${rows.length}件`)
+  if (!rows.length) { log(`未処理なし（直近${LOOKBACK_DAYS}日）`); return }
+  log(`未処理 ${rows.length}件（新しい順・直近${LOOKBACK_DAYS}日）`)
 
-  // 再解析（Box取込・UI再解析ボタン）は created_at を now にリセットするため、
-  // 処理済み候補者が「新規」として再登場する。LLM適用が created_at より後なら処理済み
-  const isDone = (c) => {
-    const at = c.raw_profile?._llm_applied?.at
-    return at && new Date(at) >= new Date(c.created_at)
-  }
+  // 失敗を繰り返すレコードは打ち切る。印が付かないまま残ると永久に再処理される
+  const givenUp = (c) => (c.raw_profile?._llm_attempts ?? 0) >= MAX_ATTEMPTS
   // 本文抽出をまとめて1回で済ませる（claude -p の固定オーバーヘッドを人数で割る）。
   // 取り違えが起きたら件数不一致で検出し、その回は1件ずつに落とす
   const bodyOf = new Map()
-  const need = rows.filter((c) => !isDone(c) && (c.raw_profile?.text ?? '').length > 50 && !bodyLooksComplete(c))
+  const need = rows.filter((c) => !givenUp(c) && (c.raw_profile?.text ?? '').length > 50 && !bodyLooksComplete(c))
   for (let i = 0; i < need.length; i += BODY_BATCH_SIZE) {
     const chunk = need.slice(i, i + BODY_BATCH_SIZE)
     if (chunk.length < 2) break                       // 1件ならまとめる意味がない
@@ -339,15 +370,19 @@ async function cycle() {
   }
 
   for (const c of rows) {
-    if (isDone(c)) {
-      log(`スキップ（再解析後LLM適用済み）: ${c.name}`)
-      state.watermark = c.created_at
-      saveState()
+    if (state.dayCount >= MAX_PER_DAY) { log(`日次上限${MAX_PER_DAY}到達、以降は次回`); break }
+    if (givenUp(c)) {
+      log(`打ち切り（${MAX_ATTEMPTS}回失敗）: ${c.name}`)
+      await markLlmChecked(c).catch(() => {})
       continue
     }
     log(`処理: ${c.name} (${c.id})`)
-    await processCandidate(c, bodyOf.get(c.id) ?? null)
-    state.watermark = c.created_at
+    try {
+      await processCandidate(c, bodyOf.get(c.id) ?? null)
+    } catch (e) {
+      // キュー方式では失敗を記録しないと同じレコードを拾い続けて費用が出続ける
+      await markAttempt(c, e)
+    }
     state.dayCount++
     saveState()
   }
@@ -486,10 +521,14 @@ async function boxQueue() {
   const manual = await rest(
     `candidates?select=${BOX_SELECT}&box_status=eq.fetch_requested&order=created_at.asc&limit=3`) ?? []
   // ② 全自動取込: 経歴書未取得（resume_url なし）の pending prod 人材。
-  //    created_at < watermark で「本サイクル通過済み」を保証（本文LLM処理との競合回避）
+  //    「本サイクル通過済み」を保証して本文LLM処理との競合を避ける。
+  //    キュー方式に変えたため watermark ではなく校正済みの印そのもので判定する（2026-08-10）。
+  //    古い在庫を掘り返さないよう本サイクルと同じ LOOKBACK_DAYS の足切りも入れる
+  const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
   const auto = manual.length >= 3 ? [] : (await rest(
     `candidates?select=${BOX_SELECT}&box_status=eq.pending&resume_url=is.null&box_url=not.is.null` +
-    `&data_env=eq.prod&created_at=lt.${encodeURIComponent(state.watermark)}` +
+    `&data_env=eq.prod&raw_profile->>_llm_checked_at=not.is.null` +
+    `&created_at=gte.${encodeURIComponent(since)}` +
     `&order=created_at.desc&limit=${AUTO_BOX_PER_POLL}`)) ?? []
   for (const c of [...manual, ...auto]) {
     if (state.dayCount >= MAX_PER_DAY) return
@@ -497,7 +536,8 @@ async function boxQueue() {
   }
 }
 
-log(`ワーカー起動 mode=${APPLY ? '本番上書き' : 'シャドー記録のみ'} watermark=${state.watermark} 上限=${MAX_PER_CYCLE}/cycle, ${MAX_PER_DAY}/day`)
+log(`ワーカー起動 mode=${APPLY ? '本番上書き' : 'シャドー記録のみ'} ` +
+  `方式=キュー(新しい順・直近${LOOKBACK_DAYS}日) 上限=${MAX_PER_CYCLE}/cycle, ${MAX_PER_DAY}/day`)
 // 前回クラッシュで 'fetching' のまま残った依頼を復帰させる
 await rest(`candidates?box_status=eq.fetching`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'fetch_requested' }) }).catch(() => {})
 // 停止・クラッシュで進行中のまま残った _llm_stage を掃除する。
