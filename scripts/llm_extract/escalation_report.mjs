@@ -64,10 +64,13 @@ if (plain.length && esc.length) {
 // 例: "  [名前] haiku: proj=2 verify=ESCALATE tech_coverage(0.17,grid=6)"
 //     "  [名前] sonnet: proj=2 verify=NEEDS_REVIEW self_low_confidence"
 const LINE = /^(\S+)\s+\[(.+?)\]\s+(haiku|sonnet): proj=(\d+) verify=(\S+)\s*(.*)$/
-const trigger = new Map()   // 理由名 -> 回数
-let haikuTotal = 0, escalated = 0, resolved = 0, stillBad = 0
-const pending = new Map()   // 名前 -> 引き金の理由リスト
-const wasted = new Map()    // 理由名 -> 昇格しても直らなかった回数
+// verify.mjs の HARD_GATES と同じ集合。Sonnet段でも同じ基準が適用されるため、
+// これだけが引き金の昇格は「文書側の性質」であり上位モデルでは覆りにくい
+const HARD = new Set(['no_projects', 'bad_dates', 'project_shortfall', 'month_label', 'self_low_confidence'])
+
+let haikuTotal = 0
+const escalations = []      // {name, triggers:[], outcome:'pass'|'bad'|null}
+const pending = new Map()   // 名前 -> escalations のインデックス
 
 let logText = ''
 try { logText = readFileSync(join(homedir(), 'akinavi_shadow.log'), 'utf8') } catch { /* ログ無し */ }
@@ -76,37 +79,66 @@ for (const line of logText.split('\n')) {
   if (!m) continue
   const [, ts, name, model, , verdict, rest] = m
   if (Date.parse(ts) < sinceMs) continue
-  // 理由は "a|b" 形式。括弧の中身（実測値）は落として種類だけ数える
+  // 理由は "a|b" 形式。括弧の中身（実測値）は落として種類だけにする
   const names = rest.trim() ? rest.trim().split('|').map((r) => r.split('(')[0].trim()).filter(Boolean) : []
   if (model === 'haiku') {
     haikuTotal++
     if (verdict === 'ESCALATE') {
-      escalated++
-      for (const n of names) trigger.set(n, (trigger.get(n) ?? 0) + 1)
-      pending.set(name, names)
+      pending.set(name, escalations.length)
+      escalations.push({ name, triggers: names, outcome: null })
     }
-  } else {
-    const trig = pending.get(name) ?? []
+  } else if (pending.has(name)) {
+    escalations[pending.get(name)].outcome = verdict === 'pass' ? 'pass' : 'bad'
     pending.delete(name)
-    if (verdict === 'pass') resolved++
-    else {
-      stillBad++
-      for (const n of trig) wasted.set(n, (wasted.get(n) ?? 0) + 1)
-    }
   }
 }
 
-console.log(`\n=== 昇格の引き金（ワーカーログ・haiku判定${haikuTotal}回中${escalated}回が昇格＝${pct(escalated, haikuTotal)}）===`)
+// ── 理由ごと（延べ数。1回の昇格に複数付くため合計は昇格数を超える）──
+const trigger = new Map(), wasted = new Map()
+for (const e of escalations) {
+  for (const n of e.triggers) {
+    trigger.set(n, (trigger.get(n) ?? 0) + 1)
+    if (e.outcome === 'bad') wasted.set(n, (wasted.get(n) ?? 0) + 1)
+  }
+}
+console.log(`\n=== 昇格の引き金・延べ（haiku判定${haikuTotal}回中${escalations.length}回が昇格＝${pct(escalations.length, haikuTotal)}）===`)
 for (const [k, v] of [...trigger.entries()].sort((a, b) => b[1] - a[1])) {
-  console.log(`  ${k.padEnd(20)} ${String(v).padStart(4)}回  うち昇格しても直らず ${String(wasted.get(k) ?? 0).padStart(3)}回`)
+  console.log(`  ${k.padEnd(20)} ${String(v).padStart(4)}回  うち昇格しても直らず ${String(wasted.get(k) ?? 0).padStart(3)}回` +
+    `  ${HARD.has(k) ? '[hard]' : '[soft]'}`)
 }
 
-const judged = resolved + stillBad
-console.log(`\n=== 昇格して何が得られたか（結果が出た${judged}件）===`)
-console.log(`  pass に転じた        : ${String(resolved).padStart(4)}回 ${pct(resolved, judged)}`)
-console.log(`  NEEDS_REVIEW のまま  : ${String(stillBad).padStart(4)}回 ${pct(stillBad, judged)}  ← 昇格コストが無駄`)
-if (judged && plain.length && esc.length) {
-  const surcharge = mean(costOf(esc)) - mean(costOf(plain))
-  console.log(`  無駄になった昇格の推定額: $${(surcharge * stillBad).toFixed(2)}` +
-    `（上乗せ$${surcharge.toFixed(4)} × ${stillBad}回）`)
+const judged = escalations.filter((e) => e.outcome)
+const bad = judged.filter((e) => e.outcome === 'bad')
+console.log(`\n=== 昇格して何が得られたか（結果が出た${judged.length}件）===`)
+console.log(`  pass に転じた        : ${String(judged.length - bad.length).padStart(4)}回 ${pct(judged.length - bad.length, judged.length)}`)
+console.log(`  NEEDS_REVIEW のまま  : ${String(bad.length).padStart(4)}回 ${pct(bad.length, judged.length)}  ← 昇格コストが無駄`)
+
+// ── 単独引き金（重複を排した実際の削減余地）──
+// 「hard だけが引き金」の昇格は、soft ゲートを残したまま止められる＝実際に削減できる母数。
+// soft を含む昇格は tech_coverage 等の回収率が高いので止めない。
+const surcharge = plain.length && esc.length ? mean(costOf(esc)) - mean(costOf(plain)) : 0
+const hardOnly = judged.filter((e) => e.triggers.length && e.triggers.every((t) => HARD.has(t)))
+const softAny = judged.filter((e) => e.triggers.some((t) => !HARD.has(t)))
+const rate = (a) => `${a.filter((e) => e.outcome === 'pass').length}/${a.length} 回収 ${pct(a.filter((e) => e.outcome === 'pass').length, a.length)}`
+console.log(`\n=== 引き金の種類で分けた回収率（重複なし・昇格1回=1件）===`)
+console.log(`  hardのみが引き金 : ${String(hardOnly.length).padStart(4)}件  ${rate(hardOnly)}`)
+console.log(`  softを含む       : ${String(softAny.length).padStart(4)}件  ${rate(softAny)}`)
+if (surcharge) {
+  const lose = hardOnly.filter((e) => e.outcome === 'pass').length
+  console.log(`\n  → hardのみを昇格させない場合: ${hardOnly.length}件の昇格が消え ` +
+    `約$${(surcharge * hardOnly.length).toFixed(2)} 削減（直近${DAYS}日）`)
+  console.log(`     代償: そのうち回収できていた ${lose}件 が needs_review 止まりになる`)
+}
+
+// ── 引き金の組み合わせ別（どの組で止めるか決める用）──
+console.log(`\n=== 引き金の組み合わせ別 回収率（上位10）===`)
+const combos = new Map()
+for (const e of judged) {
+  const k = [...new Set(e.triggers)].sort().join(' + ') || '(理由なし)'
+  if (!combos.has(k)) combos.set(k, [])
+  combos.get(k).push(e)
+}
+for (const [k, list] of [...combos.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 10)) {
+  const ok = list.filter((e) => e.outcome === 'pass').length
+  console.log(`  ${String(list.length).padStart(3)}件 回収${pct(ok, list.length).padStart(4)}  ${k}`)
 }
