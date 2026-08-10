@@ -1043,7 +1043,20 @@ function extractSkillYearsFromSheetData(data){
       // 動かずスキル年数が0件になっていた（回帰10件中6件がこの形・2026-08-10）。
       // vFull は同じループ内で月数列・No列の判定に既に使われていたものを流用する。
       if ((isLangHeaderText(vNorm) || (vFull.length <= 30 && isLangHeaderText(vFull)))
-         && langColIdx < 0) { langColIdx = j; headerRowIdx = i }
+         && langColIdx < 0) {
+        // スキル一覧表（技術名を並べただけの表）のヘッダーを案件表の技術列と誤認しない。
+        // 案件表は見出しのすぐ下に期間が並ぶが、スキル一覧表は技術名だけで日付が無い
+        // （A_S「言　語」7行目・Y_O「開発言語」6行目を誤採用していた実害・2026-08-10）
+        let hasDateBelow = false
+        for (let k = i + 1; k <= Math.min(data.length - 1, i + 5); k++) {
+          if ((data[k] ?? []).some((cell) => /(19|20)\d{2}[\/年.\-]\d{1,2}/.test(String(cell ?? '')))) {
+            hasDateBelow = true; break
+          }
+        }
+        if (hasDateBelow) { langColIdx = j; headerRowIdx = i }
+        // 検証を通る見出しが1つも無ければ、最初の候補を使う（従来動作へのフォールバック）
+        else if (langColIdxFallback < 0) { langColIdxFallback = j; headerRowIdxFallback = i }
+      }
       // 「開発環境」は具体列名（言語・使用言語等）が最後まで見つからなかった場合の保険。
       // 「開発環境」は機種/OS/言語/DB/ツールをまとめた"グループ見出し"であることが多く（H.R型）、
       // 直接ヒットさせると本物の「言語」列より先にスキャンが打ち切られ、隣の「機種」列
