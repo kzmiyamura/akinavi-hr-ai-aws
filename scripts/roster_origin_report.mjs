@@ -5,7 +5,11 @@
 // 名簿由来の印: attachmentNames が "ファイル名#行名" 形式（rosterRowName 付き）。
 // 有用判定: 人の属性（年齢/性別/単価）が1つ以上あり、スキルも取れている。
 //
-// 使い方: node scripts/roster_origin_report.mjs [日数=14]
+// 使い方:
+//   node scripts/roster_origin_report.mjs [日数=14]              # 集計のみ
+//   node scripts/roster_origin_report.mjs [日数] --quarantine    # 幽霊を一括隔離（データは残す）
+//
+// 隔離 = merged_into 自己参照で全一覧から除外。復活は restore_candidate.mjs
 import { readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -51,3 +55,22 @@ console.log(`本文由来など:  ${rows.length - roster.length}件`)
 const sample = (arr, n = 8) => arr.slice(-n).map((c) => `${c.name}(${(c.skills ?? []).length}sk)`).join(', ')
 if (useful.length) console.log(`\n使える例: ${sample(useful)}`)
 if (junk.length) console.log(`使えない例: ${sample(junk)}`)
+
+if (!process.argv.includes('--quarantine') || junk.length === 0) process.exit(0)
+
+// ── 一括隔離（データは残す。誤検知は restore_candidate.mjs で復活可能）──
+console.log(`\n幽霊 ${junk.length}件を隔離します…`)
+let ok = 0
+for (const c of junk) {
+  const cur = await (await fetch(`${URL}/rest/v1/candidates?id=eq.${c.id}&select=raw_profile,merged_into`, { headers: h })).json()
+  if (!cur[0] || cur[0].merged_into) continue          // 既に隔離・統合済みは触らない
+  const rp = { ...(cur[0].raw_profile || {}), _quarantine: { reason: 'phantom', detail: '名簿誤検出の幽霊（一括隔離）', at: new Date().toISOString() } }
+  const res = await fetch(`${URL}/rest/v1/candidates?id=eq.${c.id}`, {
+    method: 'PATCH',
+    headers: { ...h, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify({ merged_into: c.id, raw_profile: rp }),
+  })
+  if (res.ok) ok++
+  else console.log(`  隔離失敗: ${c.name} ${res.status}`)
+}
+console.log(`隔離完了: ${ok}/${junk.length}件（復活: node scripts/restore_candidate.mjs <id>）`)
