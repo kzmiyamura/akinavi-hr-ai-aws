@@ -74,12 +74,25 @@ async function skillMasterSet() {
   return s
 }
 
-/** 「AI校正が済んだ」印を残す。変更が無かった人・解析対象が無かった人にも必ず付ける。
- *  UI の「AI校正中」バッジはこの印の有無で判定するため、時間で推測する必要がなくなる
- *  （2026-08-10 ユーザー指摘「校正完了フラグを付けるだけでは？」より。指摘のとおり時間推測は筋が悪い）。
- *  raw_profile は丸ごと送り返す必要がある（PostgREST の PATCH は列単位の置換のため） */
+/** AI校正の進行状態を raw_profile._llm_stage に記録する（UI表示用）。
+ *  段階（2026-08-10 ユーザー指定）:
+ *    印なし  … ルールベースのみ           → UI「AI校正待ち」
+ *    'body'  … 本文をHaikuで解析済        → UI「AI校正開始」
+ *    'sonnet'… 添付Haikuが不合格でSonnet中 → UI「AI校正中」
+ *    _llm_checked_at あり … 完了           → UI 表示なし
+ *  raw_profile は丸ごと送り返す必要がある（PostgREST の PATCH は列単位の置換のため）。
+ *  進行表示のための書き込みなので、経歴書の解析が続く場合だけ呼ぶ（無駄書きを避ける） */
+async function markStage(c, stage) {
+  const rp = { ...(c.raw_profile || {}), _llm_stage: stage }
+  await rest(`candidates?id=eq.${c.id}`, {
+    method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ raw_profile: rp }),
+  })
+  c.raw_profile = rp   // 後続の PATCH が古い raw_profile で上書きしないよう手元も更新
+}
+
+/** 「AI校正が済んだ」印を残す。変更が無かった人・解析対象が無かった人にも必ず付ける。 */
 async function markLlmChecked(c) {
-  const rp = { ...(c.raw_profile || {}), _llm_checked_at: new Date().toISOString() }
+  const rp = { ...(c.raw_profile || {}), _llm_checked_at: new Date().toISOString(), _llm_stage: 'done' }
   await rest(`candidates?id=eq.${c.id}`, {
     method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ raw_profile: rp }),
   })
@@ -94,6 +107,7 @@ async function applyToCandidate(c, { bodyFields, attachment }) {
     return
   }
   patch.raw_profile._llm_checked_at = new Date().toISOString()
+  patch.raw_profile._llm_stage = 'done'
 
   // skills は skill_master にある未登録スキルの追加のみ（工程スキル等を消さないため）
   if (attachment?.projects?.length) {
@@ -188,6 +202,9 @@ async function processCandidate(c) {
       if (!bodyFields && (bf.candidates?.length ?? 0) > 1) {
         log(`  [${c.name}] 本文に複数人・特定不可のため本文フィールドは上書きせず`)
       }
+      // 経歴書の解析がこの後も続く場合だけ「本文解析済み」を記録する
+      // （続かない場合は直後に完了印を書くので、無駄な書き込みを増やさない）
+      if (APPLY && /\.(xlsx?|xlsm|docx|pdf)$/i.test(c.resume_url ?? '')) await markStage(c, 'body')
     } catch (e) {
       await saveShadow({ candidate_id: c.id, source: 'body', status: 'error', reasons: [String(e).slice(0, 200)] })
     }
@@ -213,7 +230,12 @@ async function processCandidate(c) {
         grid = buildGridInput(fp)
       }
       if (!grid) throw new Error(`no date cells in ${ext}`)
-      const r = await extractProjects(grid, { log: m => log(`  [${c.name}]`, m), kind })
+      const r = await extractProjects(grid, {
+        log: m => log(`  [${c.name}]`, m),
+        kind,
+        // Haiku が不合格で Sonnet に引き継ぐ瞬間に UI を「AI校正中」へ切り替える
+        onEscalate: APPLY ? () => markStage(c, 'sonnet') : null,
+      })
       await saveShadow({
         candidate_id: c.id, source: 'attachment', model: r.model, status: r.status,
         reasons: r.reasons, projects: r.projects, skill_years: r.skillYears,

@@ -15,7 +15,7 @@ import { verifyOutput } from './verify.mjs'
 /** 経歴グリッド抽出のルーター本体。他モジュールからも利用可。
  *  kind='text' は docx/pdf 由来の疑似グリッド（1行=1セル）。プロンプトだけ変え、
  *  機械検証(verify.mjs)は行集合ベースなのでそのまま共用する */
-export async function extractProjects(gridInput, { log = () => {}, kind = 'grid' } = {}) {
+export async function extractProjects(gridInput, { log = () => {}, kind = 'grid', onEscalate = null } = {}) {
   const prompt = kind === 'text'
     ? TRANSCRIBE_RULES_TEXT + gridInput.rows.map(r => r[1].join(' ')).join('\n')
     : TRANSCRIBE_RULES + JSON.stringify(gridInput)
@@ -27,6 +27,8 @@ export async function extractProjects(gridInput, { log = () => {}, kind = 'grid'
 
   let final = { model: 'haiku', output: h.data, verify: vh, costUsd: h.costUsd ?? 0 }
   if (vh.escalate) {
+    // 昇格の開始を呼び出し側に通知する（UI に「AI校正中」を出すため）
+    if (onEscalate) { try { await onEscalate() } catch { /* 通知失敗は処理を止めない */ } }
     try {
       const s = await callModel('sonnet', prompt)
       const vs = verifyOutput(gridInput, s.data, 'final')

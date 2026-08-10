@@ -63,14 +63,27 @@ function formatDate(iso: string) {
   return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
-/** 常駐AIの校正がまだ済んでいなければ true。
- * 判定は raw_profile._llm_checked_at（ワーカーが校正完了時に必ず付ける印）の有無で行う。
- * 変更が無かった人・解析対象が無かった人にも印は付くため、時間で推測する必要はない。
- * 印が無い場合の 24時間の打ち切りは、この仕組みの導入前に登録された既存データが
- * 永久に「校正中」に見えるのを防ぐためだけのもの（2026-08-10 導入） */
-function isAiCorrectionPending(c: { created_at: string; raw_profile?: Record<string, unknown> }): boolean {
-  if (c.raw_profile?._llm_checked_at) return false
-  return Date.now() - new Date(c.created_at).getTime() < 24 * 60 * 60 * 1000
+/** 常駐AIの校正状態。ワーカーが raw_profile に記録した進行段階をそのまま表示する
+ * （2026-08-10 ユーザー指定の4段階。時間による推測は行わない）。
+ *   null       … 校正完了（_llm_checked_at あり）→ 何も表示しない
+ *   'waiting'  … ルールベースのみ           → 「AI校正待ち」
+ *   'body'     … 本文をHaikuで解析済         → 「AI校正開始」
+ *   'sonnet'   … 添付Haikuが不合格→Sonnet中  → 「AI校正中」 */
+type AiStage = { label: string; cls: string; title: string } | null
+
+function aiCorrectionStage(c: { raw_profile?: Record<string, unknown> }): AiStage {
+  if (c.raw_profile?._llm_checked_at) return null
+  const stage = c.raw_profile?._llm_stage as string | undefined
+  if (stage === 'sonnet') {
+    return { label: 'AI校正中', cls: 'bg-amber-50 text-amber-700 border-amber-200',
+      title: '添付経歴書の再解析中（Haikuの結果が基準未満のためSonnetへ引き継ぎ）' }
+  }
+  if (stage === 'body') {
+    return { label: 'AI校正開始', cls: 'bg-sky-50 text-sky-600 border-sky-200',
+      title: 'メール本文の解析が完了。添付経歴書の解析を実施中' }
+  }
+  return { label: 'AI校正待ち', cls: 'bg-gray-100 text-gray-500 border-gray-200',
+    title: 'ルールベース解析のみ。常駐AIの順番待ちです' }
 }
 
 const CATEGORY_STYLE: Record<keyof SkillsByCategory, { label: string; badge: string }> = {
@@ -282,14 +295,14 @@ export function CandidateProfileFields({
         {c.duplicate_flag && (
           <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
         )}
-        {isAiCorrectionPending(c) && (
-          <span
-            className="text-xs bg-sky-50 text-sky-600 border border-sky-200 rounded px-2 py-0.5 animate-pulse"
-            title="登録直後です。常駐AIが本文・経歴書を読み直して項目を補正します（平均20分以内）"
-          >
-            ✨ AI校正中
-          </span>
-        )}
+        {(() => {
+          const st = aiCorrectionStage(c)
+          return st && (
+            <span className={`text-xs border rounded px-2 py-0.5 ${st.cls}`} title={st.title}>
+              {st.label}
+            </span>
+          )
+        })()}
       </div>
       <p className="text-xs text-gray-400 mt-0.5">
         {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年{age != null ? ` ／ ${age}歳` : ''}{gender ? `（${gender}）` : ''}{nationality ? ` ／ ${nationality}` : ''}
@@ -1610,14 +1623,14 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         {c.duplicate_flag && (
                           <span className="text-[10px] bg-yellow-100 text-yellow-700 rounded px-1 shrink-0">重複</span>
                         )}
-                        {isAiCorrectionPending(c) && (
-                          <span
-                            className="text-[10px] bg-sky-50 text-sky-600 border border-sky-200 rounded px-1 shrink-0"
-                            title="登録直後です。常駐AIが本文・経歴書を読み直して補正します（平均20分以内）"
-                          >
-                            AI校正中
-                          </span>
-                        )}
+                        {(() => {
+                          const st = aiCorrectionStage(c)
+                          return st && (
+                            <span className={`text-[10px] border rounded px-1 shrink-0 ${st.cls}`} title={st.title}>
+                              {st.label}
+                            </span>
+                          )
+                        })()}
                       </div>
                       <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5 flex-wrap">
                         <span>経験{c.experience_years ?? '?'}年</span>
