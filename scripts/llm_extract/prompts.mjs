@@ -60,19 +60,24 @@ export const BODY_FIELDS_BATCH_RULES = `あなたはSES営業メールの読み�
 ルール:
 - 書かれている値の転記のみ。推測で埋めない。記載がない項目は null
 - name: 氏名・イニシャル表記そのまま / age: 数値 / gender: "男性"|"女性"|null
-- station: 最寄駅名（路線名は含めてよい） / rate: 単価の表記そのまま
+- station: 最寄「駅名」だけ。路線名・曜日・徒歩分数・注記は含めない
+- rate: 単価の表記そのまま。範囲は範囲のまま落とさない（「61～65万円」→「61～65万円」）
 - availability: 稼働可能時期の表記そのまま（「即日〜」等）
 - company: 送信元(所属営業)会社の正式名。宛先会社・挨拶の人名と混同しない
 - employment: 所属の表記そのまま（「弊社正社員」等）
+- employmentType: "正社員"|"契約社員"|"派遣社員"|"業務委託"|"フリーランス" のいずれか、無ければ null
+- commercialFlow: "自社" または "N社先"、無ければ null。employmentType と混ぜない
 - experienceYears: 本人の「総経験年数」として明示された数値(年)のみ。
   「業界6年目です」→6 /「IT経験15年」→15。特定案件・特定業務だけの年数は含めない。
   明示がなければ null。推測・合算はしない
+- skillYears: 技術ごとの経験年数が明記されている場合のみ {"技術名": 年数}。
+  「Javaを5年、PHPは3年程度」→{"Java":5,"PHP":3}。該当なしなら {}
 - 1つのメールに複数人いる場合は candidates 配列に全員分
 - mailType: そのメールの種別。人材紹介なら "candidate"、案件紹介なら "project"、
   それ以外は "other"
 
 出力は次のJSONのみ（説明文・コードフェンス禁止）:
-{"results":[{"no":1,"mailType":"candidate","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null,"experienceYears":null}]}]}
+{"results":[{"no":1,"mailType":"candidate","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null,"employmentType":null,"commercialFlow":null,"experienceYears":null,"skillYears":{}}]}]}
 
 --- 以下、番号付きのメール本文 ---
 `
@@ -110,21 +115,34 @@ export const BODY_FIELDS_RULES = `あなたはSES営業メールの読み取り�
 ルール:
 - 書かれている値の転記のみ。推測で埋めない。記載がない項目は null
 - name: 氏名・イニシャル表記そのまま / age: 数値 / gender: "男性"|"女性"|null
-- station: 最寄駅名（路線名は含めてよい） / rate: 単価の表記そのまま
+- station: 最寄「駅名」だけ。路線名・曜日・徒歩分数・注記は含めない
+  （「月～都営大江戸線　西新宿五丁目駅」→「西新宿五丁目駅」）
+- rate: 単価の表記そのまま。範囲は範囲のまま落とさない（「61～65万円」→「61～65万円」）
 - availability: 稼働可能時期の表記そのまま（「即日〜」等）
 - company: 送信元(所属営業)会社の正式名。宛先会社・挨拶の人名と混同しない。「◯◯株式会社 △△です」は会社=◯◯株式会社
 - employment: 所属の表記そのまま（「弊社正社員」「一社下正社員」等）
+- employmentType: 雇用形態。次のいずれか1つ、無ければ null。表記を寄せて返す
+  "正社員" | "契約社員" | "派遣社員" | "業務委託" | "フリーランス"
+  （「弊社正社員」→正社員 /「個人事業主」→フリーランス /「SES」→正社員）
+- commercialFlow: 商流の位置。"自社" または "N社先"（Nは数字）、無ければ null
+  （「弊社社員」→自社 /「一社下」「1社先」→1社先 /「二次請け」→2社先）
+  ※ employmentType と混ぜないこと。「1社先個人事業主」は
+    commercialFlow="1社先", employmentType="フリーランス" と分けて返す
 - experienceYears: 本人の「総経験年数」として明示された数値(年)のみ。
   「業界6年目です」→6 /「IT経験15年」→15 /「経験年数：8年」→8。
   特定案件・特定業務だけの年数（「Javaを3年」「金融で2年」等）は含めない。
   明示がなければ null。推測・合算はしない（計算はJS側で行う）
+- skillYears: 技術ごとの経験年数が本文に明記されている場合のみ {"技術名": 年数} 形式。
+  「Javaを5年、PHPは3年程度」→{"Java":5,"PHP":3} /「Java(10年以上)」→{"Java":10}。
+  技術名は本文の表記そのまま。年数の記載がない技術は入れない。
+  該当なしなら {}。工程名(要件定義/テスト等)・業種名は入れない
 - 複数人が記載されている場合は candidates 配列に全員分
 - mailType: このメールの種別。人材(要員・エンジニア)の紹介なら "candidate"、
   案件(仕事・プロジェクト)の紹介なら "project"、営業・お知らせ等どちらでもなければ "other"。
   案件メールには個人プロフィールが無く、案件名・必須スキル・募集人数・商流等が書かれている
 
 出力は次のJSONのみ（説明文・コードフェンス禁止）:
-{"mailType":"candidate または project または other","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null,"experienceYears":null}]}
+{"mailType":"candidate または project または other","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null,"employmentType":null,"commercialFlow":null,"experienceYears":null,"skillYears":{}}]}
 
 --- 以下メール本文 ---
 `

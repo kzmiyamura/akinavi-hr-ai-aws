@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   experienceYearsFromProjects, pickBodyFieldsFor, buildPatch, mergeSkills, techsFromProjects, unionMonths,
-  isUsableName, genderMeaning, pickExperienceYears, sanitizeClaimedYears,
+  isUsableName, genderMeaning, pickExperienceYears, sanitizeClaimedYears, normEmploymentType, normCommercialFlow, bodySkillYearsToMonths,
 } from './apply.mjs'
 
 test('isUsableName: 年齢・駅名を巻き込んだ氏名を弾く', () => {
@@ -199,4 +199,79 @@ test('buildPatch: 案件表の方が大きければ申告値で下げない', ()
   })
   assert.equal(patch.experience_years, 20)
   assert.equal(patch.raw_profile._experience_source.source, 'projects')
+})
+
+// ── 雇用形態・商流（2026-08-10: Haiku に分けて出させるようにした）──
+// 以前は「1社先個人事業主」のように商流と雇用形態が1つの文字列で来ており、
+// MatchingPage の employmentType === '派遣社員' 完全一致が効かなくなるため fill 止まりだった
+test('normEmploymentType: enum 以外は捨てる', () => {
+  assert.equal(normEmploymentType('正社員'), '正社員')
+  assert.equal(normEmploymentType('派遣社員'), '派遣社員')
+  assert.equal(normEmploymentType('フリーランス'), 'フリーランス')
+  assert.equal(normEmploymentType('1社先個人事業主'), null)   // 商流混在は弾く
+  assert.equal(normEmploymentType('弊社正社員'), null)        // 寄せるのはモデルの仕事
+  assert.equal(normEmploymentType(null), null)
+})
+
+test('normCommercialFlow: 自社 と N社先 だけ受け付ける', () => {
+  assert.equal(normCommercialFlow('自社'), '自社')
+  assert.equal(normCommercialFlow('1社先'), '1社先')
+  assert.equal(normCommercialFlow('２社先'), '2社先')          // 全角
+  assert.equal(normCommercialFlow('1社先個人事業主'), null)    // 雇用形態混在は弾く
+  assert.equal(normCommercialFlow('一社下'), null)             // 寄せるのはモデルの仕事
+  assert.equal(normCommercialFlow('10社先'), null)             // 非現実的
+  assert.equal(normCommercialFlow(null), null)
+})
+
+test('buildPatch: 雇用形態は専用項目を優先し、商流は別項目に入る', () => {
+  const cand = { name: 'A.B', raw_profile: {} }
+  const { patch } = buildPatch(cand, {
+    bodyFields: {
+      employment: '1社先個人事業主',      // 生文字列（従来の項目）
+      employmentType: 'フリーランス',      // enum（新項目）
+      commercialFlow: '1社先',
+    },
+    attachment: null,
+  })
+  assert.equal(patch.raw_profile.employmentType, 'フリーランス')
+  assert.equal(patch.raw_profile.commercialFlow, '1社先')
+})
+
+test('buildPatch: enum 外の雇用形態が来たら生文字列にフォールバック', () => {
+  const cand = { name: 'A.B', raw_profile: {} }
+  const { patch } = buildPatch(cand, {
+    bodyFields: { employment: '弊社正社員', employmentType: 'よくわからない値' },
+    attachment: null,
+  })
+  assert.equal(patch.raw_profile.employmentType, '弊社正社員')
+})
+
+// ── 本文のスキル年数（添付が取れなかったときのフォールバック）──
+test('bodySkillYearsToMonths: 年を月に直し、異常値を捨てる', () => {
+  assert.deepEqual(bodySkillYearsToMonths({ Java: 5, PHP: 3 }), { Java: 60, PHP: 36 })
+  assert.deepEqual(bodySkillYearsToMonths({ Java: '10年' }), { Java: 120 })
+  assert.deepEqual(bodySkillYearsToMonths({ Java: 0 }), null)      // 0年は捨てる
+  assert.deepEqual(bodySkillYearsToMonths({ Java: 50 }), null)     // 40年超は読み違い
+  assert.deepEqual(bodySkillYearsToMonths({}), null)
+  assert.deepEqual(bodySkillYearsToMonths(null), null)
+  assert.deepEqual(bodySkillYearsToMonths('Java 5年'), null)       // 形式違いは受けない
+})
+
+test('buildPatch: 経歴書が取れていれば本文のスキル年数で上書きしない', () => {
+  const cand = { name: 'A.B', raw_profile: {} }
+  const { patch } = buildPatch(cand, {
+    bodyFields: { skillYears: { Java: 99 } },
+    attachment: { projects: [{ start: '2020/01', end: '2021/12', techs: ['Java'] }], skill_years: { Java: 24 } },
+  })
+  assert.deepEqual(patch.raw_profile.skillYears, { Java: 24 })   // 経歴書由来が残る
+})
+
+test('buildPatch: 経歴書が無ければ本文のスキル年数を使う', () => {
+  const cand = { name: 'A.B', raw_profile: {} }
+  const { patch, changes } = buildPatch(cand, {
+    bodyFields: { skillYears: { Java: 5 } },
+    attachment: null,
+  })
+  assert.deepEqual(patch.raw_profile.skillYears, { Java: 60 })
+  assert.ok(changes.some(c => c.startsWith('skillYears')))
 })

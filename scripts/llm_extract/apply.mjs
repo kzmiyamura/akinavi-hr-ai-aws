@@ -84,6 +84,8 @@ export const FIELD_POLICY = {
   nearestStation: 'fill',
   availableFrom: 'fill',
   employmentType: 'fill',
+  // 商流は regex 専任だった項目。regex が取れているものを AI で崩さないよう fill から始める
+  commercialFlow: 'fill',
 }
 
 const norm = s => String(s ?? '').replace(/[\s　・.,]/g, '').toLowerCase()
@@ -121,6 +123,44 @@ const parseYM = s => {
   if (/present|現在/i.test(String(s))) return NOW_YM
   const m = String(s).match(/(\d{4})[\/年.\-](\d{1,2})/)
   return m ? (+m[1]) * 12 + (+m[2]) : null
+}
+
+/**
+ * 本文由来のスキル年数 {技術名: 年数(年)} を月数に直して受け入れる。
+ * 経歴書（案件表の暦union）が取れているときはそちらが正なので、本文は
+ * 「添付が無い／添付から取れなかった」ときのフォールバックとして使う。
+ * 年数の妥当性は経歴書側と同じ考え方で 1〜480ヶ月に収める。
+ */
+export function bodySkillYearsToMonths(sy) {
+  if (!sy || typeof sy !== 'object' || Array.isArray(sy)) return null
+  const out = {}
+  for (const [k, v] of Object.entries(sy)) {
+    const name = String(k ?? '').trim()
+    const years = typeof v === 'number' ? v : Number(String(v ?? '').match(/\d+(?:\.\d+)?/)?.[0])
+    if (!name || name.length > 40 || !Number.isFinite(years)) continue
+    const months = Math.round(years * 12)
+    if (months < 1 || months > 480) continue      // 40年超は読み違い
+    out[name] = months
+  }
+  return Object.keys(out).length ? out : null
+}
+
+/** 雇用形態の許容値。MatchingPage が employmentType === '派遣社員' の完全一致で
+ *  派遣許可チェックを分岐するため、この集合から外れた値は書き込まない */
+export const EMPLOYMENT_TYPES = ['正社員', '契約社員', '派遣社員', '業務委託', 'フリーランス']
+export const normEmploymentType = (v) =>
+  EMPLOYMENT_TYPES.includes(String(v ?? '').trim()) ? String(v).trim() : null
+
+/** 商流は「自社」または「N社先」だけを受け付ける。
+ *  以前は商流と雇用形態が混ざった文字列（「1社先個人事業主」）が来ていたため、
+ *  形式に合わないものは捨てる */
+export function normCommercialFlow(v) {
+  const s = String(v ?? '').trim()
+  if (s === '自社') return '自社'
+  const m = s.match(/^([0-9０-９]+)社先$/)
+  if (!m) return null
+  const n = Number(m[1].replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)))
+  return Number.isFinite(n) && n >= 1 && n <= 9 ? `${n}社先` : null
 }
 
 /** 申告年数として妥当な範囲か（1〜60年）。範囲外は読み違いとみなして捨てる */
@@ -230,7 +270,11 @@ export function buildPatch(cand, { bodyFields, attachment }) {
       }
     }
     set('availableFrom', bodyFields.availability, { raw: true })
-    set('employmentType', bodyFields.employment, { raw: true })
+    // 雇用形態は enum を厳守させたので、専用項目があればそちらを優先する。
+    // 以前は商流と混ざった生文字列（「1社先個人事業主」）が来ており fill 止まりだった
+    set('employmentType', normEmploymentType(bodyFields.employmentType) ?? bodyFields.employment, { raw: true })
+    // 商流は今まで regex 専任だった項目。形式に合うものだけ入れる
+    set('commercialFlow', normCommercialFlow(bodyFields.commercialFlow), { raw: true })
   }
 
   if (attachment) {
@@ -243,6 +287,17 @@ export function buildPatch(cand, { bodyFields, attachment }) {
     if (Object.keys(sy).length) {
       stash('skillYears', rp.skillYears ?? null)
       rp.skillYears = sy; changes.push('skillYears')
+    }
+  }
+
+  // 経歴書からスキル年数が取れなかった場合のみ、本文の明示記載を使う。
+  // 案件表の暦unionの方が根拠が強いので、取れているときは触らない
+  if (!changes.includes('skillYears')) {
+    const fromBody = bodySkillYearsToMonths(bodyFields?.skillYears)
+    if (fromBody && !Object.keys(rp.skillYears ?? {}).length) {
+      stash('skillYears', rp.skillYears ?? null)
+      rp.skillYears = fromBody
+      changes.push('skillYears(本文)')
     }
   }
 
