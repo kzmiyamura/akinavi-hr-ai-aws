@@ -5,7 +5,9 @@ import { readFileSync, mkdirSync, writeFileSync } from 'fs'
 import { createClient } from '@supabase/supabase-js'
 
 const envText = readFileSync(new URL('../.env.local', import.meta.url), 'utf8')
-for (const line of envText.split('\n')) {
+// CRLF の .env.local だと `.` が \r にマッチせず `$`（文字列末尾）に届かないため
+// 1行も読めずに env が空になる（Windows で実害・2026-08-10）。改行で分割してから照合する
+for (const line of envText.split(/\r?\n/)) {
   const m = line.match(/^([^#=]+)=(.*)$/)
   if (m) process.env[m[1].trim()] = m[2].trim()
 }
