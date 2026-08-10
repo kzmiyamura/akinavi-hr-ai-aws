@@ -33,7 +33,7 @@ async function fetchAll(pathq) {
 }
 
 // ── LLM呼び出し集計（llm_shadow）──
-const shadow = await fetchAll(`llm_shadow?select=created_at,model,source,status,cost_usd&created_at=gte.${since}&order=created_at.asc`)
+const shadow = await fetchAll(`llm_shadow?select=candidate_id,created_at,model,source,status,cost_usd&created_at=gte.${since}&order=created_at.asc`)
 const byDay = new Map()
 for (const r of shadow) {
   const d = jstDay(r.created_at)
@@ -56,7 +56,7 @@ console.log('※Maxサブスク枠のため実課金ではない参考値。案�
 
 // ── 登録数と補正レイテンシ（candidates）──
 const cands = await fetchAll(
-  `candidates?select=created_at,ap:raw_profile->_llm_applied->>at&data_env=eq.prod&created_at=gte.${since}&order=created_at.asc`)
+  `candidates?select=id,created_at,ap:raw_profile->_llm_applied->>at&data_env=eq.prod&created_at=gte.${since}&order=created_at.asc`)
 const dayCand = new Map()
 const lat = []
 for (const c of cands) {
@@ -67,8 +67,21 @@ for (const c of cands) {
     if (ms > 0 && ms < 24 * 3600 * 1000) lat.push(ms / 60000)
   }
 }
-console.log(`\n=== prod 人材登録数 日別 ===`)
-for (const [d, n] of [...dayCand.entries()].sort()) console.log(`${d}  ${n}件`)
+// ── カバー率: 登録された人材のうち実際にLLM処理まで届いた割合 ──
+// 消費量そのものより「取りこぼしなく校正できているか」が運用上の本題。
+// llm_shadow に1行でもあれば処理済み（変更なしで終わった人も処理済みに数える）
+const processed = new Set(shadow.map((r) => r.candidate_id))
+const dayCovered = new Map()
+for (const c of cands) {
+  const d = jstDay(c.created_at)
+  if (processed.has(c.id)) dayCovered.set(d, (dayCovered.get(d) ?? 0) + 1)
+}
+console.log(`\n=== prod 人材登録数とAI校正カバー率 日別 ===`)
+console.log('日付        登録数   校正済み   カバー率')
+for (const [d, n] of [...dayCand.entries()].sort()) {
+  const cov = dayCovered.get(d) ?? 0
+  console.log(`${d}  ${String(n).padStart(6)}  ${String(cov).padStart(8)}   ${(cov / n * 100).toFixed(1)}%`)
+}
 if (lat.length) {
   lat.sort((a, b) => a - b)
   const p = (q) => lat[Math.floor(lat.length * q)].toFixed(1)
