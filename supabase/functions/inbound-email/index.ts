@@ -7953,8 +7953,38 @@ function gateSingleCandidate(
 }
 
 /**
+ * 名簿行テキストに「人の属性」が何種類あるか。2種類以上で新規人材として起こす。
+ * 案件表の行（期間・業務内容・勤務地・役割…）にはこれらが並ばないため、
+ * 経歴書の案件表を名簿と誤検出しても人材化されない。
+ * ※ _extractors.gen.mjs は関数単位で切り出すため、パターン表は関数内に置く
+ */
+function personAttrScore(rowText: string): number {
+  const PERSON_ATTR_PATTERNS = [
+    /(?:年齢|歳)/,
+    /(?:性別|男性|女性)/,
+    /(?:単価|単金|希望額|月額)/,
+    /(?:所属|雇用|個人事業主|正社員|契約社員|フリーランス|派遣)/,
+    /(?:稼働|参画|開始可能|即日|即可)/,
+    /(?:国籍|日本人|外国籍)/,
+    /(?:最寄|通勤|住所)/,
+  ]
+  return PERSON_ATTR_PATTERNS.reduce((n, re) => n + (re.test(rowText) ? 1 : 0), 0)
+}
+
+/** 1つの添付・リンクから新規に起こしてよい人材数の上限。
+ *  これを超える膨張は名簿誤検出の疑いが濃いため、全件を捨ててアラームを出す。 */
+const MAX_PROMOTED_PER_ENTRY = 30
+
+/**
  * ゾーンD: 名簿にしか載っていない人材を新規候補者ブロックとして起こす。
  * 既存ブロックの氏名と一致しない名簿行エントリの行テキストを返す（本文ブロックと同じ検証・dedupを通す）。
+ *
+ * 【設計原則（2026-08-10 に構造対策として導入）】
+ * 添付・リンクは「人を新規に生む」権限を無条件には持たない。行に人の属性（年齢・性別・単価・
+ * 所属・稼働・国籍・最寄）が2種類以上そろって初めて人材として起こす。
+ * 経歴書の案件表を名簿と誤検出しても、案件行には人の属性が無いため人材化されない
+ * （実害: 個人スキルシートの「勤務地」列から駅名人材が11件生まれた・2026-08-10）。
+ * 語のブロックリストを増やす対症療法ではなく、生成側に裏付けを要求する構造で防ぐ。
  */
 function promoteUnassignedRosterEntries(
   rosterEntries: SourceEntry[],
@@ -7964,13 +7994,31 @@ function promoteUnassignedRosterEntries(
   const norm = (s: string) => s.replace(/[.\s　・]/g, '').toLowerCase()
   const known = new Set(existingBlockNames.filter((n): n is string => !!n).map(norm))
   const out: { name: string; rowText: string }[] = []
+  const perEntry = new Map<string, number>()
   for (const e of rosterEntries) {
     if (!e.rosterRowName) continue
     const n = norm(e.rosterRowName)
     if (n.length < 2 || known.has(n)) continue
+    const score = personAttrScore(e.content)
+    if (score < 2) {
+      ledger.log(e.entryId, 'D-PROMOTE-REJ', `人の属性${score}種のみ:${e.rosterRowName}`)
+      continue
+    }
     known.add(n)
     ledger.log(e.entryId, 'D-NEWBLOCK', e.rosterRowName)
+    // 由来（同一添付/リンク）ごとの生成数。entryId は行ごとに一意なので親IDで束ねる
+    const originId = String(e.entryId).replace(/[#:].*$/, '')
+    perEntry.set(originId, (perEntry.get(originId) ?? 0) + 1)
     out.push({ name: e.rosterRowName, rowText: e.content })
+  }
+  // 異常膨張ガード: 1つの添付から上限を超えて人が生まれるのは名簿誤検出の疑いが濃い。
+  // 静かに大量登録するより、全件捨てて記録を残す（取りこぼしは再解析で回復できる）
+  for (const [originId, count] of perEntry) {
+    if (count > MAX_PROMOTED_PER_ENTRY) {
+      ledger.log(originId, 'D-PROMOTE-ABORT', `${count}人は異常膨張のため全件却下`)
+      console.error(`[roster-anomaly] entry=${originId} が${count}人を生成しようとしたため全件却下`)
+      return []
+    }
   }
   return out
 }

@@ -2099,6 +2099,20 @@ function looksLikeRosterName(s){
   return true
 }
 
+// ── personAttrScore ──
+function personAttrScore(rowText){
+  const PERSON_ATTR_PATTERNS = [
+    /(?:年齢|歳)/,
+    /(?:性別|男性|女性)/,
+    /(?:単価|単金|希望額|月額)/,
+    /(?:所属|雇用|個人事業主|正社員|契約社員|フリーランス|派遣)/,
+    /(?:稼働|参画|開始可能|即日|即可)/,
+    /(?:国籍|日本人|外国籍)/,
+    /(?:最寄|通勤|住所)/,
+  ]
+  return PERSON_ATTR_PATTERNS.reduce((n, re) => n + (re.test(rowText) ? 1 : 0), 0)
+}
+
 // ── extractSkillYearsFromCells ──
 function extractSkillYearsFromCells(cells, deadline = 0){
   if (cells.length === 0) return {}
@@ -3083,6 +3097,7 @@ export {
   extractSkillYearsFromBodyText,
   extractSkillYearsFromSheetData,
   looksLikeRosterName,
+  personAttrScore,
   extractSkillYearsFromCells,
   extractSkillYearsPeriodHeader,
   extractSkillYearsRepeatPeriodHeader,

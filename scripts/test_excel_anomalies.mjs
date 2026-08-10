@@ -533,6 +533,30 @@ console.log('=== K. looksLikeRosterName（1人スキルシートを名簿と誤�
   kr('K25: Tanaka Taro は人名（全角化しても弾かない）', 'Tanaka Taro', true)
 }
 
+console.log('=== K2. personAttrScore（名簿行を人材として起こす裏付け・構造対策） ===')
+{
+  const { personAttrScore } = await import('./_extractors.gen.mjs')
+  const ps = (label, text, expectPromote) => {
+    const got = personAttrScore(text) >= 2
+    if (got === expectPromote) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       score=${personAttrScore(text)} promote=${got} expect=${expectPromote}`) }
+  }
+  // 経歴書の案件表の行（人の属性が無い）→ 人材として起こしてはいけない
+  ps('K2-1: 案件表の行（勤務地・期間・業務内容）は人材化しない',
+    '【勤務地】大手町\n【期間】2020/04～2022/03\n【業務内容】バッチ設計・製造\n【役割】PG', false)
+  ps('K2-2: 案件表の行（工程・環境）は人材化しない',
+    '【勤務地】築地\n【工程】要件定義～テスト\n【環境】COBOL、DB2', false)
+  // 本物の名簿行（人の属性が2種類以上）→ 人材として起こす
+  ps('K2-3: 本物の名簿行（年齢・性別・単価）は人材化する',
+    '【名前】JIN\n【性別】男\n【年齢】62\n【希望単価】58万円\n【所属】当社個人事業主', true)
+  ps('K2-4: 最寄駅＋所属の名簿行も人材化する',
+    '【名前】OMT\n【自宅最寄駅】JR根岸線 港南台駅\n【所属】当社契約社員', true)
+  ps('K2-5: 単価と稼働だけでも人材化する',
+    '【氏名】A.M\n【希望単金】60万\n【稼働開始】即日', true)
+  // 属性1種のみ（境界）→ 起こさない
+  ps('K2-6: 属性1種のみは人材化しない', '【勤務地】新宿\n【最寄駅】新宿駅', false)
+}
+
 console.log('=== L. Method 1.7 KVブロック型: ラベル同列下方の文章セル混入（K.F型） ===')
 // 実害: 「開発環境」ラベルの同列下方に「開発手法」「業務内容」ラベル→業務内容の文章セルが
 // 並ぶテンプレートで、文章の断片（「また」「■主な業務内容」「‐ 不具合報告」等）が

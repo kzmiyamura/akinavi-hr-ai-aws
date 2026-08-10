@@ -32,6 +32,7 @@ const TARGET_FUNCTIONS = [
   'extractSkillYearsFromBodyText',
   'extractSkillYearsFromSheetData',
   'looksLikeRosterName',
+  'personAttrScore',
   'extractSkillYearsFromCells',
   'extractSkillYearsPeriodHeader',
   'extractSkillYearsRepeatPeriodHeader',
