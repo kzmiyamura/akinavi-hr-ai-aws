@@ -557,6 +557,25 @@ console.log('=== K2. personAttrScore（名簿行を人材として起こす裏�
   ps('K2-6: 属性1種のみは人材化しない', '【勤務地】新宿\n【最寄駅】新宿駅', false)
 }
 
+console.log('=== K3. isOwnersResumeFile（本人の経歴書を名簿扱いしない・構造対策） ===')
+{
+  const { isOwnersResumeFile } = await import('./_extractors.gen.mjs')
+  const r = (label, filename, bodyNames, expect) => {
+    const got = isOwnersResumeFile(filename, bodyNames)
+    if (got === expect) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       isOwnersResumeFile(${filename})=${got} expect=${expect}`) }
+  }
+  // 実害(2026-08-10 トリニタス): 本文1名(OMT)の経歴書が名簿と誤検出され駅名が人材化した
+  r('K3-1: 本人名入りの経歴書は本人のもの', 'Skill_OMT_20260628.xlsx', ['OMT'], true)
+  r('K3-2: 氏名入りの職務経歴書も本人のもの', '職務経歴書_S・R【清水】.xls', ['S・R'], true)
+  r('K3-3: 全角/半角ゆれも一致とみなす', 'skill_ｏｍｔ.xlsx', ['OMT'], true)
+  // 名簿ファイルは本人のものではない（=名簿として展開してよい）
+  r('K3-4: 営業中一覧は名簿（本文人材名を含まない）', '営業中フリーランス一覧_2026.xlsx', ['MY'], false)
+  r('K3-5: 連番ファイル名の名簿も名簿', '202686.xlsx', ['MY'], false)
+  r('K3-6: 本文に人名が無ければ常に名簿扱い', 'Skill_OMT_20260628.xlsx', [], false)
+  r('K3-7: 別人の経歴書は本人のものではない', 'Skill_ABC_20260628.xlsx', ['OMT'], false)
+}
+
 console.log('=== L. Method 1.7 KVブロック型: ラベル同列下方の文章セル混入（K.F型） ===')
 // 実害: 「開発環境」ラベルの同列下方に「開発手法」「業務内容」ラベル→業務内容の文章セルが
 // 並ぶテンプレートで、文章の断片（「また」「■主な業務内容」「‐ 不具合報告」等）が

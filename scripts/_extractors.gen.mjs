@@ -2113,6 +2113,20 @@ function personAttrScore(rowText){
   return PERSON_ATTR_PATTERNS.reduce((n, re) => n + (re.test(rowText) ? 1 : 0), 0)
 }
 
+// ── isOwnersResumeFile ──
+function isOwnersResumeFile(filename, bodyNames){
+  const norm = (s) => String(s ?? '')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/[.\s　・_\-【】()（）]/g, '')
+    .toLowerCase()
+  const fn = norm(filename)
+  if (!fn) return false
+  return bodyNames.some((n) => {
+    const k = norm(n)
+    return k.length >= 2 && fn.includes(k)
+  })
+}
+
 // ── extractSkillYearsFromCells ──
 function extractSkillYearsFromCells(cells, deadline = 0){
   if (cells.length === 0) return {}
@@ -3098,6 +3112,7 @@ export {
   extractSkillYearsFromSheetData,
   looksLikeRosterName,
   personAttrScore,
+  isOwnersResumeFile,
   extractSkillYearsFromCells,
   extractSkillYearsPeriodHeader,
   extractSkillYearsRepeatPeriodHeader,

@@ -7819,6 +7819,31 @@ async function fetchLinkedResume(url: string, ledger: Ledger, depth: number): Pr
 const ROSTER_MAX_ROWS = 15
 
 /**
+ * その添付・リンクが「本文で名指しされた人本人の経歴書」か。
+ *
+ * 【設計原則（2026-08-10）】本人の経歴書は定義上1人分の文書であり、名簿ではない。
+ * 名簿として展開すると案件表の列（勤務地・工程等）が氏名列と誤認され、実在しない人材が
+ * 量産される（トリニタスで駅名人材11件・ブライトスターで学校名人材が発生した真因）。
+ * ファイル名に本文の人材名が入っていれば本人の経歴書と判断し、名簿判定自体を行わない。
+ *
+ * 逆に「営業中一覧」等の別文書は本文の人材名を含まないため、従来どおり名簿として扱える
+ * （本文で1名を紹介しつつ別途117人の一覧を送る運用が実在するため、
+ *  「本文に無い人は作らない」と一律に決めると実在人材を大量に失う）。
+ */
+function isOwnersResumeFile(filename: string, bodyNames: string[]): boolean {
+  const norm = (s: string) => String(s ?? '')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/[.\s　・_\-【】()（）]/g, '')
+    .toLowerCase()
+  const fn = norm(filename)
+  if (!fn) return false
+  return bodyNames.some((n) => {
+    const k = norm(n)
+    return k.length >= 2 && fn.includes(k)
+  })
+}
+
+/**
  * ゾーンC: 名簿判定・行展開のオーケストレータ。
  * 名簿は行ごとに独立エントリへ展開してから返す（「1エントリ=1人」を下流に保証する）。
  * リンク型の行はリンク先を再取得して本人エントリに差し替える（Google系のみ・深さ1）。
@@ -7839,6 +7864,12 @@ async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger, linkB
     return rn.length >= 2 && priNorms.some(p => p.includes(rn) || rn.includes(p))
   }
   for (const entry of entries) {
+    // 本文で名指しされた人本人の経歴書は名簿判定にかけない（幽霊量産の構造的な防止）
+    if (isOwnersResumeFile(entry.filename ?? entry.label ?? '', priorityNames)) {
+      ledger.log(entry.entryId, 'C-OWNER-RESUME', `本人の経歴書のため名簿判定せず:${entry.filename ?? entry.label}`)
+      out.push(entry)
+      continue
+    }
     const roster = detectRoster(entry)
     if (!roster.isRoster) {
       out.push(entry)

@@ -33,6 +33,7 @@ const TARGET_FUNCTIONS = [
   'extractSkillYearsFromSheetData',
   'looksLikeRosterName',
   'personAttrScore',
+  'isOwnersResumeFile',
   'extractSkillYearsFromCells',
   'extractSkillYearsPeriodHeader',
   'extractSkillYearsRepeatPeriodHeader',
