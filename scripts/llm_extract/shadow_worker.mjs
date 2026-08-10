@@ -12,10 +12,11 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { buildGridInput, buildTextGridInput, normTech } from './lib.mjs'
-import { extractProjects, extractBodyFields, extractProjectFields } from './run.mjs'
+import { extractProjects, extractBodyFields, extractBodyFieldsBatch, extractProjectFields } from './run.mjs'
 import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE, isUsableName } from './apply.mjs'
 import { buildProjectPatch } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
+import { trimBodyForLlm } from './shadow_worker_lib.mjs'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const KEY = process.env.SUPABASE_SERVICE_KEY
@@ -24,6 +25,9 @@ if (!SUPABASE_URL || !KEY) { console.error('SUPABASE_URL / SUPABASE_SERVICE_KEY 
 const STATE_FILE = path.join(os.homedir(), '.akinavi_shadow_state.json')
 const CYCLE_MS = 5 * 60 * 1000
 const MAX_PER_CYCLE = 15        // 1サイクルのLLM対象候補者上限
+// 本文抽出をまとめて処理する人数。大きいほど固定費は下がるが、
+// 1回のプロンプトが長くなり取り違え・出力切れのリスクが増えるため中庸にする
+const BODY_BATCH_SIZE = Number(process.env.SHADOW_BODY_BATCH ?? 5)
 const MAX_PER_DAY = 400         // 日次上限（サブスク枠保護）
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'akinavi-shadow-'))
 // 本番 candidates への上書き。SHADOW_APPLY=0 で記録のみ（シャドー運転）に戻せる
@@ -200,15 +204,25 @@ function isPhantomRecord(c, bfCandidates) {
   return !hasPersonAttr                                // 人の属性が1つも無ければ幽霊
 }
 
-async function processCandidate(c) {
+/** regex が主要項目を埋めきっていれば本文LLMを省く（コスト削減）。
+ *  幽霊・非人材は属性が揃わないため、この条件を満たさず必ずAIの検査を通る */
+function bodyLooksComplete(c) {
+  const rp = c.raw_profile ?? {}
+  return !!(isUsableName(c.name) && c.desired_rate && c.from_company &&
+    (rp.age != null || rp.gender) && rp.nearestStation)
+}
+
+async function processCandidate(c, preBody = null) {
   let bodyFields = null, attachment = null
 
   // 本文フィールド（常にHaiku）
   const bodyText = c.raw_profile?.text ?? ''
-  if (bodyText.length > 50) {
+  if (bodyText.length > 50 && !preBody && bodyLooksComplete(c)) {
+    log(`  [${c.name}] 本文の主要項目は充足済み → 本文LLMを省略`)
+  } else if (bodyText.length > 50) {
     try {
       const t0 = Date.now()
-      const bf = await extractBodyFields(bodyText.slice(0, 8000))
+      const bf = preBody ?? await extractBodyFields(trimBodyForLlm(bodyText))
       await saveShadow({
         candidate_id: c.id, source: 'body', model: bf.model, status: 'ok',
         body_fields: bf.candidates, cost_usd: bf.costUsd, ms: Date.now() - t0,
@@ -303,18 +317,41 @@ async function cycle() {
   if (!rows.length) { log('新規なし'); return }
   log(`新規候補者 ${rows.length}件`)
 
+  // 再解析（Box取込・UI再解析ボタン）は created_at を now にリセットするため、
+  // 処理済み候補者が「新規」として再登場する。LLM適用が created_at より後なら処理済み
+  const isDone = (c) => {
+    const at = c.raw_profile?._llm_applied?.at
+    return at && new Date(at) >= new Date(c.created_at)
+  }
+  // 本文抽出をまとめて1回で済ませる（claude -p の固定オーバーヘッドを人数で割る）。
+  // 取り違えが起きたら件数不一致で検出し、その回は1件ずつに落とす
+  const bodyOf = new Map()
+  const need = rows.filter((c) => !isDone(c) && (c.raw_profile?.text ?? '').length > 50 && !bodyLooksComplete(c))
+  for (let i = 0; i < need.length; i += BODY_BATCH_SIZE) {
+    const chunk = need.slice(i, i + BODY_BATCH_SIZE)
+    if (chunk.length < 2) break                       // 1件ならまとめる意味がない
+    try {
+      const t0 = Date.now()
+      const b = await extractBodyFieldsBatch(chunk.map((c) => trimBodyForLlm(c.raw_profile.text)))
+      state.dayCost += b.costUsd || 0
+      if (!b.results) { log(`本文一括: ${b.reason} のため個別処理にフォールバック`); continue }
+      const per = (b.costUsd ?? 0) / chunk.length
+      chunk.forEach((c, j) => bodyOf.set(c.id, { ...b.results[j], model: b.model, costUsd: per }))
+      log(`本文一括: ${chunk.length}人を1回で抽出（${((Date.now() - t0) / 1000).toFixed(0)}秒・$${(b.costUsd ?? 0).toFixed(3)}）`)
+    } catch (e) {
+      log('本文一括に失敗、個別処理にフォールバック:', String(e).slice(0, 120))
+    }
+  }
+
   for (const c of rows) {
-    // 再解析（Box取込・UI再解析ボタン）は created_at を now にリセットするため、
-    // 処理済み候補者が「新規」として再登場する。LLM適用が created_at より後なら処理済み
-    const ap = c.raw_profile?._llm_applied
-    if (ap?.at && new Date(ap.at) >= new Date(c.created_at)) {
+    if (isDone(c)) {
       log(`スキップ（再解析後LLM適用済み）: ${c.name}`)
       state.watermark = c.created_at
       saveState()
       continue
     }
     log(`処理: ${c.name} (${c.id})`)
-    await processCandidate(c)
+    await processCandidate(c, bodyOf.get(c.id) ?? null)
     state.watermark = c.created_at
     state.dayCount++
     saveState()

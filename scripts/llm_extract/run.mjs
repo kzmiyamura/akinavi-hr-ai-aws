@@ -8,7 +8,7 @@
 //   環境変数 ANTHROPIC_API_KEY があればAPI直、なければ claude -p (サブスク枠)
 import fs from 'fs'
 import { buildGridInput, buildTextGridInput, skillYearsFromProjects } from './lib.mjs'
-import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES, PROJECT_FIELDS_RULES } from './prompts.mjs'
+import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES, BODY_FIELDS_BATCH_RULES, PROJECT_FIELDS_RULES } from './prompts.mjs'
 import { callModel } from './caller.mjs'
 import { verifyOutput } from './verify.mjs'
 
@@ -62,6 +62,29 @@ export async function extractBodyFields(bodyText) {
     mailType: r.data?.mailType ?? null,
     costUsd: r.costUsd ?? 0,
   }
+}
+
+/**
+ * 複数人分のメール本文をまとめて1回のHaikuで抽出する（固定オーバーヘッドの分散）。
+ * @param texts 本文の配列
+ * @returns texts と同じ長さの配列。取り違えを防ぐため件数が合わなければ null を返し、
+ *          呼び出し側は1件ずつの処理にフォールバックすること
+ */
+export async function extractBodyFieldsBatch(texts) {
+  if (!texts.length) return { results: [], model: 'haiku', costUsd: 0 }
+  const joined = texts.map((t, i) => `\n===== メール ${i + 1} =====\n${t}`).join('\n')
+  const r = await callModel('haiku', BODY_FIELDS_BATCH_RULES + joined)
+  const raw = r.data?.results
+  if (!Array.isArray(raw) || raw.length !== texts.length) {
+    return { results: null, model: 'haiku', costUsd: r.costUsd ?? 0, reason: `件数不一致(${raw?.length ?? 0}/${texts.length})` }
+  }
+  // no でも並び順でも対応付けできるようにする（no が欠けるモデル出力に備える）
+  const byNo = new Map(raw.map((x, i) => [Number(x?.no ?? i + 1), x]))
+  const results = texts.map((_, i) => {
+    const x = byNo.get(i + 1) ?? raw[i]
+    return { candidates: x?.candidates ?? [], mailType: x?.mailType ?? null }
+  })
+  return { results, model: 'haiku', costUsd: r.costUsd ?? 0 }
 }
 
 /** 案件テキストのフィールド抽出（常にHaiku。転記タスクのため昇格なし） */
