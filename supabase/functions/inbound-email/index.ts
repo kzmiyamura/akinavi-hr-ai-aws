@@ -7627,6 +7627,22 @@ function looksLikeRosterName(s: string): boolean {
 }
 
 /**
+ * 名簿候補の「氏名」列が実は駅名列である誤検出を弾く。
+ * 実害: トリニタスの営業状況スプレッドシートで最寄駅列が氏名列として19行展開され、
+ * 「大手町」「新横浜」等の駅名人材が量産された（2026-08-10）。
+ * 目黒・横浜など駅名と同形の実在姓があるため1件では判定せず、過半数一致で列ごと弾く。
+ */
+function isMostlyStationNames(names: string[]): boolean {
+  if (names.length < 2) return false
+  let hit = 0
+  for (const n of names) {
+    const k = n.trim().replace(/駅$/, '').replace(/\s+/g, '').replace(/ヶ/g, 'ケ')
+    if (STATION_MASTER_MAP[k]) hit++
+  }
+  return hit >= Math.ceil(names.length / 2)
+}
+
+/**
  * ゾーンC: 名簿判定 — このエントリは複数人分の名簿か。
  * 1) グリッド型: 名簿ヘッダ行（氏名列+年齢/駅/単価等のヘッダ語）があり、人名らしい行が2行以上。
  *    セル参照の行番号からその行のハイパーリンクも対応付ける（リンク型名簿の基盤）。
@@ -7671,6 +7687,8 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
         })
         dataRows.push({ name, rowText, links: rowLinks })
       }
+      // 氏名列の過半数が駅名 = 最寄駅列を誤って掴んでいる → この見出し行は名簿ではない
+      if (dataRows.length >= 2 && isMostlyStationNames(dataRows.map((x) => x.name))) continue
       if (dataRows.length >= 2) return { isRoster: true, rows: dataRows }
     }
 
@@ -7718,6 +7736,7 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
           })
           dataRows.push({ name, rowText: [otherFields, summaryCell].filter(Boolean).join('\n'), links: rowLinks })
         }
+        if (isMostlyStationNames(dataRows.map((x) => x.name))) return null
         const distinct = new Set(dataRows.map(x => x.name.replace(/[.\s　・]/g, '').toLowerCase()))
         return dataRows.length >= 2 && distinct.size >= 2 ? dataRows : null
       }
@@ -7763,6 +7782,7 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
     }
     // 相異なる氏名が2人以上いて初めて名簿。1人の経歴書は表紙と本文などで同じ氏名ラベルが
     // 2回出ることが多く（実例: 実DOCXで同一人物が2候補者に分裂した）、同名のみなら単票扱い
+    if (isMostlyStationNames(rows.map((r) => r.name))) continue
     const distinctNames = new Set(rows.map(r => r.name.replace(/[.\s　・]/g, '').toLowerCase()))
     if (rows.length >= 2 && distinctNames.size >= 2) return { isRoster: true, rows }
   }
