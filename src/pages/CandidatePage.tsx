@@ -63,14 +63,14 @@ function formatDate(iso: string) {
   return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
-/** 登録直後で常駐AIの校正（llm-overwrite）がまだ通っていないと推定される場合 true。
- * AI校正やBox取込等の更新が入ると updated_at が created_at から離れることを利用する。
- * 「変更なし」で完了したケースは updated_at が動かないため、60分経過で自動的に消す
- * （平均校正レイテンシは約20分・最大約1時間の実測に基づく。2026-08-10） */
-function isAiCorrectionPending(c: { created_at: string; updated_at: string }): boolean {
-  const created = new Date(c.created_at).getTime()
-  const updated = new Date(c.updated_at).getTime()
-  return Date.now() - created < 60 * 60 * 1000 && updated - created < 10_000
+/** 常駐AIの校正がまだ済んでいなければ true。
+ * 判定は raw_profile._llm_checked_at（ワーカーが校正完了時に必ず付ける印）の有無で行う。
+ * 変更が無かった人・解析対象が無かった人にも印は付くため、時間で推測する必要はない。
+ * 印が無い場合の 24時間の打ち切りは、この仕組みの導入前に登録された既存データが
+ * 永久に「校正中」に見えるのを防ぐためだけのもの（2026-08-10 導入） */
+function isAiCorrectionPending(c: { created_at: string; raw_profile?: Record<string, unknown> }): boolean {
+  if (c.raw_profile?._llm_checked_at) return false
+  return Date.now() - new Date(c.created_at).getTime() < 24 * 60 * 60 * 1000
 }
 
 const CATEGORY_STYLE: Record<keyof SkillsByCategory, { label: string; badge: string }> = {

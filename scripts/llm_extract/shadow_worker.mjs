@@ -74,10 +74,26 @@ async function skillMasterSet() {
   return s
 }
 
+/** 「AI校正が済んだ」印を残す。変更が無かった人・解析対象が無かった人にも必ず付ける。
+ *  UI の「AI校正中」バッジはこの印の有無で判定するため、時間で推測する必要がなくなる
+ *  （2026-08-10 ユーザー指摘「校正完了フラグを付けるだけでは？」より。指摘のとおり時間推測は筋が悪い）。
+ *  raw_profile は丸ごと送り返す必要がある（PostgREST の PATCH は列単位の置換のため） */
+async function markLlmChecked(c) {
+  const rp = { ...(c.raw_profile || {}), _llm_checked_at: new Date().toISOString() }
+  await rest(`candidates?id=eq.${c.id}`, {
+    method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ raw_profile: rp }),
+  })
+}
+
 /** LLM の抽出結果を本番 candidates に反映する */
 async function applyToCandidate(c, { bodyFields, attachment }) {
   const { patch, changes } = buildPatch(c, { bodyFields, attachment })
-  if (!patch) { log(`  [${c.name}] 変更なし（DB更新スキップ）`); return }
+  if (!patch) {
+    await markLlmChecked(c)
+    log(`  [${c.name}] 変更なし（校正済みの印のみ記録）`)
+    return
+  }
+  patch.raw_profile._llm_checked_at = new Date().toISOString()
 
   // skills は skill_master にある未登録スキルの追加のみ（工程スキル等を消さないため）
   if (attachment?.projects?.length) {
@@ -212,9 +228,12 @@ async function processCandidate(c) {
     }
   }
 
-  if (APPLY && (bodyFields || attachment)) {
-    try { await applyToCandidate(c, { bodyFields, attachment }) }
-    catch (e) { log(`  [${c.name}] 上書き失敗:`, String(e).slice(0, 200)) }
+  if (APPLY) {
+    try {
+      // 解析対象が無かった人（本文が短くリンクも添付も無い）にも校正済みの印は残す
+      if (bodyFields || attachment) await applyToCandidate(c, { bodyFields, attachment })
+      else { await markLlmChecked(c); log(`  [${c.name}] 解析対象なし（校正済みの印のみ記録）`) }
+    } catch (e) { log(`  [${c.name}] 上書き失敗:`, String(e).slice(0, 200)) }
   }
 }
 
