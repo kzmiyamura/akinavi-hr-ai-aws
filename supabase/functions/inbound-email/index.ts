@@ -2460,6 +2460,8 @@ function extractCandidateFieldsRegex(
     if (bracketCand) fromCompany = bracketCand
   }
 
+  // 国籍は抽出経路が多く営業文の断片を拾いやすいため、返す直前に1か所で検閲する
+  if (nationality && !isValidNationality(nationality)) nationality = null
   return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, experienceYearsIsDedicated, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
 }
 
@@ -2592,7 +2594,18 @@ function extractWorkStyleNote(bodyText: string, attachText: string): string | nu
     // 人物評（PR文）は勤務形態の条件ではない。「リモート環境でも自発的に情報共有〜」等の
     // 文章を勤務形態として登録した実害があった（#132 RADSTATE MS）
     if (/コミュニケーション|人柄|性格|意欲|姿勢|貢献|対応力|力を持ち|印象|安心して|きめ細か/.test(rawLine)) continue
-    const phrase = rawLine.trim().replace(/^[・■※☆\s　>：:【\-]+/, '').replace(/[【】]/g, '').trim()
+    // 案件の説明文（「元請け企業配下にて客先常駐し、〜の機能追加・改修業務に参画」等）や
+    // 最寄駅の行に「常駐可」が含まれるだけの行も勤務形態の条件ではない。
+    // 監査で勤務形態の12.7%が40字超の長文だった（2026-08-10）
+    if (/最寄|沿線|徒歩\d|業務に参画|に従事|機能追加|改修業務|案件概要|プロジェクトにて/.test(rawLine)) continue
+    let phrase = rawLine.trim().replace(/^[・■※☆\s　>：:【\-]+/, '').replace(/[【】]/g, '').trim()
+    // 長文は勤務形態に触れている節だけに絞る（読点・中黒・全角空白で分割して該当節を採用）
+    if (phrase.length > 40) {
+      const seg = phrase.split(/[、。]/).find((s) => KW.test(s))
+      KW.lastIndex = 0
+      if (seg && seg.trim()) phrase = seg.trim()
+    }
+    if (phrase.length > 60) continue   // それでも長い行は説明文とみなして採用しない
     if (phrase) return phrase
   }
   return null
@@ -7871,6 +7884,22 @@ function stripInitialSuffix(name: string): string {
  * 拾いやすい。実害: 「※上記人材にマッチする案件〜」から「上記人」を国籍として登録した（#134）。
  * そのため 人/国 で終わる場合は既知の国名に限定する。
  */
+/**
+ * 国籍として妥当な値か。抽出経路が7か所あり、それぞれで「※上記人材」「1人」「全国」等の
+ * 営業文の断片を拾っていた（直近7日の監査で国籍付き394件中109件=27.7%が不正値）。
+ * 経路ごとに直すのではなく、最終的にこの1か所で検閲する。
+ * 妥当: 「〜籍」で終わる / 既知の国名を含む（日本人・中国・外国籍 等）
+ */
+function isValidNationality(v: string): boolean {
+  const s = String(v ?? '').trim()
+  if (!s || s.length > 15) return false
+  if (/[0-9０-９]/.test(s)) return false                        // 「1人」等
+  if (/^(?:上記|下記|当該|該当|本人|弊社|貴社|全|各)/.test(s)) return false
+  if (/籍$/.test(s)) return true
+  const COUNTRIES = /日本|中国|韓国|台湾|ベトナム|インド|ネパール|フィリピン|ミャンマー|インドネシア|ブラジル|ペルー|アメリカ|イギリス|フランス|ドイツ|ロシア|モンゴル|スリランカ|バングラデシュ|パキスタン|タイ|マレーシア|シンガポール|ウズベキスタン|カンボジア|ラオス|外国/
+  return COUNTRIES.test(s)
+}
+
 function extractNationalityMark(text: string): string | null {
   const m = text.match(/[※＊\*][ 　]?([^\s,、。（）「」【】\t]{1,15}籍)/)
   if (m) return m[1].trim()

@@ -6,7 +6,47 @@
 //  - 上書き前の regex 値は raw_profile._regex_backup に退避（答え合わせ・巻き戻し用）
 //  - skills 列だけは「追加のみ」。理由は下記 SKILLS_REPLACE 参照
 //  - 変更が無ければ PATCH を投げない（Supabase書き込み回数の削減）
+import { readFileSync } from 'fs'
+import { dirname, join, resolve } from 'path'
+import { fileURLToPath } from 'url'
 import { normTech } from './lib.mjs'
+
+/** 駅名→都道府県（inbound-email と同じスナップショットを共有する） */
+const STATION_MAP = JSON.parse(readFileSync(
+  join(resolve(dirname(fileURLToPath(import.meta.url)), '../..'),
+    'supabase/functions/inbound-email/station_data.json'), 'utf8'))
+
+/**
+ * 最寄駅の記載から都道府県を引く（路線名・注記・徒歩分数を除いて照合）。
+ * 同名駅で複数県にまたがる場合は首都圏が1つだけならそれを採用、割れるなら null
+ * （inbound-email の lookupStationPrefectureFromDb と同じ方針）。
+ */
+export function prefectureFromStation(station) {
+  const base = String(station ?? '').replace(/[※（(].*$/s, '')
+    .replace(/徒歩\s*\d+\s*分|バス\s*\d+\s*分/g, '').trim()
+  if (!base) return null
+  const keys = []
+  const push = (x) => {
+    const k = x.replace(/駅$/, '').replace(/\s+/g, '').replace(/ヶ/g, 'ケ').trim()
+    if (k && !keys.includes(k)) keys.push(k)
+  }
+  push(base)
+  for (const tok of base.split(/[\s　、,/／]+/)) {
+    if (!tok || /線$|鉄道$|電鉄$|^JR|^ＪＲ/.test(tok)) continue
+    push(tok)
+  }
+  const KANTO = ['東京都', '神奈川県', '埼玉県', '千葉県']
+  for (const k of keys) {
+    const entries = STATION_MAP[k]
+    if (!entries?.length) continue
+    const prefs = [...new Set(entries.map((e) => e.prefecture))]
+    if (prefs.length === 1) return prefs[0]
+    const kanto = prefs.filter((p) => KANTO.includes(p))
+    if (kanto.length === 1) return kanto[0]
+    return null
+  }
+  return null
+}
 
 // skills 列を AI の techs で完全置換するか。
 // false の理由: skills は skill_master 照合を通った正規化済みデータで、
@@ -152,6 +192,17 @@ export function buildPatch(cand, { bodyFields, attachment }) {
     set('age', typeof bodyFields.age === 'number' ? bodyFields.age : null, { raw: true })
     set('gender', bodyFields.gender, { raw: true, eq: (a, b) => genderMeaning(a) === genderMeaning(b) })
     set('nearestStation', bodyFields.station, { raw: true })
+    // 駅を補完したら都道府県も引き直す。regex 側は駅が空の状態で本文から都道府県を
+    // 推定しており（送信元住所を拾いがち）、駅だけ後から入ると矛盾が残るため
+    // （実害: HH「練馬駅」なのに神奈川県。監査で15件検出・2026-08-10）
+    if (changes.includes('nearestStation')) {
+      const p = prefectureFromStation(rp.nearestStation)
+      if (p && p !== rp.prefecture) {
+        stash('prefecture', rp.prefecture ?? null)
+        rp.prefecture = p
+        changes.push('prefecture')
+      }
+    }
     set('availableFrom', bodyFields.availability, { raw: true })
     set('employmentType', bodyFields.employment, { raw: true })
   }

@@ -36,6 +36,7 @@ const TARGET_FUNCTIONS = [
   'isOwnersResumeFile',
   'stripInitialSuffix',
   'extractNationalityMark',
+  'isValidNationality',
   'stationNameCandidates',
   'extractWorkStyleNote',
   'deriveWorkStyleTag',

@@ -2149,6 +2149,17 @@ function extractNationalityMark(text){
   return null
 }
 
+// ── isValidNationality ──
+function isValidNationality(v){
+  const s = String(v ?? '').trim()
+  if (!s || s.length > 15) return false
+  if (/[0-9０-９]/.test(s)) return false                        // 「1人」等
+  if (/^(?:上記|下記|当該|該当|本人|弊社|貴社|全|各)/.test(s)) return false
+  if (/籍$/.test(s)) return true
+  const COUNTRIES = /日本|中国|韓国|台湾|ベトナム|インド|ネパール|フィリピン|ミャンマー|インドネシア|ブラジル|ペルー|アメリカ|イギリス|フランス|ドイツ|ロシア|モンゴル|スリランカ|バングラデシュ|パキスタン|タイ|マレーシア|シンガポール|ウズベキスタン|カンボジア|ラオス|外国/
+  return COUNTRIES.test(s)
+}
+
 // ── stationNameCandidates ──
 function stationNameCandidates(station){
   const base = String(station)
@@ -2188,7 +2199,18 @@ function extractWorkStyleNote(bodyText, attachText){
     // 人物評（PR文）は勤務形態の条件ではない。「リモート環境でも自発的に情報共有〜」等の
     // 文章を勤務形態として登録した実害があった（#132 RADSTATE MS）
     if (/コミュニケーション|人柄|性格|意欲|姿勢|貢献|対応力|力を持ち|印象|安心して|きめ細か/.test(rawLine)) continue
-    const phrase = rawLine.trim().replace(/^[・■※☆\s　>：:【\-]+/, '').replace(/[【】]/g, '').trim()
+    // 案件の説明文（「元請け企業配下にて客先常駐し、〜の機能追加・改修業務に参画」等）や
+    // 最寄駅の行に「常駐可」が含まれるだけの行も勤務形態の条件ではない。
+    // 監査で勤務形態の12.7%が40字超の長文だった（2026-08-10）
+    if (/最寄|沿線|徒歩\d|業務に参画|に従事|機能追加|改修業務|案件概要|プロジェクトにて/.test(rawLine)) continue
+    let phrase = rawLine.trim().replace(/^[・■※☆\s　>：:【\-]+/, '').replace(/[【】]/g, '').trim()
+    // 長文は勤務形態に触れている節だけに絞る（読点・中黒・全角空白で分割して該当節を採用）
+    if (phrase.length > 40) {
+      const seg = phrase.split(/[、。]/).find((s) => KW.test(s))
+      KW.lastIndex = 0
+      if (seg && seg.trim()) phrase = seg.trim()
+    }
+    if (phrase.length > 60) continue   // それでも長い行は説明文とみなして採用しない
     if (phrase) return phrase
   }
   return null
@@ -3202,6 +3224,7 @@ export {
   isOwnersResumeFile,
   stripInitialSuffix,
   extractNationalityMark,
+  isValidNationality,
   stationNameCandidates,
   extractWorkStyleNote,
   deriveWorkStyleTag,

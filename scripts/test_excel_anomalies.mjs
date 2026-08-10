@@ -624,6 +624,36 @@ console.log('=== K5. 本文フィールドの誤抽出（#132/#133/#134） ===')
     extractWorkStyleNote('週5日リモート可（出社は月1回程度）', ''), '週5日リモート可（出社は月1回程度）')
 }
 
+console.log('=== K7. isValidNationality / 勤務形態の長文除外（監査391件対応） ===')
+{
+  const { isValidNationality, extractWorkStyleNote } = await import('./_extractors.gen.mjs')
+  const v = (label, input, expect) => {
+    const got = isValidNationality(input)
+    if (got === expect) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}: isValidNationality(${JSON.stringify(input)})=${got} expect=${expect}`) }
+  }
+  // 監査で検出された不正値（394件中109件）
+  v('K7-1: 上記人 は国籍でない', '上記人', false)
+  v('K7-2: 1人 は国籍でない', '1人', false)
+  v('K7-3: 全国 は国籍でない', '全国', false)
+  v('K7-4: 当該人 は国籍でない', '当該人', false)
+  // 正しい国籍は通す
+  v('K7-5: 中国籍 は国籍', '中国籍', true)
+  v('K7-6: 日本人 は国籍', '日本人', true)
+  v('K7-7: 外国籍 は国籍', '外国籍', true)
+  v('K7-8: ナイジェリア籍 は国籍', 'ナイジェリア籍', true)
+  // 勤務形態: 案件説明文・最寄駅行は採用しない
+  const w = (label, input, expect) => {
+    const got = extractWorkStyleNote(input, '')
+    if (got === expect) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}: got=${JSON.stringify(got)} expect=${JSON.stringify(expect)}`) }
+  }
+  w('K7-9: 案件説明文は勤務形態にしない',
+    '元請け企業配下にて客先常駐し、大手総合電機メーカーの社内システムにおける機能追加・改修業務に参画', null)
+  w('K7-10: 最寄駅行は勤務形態にしない',
+    '[最寄駅]　東京メトロ有楽町線等　要町駅　(東京都)　※常駐可(フル出社の場合、片道1時間程度までを希望)', null)
+}
+
 console.log('=== K6. deriveWorkStyleTag（例外的な出社は併用可にしない・#135） ===')
 {
   const { deriveWorkStyleTag } = await import('./_extractors.gen.mjs')
