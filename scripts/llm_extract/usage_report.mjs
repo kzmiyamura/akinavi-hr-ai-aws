@@ -56,6 +56,35 @@ console.log(`合計        ${String(tH).padStart(6)}  ${String(tS).padStart(12)}
 console.log('※API換算は参考値。Maxサブスク枠のため実課金ではない')
 console.log('※実処理時間 = claude -p がモデルを回していた実測の壁時計時間（週次上限の目安）')
 
+// ── 5時間枠あたりの占有率（Max の5時間制限に対する目安）──
+// Max の5時間制限はトークン/メッセージ量で管理されており時間そのものではないため、
+// ここで出すのは「5時間のうちモデルを回していた時間の割合」＝連続稼働の目安。
+// 上限そのものの使用率は Claude Code の /usage が唯一の正解。
+{
+  const W = 5 * 3600 * 1000
+  const rows = shadow.filter((r) => r.ms).map((r) => ({ t: new Date(r.created_at).getTime(), ms: r.ms, model: r.model }))
+  rows.sort((a, b) => a.t - b.t)
+  let lo = 0, sum = 0, sumS = 0, best = { ms: 0, sonnetMs: 0, at: null }
+  for (let hi = 0; hi < rows.length; hi++) {
+    sum += rows[hi].ms
+    if (rows[hi].model === 'sonnet') sumS += rows[hi].ms
+    while (rows[lo].t < rows[hi].t - W) { sum -= rows[lo].ms; if (rows[lo].model === 'sonnet') sumS -= rows[lo].ms; lo++ }
+    if (sum > best.ms) best = { ms: sum, sonnetMs: sumS, at: new Date(rows[hi].t).toISOString() }
+  }
+  // 直近5時間
+  const now = Date.now()
+  const recent = rows.filter((r) => r.t >= now - W)
+  const recentMs = recent.reduce((n, r) => n + r.ms, 0)
+  const recentS = recent.filter((r) => r.model === 'sonnet').reduce((n, r) => n + r.ms, 0)
+  const pct = (ms) => `${(ms / W * 100).toFixed(1)}%`
+  console.log(`\n=== 5時間枠あたりのモデル稼働（ワーカー分のみ）===`)
+  console.log(`ピーク5時間: ${(best.ms / 3600000).toFixed(2)}時間 = 枠の ${pct(best.ms)}` +
+    `（うちsonnet ${(best.sonnetMs / 3600000).toFixed(2)}時間）${best.at ? ' 終了時刻 ' + best.at : ''}`)
+  console.log(`直近5時間:   ${(recentMs / 3600000).toFixed(2)}時間 = 枠の ${pct(recentMs)}` +
+    `（うちsonnet ${(recentS / 3600000).toFixed(2)}時間）`)
+  console.log('※Maxの5時間制限はトークン量で管理されており時間ではない。正確な使用率は /usage を参照')
+}
+
 // ── 週次（直近7日）の実処理時間 ──
 const weekAgo = Date.now() - 7 * 24 * 3600 * 1000
 let weekMs = 0, weekCalls = 0
