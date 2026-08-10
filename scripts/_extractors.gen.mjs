@@ -2127,6 +2127,16 @@ function isOwnersResumeFile(filename, bodyNames){
   })
 }
 
+// ── stripInitialSuffix ──
+function stripInitialSuffix(name){
+  const initM = name.match(/^([A-Za-zＡ-Ｚａ-ｚ][.\s　・]*[A-Za-zＡ-Ｚａ-ｚ](?:[.\s　・]*[A-Za-zＡ-Ｚａ-ｚ])?)/)
+  if (!initM || name.length <= initM[1].length + 2) return name
+  const remainder = name.slice(initM[1].length)
+  if (/^[A-Za-zＡ-Ｚａ-ｚ]/.test(remainder)) return name          // 4文字以上の氏名 → 切らない
+  if (/^[\s　]*[\(（]\d{2}[才歳]?[\)）]?/.test(remainder)) return name  // 年齢が続く → 切らない
+  return initM[1]
+}
+
 // ── extractSkillYearsFromCells ──
 function extractSkillYearsFromCells(cells, deadline = 0){
   if (cells.length === 0) return {}
@@ -3113,6 +3123,7 @@ export {
   looksLikeRosterName,
   personAttrScore,
   isOwnersResumeFile,
+  stripInitialSuffix,
   extractSkillYearsFromCells,
   extractSkillYearsPeriodHeader,
   extractSkillYearsRepeatPeriodHeader,

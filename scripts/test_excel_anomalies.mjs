@@ -576,6 +576,27 @@ console.log('=== K3. isOwnersResumeFile（本人の経歴書を名簿扱いし�
   r('K3-7: 別人の経歴書は本人のものではない', 'Skill_ABC_20260628.xlsx', ['OMT'], false)
 }
 
+console.log('=== K4. stripInitialSuffix（氏名を3文字に切らない・#128） ===')
+{
+  const { stripInitialSuffix } = await import('./_extractors.gen.mjs')
+  const s = (label, input, expect) => {
+    const got = stripInitialSuffix(input)
+    if (got === expect) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       stripInitialSuffix(${JSON.stringify(input)})=${JSON.stringify(got)} expect=${JSON.stringify(expect)}`) }
+  }
+  // 実害(2026-08-10 #128): 英字4文字以上の氏名が全員3文字に切られた
+  s('K4-1: tani（38歳・男性）は切らない', 'tani（38歳・男性）', 'tani（38歳・男性）')
+  s('K4-2: Kengo（30歳／男性）は切らない', 'Kengo（30歳／男性）', 'Kengo（30歳／男性）')
+  s('K4-3: Tanaka Taro は切らない', 'Tanaka Taro', 'Tanaka Taro')
+  // 回帰防止: イニシャル＋説明文は従来どおり除去する
+  s('K4-4: N.S＋説明文はイニシャルのみ', 'N.S顧客折衝～ベンダー調整可能なエンジニア！', 'N.S')
+  s('K4-5: NK（補足）はイニシャルのみ', 'NK（長野に引っ越し予定）', 'NK')
+  s('K4-6: K.Y＋全角空白＋説明文', 'K.Y　サブリーダーあり', 'K.Y')
+  // 回帰防止: 年齢が続く場合は切らない（年齢・性別抽出のため）
+  s('K4-7: A.S（25）男性 は切らない', 'A.S（25）男性', 'A.S（25）男性')
+  s('K4-8: 短い名前はそのまま', 'M.M', 'M.M')
+}
+
 console.log('=== L. Method 1.7 KVブロック型: ラベル同列下方の文章セル混入（K.F型） ===')
 // 実害: 「開発環境」ラベルの同列下方に「開発手法」「業務内容」ラベル→業務内容の文章セルが
 // 並ぶテンプレートで、文章の断片（「また」「■主な業務内容」「‐ 不具合報告」等）が

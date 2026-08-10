@@ -34,6 +34,7 @@ const TARGET_FUNCTIONS = [
   'looksLikeRosterName',
   'personAttrScore',
   'isOwnersResumeFile',
+  'stripInitialSuffix',
   'extractSkillYearsFromCells',
   'extractSkillYearsPeriodHeader',
   'extractSkillYearsRepeatPeriodHeader',

@@ -1726,16 +1726,7 @@ function extractCandidateFieldsRegex(
   // ただし「A.S（25）男性」のような年齢・性別の構造化情報は「余分な説明文」ではないため
   // 除去対象から除外する（除去すると直後の年齢・性別抽出が丸ごと失敗し、経験年数の
   // 年齢フォールバックも効かなくなる致命的な事故になる）
-  if (cleanedName) {
-    const initM = cleanedName.match(/^([A-Za-zＡ-Ｚａ-ｚ][.\s　・]*[A-Za-zＡ-Ｚａ-ｚ](?:[.\s　・]*[A-Za-zＡ-Ｚａ-ｚ])?)/)
-    if (initM && cleanedName.length > initM[1].length + 2) {
-      const remainder = cleanedName.slice(initM[1].length)
-      const looksLikeAgeSuffix = /^[\s　]*[\(（]\d{2}[才歳]?[\)）]?/.test(remainder)
-      if (!looksLikeAgeSuffix) {
-        cleanedName = initM[1]
-      }
-    }
-  }
+  if (cleanedName) cleanedName = stripInitialSuffix(cleanedName)
   // 名前から年齢・性別を抽出して除去
   // パターン1: (34歳/男性) (34才/女性) - スラッシュ区切り一体型
   // パターン2: 56才(男性) - 分離型
@@ -7813,6 +7804,25 @@ async function fetchLinkedResume(url: string, ledger: Ledger, depth: number): Pr
   else if (links.drive[0]) fetched = await fetchDriveEntry({ id: links.drive[0].id, index: 0 }, '', ledger)
   if (!fetched) return null
   return await extractEntry(fetched, ledger)
+}
+
+/**
+ * イニシャルの後ろに続く説明文を除去する。
+ *   "N.S顧客折衝～ベンダー調整可能なエンジニア！" → "N.S"
+ *   "NK（長野に引っ越し予定）"                     → "NK"
+ *
+ * 【重要】イニシャル判定は最大3文字までしか見ないため、続きが英字の場合は
+ * 「イニシャル＋説明文」ではなく「4文字以上の氏名」である。切ってはいけない。
+ * 実害: 「tani（38歳・男性）」→「tan」、「Kengo」→「Ken」と全員3文字に切られた（2026-08-10 #128）。
+ * 年齢・性別が続く場合も、除去すると直後の年齢・性別抽出が失敗するため対象外にする。
+ */
+function stripInitialSuffix(name: string): string {
+  const initM = name.match(/^([A-Za-zＡ-Ｚａ-ｚ][.\s　・]*[A-Za-zＡ-Ｚａ-ｚ](?:[.\s　・]*[A-Za-zＡ-Ｚａ-ｚ])?)/)
+  if (!initM || name.length <= initM[1].length + 2) return name
+  const remainder = name.slice(initM[1].length)
+  if (/^[A-Za-zＡ-Ｚａ-ｚ]/.test(remainder)) return name          // 4文字以上の氏名 → 切らない
+  if (/^[\s　]*[\(（]\d{2}[才歳]?[\)）]?/.test(remainder)) return name  // 年齢が続く → 切らない
+  return initM[1]
 }
 
 /** 名簿1個から展開する行数の上限（異常に大きい名簿による処理爆発の防止） */
