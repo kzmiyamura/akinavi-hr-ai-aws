@@ -64,11 +64,14 @@ function formatDate(iso: string) {
 }
 
 /** 常駐AIの校正状態。ワーカーが raw_profile に記録した進行段階をそのまま表示する
- * （2026-08-10 ユーザー指定の4段階。時間による推測は行わない）。
+ * （2026-08-10 ユーザー指定。時間による推測は行わない）。
  *   null       … 校正完了（_llm_checked_at あり）→ 何も表示しない
  *   'waiting'  … ルールベースのみ           → 「AI校正待ち」
  *   'body'     … 本文をHaikuで解析済         → 「AI校正開始」
- *   'sonnet'   … 添付Haikuが不合格→Sonnet中  → 「AI校正中」 */
+ *
+ * 'sonnet'（→「AI校正中」）は Sonnet 昇格をやめた時点で到達不能になったため廃止した。
+ * 残骸はワーカーが起動時に掃除する。古い値が万一残っても「AI校正開始」に寄せて
+ * 進行中であることは伝わるようにしてある。 */
 type AiStage = { label: string; cls: string; title: string } | null
 
 function aiCorrectionStage(c: {
@@ -80,11 +83,7 @@ function aiCorrectionStage(c: {
   // 検索・絞り込み経由（candidates_lite）は raw_profile を持つ。どちらでも動くようにする
   if (c.llm_checked_at ?? c.raw_profile?._llm_checked_at) return null
   const stage = (c.llm_stage ?? c.raw_profile?._llm_stage) as string | undefined
-  if (stage === 'sonnet') {
-    return { label: 'AI校正中', cls: 'bg-amber-50 text-amber-700 border-amber-200',
-      title: '添付経歴書の再解析中（Haikuの結果が基準未満のためSonnetへ引き継ぎ）' }
-  }
-  if (stage === 'body') {
+  if (stage === 'body' || stage === 'sonnet') {
     return { label: 'AI校正開始', cls: 'bg-sky-50 text-sky-600 border-sky-200',
       title: 'メール本文の解析が完了。添付経歴書の解析を実施中' }
   }

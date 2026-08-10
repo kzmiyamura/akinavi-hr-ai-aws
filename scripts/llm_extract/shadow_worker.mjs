@@ -79,10 +79,9 @@ async function skillMasterSet() {
 }
 
 /** AI校正の進行状態を raw_profile._llm_stage に記録する（UI表示用）。
- *  段階（2026-08-10 ユーザー指定）:
+ *  段階（2026-08-10 ユーザー指定 → 同日 Haiku 単独運用に伴い 'sonnet' を廃止）:
  *    印なし  … ルールベースのみ           → UI「AI校正待ち」
  *    'body'  … 本文をHaikuで解析済        → UI「AI校正開始」
- *    'sonnet'… 添付Haikuが不合格でSonnet中 → UI「AI校正中」
  *    _llm_checked_at あり … 完了           → UI 表示なし
  *  raw_profile は丸ごと送り返す必要がある（PostgREST の PATCH は列単位の置換のため）。
  *  進行表示のための書き込みなので、経歴書の解析が続く場合だけ呼ぶ（無駄書きを避ける） */
@@ -274,15 +273,11 @@ async function processCandidate(c, preBody = null) {
         grid = buildGridInput(fp)
       }
       if (!grid) throw new Error(`no date cells in ${ext}`)
-      const r = await extractProjects(grid, {
-        log: m => log(`  [${c.name}]`, m),
-        kind,
-        // Haiku が不合格で Sonnet に引き継ぐ瞬間に UI を「AI校正中」へ切り替える
-        onEscalate: APPLY ? () => markStage(c, 'sonnet') : null,
-      })
+      // Haiku 単独運用のため昇格通知は無い（2026-08-10）。UI の段階も body → done の2つだけ
+      const r = await extractProjects(grid, { log: m => log(`  [${c.name}]`, m), kind })
       await saveShadow({
         candidate_id: c.id, source: 'attachment', model: r.model, status: r.status,
-        reasons: r.reasons, projects: r.projects, skill_years: r.skillYears,
+        reasons: r.reasons, quality: r.quality, projects: r.projects, skill_years: r.skillYears,
         cost_usd: r.costUsd, ms: r.ms,
       })
       state.dayCost += r.costUsd || 0
@@ -505,6 +500,22 @@ async function boxQueue() {
 log(`ワーカー起動 mode=${APPLY ? '本番上書き' : 'シャドー記録のみ'} watermark=${state.watermark} 上限=${MAX_PER_CYCLE}/cycle, ${MAX_PER_DAY}/day`)
 // 前回クラッシュで 'fetching' のまま残った依頼を復帰させる
 await rest(`candidates?box_status=eq.fetching`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'fetch_requested' }) }).catch(() => {})
+// 停止・クラッシュで進行中のまま残った _llm_stage を掃除する。
+// UI は時間で古さを推測しない方針（CandidatePage.tsx）なので、印が残ると
+// 止まっているのに「AI校正中」等が出たままになる（2026-08-10 実害1件）。
+// box_status と違い raw_profile は jsonb 列ごと置換になるため1件ずつ読み書きする。
+// 廃止した 'sonnet' 段階の残骸もここで消える。同じ処理は clear_stale_stage.mjs でも単体実行できる
+try {
+  const stale = await rest('candidates?select=id,raw_profile&raw_profile->>_llm_stage=in.(body,sonnet)&limit=200')
+  for (const c of stale ?? []) {
+    const rp = { ...(c.raw_profile || {}) }
+    delete rp._llm_stage
+    await rest(`candidates?id=eq.${c.id}`, {
+      method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ raw_profile: rp }),
+    })
+  }
+  if (stale?.length) log(`停止中に残った進行印を掃除: ${stale.length}件`)
+} catch (e) { log('進行印の掃除に失敗:', String(e).slice(0, 120)) }
 while (true) {
   try { await cycle() } catch (e) { log('cycle error:', String(e).slice(0, 300)) }
   try { await projectCycle() } catch (e) { log('project cycle error:', String(e).slice(0, 300)) }

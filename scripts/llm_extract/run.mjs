@@ -10,10 +10,14 @@ import fs from 'fs'
 import { buildGridInput, buildTextGridInput, skillYearsFromProjects } from './lib.mjs'
 import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES, BODY_FIELDS_BATCH_RULES, PROJECT_FIELDS_RULES } from './prompts.mjs'
 import { callModel } from './caller.mjs'
-import { verifyOutput } from './verify.mjs'
+import { verifyOutput, shouldEscalate } from './verify.mjs'
 
-/** Sonnet 昇格の一時停止スイッチ。1 で昇格せず haiku 結果を needs_review 付きで採用する */
-const NO_ESCALATE = process.env.SHADOW_NO_ESCALATE === '1'
+/**
+ * 既定は Haiku 単独。Sonnet 昇格は明示的に有効化したときだけ動く（2026-08-10 方針転換）。
+ * 実測で昇格の約半分は needs_review のまま終わり、1回$0.27の上乗せが回収できていなかった。
+ * 再開する場合は SHADOW_USE_SONNET=1。
+ */
+const USE_SONNET = process.env.SHADOW_USE_SONNET === '1'
 
 /** 経歴グリッド抽出のルーター本体。他モジュールからも利用可。
  *  kind='text' は docx/pdf 由来の疑似グリッド（1行=1セル）。プロンプトだけ変え、
@@ -25,36 +29,32 @@ export async function extractProjects(gridInput, { log = () => {}, kind = 'grid'
   const t0 = Date.now()
 
   const h = await callModel('haiku', prompt)
-  const vh = verifyOutput(gridInput, h.data, 'primary')
-  log(`haiku: proj=${h.data?.projects?.length} verify=${vh.escalate ? 'ESCALATE' : 'pass'} ${vh.reasons.join('|')}`)
+  const vh = verifyOutput(gridInput, h.data)
+  log(`haiku: proj=${h.data?.projects?.length} ${vh.broken ? 'NEEDS_REVIEW' : 'ok'} ` +
+    `cov=${vh.quality.coverage ?? '-'} est/got=${vh.quality.est}/${vh.quality.got} ${vh.reasons.join('|')}`)
 
   let final = { model: 'haiku', output: h.data, verify: vh, costUsd: h.costUsd ?? 0 }
-  if (vh.escalate && NO_ESCALATE) {
-    // 昇格の一時停止（2026-08-10）。実測で昇格の約半分は needs_review のまま終わり、
-    // 昇格1回あたり $0.27 の上乗せが回収できていなかった（escalation_report.mjs 参照）。
-    // 下の「sonnet失敗→haiku結果を採用」と同じ着地点なので、抽出結果が失われることはない。
-    log(`昇格停止中(SHADOW_NO_ESCALATE=1) → haiku結果を採用 proj=${h.data?.projects?.length} ${vh.reasons.join('|')}`)
-    final = { model: 'haiku', output: h.data, verify: { ...vh, escalate: true }, costUsd: h.costUsd ?? 0 }
-  } else if (vh.escalate) {
+  if (USE_SONNET && shouldEscalate(vh)) {
     // 昇格の開始を呼び出し側に通知する（UI に「AI校正中」を出すため）
     if (onEscalate) { try { await onEscalate() } catch { /* 通知失敗は処理を止めない */ } }
     try {
       const s = await callModel('sonnet', prompt)
-      const vs = verifyOutput(gridInput, s.data, 'final')
-      log(`sonnet: proj=${s.data?.projects?.length} verify=${vs.escalate ? 'NEEDS_REVIEW' : 'pass'} ${vs.reasons.join('|')}`)
+      const vs = verifyOutput(gridInput, s.data)
+      log(`sonnet: proj=${s.data?.projects?.length} ${vs.broken ? 'NEEDS_REVIEW' : 'ok'} ${vs.reasons.join('|')}`)
       final = { model: 'sonnet', output: s.data, verify: vs, costUsd: (h.costUsd ?? 0) + (s.costUsd ?? 0) }
     } catch (e) {
       // 超大型経歴書では sonnet だけタイムアウトすることがある（AT・33案件PDF 実害）。
-      // haiku の部分結果を捨てて全滅させるより、needs_review 付きで採用する方が価値がある
+      // haiku の部分結果を捨てて全滅させるより、そのまま採用する方が価値がある
       log(`sonnet失敗(${String(e.message).slice(0, 40)}) → haiku結果を採用 proj=${h.data?.projects?.length}`)
-      final = { model: 'haiku', output: h.data, verify: { ...vh, escalate: true }, costUsd: h.costUsd ?? 0 }
     }
   }
 
   return {
     model: final.model,
-    status: final.verify.escalate ? 'needs_review' : 'ok',
+    // needs_review は「結果が使えない」だけに付ける。取りこぼしの程度は quality に持つ
+    status: final.verify.broken ? 'needs_review' : 'ok',
     reasons: final.verify.reasons,
+    quality: final.verify.quality,
     projects: final.output?.projects ?? [],
     skillYears: skillYearsFromProjects(final.output?.projects),
     costUsd: final.costUsd,
