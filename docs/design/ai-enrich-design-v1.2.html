@@ -112,7 +112,9 @@
   .chip.decision { background: var(--surface); border: 1.5px solid var(--accent); }
 
   /* ---- flowchart primitives ---- */
-  .col { display: flex; flex-direction: column; align-items: stretch; }
+  .col { display: flex; flex-direction: column; align-items: stretch; min-width: 0; }
+  /* flexアイテムの min-width:auto による横はみ出し防止（pre/表の overflow-x を有効化） */
+  .col > * { min-width: 0; }
 
   .box {
     background: var(--surface);
@@ -246,7 +248,7 @@
     height: 2px;
     background: var(--line);
   }
-  .branch-col { position: relative; padding-bottom: 22px; }
+  .branch-col { position: relative; padding-bottom: 22px; min-width: 0; }
   .branch-col::after {
     content: "";
     position: absolute;
