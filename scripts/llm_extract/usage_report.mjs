@@ -33,26 +33,38 @@ async function fetchAll(pathq) {
 }
 
 // ── LLM呼び出し集計（llm_shadow）──
-const shadow = await fetchAll(`llm_shadow?select=candidate_id,created_at,model,source,status,cost_usd&created_at=gte.${since}&order=created_at.asc`)
+const shadow = await fetchAll(`llm_shadow?select=candidate_id,created_at,model,source,status,cost_usd,ms&created_at=gte.${since}&order=created_at.asc`)
 const byDay = new Map()
 for (const r of shadow) {
   const d = jstDay(r.created_at)
-  if (!byDay.has(d)) byDay.set(d, { haiku: 0, sonnet: 0, haikuCost: 0, sonnetCost: 0, error: 0 })
+  if (!byDay.has(d)) byDay.set(d, { haiku: 0, sonnet: 0, haikuCost: 0, sonnetCost: 0, error: 0, ms: 0 })
   const v = byDay.get(d)
+  v.ms += r.ms ?? 0
   if (r.status === 'error') { v.error++; continue }
   // 注: 昇格時は model='sonnet' で cost_usd に haiku+sonnet の合算が入る
   if (r.model === 'sonnet') { v.sonnet++; v.sonnetCost += r.cost_usd ?? 0 }
   else { v.haiku++; v.haikuCost += r.cost_usd ?? 0 }
 }
 console.log(`=== LLM呼び出し 日別（JST・直近${DAYS}日・llm_shadow由来）===`)
-console.log('日付        haiku件  sonnet件(昇格)  エラー  API換算コスト')
-let tH = 0, tS = 0, tC = 0
+console.log('日付        haiku件  sonnet件(昇格)  エラー  API換算コスト  実処理時間')
+let tH = 0, tS = 0, tC = 0, tMs = 0
 for (const [d, v] of [...byDay.entries()].sort()) {
-  tH += v.haiku; tS += v.sonnet; tC += v.haikuCost + v.sonnetCost
-  console.log(`${d}  ${String(v.haiku).padStart(6)}  ${String(v.sonnet).padStart(12)}  ${String(v.error).padStart(5)}  $${(v.haikuCost + v.sonnetCost).toFixed(2)}`)
+  tH += v.haiku; tS += v.sonnet; tC += v.haikuCost + v.sonnetCost; tMs += v.ms
+  console.log(`${d}  ${String(v.haiku).padStart(6)}  ${String(v.sonnet).padStart(12)}  ${String(v.error).padStart(5)}  $${(v.haikuCost + v.sonnetCost).toFixed(2).padStart(7)}  ${(v.ms / 3600000).toFixed(2)}h`)
 }
-console.log(`合計        ${String(tH).padStart(6)}  ${String(tS).padStart(12)}         $${tC.toFixed(2)}`)
-console.log('※Maxサブスク枠のため実課金ではない参考値。案件サイクル分は含まず（下記参照）')
+console.log(`合計        ${String(tH).padStart(6)}  ${String(tS).padStart(12)}         $${tC.toFixed(2)}  ${(tMs / 3600000).toFixed(2)}h`)
+console.log('※API換算は参考値。Maxサブスク枠のため実課金ではない')
+console.log('※実処理時間 = claude -p がモデルを回していた実測の壁時計時間（週次上限の目安）')
+
+// ── 週次（直近7日）の実処理時間 ──
+const weekAgo = Date.now() - 7 * 24 * 3600 * 1000
+let weekMs = 0, weekCalls = 0
+for (const r of shadow) {
+  if (new Date(r.created_at).getTime() < weekAgo) continue
+  weekMs += r.ms ?? 0
+  weekCalls++
+}
+console.log(`\n直近7日の実処理時間: ${(weekMs / 3600000).toFixed(2)}時間（${weekCalls}回・ワーカー分のみ）`)
 
 // ── 登録数と補正レイテンシ（candidates）──
 const cands = await fetchAll(
