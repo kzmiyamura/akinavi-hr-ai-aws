@@ -1169,9 +1169,39 @@ async function loadOwnEmailDomain(supabaseUrl: string, serviceKey: string): Prom
  */
 export function inferPrefectureFromStation(station: string | null | undefined): string | null {
   if (!station) return null
-  const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim()
-  if (!cleaned) return null
-  return STATION_TO_PREFECTURE[cleaned] ?? null
+  for (const cand of stationNameCandidates(station)) {
+    const hit = STATION_TO_PREFECTURE[cand]
+    if (hit) return hit
+  }
+  return null
+}
+
+/**
+ * 最寄駅の記載から「駅名そのもの」の候補を列挙する。
+ *
+ * 実際の記載は路線名・注記・徒歩分数が混ざる:
+ *   「名鉄 犬山駅 ※愛知」「JR根岸線 港南台駅 徒歩15分」「京浜急行線　井土ヶ谷駅（徒歩5分）」
+ * 全体をそのまま辞書に当てると外れ、都道府県が本文の別の県（送信元の住所等）に
+ * 引きずられる実害があった（#133: 犬山駅なのに東京都）。
+ * 空白で分割した各語も候補にすることで、路線名や注記が付いていても駅名を拾える。
+ */
+function stationNameCandidates(station: string): string[] {
+  const base = String(station)
+    .replace(/[※（(].*$/s, '')                    // 「※愛知」「（徒歩5分）」以降を落とす
+    .replace(/徒歩\s*\d+\s*分|バス\s*\d+\s*分/g, '')
+    .trim()
+  const out: string[] = []
+  const push = (s: string) => {
+    const k = s.replace(/駅$/, '').replace(/\s+/g, '').replace(/ヶ/g, 'ケ').trim()
+    if (k && !out.includes(k)) out.push(k)
+  }
+  push(base)
+  // 「名鉄 犬山駅」→ 語ごとに試す。路線名（〜線/〜鉄道等）は駅名ではないので除く
+  for (const tok of base.split(/[\s　、,/／]+/)) {
+    if (!tok || /線$|鉄道$|電鉄$|^JR|^ＪＲ/.test(tok)) continue
+    push(tok)
+  }
+  return out
 }
 
 /**
@@ -1211,7 +1241,11 @@ async function lookupStationPrefectureFromDb(station: string | null | undefined)
   const hasLineSplit = lastLineIdx >= 0 && cleaned.length - lastLineIdx - 1 >= 2
   // 「小田急小田原線」のような路線名候補（同名駅の disambiguation に使う。取れなければ null）
   const lineNameCandidate = hasLineSplit ? cleaned.slice(0, lastLineIdx + 1) : null
-  const stationCandidates = hasLineSplit ? [cleaned, cleaned.slice(lastLineIdx + 1)] : [cleaned]
+  // 路線名直結（小田急小田原線本厚木）に加え、空白区切り・注記付き（名鉄 犬山駅 ※愛知）にも対応する
+  const stationCandidates = [
+    ...(hasLineSplit ? [cleaned, cleaned.slice(lastLineIdx + 1)] : [cleaned]),
+    ...stationNameCandidates(station),
+  ].filter((v, i, a) => v && a.indexOf(v) === i)
 
   for (const candidate of stationCandidates) {
     const entries = STATION_MASTER_MAP[candidate]
@@ -1907,9 +1941,7 @@ function extractCandidateFieldsRegex(
   }
   // 国籍 — 名前外 ※XX籍 / ※外国籍 パターン（括弧なし）
   if (!nationality) {
-    const allTextForNat = bodyText + '\n' + attachText
-    const natMark = allTextForNat.match(/[※＊\*][ 　]?([^\s,、。（）「」【】\t]{1,15}[籍国人])/)
-    if (natMark) nationality = natMark[1].trim()
+    nationality = extractNationalityMark(bodyText + '\n' + attachText)
   }
   // 国籍除去後のnameStrippedで上書き（フォールバックで取得済みなら維持）
   name = name || nameStripped || null
@@ -2557,6 +2589,9 @@ function extractWorkStyleNote(bodyText: string, attachText: string): string | nu
     // ／や/が3個以上連なる列挙・件名装飾（★【 件名:）を含む行はスキップして次の出現を探す
     const seps = (rawLine.match(/[／/｜|]/g) ?? []).length
     if (seps >= 3 || /[★]|件名[:：]/.test(rawLine)) continue
+    // 人物評（PR文）は勤務形態の条件ではない。「リモート環境でも自発的に情報共有〜」等の
+    // 文章を勤務形態として登録した実害があった（#132 RADSTATE MS）
+    if (/コミュニケーション|人柄|性格|意欲|姿勢|貢献|対応力|力を持ち|印象|安心して|きめ細か/.test(rawLine)) continue
     const phrase = rawLine.trim().replace(/^[・■※☆\s　>：:【\-]+/, '').replace(/[【】]/g, '').trim()
     if (phrase) return phrase
   }
@@ -7823,6 +7858,24 @@ function stripInitialSuffix(name: string): string {
   if (/^[A-Za-zＡ-Ｚａ-ｚ]/.test(remainder)) return name          // 4文字以上の氏名 → 切らない
   if (/^[\s　]*[\(（]\d{2}[才歳]?[\)）]?/.test(remainder)) return name  // 年齢が続く → 切らない
   return initM[1]
+}
+
+/**
+ * 「※中国籍」「※ナイジェリア籍」等の注記から国籍を取り出す。
+ *
+ * 「籍」で終わる語は国籍としてほぼ確実だが、「人」「国」で終わる語は営業文の一部を
+ * 拾いやすい。実害: 「※上記人材にマッチする案件〜」から「上記人」を国籍として登録した（#134）。
+ * そのため 人/国 で終わる場合は既知の国名に限定する。
+ */
+function extractNationalityMark(text: string): string | null {
+  const m = text.match(/[※＊\*][ 　]?([^\s,、。（）「」【】\t]{1,15}籍)/)
+  if (m) return m[1].trim()
+  const COUNTRIES = '日本|中国|韓国|台湾|ベトナム|インド|ネパール|フィリピン|ミャンマー|インドネシア|' +
+    'ブラジル|ペルー|アメリカ|イギリス|フランス|ドイツ|ロシア|モンゴル|スリランカ|バングラデシュ|' +
+    'パキスタン|タイ|マレーシア|シンガポール|ウズベキスタン|外国'
+  const m2 = text.match(new RegExp(`[※＊\\*][ 　]?((?:${COUNTRIES})[人国])`))
+  if (m2) return m2[1].trim()
+  return null
 }
 
 /** 名簿1個から展開する行数の上限（異常に大きい名簿による処理爆発の防止） */

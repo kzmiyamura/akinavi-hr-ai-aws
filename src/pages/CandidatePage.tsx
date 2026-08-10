@@ -443,7 +443,9 @@ export function CandidateProfileFields({
             {(roles ?? []).map((r, idx) => (
               <span
                 key={r}
-                className={idx === 0 && (roles ?? []).length > 1
+                // 先頭がスコア最上位＝主役割。役割が1個だけの人材もその1個が主役割なので強調する
+                // （#131: 1個のときだけ強調が外れて分かりにくかった）
+                className={idx === 0
                   ? 'text-xs bg-indigo-600 text-white font-medium rounded px-1.5 py-0.5'
                   : 'text-xs bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5'}
               >

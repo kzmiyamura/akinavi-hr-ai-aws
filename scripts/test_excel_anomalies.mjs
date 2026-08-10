@@ -597,6 +597,33 @@ console.log('=== K4. stripInitialSuffix（氏名を3文字に切らない・#128
   s('K4-8: 短い名前はそのまま', 'M.M', 'M.M')
 }
 
+console.log('=== K5. 本文フィールドの誤抽出（#132/#133/#134） ===')
+{
+  const { extractNationalityMark, stationNameCandidates, extractWorkStyleNote } = await import('./_extractors.gen.mjs')
+  const eq = (label, got, expect) => {
+    const ok = JSON.stringify(got) === JSON.stringify(expect)
+    if (ok) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       got=${JSON.stringify(got)} expect=${JSON.stringify(expect)}`) }
+  }
+  // #134: 「※上記人材にマッチする案件〜」から「上記人」を国籍にしていた
+  eq('K5-1: ※上記人材 は国籍でない', extractNationalityMark('※上記人材にマッチする案件情報がございましたら'), null)
+  eq('K5-2: ※中国籍 は国籍', extractNationalityMark('氏名 A.B\n※中国籍'), '中国籍')
+  eq('K5-3: ※ナイジェリア籍 は国籍', extractNationalityMark('※ナイジェリア籍（在日37年）'), 'ナイジェリア籍')
+  eq('K5-4: ※日本人 は国籍（既知の国名のみ許可）', extractNationalityMark('※日本人'), '日本人')
+  // #133: 「名鉄 犬山駅 ※愛知」から駅名を取れず都道府県が本文の別県に引きずられた
+  eq('K5-5: 名鉄 犬山駅 ※愛知 から犬山を候補にする',
+    stationNameCandidates('名鉄 犬山駅 ※愛知').includes('犬山'), true)
+  eq('K5-6: JR根岸線 港南台駅 徒歩15分 から港南台を候補にする',
+    stationNameCandidates('JR根岸線 港南台駅 徒歩15分').includes('港南台'), true)
+  eq('K5-7: 路線名そのものは駅名候補にしない',
+    stationNameCandidates('名鉄 犬山駅 ※愛知').includes('名鉄'), true)
+  // #132: PR文を勤務形態として登録していた
+  eq('K5-8: PR文は勤務形態にしない',
+    extractWorkStyleNote('不明点を放置せず積極的に確認と相談を行う高いコミュニケーション力を持ち、リモート環境でも自発的に情報共有、連携が可能です', ''), null)
+  eq('K5-9: 条件行は勤務形態として採用する',
+    extractWorkStyleNote('週5日リモート可（出社は月1回程度）', ''), '週5日リモート可（出社は月1回程度）')
+}
+
 console.log('=== L. Method 1.7 KVブロック型: ラベル同列下方の文章セル混入（K.F型） ===')
 // 実害: 「開発環境」ラベルの同列下方に「開発手法」「業務内容」ラベル→業務内容の文章セルが
 // 並ぶテンプレートで、文章の断片（「また」「■主な業務内容」「‐ 不具合報告」等）が

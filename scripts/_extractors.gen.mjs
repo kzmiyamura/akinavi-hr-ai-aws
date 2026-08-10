@@ -2137,6 +2137,63 @@ function stripInitialSuffix(name){
   return initM[1]
 }
 
+// ── extractNationalityMark ──
+function extractNationalityMark(text){
+  const m = text.match(/[※＊\*][ 　]?([^\s,、。（）「」【】\t]{1,15}籍)/)
+  if (m) return m[1].trim()
+  const COUNTRIES = '日本|中国|韓国|台湾|ベトナム|インド|ネパール|フィリピン|ミャンマー|インドネシア|' +
+    'ブラジル|ペルー|アメリカ|イギリス|フランス|ドイツ|ロシア|モンゴル|スリランカ|バングラデシュ|' +
+    'パキスタン|タイ|マレーシア|シンガポール|ウズベキスタン|外国'
+  const m2 = text.match(new RegExp(`[※＊\\*][ 　]?((?:${COUNTRIES})[人国])`))
+  if (m2) return m2[1].trim()
+  return null
+}
+
+// ── stationNameCandidates ──
+function stationNameCandidates(station){
+  const base = String(station)
+    .replace(/[※（(].*$/s, '')                    // 「※愛知」「（徒歩5分）」以降を落とす
+    .replace(/徒歩\s*\d+\s*分|バス\s*\d+\s*分/g, '')
+    .trim()
+  const out = []
+  const push = (s) => {
+    const k = s.replace(/駅$/, '').replace(/\s+/g, '').replace(/ヶ/g, 'ケ').trim()
+    if (k && !out.includes(k)) out.push(k)
+  }
+  push(base)
+  // 「名鉄 犬山駅」→ 語ごとに試す。路線名（〜線/〜鉄道等）は駅名ではないので除く
+  for (const tok of base.split(/[\s　、,/／]+/)) {
+    if (!tok || /線$|鉄道$|電鉄$|^JR|^ＪＲ/.test(tok)) continue
+    push(tok)
+  }
+  return out
+}
+
+// ── extractWorkStyleNote ──
+function extractWorkStyleNote(bodyText, attachText){
+  const t = (bodyText + '\n' + attachText).replace(/\r/g, '')
+  const KW = /(?:フル)?リモート|在宅|テレワーク|常駐|出社/g
+  let m
+  while ((m = KW.exec(t)) !== null) {
+    const idx = m.index
+    let start = idx
+    while (start > 0 && !/[\n。]/.test(t[start - 1]) && idx - start < 60) start--
+    let end = idx
+    while (end < t.length && !/[\n。]/.test(t[end]) && end - idx < 60) end++
+    const rawLine = t.slice(start, end)
+    // 件名・条件列挙行（「★要員即日／PMO／経験7年／…」等）は勤務形態の説明文ではない。
+    // ／や/が3個以上連なる列挙・件名装飾（★【 件名:）を含む行はスキップして次の出現を探す
+    const seps = (rawLine.match(/[／/｜|]/g) ?? []).length
+    if (seps >= 3 || /[★]|件名[:：]/.test(rawLine)) continue
+    // 人物評（PR文）は勤務形態の条件ではない。「リモート環境でも自発的に情報共有〜」等の
+    // 文章を勤務形態として登録した実害があった（#132 RADSTATE MS）
+    if (/コミュニケーション|人柄|性格|意欲|姿勢|貢献|対応力|力を持ち|印象|安心して|きめ細か/.test(rawLine)) continue
+    const phrase = rawLine.trim().replace(/^[・■※☆\s　>：:【\-]+/, '').replace(/[【】]/g, '').trim()
+    if (phrase) return phrase
+  }
+  return null
+}
+
 // ── extractSkillYearsFromCells ──
 function extractSkillYearsFromCells(cells, deadline = 0){
   if (cells.length === 0) return {}
@@ -3124,6 +3181,9 @@ export {
   personAttrScore,
   isOwnersResumeFile,
   stripInitialSuffix,
+  extractNationalityMark,
+  stationNameCandidates,
+  extractWorkStyleNote,
   extractSkillYearsFromCells,
   extractSkillYearsPeriodHeader,
   extractSkillYearsRepeatPeriodHeader,
