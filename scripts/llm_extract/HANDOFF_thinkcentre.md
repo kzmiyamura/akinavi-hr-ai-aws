@@ -23,7 +23,7 @@
 - 複数案件が1本文の行（raw_data.batchSize>1）は対応付け不能のためスキップ
 - 既存 prod 案件8件へは 2026-08-08 に一括適用済み（8/8で補完・破壊ゼロ・
   `raw_data._regex_backup` に退避あり）。ドライラン: `node scripts/llm_extract/project_dryrun.mjs [N] [--apply]`
-- 単体テスト: `node scripts/llm_extract/project_apply.test.mjs`（16ケース）
+- 単体テスト: `node scripts/llm_extract/project_apply_selftest.mjs`（16ケース）
 - **overwrite への昇格はドライラン実証が取れてから**（人材の FIELD_POLICY と同じ進め方）
 
 ## ✅ Box取込の全自動化 実施済み（2026-08-08 昼・ユーザー承認）

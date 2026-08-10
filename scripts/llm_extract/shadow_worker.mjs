@@ -13,7 +13,7 @@ import os from 'os'
 import path from 'path'
 import { buildGridInput, buildTextGridInput, normTech } from './lib.mjs'
 import { extractProjects, extractBodyFields, extractProjectFields } from './run.mjs'
-import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE } from './apply.mjs'
+import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE, isUsableName } from './apply.mjs'
 import { buildProjectPatch } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
 
@@ -99,6 +99,31 @@ async function applyToCandidate(c, { bodyFields, attachment }) {
   log(`  [${c.name}] 上書き: ${changes.join(', ')}`)
 }
 
+/** 非人材（案件メール等の誤登録）を一覧から隔離し、GitHub Issue で通知する。
+ *  merged_into を自己参照にすると全一覧クエリ（merged_into IS NULL 前提）から消える。
+ *  復活: node scripts/restore_candidate.mjs <id>（2026-08-10 ユーザー判断「隔離＋通知」） */
+async function quarantineCandidate(c, mailType) {
+  const rp = { ...(c.raw_profile || {}), _quarantine: { reason: `mailType=${mailType}`, at: new Date().toISOString() } }
+  await rest(`candidates?id=eq.${c.id}`, {
+    method: 'PATCH', headers: { Prefer: 'return=minimal' },
+    body: JSON.stringify({ merged_into: c.id, raw_profile: rp }),
+  })
+  log(`  [${c.name}] 非人材（${mailType}）と判定 → 隔離・Issue通知`)
+  try {
+    await fetch(`${SUPABASE_URL}/functions/v1/create-github-issue`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: KEY, Authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({
+        memo: `非人材検知: 「${c.name}」（${c.from_company ?? '会社不明'}）を一覧から隔離しました\n\n` +
+          `AI判定: ${mailType}（案件メール等の誤登録の疑い）\nid: ${c.id}\n\n` +
+          `- 削除する場合: node scripts/delete_candidate.mjs ${c.id}\n` +
+          `- 誤検知で復活する場合: node scripts/restore_candidate.mjs ${c.id}`,
+        nickname: 'shadow-worker',
+      }),
+    })
+  } catch (e) { log(`  [${c.name}] Issue通知失敗:`, String(e).slice(0, 100)) }
+}
+
 async function processCandidate(c) {
   let bodyFields = null, attachment = null
 
@@ -113,6 +138,13 @@ async function processCandidate(c) {
         body_fields: bf.candidates, cost_usd: bf.costUsd, ms: Date.now() - t0,
       })
       state.dayCost += bf.costUsd || 0
+      // 非人材検知: LLMが「人材メールではない」と判定し、かつ使える氏名が1人も無い場合のみ隔離
+      // （二重条件で誤隔離を防ぐ。実害例: 案件メールが「不明」人材として登録された 2026-08-10）
+      const noUsablePerson = !(bf.candidates ?? []).some(x => isUsableName(x?.name))
+      if (APPLY && bf.mailType && bf.mailType !== 'candidate' && noUsablePerson) {
+        await quarantineCandidate(c, bf.mailType)
+        return
+      }
       // 複数人メールでは自分の行だけを選ぶ。特定できなければ本文由来は上書きしない
       bodyFields = pickBodyFieldsFor(c.name, bf.candidates)
       if (bodyFields) bodyFields._model = bf.model  // _llm_applied.model 記録用（buildPatch が参照）

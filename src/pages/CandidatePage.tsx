@@ -63,6 +63,16 @@ function formatDate(iso: string) {
   return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
+/** 登録直後で常駐AIの校正（llm-overwrite）がまだ通っていないと推定される場合 true。
+ * AI校正やBox取込等の更新が入ると updated_at が created_at から離れることを利用する。
+ * 「変更なし」で完了したケースは updated_at が動かないため、60分経過で自動的に消す
+ * （平均校正レイテンシは約20分・最大約1時間の実測に基づく。2026-08-10） */
+function isAiCorrectionPending(c: { created_at: string; updated_at: string }): boolean {
+  const created = new Date(c.created_at).getTime()
+  const updated = new Date(c.updated_at).getTime()
+  return Date.now() - created < 60 * 60 * 1000 && updated - created < 10_000
+}
+
 const CATEGORY_STYLE: Record<keyof SkillsByCategory, { label: string; badge: string }> = {
   languages:       { label: '言語',       badge: 'bg-blue-50 text-blue-700' },
   frameworks:      { label: 'FW',         badge: 'bg-green-50 text-green-700' },
@@ -271,6 +281,14 @@ export function CandidateProfileFields({
         <span className="font-medium text-gray-800 text-sm">{c.name}</span>
         {c.duplicate_flag && (
           <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
+        )}
+        {isAiCorrectionPending(c) && (
+          <span
+            className="text-xs bg-sky-50 text-sky-600 border border-sky-200 rounded px-2 py-0.5 animate-pulse"
+            title="登録直後です。常駐AIが本文・経歴書を読み直して項目を補正します（平均20分以内）"
+          >
+            ✨ AI校正中
+          </span>
         )}
       </div>
       <p className="text-xs text-gray-400 mt-0.5">

@@ -54,7 +54,12 @@ export async function extractProjects(gridInput, { log = () => {}, kind = 'grid'
 /** メール本文フィールド抽出（常にHaiku。単純タスクのため昇格なし） */
 export async function extractBodyFields(bodyText) {
   const r = await callModel('haiku', BODY_FIELDS_RULES + bodyText)
-  return { model: 'haiku', candidates: r.data?.candidates ?? [], costUsd: r.costUsd ?? 0 }
+  return {
+    model: 'haiku',
+    candidates: r.data?.candidates ?? [],
+    mailType: r.data?.mailType ?? null,
+    costUsd: r.costUsd ?? 0,
+  }
 }
 
 /** 案件テキストのフィールド抽出（常にHaiku。転記タスクのため昇格なし） */
