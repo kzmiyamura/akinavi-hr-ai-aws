@@ -275,3 +275,22 @@ test('buildPatch: 経歴書が無ければ本文のスキル年数を使う', ()
   assert.deepEqual(patch.raw_profile.skillYears, { Java: 60 })
   assert.ok(changes.some(c => c.startsWith('skillYears')))
 })
+
+// ── 氏名の妥当性（2026-08-10: 一覧に人名でないものが並んでいた実害）──
+test('isUsableName: 本番に入っていた壊れた氏名を弾く', () => {
+  // 正常系
+  assert.equal(isUsableName('M.Y'), true)
+  assert.equal(isUsableName('山田 太郎'), true)
+  assert.equal(isUsableName('ＫＭＮ'), true)          // 全角英字は氏名として有効
+  // 実際に本番の一覧に出ていたもの
+  assert.equal(isUsableName('KM29蕨'), false)         // 年齢・駅名の巻き込み
+  assert.equal(isUsableName('昭和３３年５月１３日'), false)  // 全角数字が \d をすり抜けていた
+  assert.equal(isUsableName('オープン系'), false)      // スキル分類
+  assert.equal(isUsableName('25_62_IY伊'), false)     // 経歴書ファイル名の管理番号
+  assert.equal(isUsableName('不明'), false)           // 抽出失敗のフォールバック
+  assert.equal(isUsableName('汎用系'), false)
+  assert.equal(isUsableName('エンジニア'), false)
+  assert.equal(isUsableName('ー'), false)             // 記号のみ
+  assert.equal(isUsableName(''), false)
+  assert.equal(isUsableName(null), false)
+})

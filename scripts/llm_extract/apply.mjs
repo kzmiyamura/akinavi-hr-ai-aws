@@ -90,10 +90,26 @@ export const FIELD_POLICY = {
 
 const norm = s => String(s ?? '').replace(/[\s　・.,]/g, '').toLowerCase()
 
-/** AI の氏名が使えるか。数字混入（年齢・駅名の巻き込み）を弾く: 例「KM」→「KM29蕨」 */
+/**
+ * 氏名として使えるか。使えない名前が一覧の先頭に並ぶと製品の信頼を失うため、
+ * 「人名でないと判るもの」を機械的に弾く（2026-08-10 ユーザー指摘）。
+ *
+ * 実際に本番へ入っていた例:
+ *   「KM29蕨」          … 年齢・駅名の巻き込み
+ *   「昭和３３年５月１３日」 … 生年月日。JSの \d は全角数字にマッチしないため素通りしていた
+ *   「オープン系」        … スキル分類のラベル
+ *   「25_62_IY伊」      … 経歴書ファイル名の管理番号
+ *   「不明」            … 抽出失敗時のフォールバック
+ */
 export function isUsableName(n) {
   const s = String(n ?? '').trim()
-  return !!s && s.length <= 20 && !/\d/.test(s)
+  if (!s || s.length > 20) return false
+  if (/[0-9０-９]/.test(s)) return false                       // 半角・全角とも数字混入は不可
+  if (/(昭和|平成|令和|大正)/.test(s)) return false             // 元号＝生年月日
+  if (/(オープン系|汎用系|制御系|組込|インフラ|ネットワーク|開発系|運用系)$/.test(s)) return false
+  if (/^(不明|未定|なし|該当なし|要員|人材|エンジニア|技術者|氏名|名前|担当者)$/.test(s)) return false
+  if (!/[A-Za-zＡ-Ｚａ-ｚぁ-んァ-ヶ一-龥]/.test(s)) return false  // 記号のみ
+  return true
 }
 
 /** 性別は「男」「男性」等の表記ゆれがあるため意味で比較する（無意味な書き込みを防ぐ） */

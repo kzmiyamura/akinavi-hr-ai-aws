@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
+import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills } from '../lib/db/candidates'
 import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
@@ -63,11 +64,21 @@ function formatDate(iso: string) {
   return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
+/** 常駐AIが処理対象にする登録からの日数。ワーカーの SHADOW_LOOKBACK_DAYS と同じ値。
+ *  これより古い人材はキューに入らないため「待ち」ではなく「ルールベースのみで確定」。
+ *  ワーカー側を変えたらここも合わせること */
+const AI_LOOKBACK_DAYS = 3
+
 /** 常駐AIの校正状態。ワーカーが raw_profile に記録した進行段階をそのまま表示する
  * （2026-08-10 ユーザー指定。時間による推測は行わない）。
- *   null       … 校正完了（_llm_checked_at あり）→ 何も表示しない
- *   'waiting'  … ルールベースのみ           → 「AI校正待ち」
- *   'body'     … 本文をHaikuで解析済         → 「AI校正開始」
+ *   null       … 校正完了、または対象外    → 何も表示しない
+ *   'waiting'  … これから校正する予定      → 「AI校正待ち」
+ *   'body'     … 本文をHaikuで解析済       → 「AI校正開始」
+ *
+ * 「待ち」は**実際に校正する予定のものにだけ**出す（2026-08-10 ユーザー指定）。
+ * ワーカーは直近 AI_LOOKBACK_DAYS 日の人材しかキューに入れないため、それより古い
+ * 人材に「待ち」を出すと永久に来ない順番を待たせることになる（実測1,446件中841件が該当）。
+ * 対象外の人材はルールベースのみで確定した正常な状態なので、何も表示しない。
  *
  * 'sonnet'（→「AI校正中」）は Sonnet 昇格をやめた時点で到達不能になったため廃止した。
  * 残骸はワーカーが起動時に掃除する。古い値が万一残っても「AI校正開始」に寄せて
@@ -78,6 +89,7 @@ function aiCorrectionStage(c: {
   raw_profile?: Record<string, unknown>
   llm_checked_at?: string | null
   llm_stage?: string | null
+  created_at?: string | null
 }): AiStage {
   // 一覧は raw_profile を取らず JSON パスで取り出した llm_checked_at / llm_stage を持つ。
   // 検索・絞り込み経由（candidates_lite）は raw_profile を持つ。どちらでも動くようにする
@@ -87,6 +99,10 @@ function aiCorrectionStage(c: {
     return { label: 'AI校正開始', cls: 'bg-sky-50 text-sky-600 border-sky-200',
       title: 'メール本文の解析が完了。添付経歴書の解析を実施中' }
   }
+  // キューに入らない古い人材に「待ち」は出さない（永久に来ない順番になるため）。
+  // ルールベースのみで確定した正常な状態として、何も表示しない
+  const created = c.created_at ? Date.parse(c.created_at) : NaN
+  if (!Number.isFinite(created) || Date.now() - created > AI_LOOKBACK_DAYS * 86_400_000) return null
   return { label: 'AI校正待ち', cls: 'bg-gray-100 text-gray-500 border-gray-200',
     title: 'ルールベース解析のみ。常駐AIの順番待ちです' }
 }
@@ -296,7 +312,7 @@ export function CandidateProfileFields({
   return (
     <div className="flex-1 min-w-0">
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="font-medium text-gray-800 text-sm">{c.name}</span>
+        <span className="font-medium text-gray-800 text-sm" title={c.name ?? ''}>{displayCandidateName(c.name)}</span>
         {c.duplicate_flag && (
           <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
         )}
@@ -1655,7 +1671,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   >
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-gray-800 truncate flex items-center gap-1">
-                        {c.name}
+                        <span className={isUsableCandidateName(c.name) ? '' : 'text-gray-400 italic'} title={c.name ?? ''}>
+                          {displayCandidateName(c.name)}
+                        </span>
                         {c.duplicate_flag && (
                           <span className="text-[10px] bg-yellow-100 text-yellow-700 rounded px-1 shrink-0">重複</span>
                         )}
@@ -1727,7 +1745,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   </button>
                   <div className="flex items-start justify-between gap-3 flex-wrap">
                     <div className="min-w-0">
-                      <h3 className="text-base font-semibold text-gray-800">{selectedCandidate.name}</h3>
+                      <h3 className="text-base font-semibold text-gray-800" title={selectedCandidate.name ?? ''}>
+                        {displayCandidateName(selectedCandidate.name)}
+                      </h3>
                       <div className="flex flex-wrap gap-2 mt-1">
                         {(selectedCandidate as unknown as { from_company?: string }).from_company && (
                           <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">
