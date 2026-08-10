@@ -239,6 +239,12 @@ const PROJECT_BODY_PATTERNS = [
   /表記の件について、ご紹介いたします/,
   // Uniquery等の「見合う方がいれば提案を」パターン
   /見合う方がおりましたらご提案/,
+  // ドリームビジョン等の山括弧フィールド形式（＜案件名＞＜必須スキル＞…コロンなし）。
+  // 実害: 案件メールが unknown → 既定 candidate で「不明」人材が登録された（2026-08-10）
+  /[＜<]\s*(?:案件名|案件概要|必須スキル|募集人数|作業場所|商流制限|面談回数)\s*[＞>]/,
+  /案件を(?:ご案内|ご紹介)/,
+  /エンジニア様?のご紹介をお待ち/,
+  /マッチするエンジニア/,
 ]
 
 /**
@@ -289,7 +295,9 @@ function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' |
   const hasStrongProjectSignal =
     /【案件|案件情報|案件のご紹介|案件ご紹介|開発案件/.test(subject) ||
     /(案件名|必須スキル|募集人数|就業場所|勤務地|作業場所|参画時期|契約形態|商[\s　]*流|精[\s　]*算幅|清[\s　]*算幅)[　\s]*[：:]/.test(plainBody500) ||
-    /【商[\s　]*流】|【精[\s　]*算】|【人[\s　]*数】|【案件/.test(plainBody500)
+    /【商[\s　]*流】|【精[\s　]*算】|【人[\s　]*数】|【案件/.test(plainBody500) ||
+    // 山括弧フィールド形式（＜案件名＞等・コロンなし）も案件の強シグナル
+    /[＜<]\s*(?:案件名|案件概要|必須スキル|商流制限)\s*[＞>]/.test(plainBody500)
   if (hasCandidateProfile && !hasStrongProjectSignal) return 'candidate'
 
   // ルールベース案件判定（件名＋本文冒頭500文字）
