@@ -1031,6 +1031,12 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     refetchInterval: isImportActive ? 30_000 : false,
     staleTime: 60_000,   // 1分間はキャッシュを使いタブ切替で再フェッチしない
     gcTime: 5 * 60_000,  // 5分間キャッシュを保持
+    // 保持ページ数の上限。useInfiniteQuery の再取得は「読み込み済みの全ページ」を
+    // 取り直すため、深くスクロールすると invalidateQueries のたびに全件が飛ぶ。
+    // prod 1,881件＝19ページ・1ページ131KB で 1回2.5MB になっていた
+    // （2026-08-10 実測: egress の91.6%がPostgREST）。5ページ＝約650KBに抑える。
+    // 優先スキル設定の有無に関わらず効かせるため、ここで構造的に上限をかける
+    maxPages: 5,
     enabled: !isFiltered,
   })
 
@@ -1051,6 +1057,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     initialPageParam: 0,
     getNextPageParam: (lastPage: Candidate[], _: Candidate[][], lastPageParam: number) =>
       lastPage.length < 100 ? undefined : lastPageParam + 100,
+    maxPages: 5,   // 通常ブラウズと同じ理由（再取得は保持中の全ページを取り直すため）
     enabled: isFiltered,
   })
 
