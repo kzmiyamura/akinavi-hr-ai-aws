@@ -2577,7 +2577,23 @@ const PROSE_WORKSTYLE: Array<{ re: RegExp; label: string }> = [
  * 該当キーワードを含む文（改行・句点区切り）を最大60字程度で切り出す。無ければ null。
  */
 function extractWorkStyleNote(bodyText: string, attachText: string): string | null {
-  const t = (bodyText + '\n' + attachText).replace(/\r/g, '')
+  // 勤務条件は営業がメール本文で述べるもの。経歴書には案件の業務内容として
+  // 「取引先に常駐し…」等が頻出し、それは本人の勤務条件ではない。
+  // 本文を優先し、本文に記載が無いときだけ添付を見る
+  // （実害: 23年前の案件の業務内容「取引先に常駐し小規模案件のメンテナンスが中心」が
+  //  勤務形態として登録されていた・2026-08-10）
+  return findWorkStyleIn(bodyText, false) ?? findWorkStyleIn(attachText, true)
+}
+
+/**
+ * 1つのテキストから勤務形態の条件文を探す。
+ * @param fromAttachment 添付(経歴書)由来か。案件の業務内容を強く弾く
+ */
+function findWorkStyleIn(src: string, fromAttachment: boolean): string | null {
+  // 経歴書の案件説明を示す語。これを含む行は「本人の勤務条件」ではない。
+  // sync_extractors.mjs は関数単位で複製するため、定数は関数内に置く
+  const PROJECT_DESC_RE = /担当|参画|受注|従事|構築|開発|メンテナンス|運用|保守|対応|案件を/
+  const t = String(src ?? '').replace(/\r/g, '')
   const KW = /(?:フル)?リモート|在宅|テレワーク|常駐|出社/g
   let m: RegExpExecArray | null
   while ((m = KW.exec(t)) !== null) {
@@ -2598,6 +2614,9 @@ function extractWorkStyleNote(bodyText: string, attachText: string): string | nu
     // 最寄駅の行に「常駐可」が含まれるだけの行も勤務形態の条件ではない。
     // 監査で勤務形態の12.7%が40字超の長文だった（2026-08-10）
     if (/最寄|沿線|徒歩\d|業務に参画|に従事|機能追加|改修業務|案件概要|プロジェクトにて/.test(rawLine)) continue
+    // 添付(経歴書)側では案件の業務内容を強く弾く。本人の勤務条件ではないため。
+    // 箇条書き記号を落とす前に判定する（「・」で始まることが案件説明の手がかりになる）
+    if (fromAttachment && PROJECT_DESC_RE.test(rawLine)) continue
     let phrase = rawLine.trim().replace(/^[・■※☆\s　>：:【\-]+/, '').replace(/[【】]/g, '').trim()
     // 長文は勤務形態に触れている節だけに絞る（読点・中黒・全角空白で分割して該当節を採用）
     if (phrase.length > 40) {

@@ -39,6 +39,7 @@ const TARGET_FUNCTIONS = [
   'isValidNationality',
   'stationNameCandidates',
   'extractWorkStyleNote',
+  'findWorkStyleIn',        // extractWorkStyleNote が呼ぶ（本文優先・添付は案件説明を弾く）
   'deriveWorkStyleTag',
   'extractSkillYearsFromCells',
   'extractSkillYearsPeriodHeader',
