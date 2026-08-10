@@ -1610,6 +1610,14 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         {c.duplicate_flag && (
                           <span className="text-[10px] bg-yellow-100 text-yellow-700 rounded px-1 shrink-0">重複</span>
                         )}
+                        {isAiCorrectionPending(c) && (
+                          <span
+                            className="text-[10px] bg-sky-50 text-sky-600 border border-sky-200 rounded px-1 shrink-0"
+                            title="登録直後です。常駐AIが本文・経歴書を読み直して補正します（平均20分以内）"
+                          >
+                            AI校正中
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5 flex-wrap">
                         <span>経験{c.experience_years ?? '?'}年</span>
