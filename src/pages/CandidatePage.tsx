@@ -2,7 +2,7 @@ import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile } from '../lib/db/candidates'
+import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills } from '../lib/db/candidates'
 import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
@@ -1008,10 +1008,23 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     appliedFilter.expMin != null
   )
 
+  // 優先表示スキル（常駐AIの解析対象と同じ設定を共有する）
+  const { data: prioritySkills } = useQuery({
+    queryKey: ['priority-skills'],
+    queryFn: fetchPrioritySkills,
+    staleTime: 5 * 60_000,
+  })
+  // 「他の人材も表示」を押すまでは優先スキル該当者だけを読む。
+  // 全1,881件を19ページ抱えると invalidate のたびに全ページ再取得で 2.5MB 飛ぶため、
+  // 既定の読み込み量そのものを小さくする（2026-08-10 PostgREST egress が全体の91.6%だった）
+  const [showAllCandidates, setShowAllCandidates] = useState(false)
+  const activePrioritySkills = showAllCandidates ? null : (prioritySkills ?? null)
+
   // 通常ブラウズ（検索なし）
   const browseInfiniteQuery = useInfiniteQuery({
-    queryKey: ['candidates-paged', dataEnv],
-    queryFn: ({ pageParam }: { pageParam: number }) => fetchCandidatesPage(dataEnv, pageParam),
+    queryKey: ['candidates-paged', dataEnv, activePrioritySkills],
+    queryFn: ({ pageParam }: { pageParam: number }) =>
+      fetchCandidatesPage(dataEnv, pageParam, 100, activePrioritySkills),
     initialPageParam: 0,
     getNextPageParam: (lastPage, _allPages, lastPageParam) =>
       lastPage.candidates.length < 100 ? undefined : lastPageParam + 100,
@@ -1020,6 +1033,15 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     gcTime: 5 * 60_000,  // 5分間キャッシュを保持
     enabled: !isFiltered,
   })
+
+  // 優先スキルに1件も該当しないときは自動的に全件へ戻す。
+  // 空の一覧を見せると「人材が消えた」と誤解されるため（2026-08-10 ユーザー判断）
+  const priorityCount = browseInfiniteQuery.data?.pages[0]?.totalCount ?? null
+  useEffect(() => {
+    if (!showAllCandidates && activePrioritySkills?.length && priorityCount === 0) {
+      setShowAllCandidates(true)
+    }
+  }, [showAllCandidates, activePrioritySkills, priorityCount])
 
   // フィルター検索（ポップアップで絞り込み条件を指定した場合）
   const filterInfiniteQuery = useInfiniteQuery({
@@ -1669,6 +1691,17 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   className="w-full py-2.5 text-xs text-blue-600 hover:bg-blue-50 border-t border-gray-100 transition-colors disabled:opacity-50"
                 >
                   {isFetchingNextPage ? '読み込み中...' : `もっと見る（${isFiltered ? filteredCount : totalCount}件中${candidates.length}件表示）`}
+                </button>
+              )}
+              {/* 優先スキルで絞っている間は、残りの人材へ必ず辿り着けるようにする。
+                  絞り込み中であることと全体件数を明示して見落としを防ぐ */}
+              {!isFiltered && !showAllCandidates && activePrioritySkills?.length && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllCandidates(true)}
+                  className="w-full py-2.5 text-xs text-gray-600 hover:bg-gray-50 border-t border-gray-100 transition-colors"
+                >
+                  優先スキル（{activePrioritySkills.join('・')}）で絞り込み中 — 他の人材も表示
                 </button>
               )}
             </div>

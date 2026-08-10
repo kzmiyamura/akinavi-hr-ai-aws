@@ -272,9 +272,10 @@ export async function fetchCandidatesPage(
   dataEnv: DataEnv,
   offset: number,
   limit = 100,
+  prioritySkills?: string[] | null,
 ): Promise<{ candidates: Candidate[]; totalCount: number | null }> {
   const selectOpts = offset === 0 ? ({ count: 'exact' } as const) : {}
-  const { data, error, count } = await supabase
+  let q = supabase
     .from('candidates')
     .select(
       // AI校正の状態は raw_profile 内にあるが、一覧では通信量削減のため raw_profile 全体を
@@ -285,11 +286,43 @@ export async function fetchCandidatesPage(
     )
     .eq('data_env', dataEnv)
     .is('merged_into', null)
+
+  // 優先スキル指定時は該当者だけを取得する。1,881件を19ページ抱えると
+  // 一覧の再取得（invalidate）のたびに全ページを取り直して 2.5MB 飛ぶため、
+  // 既定の読み込み量を減らす目的も兼ねる（2026-08-10 PostgREST egress 対策）。
+  // 判定はワーカー側 buildSkillFilterClause と同じ二本立て（skills列 or 本文の部分一致）
+  if (prioritySkills?.length) {
+    q = q.or(prioritySkills.flatMap((s) => [
+      `skills.cs.${JSON.stringify([s])}`,
+      `raw_profile->>text.ilike.*${s}*`,
+    ]).join(','))
+  }
+
+  const { data, error, count } = await q
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return { candidates: (data ?? []) as Candidate[], totalCount: offset === 0 ? (count ?? null) : null }
+}
+
+/** 優先表示するスキル（app_config.llm_filter_skills）。
+ *  常駐AIの解析対象を絞る設定と同じものを共有し、「優先解析している人材が上に出る」を実現する。
+ *  未設定・空配列なら null（＝絞り込みなし・従来どおり全件） */
+export async function fetchPrioritySkills(): Promise<string[] | null> {
+  const { data } = await supabase
+    .from('app_config')
+    .select('value')
+    .eq('key', 'llm_filter_skills')
+    .maybeSingle()
+  let v: unknown = data?.value
+  // value は jsonb だが '"true"' のように文字列で二重に入っている実例があるため2回まで解く
+  for (let i = 0; i < 2 && typeof v === 'string'; i++) {
+    try { v = JSON.parse(v as string) } catch { break }
+  }
+  if (!Array.isArray(v)) return null
+  const list = v.map((s) => String(s ?? '').trim()).filter(Boolean)
+  return list.length ? list : null
 }
 
 /** 詳細表示用: 特定候補の raw_profile 全体（text・parsedGrid を含む）を取得 */
