@@ -102,26 +102,42 @@ async function applyToCandidate(c, { bodyFields, attachment }) {
 /** 非人材（案件メール等の誤登録）を一覧から隔離し、GitHub Issue で通知する。
  *  merged_into を自己参照にすると全一覧クエリ（merged_into IS NULL 前提）から消える。
  *  復活: node scripts/restore_candidate.mjs <id>（2026-08-10 ユーザー判断「隔離＋通知」） */
-async function quarantineCandidate(c, mailType) {
-  const rp = { ...(c.raw_profile || {}), _quarantine: { reason: `mailType=${mailType}`, at: new Date().toISOString() } }
+async function quarantineCandidate(c, reason, detail) {
+  const rp = { ...(c.raw_profile || {}), _quarantine: { reason, detail, at: new Date().toISOString() } }
   await rest(`candidates?id=eq.${c.id}`, {
     method: 'PATCH', headers: { Prefer: 'return=minimal' },
     body: JSON.stringify({ merged_into: c.id, raw_profile: rp }),
   })
-  log(`  [${c.name}] 非人材（${mailType}）と判定 → 隔離・Issue通知`)
+  log(`  [${c.name}] ${detail} → 隔離・Issue通知`)
   try {
     await fetch(`${SUPABASE_URL}/functions/v1/create-github-issue`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: KEY, Authorization: `Bearer ${KEY}` },
       body: JSON.stringify({
         memo: `非人材検知: 「${c.name}」（${c.from_company ?? '会社不明'}）を一覧から隔離しました\n\n` +
-          `AI判定: ${mailType}（案件メール等の誤登録の疑い）\nid: ${c.id}\n\n` +
+          `判定: ${detail}\nid: ${c.id}\n\n` +
           `- 削除する場合: node scripts/delete_candidate.mjs ${c.id}\n` +
           `- 誤検知で復活する場合: node scripts/restore_candidate.mjs ${c.id}`,
         nickname: 'shadow-worker',
       }),
     })
   } catch (e) { log(`  [${c.name}] Issue通知失敗:`, String(e).slice(0, 100)) }
+}
+
+/** 幽霊レコード検知（ルールベースの名簿誤検出で生まれた実在しない人材）。
+ *  条件: 本文にはっきり人が書かれている / この人はその誰でもない / 人の属性が何も無い、の3点同時。
+ *  名簿だけのメール（本文に人名なし）由来の正規の人材は bodyNames が空になるため対象外。
+ *  regex が「存在しない人」を作るミスは項目の上書きでは直せないため、隔離で対処する。 */
+function isPhantomRecord(c, bfCandidates) {
+  const normName = (s) => String(s ?? '').replace(/[\s　・.,【】()（）]/g, '').toLowerCase()
+  const bodyNames = (bfCandidates ?? []).filter((x) => isUsableName(x?.name)).map((x) => normName(x.name))
+  if (bodyNames.length === 0) return false            // 名簿のみのメール → 判定しない（安全側）
+  const mine = normName(c.name)
+  if (!mine) return false
+  const matchesBody = bodyNames.some((n) => n && (n === mine || n.includes(mine) || mine.includes(n)))
+  if (matchesBody) return false                        // 本文の誰かと一致 → 実在
+  const hasPersonAttr = !!(c.desired_rate || c.raw_profile?.age != null || c.raw_profile?.gender)
+  return !hasPersonAttr                                // 人の属性が1つも無ければ幽霊
 }
 
 async function processCandidate(c) {
@@ -142,7 +158,12 @@ async function processCandidate(c) {
       // （二重条件で誤隔離を防ぐ。実害例: 案件メールが「不明」人材として登録された 2026-08-10）
       const noUsablePerson = !(bf.candidates ?? []).some(x => isUsableName(x?.name))
       if (APPLY && bf.mailType && bf.mailType !== 'candidate' && noUsablePerson) {
-        await quarantineCandidate(c, bf.mailType)
+        await quarantineCandidate(c, `mailType=${bf.mailType}`, `案件メール等の誤登録（AI判定: ${bf.mailType}）`)
+        return
+      }
+      // 幽霊レコード検知（名簿誤検出で生まれた実在しない人材）
+      if (APPLY && isPhantomRecord(c, bf.candidates)) {
+        await quarantineCandidate(c, 'phantom', '本文の誰とも一致せず人の属性も無い（名簿誤検出の幽霊）')
         return
       }
       // 複数人メールでは自分の行だけを選ぶ。特定できなければ本文由来は上書きしない
