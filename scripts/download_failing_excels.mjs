@@ -14,9 +14,11 @@ for (const line of envText.split(/\r?\n/)) {
 
 const supabase = createClient(process.env.VITE_SUPABASE_URL, process.env.VITE_SUPABASE_ANON_KEY)
 
+// raw_profile を丸ごと取ると1件約35KB（attachmentText を含む）で、300件では約10MBになる。
+// 判定に要るのは skillYears だけなので JSON パスで絞る（2026-08-12・egress 対策）
 const { data } = await supabase
   .from('candidates')
-  .select('id, name, resume_url, raw_profile')
+  .select('id, name, resume_url, sy:raw_profile->skillYears')
   .eq('data_env', 'prod')
   .gte('created_at', new Date(Date.now() - 14 * 86400000).toISOString())
   .not('resume_url', 'is', null)
@@ -26,7 +28,7 @@ const { data } = await supabase
 const targets = (data ?? []).filter(r => {
   if (!r.resume_url?.includes('supabase.co/storage')) return false
   if (!/\.(xlsx?|xls)$/i.test(r.resume_url)) return false
-  const sy = r.raw_profile?.skillYears ?? {}
+  const sy = r.sy ?? {}
   return Object.keys(sy).filter(k => !k.startsWith('_')).length === 0
 }).slice(0, 10)
 
