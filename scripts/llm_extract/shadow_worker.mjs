@@ -368,17 +368,24 @@ async function cycle() {
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
   // buildPatch / mergeSkills が参照するトップレベル列は必ず select に含めること。
   // 欠けると「既存値なし」と誤認して fill 項目まで上書き・skills 全置換になる（2026-08-08 に実害）
+  // このサイクルで実際に処理できる件数まで絞って取得する。
+  // 多く取ると本文の一括抽出（有料）をその人数分行った上で、ペース配分で途中中断し、
+  // 使わなかった抽出結果を捨てて次サイクルで同じ人を再抽出する＝払い直しになる
+  // （ペース配分を入れた際に作り込んでしまった。15件抽出して1件処理という状態・2026-08-11）
+  const room = Math.max(0, Math.min(MAX_PER_DAY, allowed) - state.dayCount)
+  const take = Math.min(MAX_PER_CYCLE, room)
+  if (take <= 0) { log('ペース配分により待機（今サイクルの処理枠なし）'); return }
   const { clause: skillClause, list: skillList } = await skillFilterClause()
   const q = `candidates?select=id,name,resume_url,raw_profile,created_at,desired_rate,from_company,experience_years,skills` +
     `&data_env=eq.prod&merged_into=is.null` +
     `&raw_profile->>_llm_checked_at=is.null` +
     `&created_at=gte.${encodeURIComponent(since)}` +
     skillClause +
-    `&order=created_at.desc&limit=${MAX_PER_CYCLE}`
+    `&order=created_at.desc&limit=${take}`
   const rows = await rest(q)
   const filterNote = skillList ? `・スキル絞込[${skillList.join(',')}]` : ''
   if (!rows.length) { log(`未処理なし（直近${LOOKBACK_DAYS}日${filterNote}）`); return }
-  log(`未処理 ${rows.length}件（新しい順・直近${LOOKBACK_DAYS}日${filterNote}）`)
+  log(`未処理 ${rows.length}件を処理（新しい順・直近${LOOKBACK_DAYS}日${filterNote}・今サイクル枠${take}件）`)
 
   // 失敗を繰り返すレコードは打ち切る。印が付かないまま残ると永久に再処理される
   const givenUp = (c) => (c.raw_profile?._llm_attempts ?? 0) >= MAX_ATTEMPTS
