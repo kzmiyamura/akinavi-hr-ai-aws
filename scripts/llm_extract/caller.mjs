@@ -35,8 +35,11 @@ function spawnWithStdin(cmd, args, input, timeoutMs = 180_000) {
     })
     let out = '', err = ''
     const timer = setTimeout(() => {
-      if (IS_WIN) spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'])
-      else p.kill('SIGKILL')
+      if (IS_WIN) {
+        // taskkill 自体が失敗しても未処理 error でプロセスごと落ちないようにする
+        const killer = spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { windowsHide: true })
+        killer.on('error', () => { /* 落とせなくても close/timeout 側で処理する */ })
+      } else p.kill('SIGKILL')
       reject(new Error('timeout'))
     }, timeoutMs)
     p.stdout.on('data', d => { out += d })
@@ -47,8 +50,16 @@ function spawnWithStdin(cmd, args, input, timeoutMs = 180_000) {
       if (c === 0) resolve(out)
       else reject(new Error(`exit=${c} ${err.slice(0, 300)}`))
     })
-    p.stdin.write(input)
-    p.stdin.end()
+    // 子プロセスが先に終了していると write が EPIPE / EOF を投げる。
+    // stream の 'error' は未処理だと throw してワーカーごと落ちる
+    // （実害: タイムアウトで taskkill した直後に "Error: write EOF" でクラッシュし、
+    //  pm2 が再起動していた・2026-08-10 のログで確認）。
+    // 終了理由は 'error'/'close' で受け取るので、ここでは握りつぶす
+    p.stdin.on('error', () => {})
+    try {
+      p.stdin.write(input)
+      p.stdin.end()
+    } catch { /* 上と同じ理由。書けなければ close 側で拾われる */ }
   })
 }
 
