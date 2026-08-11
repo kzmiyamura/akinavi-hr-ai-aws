@@ -3025,9 +3025,64 @@ function normalizePdfRadicals(text: string): string {
  * スキャンPDF（画像のみ）の場合は空文字を返す。
  */
 async function extractPdfText(base64: string): Promise<string> {
+  const bytes = (() => { try { return Uint8Array.from(atob(base64), c => c.charCodeAt(0)) } catch { return null } })()
+  if (!bytes) return ''
+
+  // ① 文字の描画位置(Y座標)から行を復元する。
+  // extractText(mergePages) は文字列を空白で連結するだけで改行を残さないため、
+  // 経歴書PDFが「改行ゼロの巨大な1行」になり、行×列の対応付けが全滅していた
+  // （実害: HT の経歴書が3,755文字1行 → 技術トークン0・案件0件・2026-08-11）。
+  try {
+    const { getDocumentProxy } = await import('npm:unpdf@1.6.2') as {
+      getDocumentProxy: (d: Uint8Array) => Promise<{
+        numPages: number
+        getPage: (n: number) => Promise<{ getTextContent: () => Promise<{ items: unknown[] }> }>
+      }>
+    }
+    const pdf = await getDocumentProxy(bytes)
+    const lines: string[] = []
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const content = await (await pdf.getPage(p)).getTextContent()
+      // Y座標でまとめる。同じ行の文字は Y がほぼ一致する（1未満の差は同一行とみなす）
+      const byRow = new Map<number, { x: number; s: string }[]>()
+      for (const it of content.items) {
+        const item = it as { str?: string; transform?: number[] }
+        const s = item.str ?? ''
+        if (!s.trim()) continue
+        const tr = item.transform
+        if (!Array.isArray(tr) || tr.length < 6) continue
+        const key = Math.round(tr[5])          // transform[5] = Y
+        if (!byRow.has(key)) byRow.set(key, [])
+        byRow.get(key)!.push({ x: tr[4], s })  // transform[4] = X
+      }
+      // Y は下から上に増えるので降順、行内は X 昇順で左から順に並べる
+      for (const y of [...byRow.keys()].sort((a, b) => b - a)) {
+        const raw = byRow.get(y)!.sort((a, b) => a.x - b.x).map((v) => v.s).join(' ')
+        // pdf.js は文字を細かい単位で返すため「2026 年 7 月 14 日」のように空白が入り、
+        // 日付検出（(19|20)\d{2}[年/.-]\d{1,2}）が効かなくなる。
+        // 同じ問題は buildTextGridInput 側では既知だったが、regex 側には入っていなかった
+        // （Issue #126 と同種。ここで詰めれば両方の経路が救われる）
+        const row = raw
+          .replace(/(\d)\s+([年月日])/g, '$1$2')
+          .replace(/([年月])\s+(\d)/g, '$1$2')
+          .replace(/(\d)\s+[\/／]\s+(\d)/g, '$1/$2')
+          .trim()
+        if (row) lines.push(row)
+      }
+    }
+    if (lines.length > 1) {
+      const text = lines.join('\n')
+      console.log(`[PDF] テキスト抽出完了(行復元): ${pdf.numPages}ページ / ${lines.length}行 / ${text.length}文字`)
+      return normalizePdfRadicals(text)
+    }
+    console.warn('[PDF] 行復元で1行以下。従来方式にフォールバック')
+  } catch (e) {
+    console.warn('[PDF] 行復元に失敗、従来方式にフォールバック:', e instanceof Error ? e.message : String(e))
+  }
+
+  // ② フォールバック: 従来どおり連結テキストを取る（スキャンPDF等はここも空になる）
   try {
     const { extractText } = await import('npm:unpdf@1.6.2') as { extractText: (pdf: Uint8Array, opts?: { mergePages?: boolean }) => Promise<{ text: string; totalPages: number }> }
-    const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
     const { text, totalPages } = await extractText(bytes, { mergePages: true })
     console.log(`[PDF] テキスト抽出完了: ${totalPages}ページ / ${text.length}文字`)
     return normalizePdfRadicals(text ?? '')
