@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tansta
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
+import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills } from '../lib/db/candidates'
 import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
@@ -873,9 +874,11 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteCandidate(id, dataEnv),
-    onSuccess: () => {
+    onSuccess: (_r, id) => {
       queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
-      queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
+      // 一覧は該当者を取り除くだけでよい。invalidate は保持中の全ページ
+      // （最大5ページ＝約650KB）を取り直すため、1人の削除には重すぎる
+      removeCandidateFromCache(queryClient, dataEnv, id)
       queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
       setDeletingId(null)
     },
@@ -979,6 +982,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
       await supabase.from('candidates').update({ box_status: 'enriched' }).eq('id', c.id)
 
       setBoxUploadMsg({ id: c.id, text: `Box経歴書を取り込みました: ${file.name}`, ok: true })
+      // ここは inbound-email が人材データを丸ごと書き換える（経歴書URL・スキル・経験年数等）。
+      // 手元に新しい値が無いので部分更新はできず、再取得が正しい
       queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
       queryClient.invalidateQueries({ queryKey: ['candidates-count', dataEnv] })
     } catch (e) {
@@ -1001,7 +1006,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
       setBoxUploadMsg({ id: c.id, text: `取込依頼に失敗しました: ${error.message}`, ok: false })
       return
     }
-    queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
+    // 変えたのは box_status だけなので、一覧は該当者を差し替えれば足りる
+    patchCandidateInCache(queryClient, dataEnv, c.id, { box_status: 'fetch_requested' })
   }
 
   const { data: isImportActive } = useQuery({
@@ -1210,24 +1216,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         .single()
       if (data && (data.box_status !== selectedCandidate!.box_status || data.resume_url !== selectedCandidate!.resume_url)) {
         // 1人の取込状態が変わっただけなので、一覧キャッシュの該当者だけ差し替える。
-        // invalidateQueries は保持中の全ページ（最大5ページ＝約650KB）を取り直すため、
-        // 5秒間隔のポーリングでそれを繰り返すと通信量が跳ね上がる
-        // （2026-08-11 実測: egress の91.6%が PostgREST）
-        queryClient.setQueriesData(
-          { queryKey: ['candidates-paged', dataEnv] },
-          (old: unknown) => {
-            const page = old as { pages?: { candidates: Candidate[] }[] } | undefined
-            if (!page?.pages) return old
-            return {
-              ...page,
-              pages: page.pages.map(p => ({
-                ...p,
-                candidates: p.candidates.map(c =>
-                  c.id === data.id ? { ...c, box_status: data.box_status, resume_url: data.resume_url } : c),
-              })),
-            }
-          },
-        )
+        // 5秒間隔のポーリングで全件再取得を繰り返すと通信量が跳ね上がる
+        patchCandidateInCache(queryClient, dataEnv, data.id,
+          { box_status: data.box_status, resume_url: data.resume_url })
       }
       return data
     },
