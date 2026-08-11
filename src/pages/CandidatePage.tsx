@@ -1209,7 +1209,25 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         .eq('id', selectedCandidate!.id)
         .single()
       if (data && (data.box_status !== selectedCandidate!.box_status || data.resume_url !== selectedCandidate!.resume_url)) {
-        queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
+        // 1人の取込状態が変わっただけなので、一覧キャッシュの該当者だけ差し替える。
+        // invalidateQueries は保持中の全ページ（最大5ページ＝約650KB）を取り直すため、
+        // 5秒間隔のポーリングでそれを繰り返すと通信量が跳ね上がる
+        // （2026-08-11 実測: egress の91.6%が PostgREST）
+        queryClient.setQueriesData(
+          { queryKey: ['candidates-paged', dataEnv] },
+          (old: unknown) => {
+            const page = old as { pages?: { candidates: Candidate[] }[] } | undefined
+            if (!page?.pages) return old
+            return {
+              ...page,
+              pages: page.pages.map(p => ({
+                ...p,
+                candidates: p.candidates.map(c =>
+                  c.id === data.id ? { ...c, box_status: data.box_status, resume_url: data.resume_url } : c),
+              })),
+            }
+          },
+        )
       }
       return data
     },
