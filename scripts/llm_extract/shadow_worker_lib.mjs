@@ -27,6 +27,28 @@ export function trimBodyForLlm(text) {
 }
 
 /**
+ * 本文LLMを省略してよいか。
+ *
+ * regex が主要項目を埋めていれば省略する、という判定だけだと、
+ * 添付が無い人材まで省略されて本文からしか取れない項目を永久に取り逃す。
+ * 本文由来にしかない情報:
+ *   ・総経験年数の申告値（案件表は前職・研修が載らず過小評価になる）
+ *   ・商流（自社 / N社先）
+ *   ・スキル年数（添付が無ければ唯一の情報源）
+ *
+ * 実測（2026-08-11）: _experience_source を持つ45件のうち申告値が入ったのは2件だけ。
+ * うち T.A は案件表6年に対し申告24年で、18年分の取りこぼしが埋まった。
+ * 添付がある人材は案件表から取れるので従来どおり省略してよい。
+ *
+ * @param resumeUrl 経歴書のURL（解析可能な拡張子かどうかで判断する）
+ * @param bodyComplete regex が本文の主要項目を埋めているか（bodyLooksComplete の結果）
+ */
+export function shouldSkipBodyLlm(resumeUrl, bodyComplete) {
+  const hasAttachment = /\.(xlsx?|xlsm|docx?|pdf)(?:$|\?)/i.test(String(resumeUrl ?? ''))
+  return hasAttachment && !!bodyComplete
+}
+
+/**
  * その時刻までに使ってよい処理件数（日次上限を24時間に均したもの）。
  *
  * 上限だけを置くと、ワーカーは能力いっぱいで走って朝の数時間で使い切る

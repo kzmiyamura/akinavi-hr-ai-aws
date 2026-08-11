@@ -18,6 +18,7 @@ import { buildProjectPatch, DEFAULT_TITLE } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
 import {
   trimBodyForLlm, projectLooksComplete, parseSkillFilterValue, buildSkillFilterClause, pacedAllowance,
+  shouldSkipBodyLlm,
 } from './shadow_worker_lib.mjs'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
@@ -240,7 +241,7 @@ async function processCandidate(c, preBody = null) {
 
   // 本文フィールド（常にHaiku）
   const bodyText = c.raw_profile?.text ?? ''
-  if (bodyText.length > 50 && !preBody && bodyLooksComplete(c)) {
+  if (bodyText.length > 50 && !preBody && shouldSkipBodyLlm(c.resume_url, bodyLooksComplete(c))) {
     log(`  [${c.name}] 本文の主要項目は充足済み → 本文LLMを省略`)
   } else if (bodyText.length > 50) {
     try {
@@ -392,7 +393,8 @@ async function cycle() {
   // 本文抽出をまとめて1回で済ませる（claude -p の固定オーバーヘッドを人数で割る）。
   // 取り違えが起きたら件数不一致で検出し、その回は1件ずつに落とす
   const bodyOf = new Map()
-  const need = rows.filter((c) => !givenUp(c) && (c.raw_profile?.text ?? '').length > 50 && !bodyLooksComplete(c))
+  const need = rows.filter((c) => !givenUp(c) && (c.raw_profile?.text ?? '').length > 50 &&
+    !shouldSkipBodyLlm(c.resume_url, bodyLooksComplete(c)))
   for (let i = 0; i < need.length; i += BODY_BATCH_SIZE) {
     const chunk = need.slice(i, i + BODY_BATCH_SIZE)
     if (chunk.length < 2) break                       // 1件ならまとめる意味がない

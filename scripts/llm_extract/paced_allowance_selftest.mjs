@@ -34,5 +34,20 @@ t('上限10・6時間で3件', pacedAllowance(10, at(6)), 3)
 // 実運用の意味: 100件/日なら1時間あたり約4件ペース
 t('9時間経過で約38件（4件/時ペース）', pacedAllowance(100, at(9)), 38)
 
-console.log(`\n📊 ${pass} passed / ${fail} failed`)
+// ── 本文LLMを省略してよいかの判定 ──
+// 添付が無い人材は本文が唯一の情報源。regexが主要項目を埋めていても省略してはいけない
+// （実測: _experience_source 45件中、申告値が入ったのは2件だけ。うちT.Aは
+//  案件表6年 vs 申告24年で18年分の取りこぼしが埋まった・2026-08-11）
+const { shouldSkipBodyLlm } = await import('./shadow_worker_lib.mjs')
+t('添付あり＋充足 → 省略する', shouldSkipBodyLlm('https://x/a.xlsx', true), true)
+t('添付あり＋不足 → 省略しない', shouldSkipBodyLlm('https://x/a.xlsx', false), false)
+t('添付なし＋充足 → 省略しない（本文が唯一の情報源）', shouldSkipBodyLlm(null, true), false)
+t('添付なし＋不足 → 省略しない', shouldSkipBodyLlm(null, false), false)
+t('pdfも添付として扱う', shouldSkipBodyLlm('https://x/a.pdf', true), true)
+t('docxも添付として扱う', shouldSkipBodyLlm('https://x/a.docx', true), true)
+t('解析できない拡張子は添付とみなさない', shouldSkipBodyLlm('https://x/a.jpg', true), false)
+t('クエリ付きURLでも判定できる', shouldSkipBodyLlm('https://x/a.xlsx?token=1', true), true)
+
+console.log(`
+📊 ${pass} passed / ${fail} failed`)
 process.exit(fail ? 1 : 0)
