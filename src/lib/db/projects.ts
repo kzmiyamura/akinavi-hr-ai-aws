@@ -53,6 +53,10 @@ export interface Project {
   start_date: string | null
   end_date: string | null
   work_location: string | null
+  /** 勤務地から解決した都道府県。マッチングの勤務地スコアはこちらを使う（work_location は表示用の生文字列） */
+  work_prefecture: string | null
+  /** 募集要件の必要経験年数。null は要件記載なし（従来どおりの絶対評価で採点される） */
+  required_experience_years: number | null
   remote_policy: string | null
   contract_type: string | null
   headcount: number | null

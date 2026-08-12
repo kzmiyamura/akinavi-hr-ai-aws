@@ -207,6 +207,10 @@ export interface ProjectScoreParams {
   budgetMin?: number | null
   budgetMax?: number | null
   workLocation?: string | null
+  /** 勤務地から解決済みの都道府県。渡すと work_location の文字列解析より優先される */
+  workPrefecture?: string | null
+  /** 案件が要求する経験年数。渡すと「要件を満たすか」で採点する（未指定なら従来の絶対評価） */
+  requiredExpYears?: number | null
   remotePolicy?: string | null
   weights?: ScoringWeights
 }
@@ -237,6 +241,8 @@ export async function fetchCandidatesForProject(
       p_weight_location: w.location,
       p_weight_remote:   w.remote,
       p_require_haken:   requireHaken,
+      p_work_prefecture: params.workPrefecture ?? null,
+      p_required_exp_years: params.requiredExpYears ?? null,
     })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as (Candidate & { rule_score: number })[]

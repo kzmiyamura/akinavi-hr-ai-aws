@@ -1282,6 +1282,73 @@ async function lookupStationPrefectureFromDb(station: string | null | undefined)
 }
 
 /**
+ * 案件の勤務地文字列から都道府県を解決する。
+ *
+ * 人材側は raw_profile.prefecture に都道府県まで正規化して入るのに対し、案件側は
+ * work_location が生文字列（例:「東品川（最寄りは青物横丁または品川シーサイド）」）のままで、
+ * マッチングRPCの `(\S+?)[都道府県]` では都道府県が取れず勤務地の配点が丸ごと死んでいた。
+ * 人材側と同じ粒度に揃えるため、駅名は station_master スナップショットで都道府県に解決する。
+ *
+ * 優先順位: ①文字列に都道府県が含まれる → ②勤務地を駅名候補に分解して照合 → ③本文から都道府県を拾う
+ */
+export function splitLocationTokens(workLocation: string): string[] {
+  return workLocation
+    // 「最寄りは」「または」等のつなぎ語を区切りに変換してから分割する
+    .replace(/(最寄り(?:駅)?は?|または|もしくは|周辺|近郊|徒歩\s*\d+\s*分|各線|駅から)/g, ' ')
+    .split(/[（）()\[\]「」、,，/／・|｜\s]+/)
+    .map((s) => s.replace(/駅$/, '').trim())
+    .filter((s) => s.length >= 2 && s.length <= 20)
+}
+
+async function resolveProjectPrefecture(
+  workLocation: string | null | undefined,
+  fallbackText: string,
+): Promise<string | null> {
+  const loc = (workLocation ?? '').trim()
+  if (loc) {
+    const direct = PREFECTURES.find((p) => loc.includes(p))
+    if (direct) return direct
+    for (const token of splitLocationTokens(loc)) {
+      const pref = await lookupStationPrefectureFromDb(token)
+      if (pref) return pref
+    }
+  }
+  // 勤務地欄から取れない場合のみ本文を走査（出現順で最初の都道府県を採用）
+  let firstIdx = Infinity
+  let firstPref: string | null = null
+  for (const p of PREFECTURES) {
+    const idx = (fallbackText ?? '').indexOf(p)
+    if (idx !== -1 && idx < firstIdx) { firstIdx = idx; firstPref = p }
+  }
+  return firstPref
+}
+
+/**
+ * 案件本文から募集要件の必要経験年数を抽出する（例:「実務経験5年以上」→ 5）。
+ *
+ * マッチングの経験年数の配点は候補者側の値だけを見た絶対評価（10年以上=満点）だったため、
+ * 3年で足りる案件でもベテランが機械的に上位へ来ていた。案件側の要求年数を持たせて突合する。
+ */
+export function extractRequiredExperienceYears(text: string): number | null {
+  if (!text) return null
+  const t = text.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xFEE0))
+  const patterns = [
+    /(?:実務|開発|業務|運用|設計|IT)?経験[^\n。]{0,12}?(\d{1,2})\s*年以上/,
+    /(\d{1,2})\s*年以上[^\n。]{0,12}?(?:実務|開発|業務|運用|設計|IT)?経験/,
+    /経験年数[^\n]{0,6}[：:]\s*(\d{1,2})\s*年/,
+  ]
+  for (const re of patterns) {
+    const m = t.match(re)
+    if (m) {
+      const n = parseInt(m[1], 10)
+      // 1〜40年の範囲外は誤読（バージョン番号・西暦の混入等）とみなす
+      if (Number.isFinite(n) && n >= 1 && n <= 40) return n
+    }
+  }
+  return null
+}
+
+/**
  * スキルシートのフェーズ表ヘッダー行を検出する。
  *
  * 添付スキルシート（Excel→CSV）には次のような行が含まれる:
@@ -11167,6 +11234,21 @@ Deno.serve(async (req: Request) => {
         batchSize: projectObjects.length,
       }
 
+      // 案件ごとにマッチング用の正規化値を解決する。
+      // work_location / 本文は表示用の生文字列のまま残し、採点にはこちらを使う
+      const projectMatchFields = await Promise.all(projectObjects.map(async (raw) => {
+        const ownText = [
+          typeof raw.title === 'string' ? raw.title : '',
+          typeof raw.description === 'string' ? raw.description : '',
+        ].join('\n')
+        // 複数案件メールでは他案件の記述を巻き込まないよう自案件のテキストだけを見る
+        const scopedText = projectObjects.length > 1 ? ownText : [ownText, allProjectText].join('\n')
+        const workPrefecture = await resolveProjectPrefecture(strOrNull(raw.workLocation), scopedText)
+        const requiredExperienceYears = extractRequiredExperienceYears(scopedText)
+        return { workPrefecture, requiredExperienceYears }
+      }))
+      console.log(`[project_match_fields] ${projectMatchFields.map((f, i) => `#${i} 県=${f.workPrefecture ?? '—'} 要求年数=${f.requiredExperienceYears ?? '—'}`).join(' / ')}`)
+
       const insertRows = projectObjects.map((raw, batchIndex) => {
         const requiredSkills = dedupeTrimmedSkills(raw.requiredSkills)
         const niceToHaveSkills = dedupeTrimmedSkills(raw.niceToHaveSkills)
@@ -11196,6 +11278,9 @@ Deno.serve(async (req: Request) => {
           start_date: parseIsoDateOnly(raw.startDate),
           end_date: parseIsoDateOnly(raw.endDate),
           work_location: strOrNull(raw.workLocation),
+          // 勤務地を都道府県まで解決した値（人材側 raw_profile.prefecture と同じ粒度）
+          work_prefecture: projectMatchFields[batchIndex]?.workPrefecture ?? null,
+          required_experience_years: projectMatchFields[batchIndex]?.requiredExperienceYears ?? null,
           remote_policy: strOrNull(raw.remotePolicy),
           contract_type: strOrNull(raw.contractType),
           headcount,
