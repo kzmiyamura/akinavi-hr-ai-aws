@@ -36,14 +36,19 @@ async function fetchAll(pathq) {
 }
 
 const rows = await fetchAll(
-  'candidates?select=id,name,resume_url,box_url,box_status,' +
-  'sy:raw_profile->skillYears,checked:raw_profile->>_llm_checked_at,att:raw_profile->>attachmentCount' +
+  'candidates?select=id,name,resume_url,box_url,box_status,drive_url,' +
+  'sy:raw_profile->skillYears,checked:raw_profile->>_llm_checked_at,att:raw_profile->>attachmentCount,' +
+  'srcatt:raw_profile->>sourceAttachmentCount,attn:raw_profile->attachmentNames,dl:raw_profile->driveLinks' +
   `&data_env=eq.prod&merged_into=is.null&created_at=gte.${since}`)
 
 const has = (o) => Object.keys(o ?? {}).filter((k) => !k.startsWith('_')).length > 0
 const ext = (u) => (String(u ?? '').toLowerCase().match(/\.(xlsx?|xlsm|docx?|pdf)(?:$|\?)/) ?? [])[1] ?? null
 
-const g = { ok: [], extractFail: [], noResumeHasBox: [], noResumeNoBox: [], unsupported: [] }
+// 「経歴書なし」の判定は resume_url 列だけでは誇張される（2026-08-12 実測: 165件中、
+// 真に入力なしは55件だった）。メールに添付が実在したか（sourceAttachmentCount /
+// attachmentNames）と Drive リンク（drive_url 列）も見て切り分ける。
+// 精密な内訳は scripts/sql/audit_no_resume_claim*.sql（サーバー側集計）を使う
+const g = { ok: [], extractFail: [], attachedNoResume: [], driveOnly: [], noResumeHasBox: [], noResumeNoBox: [], unsupported: [] }
 for (const c of rows) {
   if (has(c.sy)) { g.ok.push(c); continue }
   if (c.resume_url) {
@@ -51,7 +56,10 @@ for (const c of rows) {
     // .doc（旧バイナリ）は mammoth 非対応。PDFはtextract経由
     if (e === 'doc') g.unsupported.push(c)
     else g.extractFail.push(c)
-  } else if (c.box_url) g.noResumeHasBox.push(c)
+  } else if (Number(c.srcatt ?? 0) > 0 || (Array.isArray(c.attn) && c.attn.length > 0)) {
+    g.attachedNoResume.push(c)
+  } else if (c.drive_url || (Array.isArray(c.dl) && c.dl.length > 0)) g.driveOnly.push(c)
+  else if (c.box_url) g.noResumeHasBox.push(c)
   else g.noResumeNoBox.push(c)
 }
 
@@ -60,6 +68,8 @@ console.log(`直近${DAYS}日の prod 人材 ${rows.length}件\n`)
 console.log(`スキル年数あり            ${String(g.ok.length).padStart(5)}件  ${pct(g.ok.length)}`)
 console.log(`─ 以下、取れていないもの ─`)
 console.log(`経歴書あり・抽出できず    ${String(g.extractFail.length).padStart(5)}件  ${pct(g.extractFail.length)}  ← 抽出器で直せる`)
+console.log(`添付あり・経歴書扱いされず${String(g.attachedNoResume.length).padStart(5)}件  ${pct(g.attachedNoResume.length)}  ← 割当/パースの問題。直せる`)
+console.log(`Driveリンクのみ・未取込   ${String(g.driveOnly.length).padStart(5)}件  ${pct(g.driveOnly.length)}  ← リンク先の取得が必要`)
 console.log(`経歴書なし・Boxリンクあり ${String(g.noResumeHasBox.length).padStart(5)}件  ${pct(g.noResumeHasBox.length)}  ← 取込待ち`)
 console.log(`経歴書なし・リンクもなし  ${String(g.noResumeNoBox.length).padStart(5)}件  ${pct(g.noResumeNoBox.length)}  ← 入力が無い`)
 console.log(`未対応形式(.doc)          ${String(g.unsupported.length).padStart(5)}件  ${pct(g.unsupported.length)}`)
