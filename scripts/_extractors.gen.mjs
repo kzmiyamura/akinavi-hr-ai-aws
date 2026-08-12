@@ -1450,6 +1450,10 @@ function extractSkillYearsFromSheetData(data){
         const totalProjectMonths = unionMonths + datelessSum
         if (!skillMonths['_totalProjectMonths']) skillMonths['_totalProjectMonths'] = totalProjectMonths
         // max日付 − min日付 スパン（空白期間込みのキャリア全体幅）
+        // 解決済みの startYM/endYM を優先して使う。生文字列を再パースすると「現在」「継続中」で
+        // 終わる進行中案件の end が落ち、スパンが「最後の日付付き終了」で打ち切られる
+        // （2020/10〜現在 の経歴が 2025/02 までの53ヶ月＝4年になっていた実害があった）。
+        // 上流の endYM は既に「現在」を今月に解決している（同関数内の期間セル解析と同じ扱い）
         const parseYM = (s) => {
           const m = s.match(/(\d{2,4})[\/\-年](\d{1,2})/)
           if (!m) return null
@@ -1457,8 +1461,8 @@ function extractSkillYearsFromSheetData(data){
           if (year < 100) year = year < 50 ? 2000 + year : 1900 + year
           return year * 12 + parseInt(m[2])
         }
-        const starts = projectPeriods.map(p => parseYM(p.start)).filter((v)=> v !== null)
-        const ends   = projectPeriods.map(p => parseYM(p.end)).filter((v)=> v !== null)
+        const starts = projectPeriods.map(p => p.startYM ?? parseYM(p.start)).filter((v)=> v !== null)
+        const ends   = projectPeriods.map(p => p.endYM   ?? parseYM(p.end)).filter((v)=> v !== null)
         if (starts.length > 0 && ends.length > 0) {
           const spanMonths = Math.max(...ends) - Math.min(...starts) + 1
           if (spanMonths > 0) skillMonths['_dateSpanMonths'] = spanMonths

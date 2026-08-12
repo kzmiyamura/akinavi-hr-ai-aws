@@ -25,9 +25,13 @@ const URL = process.env.SUPABASE_URL, KEY = process.env.SUPABASE_SERVICE_KEY
 if (!URL || !KEY) { console.error('SUPABASE_URL / SUPABASE_SERVICE_KEY が読めません'); process.exit(1) }
 
 const args = process.argv.slice(2)
-const DAYS = Number(args.find((a) => /^\d+$/.test(a)) ?? 7)
 const RUN = args.includes('--run')
-const LIMIT = Number(args[args.indexOf('--limit') + 1] || 0) || Infinity
+const limitAt = args.indexOf('--limit')
+const LIMIT = Number(limitAt >= 0 ? args[limitAt + 1] : 0) || Infinity
+// 日数は素の数値引数。--limit の値を日数と誤認しないよう除外する
+const DAYS = Number(args.find((a, i) => /^\d+$/.test(a) && i !== limitAt + 1) ?? 7)
+const idAt = args.indexOf('--id')
+const ONLY_ID = idAt >= 0 ? args[idAt + 1] : null
 const since = new Date(Date.now() - DAYS * 86400000).toISOString()
 
 const headers = { apikey: KEY, Authorization: `Bearer ${KEY}` }
@@ -52,9 +56,14 @@ const rows = await fetchAll(
   'subject:raw_profile->>subject,mailfrom:raw_profile->>from' +
   `&data_env=eq.prod&merged_into=is.null&created_at=gte.${since}&resume_url=not.is.null`)
 
-const targets = rows.filter((c) => !hasSy(c.sy) && String(c.resume_url).includes('supabase.co/storage'))
-console.log(`対象: ${targets.length}件（直近${DAYS}日・resume_url=Storage・skillYears空）` +
-  (Number.isFinite(LIMIT) ? ` → 先頭${LIMIT}件のみ実行` : ''))
+const targets = ONLY_ID
+  // --id 指定時は skillYears 空の条件を外す（抽出器の修正を1人で検証し直す用途）
+  ? rows.filter((c) => c.id === ONLY_ID)
+  : rows.filter((c) => !hasSy(c.sy) && String(c.resume_url).includes('supabase.co/storage'))
+console.log(ONLY_ID
+  ? `対象: ${targets.length}件（--id 指定）`
+  : `対象: ${targets.length}件（直近${DAYS}日・resume_url=Storage・skillYears空）` +
+    (Number.isFinite(LIMIT) ? ` → 先頭${LIMIT}件のみ実行` : ''))
 
 if (!RUN) {
   for (const c of targets.slice(0, 30)) {

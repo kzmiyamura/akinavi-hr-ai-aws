@@ -11,7 +11,8 @@ import * as XLSX from 'xlsx'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const envPath = resolve(__dirname, '../.env.local')
 if (existsSync(envPath)) {
-  for (const line of readFileSync(envPath, 'utf8').split('\n')) {
+  // CRLF の .env.local だと `.` が \r にマッチせず 1行も読めない（Windows で実害・download_failing_excels.mjs と同件）
+  for (const line of readFileSync(envPath, 'utf8').split(/\r?\n/)) {
     const m = line.match(/^([^#=]+)=(.*)$/)
     if (m) process.env[m[1].trim()] = m[2].trim()
   }
@@ -56,12 +57,20 @@ for (const m of merges.slice(0, 30)) {
   console.log(`  r${m.s.r}-${m.e.r} c${m.s.c}-${m.e.c}  [${String(val).slice(0, 30)}]`)
 }
 
-console.log('\n=== セルグリッド (行5〜25, 列0〜12) ===')
-for (let r = 5; r <= 25 && r < data2d.length; r++) {
+// 表示範囲は引数で変えられる（例: --rows 25-45 --cols 0-10）。既定は 行5〜25・列0〜12
+const rowsArg = (process.argv[process.argv.indexOf('--rows') + 1] ?? '').match(/^(\d+)-(\d+)$/)
+const colsArg = (process.argv[process.argv.indexOf('--cols') + 1] ?? '').match(/^(\d+)-(\d+)$/)
+const R0 = rowsArg ? Number(rowsArg[1]) : 5
+const R1 = rowsArg ? Number(rowsArg[2]) : 25
+const C0 = colsArg ? Number(colsArg[1]) : 0
+const C1 = colsArg ? Number(colsArg[2]) : 12
+
+console.log(`\n=== セルグリッド (行${R0}〜${R1}, 列${C0}〜${C1}) ===`)
+for (let r = R0; r <= R1 && r < data2d.length; r++) {
   const row = data2d[r] ?? []
-  const cols = row.slice(0, 13).map((v, i) => {
+  const cols = row.slice(C0, C1 + 1).map((v, i) => {
     const s = String(v ?? '').slice(0, 10).padEnd(12)
-    return `[${i}]${s}`
+    return `[${C0 + i}]${s}`
   })
   console.log(`r${String(r).padStart(2,'0')}: ${cols.join(' ')}`)
 }
