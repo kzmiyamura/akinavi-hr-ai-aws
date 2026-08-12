@@ -42,6 +42,9 @@ Get-Content ~/akinavi_shadow.log -Tail 20
 参考: 2026-08-10 は PostgREST 291MB（全体の91.6%）だった。
 無料枠は 5GB/月 ＝ 約166MB/日。
 
+**→ 2026-08-12 確認結果**: 8/10 実測は PostgREST 366MB（92.4%）、8/11 は **86.5MB（89.0%）** で76%減。
+判定は「100MB前後＝部分的に効いた」。下記5の invalidateQueries 対応を実施済み（8/13 の値で再判定）。
+
 ## 3. ワーカーの現在の設定
 
 | 項目 | 値 | 変え方 |
@@ -103,9 +106,10 @@ pm2 restart akinavi-shadow --update-env
 ## 5. 未解決・次にやるなら
 
 **egress（明日の数字次第）**
-- `invalidateQueries(['candidates-paged'])` がまだ5箇所ある。
-  ただし新規登録・再解析は一覧の構成が変わるので `invalidate` が正しい。
-  手元に新しい値がある単一人材の変更だけ `src/lib/candidateCache.ts` で置き換える
+- ~~`invalidateQueries(['candidates-paged'])` がまだ5箇所ある~~ **対応済み（2026-08-12）**。
+  該当したのは編集モーダル保存後の1箇所のみ（`patchCandidateInCache` に置換、
+  詳細ペイン raw_profile と CandidateDetailPage も部分更新化）。
+  残りは新規登録・再解析・デモ投入・手動リロード・絞込変更のため invalidate が正しい（据え置き）
 
 **抽出精度**
 - `Y_O.xlsx` のスキル年数ゼロ（シートに `#REF!` が多数）
