@@ -79,6 +79,8 @@ const AI_LOOKBACK_DAYS = 3
  * 「待ち」は**実際に校正する予定のものにだけ**出す（2026-08-10 ユーザー指定）。
  * ワーカーは直近 AI_LOOKBACK_DAYS 日の人材しかキューに入れないため、それより古い
  * 人材に「待ち」を出すと永久に来ない順番を待たせることになる（実測1,446件中841件が該当）。
+ * 同様に、スキル絞込（app_config.llm_filter_skills）が有効なときは対象外の人材も
+ * キューに入らない（2026-08-12 実測: 3日以内の未校正571件中255件が絞込対象外）。
  * 対象外の人材はルールベースのみで確定した正常な状態なので、何も表示しない。
  *
  * 'sonnet'（→「AI校正中」）は Sonnet 昇格をやめた時点で到達不能になったため廃止した。
@@ -91,7 +93,8 @@ function aiCorrectionStage(c: {
   llm_checked_at?: string | null
   llm_stage?: string | null
   created_at?: string | null
-}): AiStage {
+  skills?: string[]
+}, filterSkills?: string[] | null): AiStage {
   // 一覧は raw_profile を取らず JSON パスで取り出した llm_checked_at / llm_stage を持つ。
   // 検索・絞り込み経由（candidates_lite）は raw_profile を持つ。どちらでも動くようにする
   if (c.llm_checked_at ?? c.raw_profile?._llm_checked_at) return null
@@ -104,6 +107,17 @@ function aiCorrectionStage(c: {
   // ルールベースのみで確定した正常な状態として、何も表示しない
   const created = c.created_at ? Date.parse(c.created_at) : NaN
   if (!Number.isFinite(created) || Date.now() - created > AI_LOOKBACK_DAYS * 86_400_000) return null
+  // スキル絞込が有効な場合、対象外の人材はキューに入らないので「待ち」を出さない。
+  // 判定はワーカーの二本立て（skills列の一致 or 本文の部分一致）に合わせるが、
+  // 一覧行は本文（raw_profile.text）を持たないため skills 列だけで近似する
+  if (filterSkills?.length) {
+    const text = typeof c.raw_profile?.text === 'string' ? (c.raw_profile.text as string).toLowerCase() : null
+    const hit = filterSkills.some((f) => {
+      const fl = f.toLowerCase()
+      return (c.skills ?? []).some((s) => s.toLowerCase() === fl) || (text?.includes(fl) ?? false)
+    })
+    if (!hit) return null
+  }
   return { label: 'AI校正待ち', cls: 'bg-gray-100 text-gray-500 border-gray-200',
     title: 'ルールベース解析のみ。常駐AIの順番待ちです' }
 }
@@ -270,6 +284,13 @@ export function CandidateProfileFields({
   agentDomainMap?: Map<string, AgentCompany>
 }) {
   const raw = getRaw(c)
+  // 「AI校正待ち」バッジの表示判定に使う（ワーカーの絞込対象外なら待ちを出さない）。
+  // 一覧側と同じ queryKey なのでキャッシュを共有し、追加リクエストはほぼ発生しない
+  const { data: badgeFilterSkills } = useQuery({
+    queryKey: ['priority-skills'],
+    queryFn: fetchPrioritySkills,
+    staleTime: 5 * 60_000,
+  })
   const { skillsByCategory: sbc, roles, industries,
     prefecture, nearestStation, availableRegions,
     currentWorkLocation, remoteAvailable,
@@ -318,7 +339,7 @@ export function CandidateProfileFields({
           <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
         )}
         {(() => {
-          const st = aiCorrectionStage(c)
+          const st = aiCorrectionStage(c, badgeFilterSkills ?? null)
           return st && (
             <span className={`text-xs border rounded px-2 py-0.5 ${st.cls}`} title={st.title}>
               {st.label}
@@ -1694,7 +1715,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           <span className="text-[10px] bg-yellow-100 text-yellow-700 rounded px-1 shrink-0">重複</span>
                         )}
                         {(() => {
-                          const st = aiCorrectionStage(c)
+                          const st = aiCorrectionStage(c, prioritySkills ?? null)
                           return st && (
                             <span className={`text-[10px] border rounded px-1 shrink-0 ${st.cls}`} title={st.title}>
                               {st.label}
