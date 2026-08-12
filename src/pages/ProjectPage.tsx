@@ -129,12 +129,17 @@ export function ProjectProfileFields({
 
   return (
     <div className="flex-1 min-w-0 space-y-2">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="font-medium text-gray-800 text-sm">{p.title}</span>
-        <span className={`text-xs rounded px-2 py-0.5 ${statusColor[p.status]}`}>
-          {statusLabel[p.status]}
-        </span>
-      </div>
+      {/* 詳細ペインでは上部ヘッダーに同じ見出しが出るため、ここでは繰り返さない */}
+      {!detailMode && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-medium text-gray-800 text-sm">{p.title}</span>
+          <span className={`text-xs rounded px-2 py-0.5 ${statusColor[p.status]}`}>
+            {statusLabel[p.status]}
+          </span>
+        </div>
+      )}
+
+      {detailMode && <RecruitSummary project={p} required={required} />}
       <div className="text-xs text-gray-400 flex flex-wrap gap-x-3 gap-y-0.5">
         <span>{p.client ?? 'クライアント不明'}</span>
         {p.created_at && <span>登録: {formatDate(p.created_at)}</span>}
@@ -164,8 +169,9 @@ export function ProjectProfileFields({
           </span>
         )}
         {p.headcount != null && <span>募集: {p.headcount}名</span>}
-        {p.budget_min != null && (
-          <span>予算: {p.budget_min}〜{p.budget_max ?? '?'}万</span>
+        {/* 上限だけ提示される案件（「〜80万円」）が多く、budget_min だけを条件にすると単価が消える */}
+        {(p.budget_min != null || p.budget_max != null) && (
+          <span>予算: {formatBudget(p.budget_min, p.budget_max)}</span>
         )}
         {p.start_date && <span>開始: {p.start_date}</span>}
         {p.end_date && <span>終了: {p.end_date}</span>}
@@ -261,6 +267,63 @@ export function ProjectProfileFields({
       )}
 
       {detailMode && <MatchingInputs project={p} requiredSkillCount={required.length} niceCount={nice.length} />}
+    </div>
+  )
+}
+
+/** 「〜80万」「60〜80万」「60万〜」を上限・下限の有無に応じて表示する */
+function formatBudget(min: number | null, max: number | null): string {
+  if (min != null && max != null) return min === max ? `${min}万` : `${min}〜${max}万`
+  if (max != null) return `〜${max}万`
+  return `${min}万〜`
+}
+
+/**
+ * 案件詳細の先頭で「何を募集していて、どんな人が欲しいか」を1画面で答える。
+ *
+ * 従来は見出しの次がいきなり業務内容の長文で、募集役割・求めるスキル・条件が
+ * 本文の下に散っていたため、案件を開いても人物像がすぐ掴めなかった。
+ */
+function RecruitSummary({ project: p, required }: { project: Project; required: string[] }) {
+  const headline = p.role_summary ?? required[0] ?? p.title
+  const conditions = [
+    p.work_prefecture ?? p.work_location,
+    (p.budget_min != null || p.budget_max != null) ? formatBudget(p.budget_min, p.budget_max) : null,
+    p.contract_type,
+    p.remote_policy ? (p.remote_policy.length > 16 ? `${p.remote_policy.slice(0, 16)}…` : p.remote_policy) : null,
+    p.start_date ? `${p.start_date} 開始` : null,
+  ].filter(Boolean) as string[]
+
+  return (
+    <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-3 space-y-2">
+      <div className="text-sm font-semibold text-gray-800">
+        {headline}
+        <span className="font-normal text-gray-600">
+          {p.headcount != null ? ` を ${p.headcount}名` : ' を募集'}
+        </span>
+      </div>
+
+      <div className="flex flex-wrap items-baseline gap-1.5">
+        <span className="text-xs text-gray-500 shrink-0">求める人</span>
+        {required.length > 0
+          ? required.slice(0, 6).map((s) => (
+              <span key={s} className="text-xs bg-white border border-green-200 text-green-700 rounded px-1.5 py-0.5">{s}</span>
+            ))
+          : <span className="text-xs text-red-500">必須スキル未取得</span>}
+        {required.length > 6 && <span className="text-xs text-gray-400">+{required.length - 6}</span>}
+        {p.required_experience_years != null && (
+          <span className="text-xs bg-white border border-amber-200 text-amber-700 rounded px-1.5 py-0.5">
+            経験{p.required_experience_years}年以上
+          </span>
+        )}
+      </div>
+
+      {conditions.length > 0 && (
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <span className="text-xs text-gray-500 shrink-0">条件</span>
+          <span className="text-xs text-gray-700">{conditions.join(' / ')}</span>
+        </div>
+      )}
     </div>
   )
 }
