@@ -163,18 +163,24 @@ Deno.serve(async (req: Request) => {
           ? project.required_skills.map(String).filter(Boolean)
           : []
 
-        // スキル重複フィルター（大文字小文字を無視した部分一致）
-        const skillFiltered = requiredSkills.length > 0
-          ? (allCandidates ?? []).filter(c => {
-              const cSkills: string[] = Array.isArray(c.skills) ? c.skills.map(String) : []
-              return requiredSkills.some(r =>
-                cSkills.some(s =>
-                  s.toLowerCase().includes(r.toLowerCase()) ||
-                  r.toLowerCase().includes(s.toLowerCase())
-                )
-              )
-            })
-          : (allCandidates ?? [])
+        // スキルフィルター。判定は skill_hit_weights RPC に集約している
+        // （マッチング画面の fetch_candidates_for_project と同じ関数）。
+        // 以前はここで JS 側の双方向部分一致をしていたが、"C" を持つ人が
+        // 「Azure Functions」に、"Shell" を持つ人が「PowerShell」に一致するなど
+        // 別物を通していた。詳細は 20260812_skill_match_normalize.sql
+        let skillFiltered = allCandidates ?? []
+        if (requiredSkills.length > 0) {
+          const { data: hitRows, error: hitErr } = await supabase.rpc('skill_hit_weights', {
+            p_data_env: 'prod',
+            p_required_skills: requiredSkills,
+            p_skill_weights: null,
+          })
+          if (hitErr) throw new Error(`スキル判定エラー: ${hitErr.message}`)
+          const eligible = new Set<string>(
+            (hitRows ?? []).map((r: { candidate_id: string }) => String(r.candidate_id))
+          )
+          skillFiltered = skillFiltered.filter(c => eligible.has(String(c.id)))
+        }
 
         const targets = skillFiltered
           .filter(c =>

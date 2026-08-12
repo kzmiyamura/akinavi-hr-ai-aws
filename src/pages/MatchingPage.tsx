@@ -23,6 +23,8 @@ import {
 import { supabase } from '../lib/supabase'
 import { getMatchingSettings, MATCHING_DEFAULTS } from '../lib/db/matchingSettings'
 import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
+import { fetchSkillMatches, NO_MATCHES } from '../lib/db/skillMatch'
+import type { SkillMatcher } from '../lib/db/skillMatch'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
@@ -440,6 +442,7 @@ function ProjectModeRankCard({
   duplicates,
   requiredSkills = [],
   niceToHaveSkills = [],
+  skillMatcher = NO_MATCHES,
   agentDomainMap,
 }: {
   s: RankedSubmission
@@ -450,6 +453,8 @@ function ProjectModeRankCard({
   duplicates?: DuplicateCandidate[]
   requiredSkills?: string[]
   niceToHaveSkills?: string[]
+  /** スキル一致判定。サーバの skill_satisfies と同じ結果になる（src/lib/db/skillMatch.ts） */
+  skillMatcher?: SkillMatcher
   agentDomainMap?: Map<string, { license_status: string }>
 }) {
   const [showEmail, setShowEmail] = useState(false)
@@ -547,7 +552,7 @@ function ProjectModeRankCard({
           })()}
           {(() => {
             const allSkills = (s.candidate.skills as string[]) ?? []
-            const skillMatch = (sk: string, list: string[]) => list.some(r => sk.toLowerCase().includes(r.toLowerCase()) || r.toLowerCase().includes(sk.toLowerCase()))
+            const skillMatch = (sk: string, list: string[]) => list.some(r => skillMatcher(sk, r))
             const reqMatched = allSkills.filter(sk => skillMatch(sk, requiredSkills))
             const niceMatched = allSkills.filter(sk => !skillMatch(sk, requiredSkills) && skillMatch(sk, niceToHaveSkills))
             const unmatched = allSkills.filter(sk => !skillMatch(sk, requiredSkills) && !skillMatch(sk, niceToHaveSkills))
@@ -555,7 +560,7 @@ function ProjectModeRankCard({
           })()}
           {(requiredSkills.length > 0 || niceToHaveSkills.length > 0) && (() => {
             const allSkills = (s.candidate.skills as string[]) ?? []
-            const skillMatch = (req: string) => allSkills.some(sk => sk.toLowerCase().includes(req.toLowerCase()) || req.toLowerCase().includes(sk.toLowerCase()))
+            const skillMatch = (req: string) => allSkills.some(sk => skillMatcher(sk, req))
             return (
               <div className="mt-1.5 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 space-y-1.5">
                 {requiredSkills.length > 0 && (
@@ -1365,6 +1370,32 @@ const { data: projects = [] } = useQuery({
     : []
   const selectedCandidateSubs = sortedSelectedCandidateSubs
 
+  // 必須スキルが満たされているかの判定はサーバ（skill_satisfies）に問い合わせる。
+  // 画面側で部分一致すると、配点に入っていないスキルが緑で出てしまう
+  const selectedProjectSkillNeeds = useMemo(() => {
+    if (!selectedProject) return { have: [] as string[], want: [] as string[] }
+    const want = [
+      ...((selectedProject.required_skills as string[] | null) ?? []),
+      ...(((selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] | null) ?? []),
+    ]
+    const have = selectedProjectRanked.flatMap(s => (s.candidate.skills as string[] | null) ?? [])
+    return { have: [...new Set(have)], want: [...new Set(want)] }
+  }, [selectedProject?.id, selectedProjectRanked.length])
+
+  const { data: projectSkillMatcher = NO_MATCHES } = useQuery({
+    queryKey: [
+      'matching-skill-matches',
+      selectedProject?.id,
+      selectedProjectSkillNeeds.have.length,
+      selectedProjectSkillNeeds.want.join(','),
+    ],
+    queryFn: () => fetchSkillMatches(selectedProjectSkillNeeds.have, selectedProjectSkillNeeds.want),
+    enabled: mode === 'project'
+      && selectedProjectSkillNeeds.have.length > 0
+      && selectedProjectSkillNeeds.want.length > 0,
+    staleTime: 5 * 60 * 1000,
+  })
+
   // 重複候補マップ: candidate_id → DuplicateCandidate[]
   const [duplicatesMap, setDuplicatesMap] = useState<Record<string, DuplicateCandidate[]>>({})
   useEffect(() => {
@@ -1863,6 +1894,7 @@ const { data: projects = [] } = useQuery({
                               duplicates={duplicatesMap[s.candidate.id]}
                               requiredSkills={selectedProject.required_skills as string[]}
                               niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
+                              skillMatcher={projectSkillMatcher}
                               agentDomainMap={agentDomainMap}
                             />
                           ))}
