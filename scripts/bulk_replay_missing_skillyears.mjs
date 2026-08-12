@@ -31,8 +31,11 @@ const args = process.argv.slice(2)
 const RUN = args.includes('--run')
 const limitAt = args.indexOf('--limit')
 const LIMIT = Number(limitAt >= 0 ? args[limitAt + 1] : 0) || Infinity
-// 日数は素の数値引数。--limit の値を日数と誤認しないよう除外する
-const DAYS = Number(args.find((a, i) => /^\d+$/.test(a) && i !== limitAt + 1) ?? 7)
+// 日数は素の数値引数。--limit の値を日数と誤認しないよう除外する。
+// limitAt は --limit が無いと -1 になるので、limitAt+1=0 で先頭の引数を
+// 誤って弾かないよう limitAt >= 0 のときだけ除外する
+// （`365 --run --excel` が7日として動いていた）
+const DAYS = Number(args.find((a, i) => /^\d+$/.test(a) && (limitAt < 0 || i !== limitAt + 1)) ?? 7)
 const idAt = args.indexOf('--id')
 const ONLY_ID = idAt >= 0 ? args[idAt + 1] : null
 // skillYears が取れるのは実質 Excel だけ。PDF/Word を混ぜると無駄打ちになる
@@ -82,22 +85,37 @@ if (!RUN) {
   process.exit(0)
 }
 
+// 連続で叩くと TypeError: fetch failed（接続の張り直し失敗）が散発する。
+// 2026-08-12 の実測では39件中17件がこれで落ちた。少し待って2回まで再試行する
+async function fetchRetry(url, init, tries = 3) {
+  let lastErr
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fetch(url, init)
+    } catch (e) {
+      lastErr = e
+      await new Promise((r) => setTimeout(r, 1500 * (i + 1)))
+    }
+  }
+  throw lastErr
+}
+
 let ok = 0, improved = 0, failed = 0
 for (const c of targets.slice(0, LIMIT)) {
   const tag = `${String(c.name ?? '').padEnd(12)} ${c.id.slice(0, 8)}`
   try {
     // 本文テキスト（この1件のみ・JSONパスで text だけ）
-    const tRes = await fetch(`${URL}/rest/v1/candidates?id=eq.${c.id}&select=txt:raw_profile->>text`, { headers })
+    const tRes = await fetchRetry(`${URL}/rest/v1/candidates?id=eq.${c.id}&select=txt:raw_profile->>text`, { headers })
     const txt = (await tRes.json())[0]?.txt ?? ''
     // 経歴書ファイル（自前 Storage・公開URL）
-    const fRes = await fetch(c.resume_url)
+    const fRes = await fetchRetry(c.resume_url)
     if (!fRes.ok) { console.log(`SKIP ${tag} 経歴書取得 ${fRes.status}`); failed++; continue }
     const buf = Buffer.from(await fRes.arrayBuffer())
     if (buf.length === 0 || buf.length > 15 * 1024 * 1024) { console.log(`SKIP ${tag} サイズ異常 ${buf.length}`); failed++; continue }
     const name = decodeURIComponent(String(c.resume_url).split('/').pop() ?? 'resume.bin').split('?')[0]
     const mimeType = fRes.headers.get('content-type') ?? 'application/octet-stream'
 
-    const res = await fetch(`${URL}/functions/v1/inbound-email`, {
+    const res = await fetchRetry(`${URL}/functions/v1/inbound-email`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({
