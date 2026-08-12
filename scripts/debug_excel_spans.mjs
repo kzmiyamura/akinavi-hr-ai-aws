@@ -44,7 +44,9 @@ const fileRes = await fetch(
 )
 const buf = await fileRes.arrayBuffer()
 
-const wb = XLSX.read(new Uint8Array(buf), { type: 'array' })
+// 本番（index.ts:7299）と同じ読み込みオプション。cellDates の有無で
+// 日付書式のセルが Date になるかテキストのままかが変わり、抽出結果が別物になる
+const wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true })
 const wsName = wb.SheetNames[0]
 const ws = wb.Sheets[wsName]
 const data2d = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })

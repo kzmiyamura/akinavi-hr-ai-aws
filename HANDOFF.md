@@ -2,6 +2,32 @@
 
 ## 0. 次セッションの最初にやること
 
+### ⓪ 日付書式付きの数値セルがスキル表を丸ごと壊す（**最優先・再現手順あり**）
+
+本番は `XLSX.read(bytes, { type:'array', cellDates:true })` で読む（`index.ts:7299`）。
+このため「日付書式が付いた小さい数値」が Date に化け、`cellToText` が
+1900〜1902年の日付として描画する（`index.ts` の `cellToText`。y>=1900 を通す）。
+
+**実害**: T.A（`2b2234fb-7770-4ce2-ac59-7d24fdc6ca86`）は
+`cellDates:false` なら Unified が **52スキル**（最長136ヶ月）取れるのに、
+本番の `cellDates:true` では **grid=0 / cells=0** で全滅する。
+ログに `"1900/9/9"` `"1901/8/11"` `"1900/7/9"` という値が並ぶのが目印
+（それぞれ Excel シリアルの 253 / 589 / 191）。
+
+```
+node scripts/probe_skillyears.mjs 2b2234fb-7770-4ce2-ac59-7d24fdc6ca86
+node scripts/fetch_logs.mjs --hours 1 "TAスキルシート"
+```
+
+**未着手の理由**: この 253 / 589 / 191 が元の表で何を表す列なのか（規模の人月？件数？）
+を確認できていない。`cellToText` で「1910年より前の日付はシリアル値に戻す」のが
+筋に見えるが、値の意味を取り違えると別の壊し方をする。
+**CLAUDE.md の手順どおり `test_excel_anomalies.mjs` にケースを足してから直すこと。**
+
+なお `test_excel_parsing.mjs` は正しく `cellDates:true` を使っているので回帰は有効。
+ズレていたのは調査ツール側で、`probe_skillyears` / `audit_replay_experience_impact` /
+`debug_excel_spans` は本番に合わせて修正済み。
+
 ### ① スキル一致判定が緩すぎる → **対応済み（2026-08-12 夜）**
 
 `20260812_skill_match_normalize.sql` で部分一致をやめた。詳細はコミット `264be99`。
@@ -60,6 +86,12 @@ skillYears から内部キーを除外して保存している。経験年数の
 Excel だけなので、`--excel` を付けて回す（付けないと大半が無駄打ちになる）。
 PDF の skillYears 取得率は38%（93/245）で、Excel の95%（897/940）に比べて低い。
 **PDFからのスキル抽出が次の伸びしろ**。
+
+**Excel対象は流し終えた（2026-08-12 夜）**。38件を再解析して10件で skillYears が回復
+（H.I 37件 / TA 62件 / M.T 28件 / HT 29件 / TK 28件 / I.Y 19件 / W.Y 17件 / M.Y 15件 /
+YN 5件 / A.T 2件）。残りは経歴書にスキル表が無いか、上の⓪で全滅している。
+1件だけ 546（WORKER_RESOURCE_LIMIT）で失敗＝ M.S（`2d131015`）。重いファイルで
+変更前から落ちていた。
 
 ---
 

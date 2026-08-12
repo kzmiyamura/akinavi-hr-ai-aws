@@ -58,7 +58,10 @@ if (!/\.xlsx?$/i.test(String(c.resume_url).split('?')[0])) {
   console.log('Excel 以外の経歴書です（このツールは xlsx/xls 専用）'); process.exit(0)
 }
 
-const wb = XLSX.read(new Uint8Array(await (await fetch(c.resume_url)).arrayBuffer()), { type: 'array' })
+// 読み込みオプションも本番に合わせる（index.ts:7299）。cellDates の有無で
+// 日付書式のセルが Date になるかテキストのままかが変わり、抽出結果が別物になる
+const wb = XLSX.read(new Uint8Array(await (await fetch(c.resume_url)).arrayBuffer()),
+  { type: 'array', cellDates: true })
 
 const show = (label, obj, score) => {
   if (!obj || Object.keys(obj).length === 0) { console.log(`  ${label}: (空)`); return }

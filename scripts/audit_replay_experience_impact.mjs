@@ -78,7 +78,8 @@ console.log(`うち ${Math.min(targets.length, LIMIT)} 件を検査します\n`)
 
 /** 本番（inbound-email）と同じ経路で Excel から skillYears を作る */
 function extractSkillYears(buf) {
-  const wb = XLSX.read(new Uint8Array(buf), { type: 'array' })
+  // 読み込みオプションも本番に合わせる（index.ts:7299）
+  const wb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true })
   let best = null, bestScore = -1
   for (const name of wb.SheetNames) {
     const ws = wb.Sheets[name]
