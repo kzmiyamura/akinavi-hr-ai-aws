@@ -143,7 +143,21 @@ const cat = (r) => {
 const groups = {}
 for (const r of results) (groups[cat(r)] ??= []).push(r)
 
-console.log('=== 再解析したときの経験年数の変化 ===')
+// skillYears（実スキル）が回復するかどうか。経験年数とは別の観点で、
+// 再解析の主目的はこちら（マッチングのスキル判定に使えるようになる）
+const realSkills = (r) => Object.keys(r.sy ?? {}).filter((k) => !k.startsWith('_')).length
+const recovered = results.filter((r) => realSkills(r) > 0)
+console.log('=== 再解析で skillYears（実スキル）が入るか ===')
+console.log(`  入る    ${String(recovered.length).padStart(3)}件`)
+console.log(`  入らない ${String(results.length - recovered.length).padStart(3)}件  （経歴書にスキル表が無く、日付スパンしか読めないファイル）`)
+if (recovered.length > 0) {
+  console.log('  入る人:')
+  for (const r of recovered.slice(0, 20)) {
+    console.log(`    ${String(r.c.name ?? '').padEnd(12)} ${String(realSkills(r)).padStart(3)}スキル  ${r.c.id}`)
+  }
+}
+
+console.log('\n=== 再解析したときの経験年数の変化 ===')
 for (const [k, v] of Object.entries(groups).sort((a, b) => b[1].length - a[1].length)) {
   console.log(`  ${k.padEnd(8)} ${String(v.length).padStart(3)}件`)
 }

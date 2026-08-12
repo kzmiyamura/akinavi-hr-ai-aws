@@ -7336,6 +7336,12 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
     let skillYears: Record<string, number> = {}
     let firstJsonRows: Array<Record<string, string>> | undefined
     let firstGrid: string[][] | undefined
+    // 実スキルが1件でも取れているか。_totalProjectMonths / _dateSpanMonths は
+    // 経験年数推定用の内部キーで、スキルが取れたことにはならない
+    const hasRealSkillYears = (o: Record<string, number>) => Object.keys(o).some(k => !k.startsWith('_'))
+    // 添付全体の時間予算（シートを跨いで共有）。1シート目で使い切ったら
+    // 2シート目以降は見ずに打ち切る。546（WORKER_RESOURCE_LIMIT）を出さないための上限
+    const excelDeadline = Date.now() + 4500
     // セル単位ハイパーリンク（rels相当・SheetJSのlプロパティ）— 名簿リンク型検出の基盤
     const allLinks: { cell: string; url: string }[] = []
     for (const sheetName of sortedNames.slice(0, 3)) {
@@ -7368,12 +7374,25 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
       if (gridText.trim()) texts.push(`--- シート: ${sheetName} ---\n${gridText}`)
 
       // skillYears 抽出: grid ベースと SpanCell ベースの両方を試し、スキル数が多い方を採用
-      if (Object.keys(skillYears).length === 0) {
+      //
+      // 続行条件は「実スキルが取れていないこと」。以前は内部キーだけの結果
+      // （下のフォールバックが付ける _dateSpanMonths 等）でも非空と見なして打ち切っていたため、
+      // 1シート目が表紙・職務要約で2シート目に実績表がある経歴書を丸ごと取りこぼしていた
+      // （実例: H.I の「職務経歴書」→スキル0・スパンのみ / 「実績一覧」→27スキル。
+      //  シート名の優先キーワードに「職務」が入っているので表紙の方が先に来る）
+      if (!hasRealSkillYears(skillYears)) {
+        if (Date.now() > excelDeadline) {
+          console.warn(`[Excel] シート "${sheetName}" 以降は時間予算超過のため skillYears 抽出をスキップ`)
+          continue
+        }
         // 全抽出で共有する1つの時間予算（合計3.5秒）。各関数に別々の予算を渡すと順次実行で合算され
         // 13秒以上かかり546リソース超過→候補者消失になる実害があった（1-r.co.jp「展開用」テンプレ）。
         // 546は6.4秒でも発動するため、抽出以外の処理(~2秒)を足しても6秒未満に収まるよう短めにする。
         // 超過時は各関数が部分結果/空を返し、最終的に軽量な grid 結果へ退化する（546を根絶）。
-        const sheetDeadline = Date.now() + 3500
+        // 添付全体の予算（excelDeadline）も超えないようにして、複数シートを見ても総時間が伸びないようにする。
+        const sheetDeadline = Math.min(Date.now() + 3500, excelDeadline)
+        // 前のシートがフォールバックで付けた内部キー。実スキルが取れても失わないよう退避する
+        const prevMeta = skillYears
         const jsonRows = spanCellsToJson(cells, sheetDeadline)
         if (Date.now() > sheetDeadline) console.warn(`[Excel-json] TIMEOUT sheet="${sheetName}" 時間予算超過のため部分結果で打ち切り rows=${jsonRows.length}`)
         console.log(`[Excel-json] sheet="${sheetName}" totalRows=${jsonRows.length} rows=${JSON.stringify(jsonRows.slice(0, 10))}`)
@@ -7417,6 +7436,10 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
           // 勝者が syGrid(未フィルタ)の場合、案件期間の単純合算で「Excel=60年」等の非現実的な
           // 巨大値が残る実害があった（M.T型）。確定後に必ずフィルタを通し 40年超・ノイズ語を除外する。
           skillYears = filterSkillYears(skillYears)
+          // 前のシートで拾った経験年数の材料を落とさない（このシートで取れた方を優先）
+          for (const k of ['_totalProjectMonths', '_dateSpanMonths']) {
+            if (!skillYears[k] && prevMeta[k]) skillYears[k] = prevMeta[k]
+          }
           firstJsonRows = jsonRows
           const winner = (syVisual && countVisual > 0) ? 'visual'
             : (syProject && countProject >= countGrid) ? 'project'
@@ -7430,7 +7453,9 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
           // （例: "0年11ヶ月"）が jsonRows に残っていることがあるため、それらを合算する
           const fallbackMonths = sumStandaloneDurationValues(jsonRows)
           if (fallbackMonths > 0) {
-            skillYears = { _totalProjectMonths: fallbackMonths }
+            // 先に見たシートの内部キーは残す（後のシートで上書きしない）。
+            // 実スキルは取れていないので、次のシートの探索は続く
+            skillYears = { _totalProjectMonths: fallbackMonths, ...skillYears }
             firstJsonRows = jsonRows
             console.log(`[skillYears-fallback] sheet="${sheetName}" totalProjectMonths=${fallbackMonths}（単体期間セル合算）`)
           } else {
@@ -7438,7 +7463,7 @@ async function extractExcelAll(base64: string, opts?: { gidCsvRows?: string[][] 
             // 在籍全体のスパンを概算する（外資コンサル系の職務経歴書等で使用）
             const spanMonths = estimateDateSpanMonthsFromRows(jsonRows)
             if (spanMonths && spanMonths > 0) {
-              skillYears = { _dateSpanMonths: spanMonths }
+              skillYears = { _dateSpanMonths: spanMonths, ...skillYears }
               firstJsonRows = jsonRows
               console.log(`[skillYears-fallback] sheet="${sheetName}" dateSpanMonths=${spanMonths}（日付スパン概算）`)
             }
