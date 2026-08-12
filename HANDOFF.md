@@ -1,5 +1,51 @@
 # 引き継ぎ（2026-08-12 時点）
 
+## 0. 次セッションの最初にやること（2026-08-12 午後セッションからの引き継ぎ）
+
+**やりかけの作業: 経歴書ありで skillYears 空の245件の一括再解析。**
+スクリプトは作成・ドライラン済みで、**実行直前で停止した**（ユーザー exit のため未実行）。
+
+```powershell
+node scripts/bulk_replay_missing_skillyears.mjs                 # ドライラン（対象一覧）
+node scripts/bulk_replay_missing_skillyears.mjs --run --limit 5 # まず5件で挙動確認
+node scripts/bulk_replay_missing_skillyears.mjs --run           # 全228件（約20分・AI不使用）
+```
+
+- 対象: 直近7日・resume_url が自前 Storage・skillYears 空の228件（PDF 140件含む）
+- 狙い: PDF行復元・管理番号マッチ等の**新抽出器を旧取り込み分に適用し直す**。
+  inbound-email の再解析経路（force + target_candidate_id）なので AI 費用ゼロ
+- 実行後 `node scripts/audit_skillyears_gap.mjs 7` で回復数を確認する
+
+**その次のタスク（ユーザー指示済み・未着手）: 案件側の抽出をマッチング精度観点で再設計。**
+案件メールの抽出が人材とのマッチングを考慮できていない。`fetch_candidates_for_project`
+RPC がスコア計算に使う項目（スキル・単価・地域・稼働時期等）を正として、
+案件側で引き抜くべき項目と形式を人材側と揃える設計を提案 → 実装する。
+
+### 今日（8/12 午後）やったこと（すべて push・デプロイ済み）
+
+1. **egress**: 8/11 実測 PostgREST 86.5MB（前日366MB から76%減）。編集モーダル保存後の
+   一覧 invalidate を部分更新に置換（該当は8箇所中1箇所のみ。他は据え置きが正しい）
+2. **「AI校正待ち」バッジ修正**: スキル絞込対象外の255件に永久に来ない「待ち」が
+   出ていた。絞込判定をバッジに追加
+3. **監査の誇張を訂正**: 「経歴書なし19.6%」は誤分類で、真に入力なしは6.5%。
+   検証SQL `scripts/sql/audit_no_resume_claim*.sql`
+4. **名簿取りこぼし4系統を修正**（inbound-email デプロイ済み）:
+   - 行上限 15→70（切り捨て約246行/3日）・膨張ガード 30→70 連動
+   - 名簿リンク取得に最低2.5秒予算を保証（予算0秒問題）
+   - 添付割当にパス1.5「管理番号マッチ」追加（キャル型 D-UNASSIGNED 対策）
+   - looksLikeRosterName に「顧客」追加（Trinitas 幽霊11件の再発防止）
+   - 検証: anomalies 195/195・Golden 207/207 一致。監視は
+     `npx supabase db query --linked -f scripts/sql/audit_roster_drops.sql`
+
+### 監視ポイント（数日後に見る）
+
+- 名簿行上限 70 化の副作用: 546（CPU限界）タイムアウトや幽霊増がないか。
+  幽霊は隔離 Issue（非人材検知まとめ）の頻度で分かる
+- C-ROSTER-CAP / C-ROW-LINK-SKIP / D-UNASSIGNED が減ったか（audit_roster_drops.sql）
+- 隔離済み89件の完全削除（`node scripts/audit_quarantined.mjs 7 --delete`）は**ユーザー判断待ち**
+- ワーカー処理能力: 絞込合致の流入 ≒105件/日 vs 上限100件/日で拮抗。
+  上限引き上げは Max 枠消費と引き換えのため**ユーザー判断待ち**
+
 ## 1. まず再起動後に確認すること
 
 pm2 は `pm2 save` 済みなので、ログオン時に自動復元される想定
