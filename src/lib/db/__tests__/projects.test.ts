@@ -22,6 +22,10 @@ const baseProject: Project = {
   role_summary: 'SE',
   industry: '金融',
   raw_data: { niceToHaveSkills: ['Docker'] },
+  // マッチングに使う項目（2026-08-12 追加）
+  skill_weights: null,
+  work_prefecture: null,
+  required_experience_years: null,
   status: 'open',
   created_by: 'test',
   updated_by: null,

@@ -520,7 +520,6 @@ function ProjectModeRankCard({
             const gender = rp2?.gender as string | null
             const prefecture = rp2?.prefecture as string | null
             const nearestStation = rp2?.nearestStation as string | null
-            const remoteAvailable = rp2?.remoteAvailable as boolean | null
             const wantsFullRemote = rp2?.wantsFullRemote as boolean | null
             const agentComment = rp2?.agentComment as string | null
             const location = [prefecture, nearestStation].filter(Boolean).join(' / ')

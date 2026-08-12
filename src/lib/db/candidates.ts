@@ -312,7 +312,8 @@ export async function fetchCandidatesPage(
     .range(offset, offset + limit - 1)
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
-  return { candidates: (data ?? []) as Candidate[], totalCount: offset === 0 ? (count ?? null) : null }
+  // .or() を挟むと supabase-js の戻り型が GenericStringError[] に落ちるため unknown 経由で戻す
+  return { candidates: (data ?? []) as unknown as Candidate[], totalCount: offset === 0 ? (count ?? null) : null }
 }
 
 /** 優先表示するスキル（app_config.llm_filter_skills）。
