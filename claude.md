@@ -128,7 +128,9 @@ git add -A && git commit -m "fix: ..." && git push
 | `candidates_archive_light` | 人材マップ用サマリー。7日経過 prod 人材を `archive-candidates` Edge Function が毎日 JST 0:00 に移動 |
 | `ai_logs` | AI呼び出しログ。`inbound-email` 由来は `model='no-ai'` |
 | `error_logs` | フロントエンドエラーログ。30日自動削除 cron は未実装（要追加） |
-| `skill_master` | ITスキルマスタ（約1,660件）。aliases で表記ゆれ吸収 |
+| `skill_master` | ITスキルマスタ（951件）。aliases で表記ゆれ吸収。更新すると `skill_norm_map` がトリガで貼り直される |
+| `skill_norm_map` | **マテリアライズドビュー**。skill_master の正式名＋別名 → 正式名の正規化辞書。マッチングのスキル一致判定用 |
+| `skill_implications` | 「childを持つ人はparent要件も満たす」向きのある包含関係（MySQL→SQL 等）。別名では表現できない関係を扱う |
 | `station_master` | 駅名・路線名→都道府県マッピング（ekidata.jp実データ、12,666行・8,443駅名。同名駅は路線で判別。路線不明時は首都圏の県を優先採用＝2026-08-08ユーザー判断、首都圏同士で割れたらnull）。`scripts/export_station_master.mjs` で `supabase/functions/inbound-email/station_data.json` に書き出し、Edge Functionにビルド時同梱（実行時DB問い合わせなし）。DB更新時は再エクスポート＋再デプロイが必要 |
 | `app_config` | アプリ全体設定・Microsoft OAuthトークン保存 |
 | `notification_rules` | 人材ウォッチ通知ルール（通知タブでCRUD）。7/23復旧日にマイグレーション適用 |
@@ -152,6 +154,11 @@ git add -A && git commit -m "fix: ..." && git push
 ## 6. アーキテクチャメモ
 
 - **マッチングスコア計算**: `fetch_candidates_for_project` RPC（SQL）でルールスコアを計算 → topN件だけ AI 採点。スコア配点・ウェイト詳細はRPC定義を参照
+- **スキル一致判定**: 実体は `skill_hit_weights()`、定義は `skill_satisfies()`（`20260812_skill_match_normalize.sql`）。
+  正規化（skill_master の別名）＋包含関係（`skill_implications`）＋語境界の3つで判定する。
+  **部分一致は使わない**（`JavaScript` が `Java` に、`Shell` が `PowerShell` に一致していた）。
+  `fetch_candidates_for_project` / `auto-match` / マッチング画面の緑表示は全てこの判定を共有する。
+  判定を変えたら `scripts/sql/test_skill_matching.sql` と `test_skill_matching_rpc_parity.sql` を実行する
 - **inbound-email 処理フロー**: `supabase/functions/inbound-email/index.ts` を参照
 - **論理データ環境**: `prod` / `demo` を `data_env` カラムで分離。SettingsPage の「デモモード」スイッチで切替
 - **画面構成**: ナビは5タブ（マッチング/人材/案件/通知/設定）。`src/components/Layout.tsx` の `NAV_ITEMS` を正とする
