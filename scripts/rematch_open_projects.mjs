@@ -4,15 +4,19 @@
  * submissions を upsert する。新スコアリング（英語要件・雇用形態・派遣免許）を反映。
  *
  * Usage:
- *   node scripts/rematch_open_projects.mjs [--dry-run]
+ *   node scripts/rematch_open_projects.mjs [--dry-run] [--project <id先頭一致>]
+ *
+ * --project を付けると1案件だけ回す（id は先頭一致で可）。
  */
 
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'fs'
 
 // .env.local を手動パース（dotenv 不要）
+// CRLF のまま split('\n') すると行末に \r が残り、`.` は \r にマッチしないので
+// /^([^#=]+)=(.*)$/ が全行外れる（＝env が空のまま起動する）
 const envText = readFileSync(new URL('../.env.local', import.meta.url), 'utf8')
-for (const line of envText.split('\n')) {
+for (const line of envText.split(/\r?\n/)) {
   const m = line.match(/^([^#=]+)=(.*)$/)
   if (m) process.env[m[1].trim()] = m[2].trim()
 }
@@ -20,13 +24,33 @@ for (const line of envText.split('\n')) {
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL
 const ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY
 const EDGE_URL = `${SUPABASE_URL}/functions/v1`
-const supabase = createClient(SUPABASE_URL, ANON_KEY)
+
+// anon ロールは statement_timeout（既定8秒）が短く、必須スキルが広い案件だと
+// fetch_candidates_for_project（実測10秒超）が毎回切られる。バッチは service_role で回す。
+const USE_SERVICE = process.argv.includes('--service')
+let dbKey = ANON_KEY
+if (USE_SERVICE) {
+  const wt = readFileSync(new URL('.akinavi_shadow.env', `file:///${process.env.USERPROFILE.replace(/\\/g, '/')}/`), 'utf8')
+  for (const line of wt.split(/\r?\n/)) {
+    const m = line.match(/^\s*export\s+([A-Z_]+)=(.*)$/)
+    if (m) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '')
+  }
+  dbKey = process.env.SUPABASE_SERVICE_KEY
+}
+const supabase = createClient(SUPABASE_URL, dbKey)
 
 const DEFAULT_WEIGHTS = { skill: 40, exp: 15, rate: 15, location: 20, remote: 10 }
 const BATCH_TOP_N = 10
-const CANDIDATE_LIMIT = 500
+const CANDIDATE_LIMIT = (() => {
+  const i = process.argv.indexOf('--limit')
+  return i >= 0 ? Number(process.argv[i + 1]) : 500
+})()
 const DATA_ENV = 'prod'
 const DRY_RUN = process.argv.includes('--dry-run')
+const PROJECT_FILTER = (() => {
+  const i = process.argv.indexOf('--project')
+  return i >= 0 ? process.argv[i + 1] ?? null : null
+})()
 
 // ── 候補者 → match-batch 入力変換 ──────────────────────────────────────────
 function toCandidateBatchInput(c, agentMap) {
@@ -112,14 +136,20 @@ async function main() {
   console.log(`agent_companies: ${agentMap.size} 件`)
 
   // open 案件を全取得
-  const { data: projects, error: pErr } = await supabase
+  const { data: allProjects, error: pErr } = await supabase
     .from('projects')
     .select('*')
     .eq('data_env', DATA_ENV)
     .eq('status', 'open')
     .order('created_at', { ascending: false })
   if (pErr) throw new Error(pErr.message)
-  console.log(`open 案件: ${projects.length} 件\n`)
+  const projects = PROJECT_FILTER
+    ? allProjects.filter(p => p.id.startsWith(PROJECT_FILTER))
+    : allProjects
+  if (PROJECT_FILTER && projects.length === 0) {
+    throw new Error(`--project ${PROJECT_FILTER} に一致する open 案件がない`)
+  }
+  console.log(`open 案件: ${projects.length} 件${PROJECT_FILTER ? `（--project ${PROJECT_FILTER} で絞り込み）` : ''}\n`)
 
   let totalUpserted = 0, totalErrors = 0
 
@@ -142,6 +172,11 @@ async function main() {
       p_weight_location: DEFAULT_WEIGHTS.location,
       p_weight_remote:   DEFAULT_WEIGHTS.remote,
       p_require_haken:   false,
+      // 画面（src/lib/db/candidates.ts）と同じ引数を渡す。
+      // 省略すると古い13引数版のオーバーロードに落ちて結果が食い違う
+      p_work_prefecture:    project.work_prefecture ?? null,
+      p_required_exp_years: project.required_experience_years ?? null,
+      p_skill_weights:      project.skill_weights ?? null,
     })
     if (cErr) { console.error('  candidates 取得失敗:', cErr.message); continue }
     if (!candidates || candidates.length === 0) { console.log('  候補者なし スキップ'); continue }
