@@ -94,7 +94,15 @@ export function buildProjectPatch(p, f, skillMasterNormSet) {
   set('workload', f.workload)
   set('settlement_min', intIn(f.settlementMin, 0, 744))
   set('settlement_max', intIn(f.settlementMax, 0, 744))
-  set('role_summary', f.roleSummary)
+  // 体制の人数表現は募集役割として意味を持たないので捨てる。
+  // 実害: 「PLとメンバーの合計3名は弊社から参画」から roleSummary="メンバー" を拾い、
+  // 案件見出しが「メンバー を 1名」になった。同じ案件の再送版は「保守開発」と取れており揺れる。
+  // ヘルプデスク・開発および保守 のような正しい値を落とさないよう、白リストではなく除外語で判定する
+  const MEANINGLESS_ROLE = /^(メンバー|メンバ|要員|担当者?|増員|スタッフ|人員|作業者)$/
+  const roleSummary = typeof f.roleSummary === 'string' && !MEANINGLESS_ROLE.test(f.roleSummary.trim())
+    ? f.roleSummary
+    : null
+  set('role_summary', roleSummary)
   set('industry', f.industry)
   set('niceToHaveSkills', Array.isArray(f.niceToHaveSkills) ? f.niceToHaveSkills.filter(Boolean) : null, { raw: true })
 
@@ -109,13 +117,21 @@ export function buildProjectPatch(p, f, skillMasterNormSet) {
     set('requiredSkillYears', Object.keys(cleaned).length ? cleaned : null, { raw: true })
   }
 
-  // required_skills は skill_master にある未登録スキルの追加のみ
-  if (Array.isArray(f.requiredSkills) && f.requiredSkills.length && skillMasterNormSet) {
+  // required_skills は「regex が1件も取れなかったときだけ」LLM の結果で埋める（他項目と同じ fill）。
+  //
+  // 以前は人材の skills と同じ「追加のみ」だったが、実データ8件で測ると役に立ったのは
+  // required_skills が空だった1件だけで、既に入っている案件への追加は全部ノイズだった
+  // （Azure Functions があるのに AzureFunction、システム側のヘルプデスク があるのに ヘルプデスク）。
+  // normTech は空白と大文字小文字しか吸収しないため、この手の表記ゆれは重複として弾けない。
+  // 必須スキルが増えると「何件中いくつ一致したか」の分母が膨らみ、同じ候補者でもスコアが
+  // 下がるので、取りこぼしを埋める効果よりも害が大きい。
+  const hasRegexSkills = Array.isArray(p.required_skills) && p.required_skills.length > 0
+  if (!hasRegexSkills && Array.isArray(f.requiredSkills) && f.requiredSkills.length && skillMasterNormSet) {
     const merged = mergeSkills(p.required_skills, f.requiredSkills, skillMasterNormSet)
     if (merged) {
       stash('required_skills', p.required_skills ?? null)
       top.required_skills = merged
-      changes.push(`required_skills(+${merged.length - (p.required_skills?.length ?? 0)})`)
+      changes.push(`required_skills(${merged.length}件・regexが0件のため補完）`)
     }
   }
 

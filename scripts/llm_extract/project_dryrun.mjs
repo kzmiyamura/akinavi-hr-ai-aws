@@ -5,11 +5,25 @@
 // buildProjectPatch が「適用するはずの変更」を表示する。ポリシー調整の判断材料用。
 //
 // 使い方:
-//   source ~/.akinavi_shadow.env && node scripts/llm_extract/project_dryrun.mjs [件数=10]
+//   node scripts/llm_extract/project_dryrun.mjs [件数=10]
 //   --apply を付けると実際に PATCH する（既定はドライラン・書き込みなし）
+//
+// env は ~/.akinavi_shadow.env から自分で読む（source は allowlist に登録できず
+// 実行のたびに承認待ちで止まるため。sb-query.mjs と同じ方針）
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { extractProjectFields } from './run.mjs'
 import { buildProjectPatch } from './project_apply.mjs'
 import { normTech } from './lib.mjs'
+
+for (const line of readFileSync(join(homedir(), '.akinavi_shadow.env'), 'utf8').split(/\r?\n/)) {
+  const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/)
+  if (!m) continue
+  let v = m[2].trim()
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1)
+  if (!process.env[m[1]]) process.env[m[1]] = v
+}
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const KEY = process.env.SUPABASE_SERVICE_KEY
