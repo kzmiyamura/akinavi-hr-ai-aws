@@ -569,7 +569,8 @@ interface EditModalProps {
   nickname: string
   dataEnv: DataEnv
   onClose: () => void
-  onSaved: () => void
+  /** 保存後に呼ぶ。patch は DB 反映済みの更新値（一覧・詳細キャッシュの部分更新に使う） */
+  onSaved: (patch: Partial<Candidate>) => void
 }
 
 export function CandidateEditModal({ candidate, nickname, dataEnv, onClose, onSaved }: EditModalProps) {
@@ -595,7 +596,7 @@ export function CandidateEditModal({ candidate, nickname, dataEnv, onClose, onSa
       }
       const allSkills = Object.values(skillsByCategory).flat()
 
-      await updateCandidate({
+      const updated = await updateCandidate({
         id: candidate.id,
         dataEnv,
         name: form.name.trim() || candidate.name,
@@ -623,7 +624,7 @@ export function CandidateEditModal({ candidate, nickname, dataEnv, onClose, onSa
       await import('../lib/supabase').then(({ supabase }) =>
         supabase.from('candidates').update({ skills: allSkills }).eq('id', candidate.id).eq('data_env', dataEnv),
       )
-      onSaved()
+      onSaved({ ...updated, skills: allSkills })
     } catch (e) {
       setError(String(e))
     } finally {
@@ -1233,10 +1234,16 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           nickname={nickname}
           dataEnv={dataEnv}
           onClose={() => setEditingCandidate(null)}
-          onSaved={() => {
+          onSaved={(patch) => {
             setEditingCandidate(null)
             queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
-            queryClient.invalidateQueries({ queryKey: ['candidates-paged', dataEnv] })
+            // 1人の編集なので一覧は該当者の差し替えで足りる。invalidate すると
+            // 保持中の全ページ（最大約650KB）を取り直してしまう
+            patchCandidateInCache(queryClient, dataEnv, editingCandidate.id, patch)
+            // 詳細ペインの raw_profile も手元の更新値で差し替え（再取得しない）
+            if (patch.raw_profile) {
+              queryClient.setQueryData(['candidate-raw-profile', editingCandidate.id], patch.raw_profile)
+            }
           }}
         />
       )}

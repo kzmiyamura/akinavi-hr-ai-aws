@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Pencil, Loader2, ExternalLink, Reply } from 'lucide-react'
-import { fetchCandidateById } from '../lib/db/candidates'
+import { fetchCandidateById, type Candidate } from '../lib/db/candidates'
+import { patchCandidateInCache } from '../lib/candidateCache'
 import { CandidateProfileFields, CandidateEditModal } from './CandidatePage'
 import { toViewerUrl } from '../lib/viewerUrl'
 import type { DataEnv } from '../lib/dataEnv'
@@ -22,9 +23,17 @@ export function CandidateDetailPage({ candidateId, nickname, dataEnv, onBack }: 
     queryFn: () => fetchCandidateById(candidateId, dataEnv),
   })
 
-  function handleSaved() {
-    queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv, candidateId] })
-    queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+  function handleSaved(patch: Partial<Candidate>) {
+    // 編集値は手元にあるので、このページの詳細行と人材タブの一覧は部分更新で反映する
+    // （invalidate だと詳細行35KB＋一覧全ページの再取得が飛ぶ）
+    queryClient.setQueryData(['candidates', dataEnv, candidateId], (old: unknown) =>
+      old ? { ...(old as Candidate), ...patch } : old)
+    patchCandidateInCache(queryClient, dataEnv, candidateId, patch)
+    if (patch.raw_profile) {
+      queryClient.setQueryData(['candidate-raw-profile', candidateId], patch.raw_profile)
+    }
+    // マッチング/履歴/重複タブの全件クエリは従来どおり stale 化（非表示中は再取得は飛ばない）
+    queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv], exact: true })
     setEditingOpen(false)
   }
 
