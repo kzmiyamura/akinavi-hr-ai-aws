@@ -15,7 +15,7 @@
  *     FAIL を確認 → index.ts を修正 → PASS を確認（テストファースト）
  *   - index.ts 変更後は node scripts/sync_extractors.mjs を忘れずに
  */
-import { extractSkillYearsFromSheetData, scoreSkillQuality, gridToJsonRows, extractSkillYearsFromSheetJson, filterSkillYears, extractSkillYearsFromBodyText } from './_extractors.gen.mjs'
+import { extractSkillYearsFromSheetData, scoreSkillQuality, gridToJsonRows, extractSkillYearsFromSheetJson, filterSkillYears, extractSkillYearsFromBodyText, cellToText } from './_extractors.gen.mjs'
 
 const verbose = process.argv.includes('-v')
 let pass = 0
@@ -889,6 +889,45 @@ console.log('=== R. assignAttachmentsToBlocks（ブロック×添付の割当・
     [{ name: 'GH', station: '横浜駅' }],
     [{ label: 'Excelファイル(GH_横浜.xlsx)' }],
     { 0: 'Excelファイル(GH_横浜.xlsx)' })
+}
+
+console.log('=== S. cellToText: 日付書式が付いた数値セル（T.A型） ===')
+{
+  // 本番は XLSX.read(..., { cellDates: true }) で読む（index.ts:7299）。
+  // 「期間」列に日数（253日など）を入れて "00年9ヶ月" と表示する書式を当てているファイルがあり、
+  // その数値が Date に化けて 1900〜1902年の日付になる。cellToText がそれを "1900/9/9" と
+  // 出力すると期間列が壊れ、スキル表の抽出が丸ごと失敗する。
+  // 実例: T.A（2b2234fb）のスキルシートは 52スキル取れるはずが grid=0 / cells=0 で全滅していた。
+  // セルの表示文字列（w）は "00年9ヶ月" と正しいので、実在しない年ならそちらを使う。
+  const ct = (label, cell, expect) => {
+    const got = cellToText(cell)
+    if (got === expect) { pass++; if (verbose) console.log(`  PASS ${label} -> "${got}"`) }
+    else {
+      fail++
+      failures.push(label)
+      console.log(`  FAIL ${label}`)
+      console.log(`       expect: "${expect}"`)
+      console.log(`       got   : "${got}"`)
+    }
+  }
+  const d = (y, m, day) => new Date(Date.UTC(y, m - 1, day))
+
+  ct('S1: 期間セル（253日→"00年9ヶ月"）は表示文字列を使う',
+    { v: d(1900, 9, 9), w: '00年9ヶ月' }, '00年9ヶ月')
+  ct('S2: 期間セル（589日→"01年8ヶ月"）',
+    { v: d(1901, 8, 11), w: '01年8ヶ月' }, '01年8ヶ月')
+  ct('S3: 実在の日付は YYYY/M/D に正規化する（従来どおり）',
+    { v: d(2019, 3, 1), w: '2019/3/1' }, '2019/3/1')
+  ct('S4: 生年月日1969年も日付として扱う（1910年以降）',
+    { v: d(1969, 11, 8), w: '1969年11月8日' }, '1969/11/8')
+  ct('S5: 1910年ちょうどは日付',
+    { v: d(1910, 1, 1), w: '1910/1/1' }, '1910/1/1')
+  ct('S6: 1909年は日付扱いしない（表示文字列を使う）',
+    { v: d(1909, 12, 31), w: '01年11ヶ月' }, '01年11ヶ月')
+  ct('S7: 表示文字列が無ければ従来どおり日付として出す（後方互換）',
+    { v: d(1900, 9, 9) }, '1900/9/9')
+  ct('S8: 2100年超は従来どおり表示文字列',
+    { v: d(2200, 1, 1), w: '2200/1/1' }, '2200/1/1')
 }
 
 console.log(`\n📊 ${pass} passed / ${fail} failed（全${pass + fail}ケース）`)

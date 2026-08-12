@@ -4764,7 +4764,12 @@ function cellToText(cell: XlsxCell | undefined): string {
   const v = cell.v
   if (v instanceof Date) {
     const y = v.getUTCFullYear(), mo = v.getUTCMonth() + 1, d = v.getUTCDate()
-    if (y >= 1900 && y <= 2100) return `${y}/${mo}/${d}`
+    // 1910年より前は実在の日付ではなく、日付書式が付いた小さい数値が cellDates:true で
+    // Date に化けたもの。「期間」列に日数を入れて "00年9ヶ月" と表示するファイルが実在する
+    // （実例 T.A: 253日 → 1900/9/9 に化けて期間列が壊れ、52スキルあるシートが
+    //  grid=0 / cells=0 で全滅していた）。表示文字列(w)の方が正しいのでそちらに任せる。
+    // w が無いときだけ従来どおり日付として出す（後方互換）。
+    if ((y >= 1910 || !cell.w) && y <= 2100) return `${y}/${mo}/${d}`
   }
   return String(cell.w ?? (v !== undefined ? v : '')).replace(/\r\n?/g, '\n').trim()
 }
