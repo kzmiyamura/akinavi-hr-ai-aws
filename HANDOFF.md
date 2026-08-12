@@ -6,31 +6,36 @@
 
 ## 0. 次にやること
 
-### ★ 最優先: マッチング画面のスキル緑表示が本当に直っているか確認する（**未検証**）
+### ★ スキル緑表示の件: ほぼ白と判明（残るは目視1回だけ）
 
-セッション終了間際にブラウザで見たところ、**判定が効いていない可能性がある**。
-確認しきる前に中断したので、必ず自分の目で確かめること。
+8/13 に切り分けを実施した。**原因は「観察時点の Vercel デプロイが古かった」でほぼ確定。**
 
-見たもの（`https://akinavi-hr-ai-aws.vercel.app/` → マッチング → 案件
-「１．精密機器製造・販売会社向け生産管理業務…」→ 1位 M.K）:
+調べた事実:
 
-- 候補者スキルのタグで **「C」が緑（＝必須スキル一致）に見えた**
-- 必須スキルパネルで **「C#」が緑**、Java・基本設計・VB.net は取り消し線
+1. **現在の Vercel は最新コード**。デプロイ済みバンドル `assets/index-D-YZVJrc.js` に
+   `match_skill_strings` が含まれ、ローカル `npm run build` の成果物と
+   **ファイル名ハッシュが完全一致**（＝HEAD のビルドが配信されている）
+2. **サーバ判定は正しい**。M.K の実スキルで RPC を直接呼んだ:
+   `match_skill_strings({C, Objective-C, .NET Framework, MySQL}, {C#, Java, SQL, VB.net})`
+   → 返るのは `MySQL→SQL` の1組だけ。**C は C# を満たさない**
+3. **テスト全て PASS**: test_skill_matching.sql 28/28、
+   test_skill_matching_rpc_parity.sql（1,571人・食い違い0）、
+   test_match_skill_strings.sql、vitest skillMatch 7/7、`npm run build` 成功
+4. **フロント配線も正常**（`MatchingPage.tsx:1384` で `projectSkillMatcher` を
+   RPC から取得し `:1896` で渡している。`NO_MATCHES` は読込中フォールバックのみ）
+5. **観察された表示は旧コードの挙動と完全一致**。観察対象はスコア順2位の
+   M.K（`938cfb4a`、C# なし・C あり・Java/JavaScript なし）とみられ、
+   旧ルール（双方向部分一致）だと `"C#".includes("C")` で C も C# も緑、
+   Java・基本設計・VB.net は取り消し線 — 見た目がそのまま再現する。
+   なお RPC の順位では精密機器案件の1位は K.N。submissions のスコア順では
+   1位 K.M（70点・本物の C# 持ち）、2位 M.K（67点）
+6. 案件「１．精密機器製造・販売会社向け…」は **prod に2件重複**
+   （`82da71a0`=C#/VB.net 表記、`b49f11d9`=C#.NET/VB.NET 表記）。既知の積み残し
 
-新ルールでは **C は C# を満たさない**（`scripts/sql/test_skill_matching.sql` で PASS 済み）。
-考えられるのは次の3つ。**上から順に潰すこと。**
-
-1. **M.K が隠れている20スキルの中に本物の C# を持っている**（＝正しい表示）。
-   「スキルをさらに表示（20件）」を開けば分かる。一番ありそう
-2. **Vercel のデプロイが古い**。`tsc -b` は 8/11 から壊れていて、直したのは
-   `f3d0f44`。それ以前のデプロイが失敗していた可能性がある。
-   Vercel のビルドログで最新コミットが出ているか見る
-3. **フロントの配線ミス**。`MatchingPage.tsx` の `skillMatcher` が
-   `NO_MATCHES` のままか、`projectSkillMatcher` が渡っていない
-
-サーバ側の判定は検証済みなので、疑うならフロント。切り分けは
-`npx supabase db query --linked -f scripts/sql/test_match_skill_strings.sql`（PASS 済み）
-と、ブラウザの DevTools で `match_skill_strings` の応答を見るのが早い。
+残作業（5分）: ブラウザで当該案件を開き、M.K の必須スキルパネルで
+**C# が取り消し線・SQL とテストだけ緑**になっていることを目視する。
+8/13 にブラウザで開く直前まで進めて中断した。スーパーリロード
+（キャッシュに旧バンドルが残っている可能性）を忘れずに。
 
 ### 次点: PDF からのスキル抽出
 
