@@ -79,14 +79,19 @@ function resolveProjectPrefecture(workLocation, fallbackText) {
 function extractRequiredExperienceYears(text) {
   if (!text) return null
   const t = text.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xFEE0))
+  const SUFFIX = '(?:以上|程度|前後|超)'
   const patterns = [
-    /(?:実務|開発|業務|運用|設計|IT)?経験[^\n。]{0,12}?(\d{1,2})\s*年以上/,
-    /(\d{1,2})\s*年以上[^\n。]{0,12}?(?:実務|開発|業務|運用|設計|IT)?経験/,
-    /経験年数[^\n]{0,6}[：:]\s*(\d{1,2})\s*年/,
+    new RegExp(`(?:実務|開発|業務|運用|設計|IT)?経験[^\\n。]{0,14}?(?<![\\d])(\\d{1,2})\\s*年${SUFFIX}`),
+    new RegExp(`(?<![\\d])(\\d{1,2})\\s*年${SUFFIX}[^\\n。]{0,14}?(?:実務|開発|業務|運用|設計|IT)?経験`),
+    /経験年数[^\n]{0,6}[：:]\s*(?<![\d])(\d{1,2})\s*年/,
   ]
+  // 候補者側の experience_years は IT実務経験年数。社会人歴・在籍年数は突き合わせられないので拾わない
+  const NOT_IT_EXPERIENCE = /(社会人|勤務|就業|在籍|社歴|同一企業)/
   for (const re of patterns) {
-    const m = t.match(re)
-    if (m) {
+    for (const m of t.matchAll(new RegExp(re.source, 'g'))) {
+      const at = m.index ?? 0
+      const ctx = t.slice(Math.max(0, at - 12), at + m[0].length + 12)
+      if (NOT_IT_EXPERIENCE.test(ctx)) continue
       const n = parseInt(m[1], 10)
       if (Number.isFinite(n) && n >= 1 && n <= 40) return n
     }
@@ -94,8 +99,12 @@ function extractRequiredExperienceYears(text) {
   return null
 }
 
+// description には【スキル】欄が入らないため、元メール全文（raw_data.text）も見る。
+// ただし1通に複数案件が入っていた場合（batchSize>1）は他案件の記述を巻き込むので使わない
 const res = await fetch(
-  `${URL_}/rest/v1/projects?select=id,title,description,work_location,work_prefecture,required_experience_years&data_env=eq.prod&limit=1000`,
+  `${URL_}/rest/v1/projects?select=id,title,description,work_location,work_prefecture,` +
+  `required_experience_years,srctext:raw_data->>text,batchsize:raw_data->batchSize` +
+  `&data_env=eq.prod&limit=1000`,
   { headers })
 if (!res.ok) { console.error(`${res.status}: ${(await res.text()).slice(0, 200)}`); process.exit(1) }
 const rows = await res.json()
@@ -103,7 +112,8 @@ console.log(`案件 ${rows.length}件\n`)
 
 let updated = 0, skipped = 0
 for (const p of rows) {
-  const text = [p.title ?? '', p.description ?? ''].join('\n')
+  const singleProjectMail = Number(p.batchsize ?? 1) <= 1
+  const text = [p.title ?? '', p.description ?? '', singleProjectMail ? (p.srctext ?? '') : ''].join('\n')
   const pref = p.work_prefecture ?? resolveProjectPrefecture(p.work_location, text)
   const years = p.required_experience_years ?? extractRequiredExperienceYears(text)
   const needs = (pref !== p.work_prefecture) || (years !== p.required_experience_years)

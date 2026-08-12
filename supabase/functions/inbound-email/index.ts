@@ -1332,14 +1332,23 @@ async function resolveProjectPrefecture(
 export function extractRequiredExperienceYears(text: string): number | null {
   if (!text) return null
   const t = text.replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xFEE0))
+  // 「以上」以外に「程度」「前後」も要件表現として拾う（実例:「Javaでの開発経験（10年程度）」）。
+  // 数字の直前が数字でないことを要求して「2027年2月」の "27年" を誤って拾わないようにする
+  const SUFFIX = '(?:以上|程度|前後|超)'
   const patterns = [
-    /(?:実務|開発|業務|運用|設計|IT)?経験[^\n。]{0,12}?(\d{1,2})\s*年以上/,
-    /(\d{1,2})\s*年以上[^\n。]{0,12}?(?:実務|開発|業務|運用|設計|IT)?経験/,
-    /経験年数[^\n]{0,6}[：:]\s*(\d{1,2})\s*年/,
+    new RegExp(`(?:実務|開発|業務|運用|設計|IT)?経験[^\\n。]{0,14}?(?<![\\d])(\\d{1,2})\\s*年${SUFFIX}`),
+    new RegExp(`(?<![\\d])(\\d{1,2})\\s*年${SUFFIX}[^\\n。]{0,14}?(?:実務|開発|業務|運用|設計|IT)?経験`),
+    /経験年数[^\n]{0,6}[：:]\s*(?<![\d])(\d{1,2})\s*年/,
   ]
+  // 候補者側の experience_years は IT実務経験年数なので、それと突き合わせられない
+  // 年数（社会人歴・現職の在籍年数）は拾わない。
+  // 実例:「所属会社で1〜2年以上の勤務経験」「社会人経験3年以上」
+  const NOT_IT_EXPERIENCE = /(社会人|勤務|就業|在籍|社歴|同一企業)/
   for (const re of patterns) {
-    const m = t.match(re)
-    if (m) {
+    for (const m of t.matchAll(new RegExp(re.source, 'g'))) {
+      const at = m.index ?? 0
+      const ctx = t.slice(Math.max(0, at - 12), at + m[0].length + 12)
+      if (NOT_IT_EXPERIENCE.test(ctx)) continue
       const n = parseInt(m[1], 10)
       // 1〜40年の範囲外は誤読（バージョン番号・西暦の混入等）とみなす
       if (Number.isFinite(n) && n >= 1 && n <= 40) return n

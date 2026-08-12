@@ -259,6 +259,87 @@ export function ProjectProfileFields({
           )}
         </div>
       )}
+
+      {detailMode && <MatchingInputs project={p} requiredSkillCount={required.length} niceCount={nice.length} />}
+    </div>
+  )
+}
+
+/**
+ * この案件がマッチングに持ち込む条件を、配点の軸ごとに表示する。
+ *
+ * 案件メール・手入力から何を取れて何を取れなかったかが画面から分からず、
+ * 「勤務地の配点が実は死んでいる」といった状態に気づけなかったため、
+ * 採点に使う値そのもの（正規化後）と重みを並べて可視化する。
+ */
+function MatchingInputs({ project: p, requiredSkillCount, niceCount }: {
+  project: Project
+  requiredSkillCount: number
+  niceCount: number
+}) {
+  const rows: Array<{ axis: string; weight: number | null; value: string | null; note?: string }> = [
+    {
+      axis: '必須スキル', weight: 40,
+      value: requiredSkillCount > 0 ? `${requiredSkillCount}件を候補者スキルと照合` : null,
+      note: requiredSkillCount > 0 ? undefined : '全候補者が一律の点になり、絞り込みが効きません',
+    },
+    {
+      axis: '勤務地', weight: 20,
+      value: p.work_prefecture,
+      note: p.work_prefecture
+        ? `表記「${p.work_location ?? '—'}」から判定。同一県=満点／同一地方=半分`
+        : `「${p.work_location ?? '未入力'}」から都道府県を特定できず、全候補者が横並びになります`,
+    },
+    {
+      axis: '単価', weight: 15,
+      value: p.budget_max != null ? `上限 ${p.budget_max}万円` : null,
+      note: p.budget_max != null ? '希望単価が上限以内なら満点' : '単価差が採点されません',
+    },
+    {
+      axis: '経験年数', weight: 15,
+      value: p.required_experience_years != null ? `${p.required_experience_years}年以上を要求` : null,
+      note: p.required_experience_years != null
+        ? '要求年数を満たすかで採点'
+        : '要求年数の記載なし。候補者の年数だけで採点（10年以上が満点）',
+    },
+    {
+      axis: 'リモート', weight: 10,
+      value: p.remote_policy,
+      note: p.remote_policy ? undefined : 'フルリモート希望の候補者を減点できません',
+    },
+    {
+      axis: '派遣許可', weight: null,
+      value: p.contract_type === '派遣' ? '派遣免許を持つ会社の人材に限定' : null,
+      note: p.contract_type === '派遣' ? undefined : '限定しない',
+    },
+  ]
+
+  return (
+    <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2 space-y-1">
+      <div className="text-xs font-medium text-gray-600">マッチングに使う条件</div>
+      <table className="w-full text-xs">
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.axis} className="align-top">
+              <td className="py-0.5 pr-2 text-gray-500 whitespace-nowrap w-20">{r.axis}</td>
+              <td className="py-0.5 pr-2 text-gray-400 whitespace-nowrap w-12">
+                {r.weight != null ? `${r.weight}点` : '絞込'}
+              </td>
+              <td className="py-0.5">
+                {r.value
+                  ? <span className="text-gray-700">{r.value}</span>
+                  : <span className="text-red-500 font-medium">未取得</span>}
+                {r.note && <div className="text-gray-400 leading-snug">{r.note}</div>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {niceCount > 0 && (
+        <div className="text-xs text-gray-400 border-t border-gray-200 pt-1">
+          尚可スキル{niceCount}件は抽出済みですが、現在スコアには加算していません
+        </div>
+      )}
     </div>
   )
 }
