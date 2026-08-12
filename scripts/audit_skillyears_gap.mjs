@@ -69,7 +69,17 @@ const failChecked = g.extractFail.filter((c) => c.checked).length
 console.log(`\n「経歴書あり・抽出できず」の内訳:`)
 console.log(`  AI校正済みでも取れず  ${failChecked}件  ← 抽出そのものが失敗`)
 console.log(`  AI未処理（順番待ち）  ${g.extractFail.length - failChecked}件  ← 処理されれば取れる可能性`)
-console.log(`  拡張子別: ${[...new Set(g.extractFail.map((c) => ext(c.resume_url) ?? '?'))].join(', ')}`)
+  // どの形式が支配的かで直す場所が変わる（xlsxならグリッド解析、pdf/docxならtextract）
+  const byExt = new Map()
+  for (const c of g.extractFail) {
+    const e = ext(c.resume_url) ?? '(不明)'
+    if (!byExt.has(e)) byExt.set(e, { total: 0, checked: 0 })
+    const v = byExt.get(e); v.total++; if (c.checked) v.checked++
+  }
+  console.log('  拡張子別:')
+  for (const [e, v] of [...byExt.entries()].sort((a, b) => b[1].total - a[1].total)) {
+    console.log(`    ${e.padEnd(8)} ${String(v.total).padStart(4)}件（AI校正済でも失敗 ${v.checked}件）`)
+  }
 
 // Box は取込ステータスで待ち状況が分かる
 if (g.noResumeHasBox.length) {

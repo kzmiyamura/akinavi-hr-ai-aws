@@ -32,6 +32,10 @@
       "Bash(grep -ac * ~/akinavi_shadow.log)",
       "Bash(cat ~/.akinavi_shadow_state.json)",
       "Bash(deno check *)",
+      "Bash(npx supabase *)",
+      "Bash(npx vitest run *)",
+      "Bash(node --check *)",
+      "Bash(cat ~/akinavi_shadow.log)",
 
       "PowerShell(pm2 start *)",
       "PowerShell(pm2 stop *)",
