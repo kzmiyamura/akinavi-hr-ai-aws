@@ -7772,7 +7772,9 @@ function looksLikeRosterName(s: string): boolean {
   if (/大学|高等学校|高校|学院|学校|短大|専門学校|学部|学科|卒業|入学|中退|大卒|高卒|院卒|専卒/.test(tNoSpace)) return false
   // 「勤務地」「場所」「常駐先」は案件表の列見出し。個人スキルシートの勤務地列を氏名列と
   // 誤認し、勤務地の駅名を人材として登録した実害（2026-08-10 トリニタス）
-  if (/生年月日|年月日|学歴|住所|期間|概要|案件|要件|作業|工程|役割|人数|規模|環境|備考|資格|スキル|言語|OS\b|フレームワーク|ツール|自己PR|経験|年数|性別|年齢|最寄|駅|単価|金額|稼働|開始|終了|合計|小計|通勤|沿線|会社|所属|部署|電話|メール|mail|TEL|FAX|プロジェクト|システム|開発|設計|テスト|運用|保守|担当|内容|詳細|日付|時期|現在|以上|以下|合否|評価|№|No\.?|保有|得意|分野|技術|職種|職務|要約|サマリ|紹介|実績|成果|履歴|勤務|場所|常駐|出社|拠点/i.test(tNoSpace)) return false
+  // 「顧客」は経歴書の顧客欄セルが氏名列に並ぶと、取引先企業名の幽霊人材を量産する
+  // （2026-08-11 Trinitas 経歴書で11件隔離: 日新火災・野村証券・中外製薬…）
+  if (/生年月日|年月日|学歴|住所|期間|概要|案件|要件|作業|工程|役割|人数|規模|環境|備考|資格|スキル|言語|OS\b|フレームワーク|ツール|自己PR|経験|年数|性別|年齢|最寄|駅|単価|金額|稼働|開始|終了|合計|小計|通勤|沿線|会社|所属|部署|電話|メール|mail|TEL|FAX|プロジェクト|システム|開発|設計|テスト|運用|保守|担当|内容|詳細|日付|時期|現在|以上|以下|合否|評価|№|No\.?|保有|得意|分野|技術|職種|職務|要約|サマリ|紹介|実績|成果|履歴|勤務|場所|常駐|出社|拠点|顧客/i.test(tNoSpace)) return false
   // スキルシートのカテゴリ見出し（データベース/ネットワーク等のカタカナ分類語）は人名ではない。
   // 1人分のスキルシートを名簿と誤検出し、分類セルを人名行として展開する事故を防ぐ（Y.M_沼津.xlsx 実害）
   if (/^(?:データベース|ネットワーク|サーバ(?:ー)?|ミドルウェア|インフラ(?:ストラクチャ)?|クラウド|セキュリティ|ストレージ|プラットフォーム|アプリケーション|オペレーティングシステム|ハードウェア|ソフトウェア|プログラミング|マネジメント|コミュニケーション|プログラム|アーキテクチャ)$/.test(t)) return false
@@ -8029,8 +8031,12 @@ function extractNationalityMark(text: string): string | null {
   return null
 }
 
-/** 名簿1個から展開する行数の上限（異常に大きい名簿による処理爆発の防止） */
-const ROSTER_MAX_ROWS = 15
+/** 名簿1個から展開する行数の上限（異常に大きい名簿による処理爆発の防止）。
+ *  15 だった間、実在の65行名簿（UNITE NEO「弊社個人」一覧）が毎回50人切り捨てられていた
+ *  （2026-08-12 pipeline_trace 実測: C-ROSTER-CAP 14名簿・約246行/3日）。
+ *  実測最大65行に余裕を持たせた値。行は looksLikeRosterName と人の属性2種ゲートを
+ *  通るため、上限を上げても幽霊の量産には直結しない */
+const ROSTER_MAX_ROWS = 70
 
 /**
  * その添付・リンクが「本文で名指しされた人本人の経歴書」か。
@@ -8069,8 +8075,8 @@ async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger, linkB
   const linkFetchStart = Date.now()
   const out: SourceEntry[] = []
   // 本文で紹介されている人材の行を先頭へ（安定ソート）。
-  // 15行上限・リンク取得60秒予算は先頭から消費されるため、並べ替えないと
-  // 「本文に名前がある人が名簿の16行目以降にいる」場合に行情報とリンク先経歴書ごと失われる。
+  // 行数上限（ROSTER_MAX_ROWS）とリンク取得予算は先頭から消費されるため、並べ替えないと
+  // 「本文に名前がある人が名簿の後方行にいる」場合に行情報とリンク先経歴書ごと失われる。
   const normName = (s: string) => s.replace(/[.\s　・]/g, '').toLowerCase()
   const priNorms = priorityNames.map(normName).filter(n => n.length >= 2)
   const isPriority = (rowName: string) => {
@@ -8217,8 +8223,10 @@ function personAttrScore(rowText: string): number {
 }
 
 /** 1つの添付・リンクから新規に起こしてよい人材数の上限。
- *  これを超える膨張は名簿誤検出の疑いが濃いため、全件を捨ててアラームを出す。 */
-const MAX_PROMOTED_PER_ENTRY = 30
+ *  これを超える膨張は名簿誤検出の疑いが濃いため、全件を捨ててアラームを出す。
+ *  ROSTER_MAX_ROWS と連動させること: これが行上限より小さいと、正当な大型名簿
+ *  （実測65行）が全件却下になる（2026-08-12 に 15/30 → 70/70 へ引き上げ） */
+const MAX_PROMOTED_PER_ENTRY = 70
 
 /**
  * ゾーンD: 名簿にしか載っていない人材を新規候補者ブロックとして起こす。
@@ -8626,8 +8634,13 @@ async function unmarkEmailProcessed(
  *
  * @returns Map<blockIdx, attachment>
  */
-function assignAttachmentsToBlocks<T extends { label: string; content?: string }>(
-  blocks: Array<{ name: string | null; station: string | null }>,
+interface AssignableAttachment { label: string; content?: string }
+interface AttachTargetBlock { name: string | null; station: string | null; text?: string }
+
+// ※ シグネチャに波括弧入りの型リテラルを書かないこと。sync_extractors.mjs の
+//    関数末尾検出（波括弧対応）が誤認して _extractors.gen.mjs が壊れる
+function assignAttachmentsToBlocks<T extends AssignableAttachment>(
+  blocks: AttachTargetBlock[],
   attachments: T[],
 ): Map<number, T> {
   const result = new Map<number, { label: string; content?: string; skillYears?: Record<string, number> }>()
@@ -8658,6 +8671,38 @@ function assignAttachmentsToBlocks<T extends { label: string; content?: string }
       }
     }
   })
+
+  // ── パス1.5: 管理番号マッチ ──
+  // キャル等は添付名が「24272職務経歴書.xls」のような管理番号のみで、本文ブロック側に
+  // 「①■24272 …」と同じ番号が書かれる。名前・駅のどちらでも当たらない
+  // （2026-08-12 実測: D-UNASSIGNED 7件/3日の主因）。
+  // 4〜6桁の独立した数字列（前後に数字が続かない）を、ブロック側・ファイル名側の
+  // 双方でちょうど1箇所にしか現れない場合に限り照合する。西暦4桁や日付8桁の
+  // 偶然一致は、桁数制限と一意性条件で除外される（件名は全ブロック共通に含まれる
+  // ため、件名由来の番号は一意にならず自然に無効化される）
+  {
+    const numsOf = (s: string) => [...s.matchAll(/(?<!\d)\d{4,6}(?!\d)/g)].map((m) => m[0])
+    const byNum = (entries: Array<[number, string[]]>) => {
+      const map = new Map<string, number[]>()
+      for (const [idx, nums] of entries) {
+        for (const n of new Set(nums)) map.set(n, [...(map.get(n) ?? []), idx])
+      }
+      return map
+    }
+    const blockNums = byNum(blocks.map((b, i) => [i, numsOf(b.text ?? '')]))
+    const attNums = byNum(attachments.map((att, i) => {
+      const filenameMatch = att.label.match(/\(([^)]+)\)/)
+      return [i, numsOf(filenameMatch ? filenameMatch[1] : att.label)]
+    }))
+    for (const [n, bIdxs] of blockNums) {
+      const aIdxs = attNums.get(n)
+      if (!aIdxs || bIdxs.length !== 1 || aIdxs.length !== 1) continue
+      const bi = bIdxs[0], ai = aIdxs[0]
+      if (result.has(bi) || used.has(ai)) continue
+      result.set(bi, attachments[ai])
+      used.add(ai)
+    }
+  }
 
   // ── パス2: 駅名マッチ（パス1で未割当のブロックのみ・他人名を含むファイルは除外） ──
   blocks.forEach((b, blockIdx) => {
@@ -9327,8 +9372,9 @@ Deno.serve(async (req: Request) => {
     // ゾーンA+B: Google Drive / Sheets / Docs リンクを統一エントリとして取得・抽出（設計書v4）
     // 旧fetchGoogleLinksのdriveSheetSkillYears無条件上書きは廃止 — skillYearsは
     // 候補者に割り当てられたエントリからのみ採用する（ゾーンE pickSkillYears）
-    // リンク取得の共有時間予算: 開始から3秒まで。edge の実質制限(~6秒)内に collectGoogle と
-    // expandRoster の2連続リンク取得を収める（超過分のリンクは本文に残るので再解析で拾える）。
+    // リンク取得の共有時間予算: 本文リンク取得（collectGoogle）は開始から1.5秒まで。
+    // 名簿行のリンク取得は expandRosterEntries 側で最低予算を別途保証する（下記）。
+    // poll-email がメールを直列処理するため、1通あたりの処理時間は短く保つ
     const linkFetchDeadline = _t0 + 1500
     const googleEntries = await collectGoogleEntries(body, ledger, linkFetchDeadline)
     const rawAllAttachments = [...supportedAttachments]
@@ -9385,8 +9431,11 @@ Deno.serve(async (req: Request) => {
     const bodyPriorityNames = (earlyMultiCheck ?? [body])
       .map((t) => extractCandidateFieldsRegex(t, '').name ?? extractNameFallback(t))
       .filter((n): n is string => !!n)
-    // 残り予算を名簿リンク取得に渡す（collectGoogle で使い切っていれば 0 = 名簿リンクは取りに行かない）
-    const rosterLinkBudget = Math.max(0, linkFetchDeadline - Date.now())
+    // 名簿リンク取得の予算。従来は collectGoogle の残り時間だけを渡していたため、
+    // 本文リンクで使い切ると名簿行の予算が0秒になり、行のリンク先経歴書が一切
+    // 取得されない実害があった（2026-08-12 実測: C-ROW-LINK-SKIP「予算(0s)超過」8件/3日）。
+    // 名簿展開には最低 ROSTER_LINK_FETCH_BUDGET_MS（2.5秒）を保証する
+    const rosterLinkBudget = Math.max(ROSTER_LINK_FETCH_BUDGET_MS, linkFetchDeadline - Date.now())
     const allTextContents: SourceEntry[] = await expandRosterEntries([...googleEntries, ...officeEntries], ledger, rosterLinkBudget, bodyPriorityNames)
 
     // ── skill_master DB照合（AIなし・全タイプ共通） ────────────────────────
@@ -9526,6 +9575,9 @@ Deno.serve(async (req: Request) => {
           return {
             name: fields.name ?? extractNameFallback(text) ?? null,
             station: fields.nearestStation ?? null,
+            // 管理番号マッチ（パス1.5）用。件名も含むが、件名由来の番号は全ブロックに
+            // 共通して現れるため一意性条件で自然に無効化される
+            text,
           }
         })
         const blockAttachAssignment = assignAttachmentsToBlocks(blockMetas, allTextContents)

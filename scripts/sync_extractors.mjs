@@ -34,6 +34,7 @@ const TARGET_FUNCTIONS = [
   'looksLikeRosterName',
   'personAttrScore',
   'isOwnersResumeFile',
+  'assignAttachmentsToBlocks', // ブロック×添付の全体最適割当（管理番号マッチ含む）
   'stripInitialSuffix',
   'extractNationalityMark',
   'isValidNationality',
@@ -136,6 +137,10 @@ function stripTs(code) {
   // 1. インターフェース・type定義を削除
   code = code.replace(/^\s*(?:export\s+)?(?:interface|type)\s+\w+[^{]*\{[^}]*\}\s*\n/gm, '')
   code = code.replace(/^\s*type\s+\w+\s*=\s*.+;\s*\n/gm, '')
+
+  // 1b. 関数宣言のジェネリクス `function foo<T extends {...}>(` → `function foo(`
+  //     （assignAttachmentsToBlocks 等。`>(` の最初の出現までを非貪欲で除去）
+  code = code.replace(/(function\s+\w+)\s*<[^(]*?>\s*\(/g, '$1(')
 
   // 2. as Type キャスト（"as string", "as any" 等）— 比較演算子の > は含まない
   code = code.replace(/\bas\s+(?:string|number|boolean|unknown|any|null|undefined|\w+)(?:\[\])*(?:\s*\|\s*(?:\w+)(?:\[\])*)*/g, '')

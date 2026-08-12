@@ -531,6 +531,10 @@ console.log('=== K. looksLikeRosterName（1人スキルシートを名簿と誤�
   // 回帰防止: 「学」を含む正規の人名・イニシャルは通す
   kr('K24: 中村 学 は人名', '中村 学', true)
   kr('K25: Tanaka Taro は人名（全角化しても弾かない）', 'Tanaka Taro', true)
+  // 実害(2026-08-11 Trinitas): 経歴書の顧客欄セルが氏名列に並び、取引先企業名の
+  // 幽霊人材が11件量産された（日新火災・野村証券・中外製薬…→隔離）
+  kr('K34: 顧客は人名でない', '顧客', false)
+  kr('K35: 顧客名は人名でない', '顧客名', false)
 }
 
 console.log('=== K2. personAttrScore（名簿行を人材として起こす裏付け・構造対策） ===')
@@ -834,6 +838,57 @@ console.log('=== Q. scoreProseRoles: 役割の主・副ランキング ===')
     '運用保守の現場経験が長く、チームでの調整業務を担当してきました。テスト設計の経験もあります。',
     '運用保守の現場経験が長く、チームでの調整業務を担当してきました。テスト設計の経験もあります。\nポジション\n運用保守',
     ['運用保守', 'テストエンジニア'])
+}
+
+console.log('=== R. assignAttachmentsToBlocks（ブロック×添付の割当・管理番号マッチ） ===')
+{
+  const { assignAttachmentsToBlocks } = await import('./_extractors.gen.mjs')
+  const r = (label, blocks, attachments, expect) => {
+    const got = assignAttachmentsToBlocks(blocks, attachments)
+    const gotObj = Object.fromEntries([...got.entries()].map(([k, v]) => [k, v.label]))
+    const ok = JSON.stringify(gotObj) === JSON.stringify(expect)
+    if (ok) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else {
+      fail++; failures.push(label)
+      console.log(`  FAIL ${label}\n       expect=${JSON.stringify(expect)}\n       got   =${JSON.stringify(gotObj)}`)
+    }
+  }
+  // 実害(2026-08-12 キャル): 添付名が管理番号のみで名前・駅のどちらでも当たらず
+  // D-UNASSIGNED（3日で7件）。本文ブロックの「①■24272」と番号で照合する
+  r('R1: 管理番号でブロックと添付を照合（キャル型）',
+    [
+      { name: 'CS', station: '新井薬師駅', text: '①■24272　若手WEBオープン/インフラエンジニア CS 新井薬師駅 単価60万' },
+      { name: 'KH', station: '飯山満駅', text: '②■31265　ABAPエンジニア KH 飯山満駅 単価65万' },
+    ],
+    [{ label: 'Excelファイル(24272職務経歴書.xls)' }, { label: 'Excelファイル(31265職務経歴書.xlsx)' }],
+    { 0: 'Excelファイル(24272職務経歴書.xls)', 1: 'Excelファイル(31265職務経歴書.xlsx)' })
+  // 両ブロックに共通する番号（件名由来の西暦等）は一意でないため割当に使わない
+  r('R2: 全ブロック共通の番号は照合に使わない',
+    [
+      { name: 'AB', station: null, text: '2026年8月開始 単価60万' },
+      { name: 'CD', station: null, text: '2026年8月開始 単価65万' },
+    ],
+    [{ label: 'Excelファイル(2026経歴書.xlsx)' }],
+    {})
+  // 日付8桁（20260628）からは4〜6桁トークンを拾わない（誤マッチ防止）。
+  // ブロックを2つにしてパス3（残余1対1マッチ）が発動しない条件で番号ロジックだけを見る
+  r('R3: ファイル名の日付8桁は番号として扱わない',
+    [
+      { name: 'EF', station: null, text: '管理番号 2606 の人材' },
+      { name: 'GH', station: null, text: '番号なしの人材' },
+    ],
+    [{ label: 'Excelファイル(Skill_XY_20260628.xlsx)' }],
+    {})
+  // 従来パスの回帰防止: ファイル名の名前マッチが最優先
+  r('R4: 名前マッチは番号より優先（従来パス1）',
+    [{ name: 'K.N', station: '亀有駅', text: '■12345 K.N 亀有駅 単価60万' }],
+    [{ label: 'Excelファイル(K.N_亀有.xlsm)' }, { label: 'Excelファイル(12345一覧.xlsx)' }],
+    { 0: 'Excelファイル(K.N_亀有.xlsm)' })
+  // text 未指定でも従来どおり動く（後方互換）
+  r('R5: text なしブロックは従来パスのみで割当',
+    [{ name: 'GH', station: '横浜駅' }],
+    [{ label: 'Excelファイル(GH_横浜.xlsx)' }],
+    { 0: 'Excelファイル(GH_横浜.xlsx)' })
 }
 
 console.log(`\n📊 ${pass} passed / ${fail} failed（全${pass + fail}ケース）`)
