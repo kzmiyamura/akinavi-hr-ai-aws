@@ -48,6 +48,8 @@ export interface Project {
   client: string | null
   description: string
   required_skills: string[]
+  /** 必須スキルごとの重み {"Java":6,"基本設計":1}。null なら全て等価 */
+  skill_weights: Record<string, number> | null
   budget_min: number | null
   budget_max: number | null
   start_date: string | null

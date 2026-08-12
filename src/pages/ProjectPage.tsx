@@ -344,7 +344,11 @@ function MatchingInputs({ project: p, requiredSkillCount, niceCount }: {
     {
       axis: '必須スキル', weight: 40,
       value: requiredSkillCount > 0 ? `${requiredSkillCount}件を候補者スキルと照合` : null,
-      note: requiredSkillCount > 0 ? undefined : '全候補者が一律の点になり、絞り込みが効きません',
+      note: requiredSkillCount === 0
+        ? '全候補者が一律の点になり、絞り込みが効きません'
+        : p.skill_weights
+          ? undefined   // 重みは下に一覧で出す
+          : '全スキルが同じ重み。工程語だけ一致した候補者も満点になります',
     },
     {
       axis: '勤務地', weight: 20,
@@ -398,6 +402,29 @@ function MatchingInputs({ project: p, requiredSkillCount, niceCount }: {
           ))}
         </tbody>
       </table>
+      {p.skill_weights && Object.keys(p.skill_weights).length > 0 && (
+        <div className="border-t border-gray-200 pt-1 space-y-0.5">
+          <div className="text-xs text-gray-500">
+            スキルの重み（言語ほど重い・年数指定と記載順で加点）
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {Object.entries(p.skill_weights)
+              .sort((a, b) => b[1] - a[1])
+              .map(([skill, w]) => (
+                <span
+                  key={skill}
+                  className={`text-xs rounded px-1.5 py-0.5 border ${
+                    w >= 4 ? 'bg-green-100 border-green-300 text-green-800 font-medium'
+                    : w >= 2 ? 'bg-white border-gray-300 text-gray-600'
+                    : 'bg-white border-gray-200 text-gray-400'
+                  }`}
+                >
+                  {skill} <span className="opacity-70">×{w}</span>
+                </span>
+              ))}
+          </div>
+        </div>
+      )}
       {niceCount > 0 && (
         <div className="text-xs text-gray-400 border-t border-gray-200 pt-1">
           尚可スキル{niceCount}件は抽出済みですが、現在スコアには加算していません

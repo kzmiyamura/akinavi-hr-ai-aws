@@ -101,9 +101,39 @@ function extractRequiredExperienceYears(text) {
 
 // description には【スキル】欄が入らないため、元メール全文（raw_data.text）も見る。
 // ただし1通に複数案件が入っていた場合（batchSize>1）は他案件の記述を巻き込むので使わない
+// 必須スキルの重み（inbound-email の SKILL_CATEGORY_WEIGHT / buildSkillWeights と同じ規則）。
+// カテゴリ=技術の核か工程語か / 年数指定あり=+2 / 記載順の先頭=+1、上限6
+const SKILL_CATEGORY_WEIGHT = {
+  languages: 4, frameworks: 3, databases: 3, clouds: 3, infrastructures: 3, dwh: 3,
+  libraries: 2, os: 2, tools: 2, design: 2, marketing: 2,
+  certifications: 1, methodologies: 1, others: 1,
+}
+const skillCategory = new Map()
+for (let from = 0; ; from += 1000) {
+  const r = await fetch(`${URL_}/rest/v1/skill_master?select=name,aliases,category&limit=1000&offset=${from}`, { headers })
+  const page = await r.json()
+  for (const s of page) {
+    skillCategory.set(String(s.name).toLowerCase(), s.category)
+    for (const a of s.aliases ?? []) skillCategory.set(String(a).toLowerCase(), s.category)
+  }
+  if (page.length < 1000) break
+}
+
+function buildSkillWeights(requiredSkills, requiredSkillYears) {
+  const out = {}
+  ;(requiredSkills ?? []).forEach((skill, i) => {
+    const cat = skillCategory.get(String(skill).toLowerCase()) ?? 'others'
+    const base = SKILL_CATEGORY_WEIGHT[cat] ?? 1
+    const yearBonus = ((requiredSkillYears ?? {})[skill]?.length ?? 0) > 0 ? 2 : 0
+    out[skill] = Math.min(base + yearBonus + (i === 0 ? 1 : 0), 6)
+  })
+  return out
+}
+
 const res = await fetch(
   `${URL_}/rest/v1/projects?select=id,title,description,work_location,work_prefecture,` +
-  `required_experience_years,srctext:raw_data->>text,batchsize:raw_data->batchSize` +
+  `required_experience_years,required_skills,skill_weights,rsy:raw_data->requiredSkillYears,` +
+  `srctext:raw_data->>text,batchsize:raw_data->batchSize` +
   `&data_env=eq.prod&limit=1000`,
   { headers })
 if (!res.ok) { console.error(`${res.status}: ${(await res.text()).slice(0, 200)}`); process.exit(1) }
@@ -116,15 +146,26 @@ for (const p of rows) {
   const text = [p.title ?? '', p.description ?? '', singleProjectMail ? (p.srctext ?? '') : ''].join('\n')
   const pref = p.work_prefecture ?? resolveProjectPrefecture(p.work_location, text)
   const years = p.required_experience_years ?? extractRequiredExperienceYears(text)
-  const needs = (pref !== p.work_prefecture) || (years !== p.required_experience_years)
+  // 重みは必須スキルが変われば付け直す必要があるので、既存値があっても毎回再計算して比較する
+  const weights = buildSkillWeights(p.required_skills, p.rsy)
+  const weightsChanged = JSON.stringify(weights) !== JSON.stringify(p.skill_weights ?? {})
+  const needs = (pref !== p.work_prefecture) || (years !== p.required_experience_years) || weightsChanged
   const tag = String(p.title ?? '').slice(0, 32).padEnd(34)
   if (!needs) { skipped++; console.log(`  -  ${tag} 変更なし`); continue }
-  console.log(`  ${RUN ? '→' : '?'}  ${tag} 県=${pref ?? '解決できず'} 要求年数=${years ?? '—'}  ← "${String(p.work_location ?? '').slice(0, 30)}"`)
+  console.log(`  ${RUN ? '→' : '?'}  ${tag} 県=${pref ?? '解決できず'} 要求年数=${years ?? '—'}`)
+  if (weightsChanged) {
+    const shown = Object.entries(weights).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}×${v}`).join(' ')
+    console.log(`       重み: ${shown || '（必須スキルなし）'}`)
+  }
   if (!RUN) { updated++; continue }
   const patch = await fetch(`${URL_}/rest/v1/projects?id=eq.${p.id}`, {
     method: 'PATCH',
     headers: { ...headers, Prefer: 'return=minimal' },
-    body: JSON.stringify({ work_prefecture: pref, required_experience_years: years }),
+    body: JSON.stringify({
+      work_prefecture: pref,
+      required_experience_years: years,
+      skill_weights: Object.keys(weights).length ? weights : null,
+    }),
   })
   if (!patch.ok) { console.log(`     FAIL ${patch.status} ${(await patch.text()).slice(0, 120)}`); continue }
   updated++

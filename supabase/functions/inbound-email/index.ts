@@ -1324,6 +1324,54 @@ async function resolveProjectPrefecture(
 }
 
 /**
+ * 必須スキルの重み。skill_master のカテゴリで「技術の核か、工程語か」を分ける。
+ *
+ * 従来は必須スキルを全て等価に扱っていたため、「基本設計・テスト・保守開発」のような
+ * 工程語だけ一致した候補者が、言語が全く合わないのに上位に来ていた。
+ * 営業判断では言語スキルの一致が最も重いので、カテゴリで傾斜をつける。
+ */
+const SKILL_CATEGORY_WEIGHT: Record<string, number> = {
+  languages: 4,
+  frameworks: 3,
+  databases: 3,
+  clouds: 3,
+  infrastructures: 3,
+  dwh: 3,
+  libraries: 2,
+  os: 2,
+  tools: 2,
+  design: 2,
+  marketing: 2,
+  certifications: 1,
+  methodologies: 1,   // 基本設計・テスト・保守開発・ヘルプデスク 等
+  others: 1,          // 英語 等
+}
+const SKILL_WEIGHT_MAX = 6
+
+/**
+ * 案件の必須スキルごとの重みを決める（AI不使用）。
+ *
+ * 加点の根拠:
+ *   - カテゴリ（言語=4 … 工程語=1）
+ *   - 年数指定あり（「Javaでの開発経験（10年程度）」）= +2。年数を書くほど重視されている
+ *   - 記載順の先頭 = +1。募集要件は重要なものから書かれる
+ */
+export function buildSkillWeights(
+  requiredSkills: string[],
+  categoryOf: (skill: string) => string | null,
+  requiredSkillYears: Record<string, number[]>,
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  requiredSkills.forEach((skill, i) => {
+    const base = SKILL_CATEGORY_WEIGHT[categoryOf(skill) ?? 'others'] ?? 1
+    const yearBonus = (requiredSkillYears[skill]?.length ?? 0) > 0 ? 2 : 0
+    const orderBonus = i === 0 ? 1 : 0
+    out[skill] = Math.min(base + yearBonus + orderBonus, SKILL_WEIGHT_MAX)
+  })
+  return out
+}
+
+/**
  * 案件本文から募集要件の必要経験年数を抽出する（例:「実務経験5年以上」→ 5）。
  *
  * マッチングの経験年数の配点は候補者側の値だけを見た絶対評価（10年以上=満点）だったため、
@@ -11269,6 +11317,13 @@ Deno.serve(async (req: Request) => {
           required_skills: requiredSkills,
           remote_policy: strOrNull(raw.remotePolicy),
         })
+        // 必須スキルの重み（カテゴリ＋年数指定＋記載順）。マッチングの必須スキル配点で使う
+        const skillCategory = new Map(masterSkills.map((s) => [s.name.toLowerCase(), s.category]))
+        const skillWeights = buildSkillWeights(
+          requiredSkills,
+          (s) => skillCategory.get(s.toLowerCase()) ?? null,
+          (raw as { requiredSkillYears?: Record<string, number[]> }).requiredSkillYears ?? {},
+        )
         const headcount = parseOptionalInt(raw.headcount, 1, 500)
         const settlementMin = parseOptionalInt(raw.settlementMin, 0, 744)
         const settlementMax = parseOptionalInt(raw.settlementMax, 0, 744)
@@ -11282,6 +11337,7 @@ Deno.serve(async (req: Request) => {
           client: strOrNull(raw.client),
           description,
           required_skills: requiredSkills,
+          skill_weights: Object.keys(skillWeights).length > 0 ? skillWeights : null,
           budget_min: budgetMin,
           budget_max: budgetMax,
           start_date: parseIsoDateOnly(raw.startDate),
