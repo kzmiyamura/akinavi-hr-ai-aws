@@ -15,9 +15,11 @@ SELECT
   (SELECT string_agg(want, ',') FROM t WHERE idx = 0)                      AS 合致内容
 UNION ALL
 SELECT
-  '1: Entra ID の空白ゆれは吸収する',
-  (SELECT count(*) FROM t WHERE idx = 1), 1,
-  CASE WHEN (SELECT count(*) FROM t WHERE idx = 1) = 1 THEN 'PASS' ELSE 'FAIL' END,
+  -- Entra ID は空白ゆれを吸収して EntraID を満たし、さらに包含関係で Microsoft 365 も満たす
+  -- （Entra ID は M365 の ID 基盤。2026-08-13 に skill_implications へ追加）
+  '1: Entra ID は EntraID と Microsoft 365 を満たす',
+  (SELECT count(*) FROM t WHERE idx = 1), 2,
+  CASE WHEN (SELECT count(*) FROM t WHERE idx = 1) = 2 THEN 'PASS' ELSE 'FAIL' END,
   (SELECT string_agg(want, ',') FROM t WHERE idx = 1)
 UNION ALL
 SELECT
