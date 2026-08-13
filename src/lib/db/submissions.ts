@@ -56,6 +56,38 @@ export async function upsertSubmission(input: UpsertSubmissionInput): Promise<Su
   return data as Submission
 }
 
+/** 1リクエストあたりの保存件数。全件モードで 500 件を1件ずつ往復すると数十秒かかる */
+const SUBMISSION_UPSERT_CHUNK = 200
+
+/**
+ * マッチング結果をまとめて保存（同一ペアは上書き）。
+ * 保存後の行は使わないので select しない（戻りぶんの転送を丸ごと省く）
+ */
+export async function upsertSubmissions(inputs: UpsertSubmissionInput[]): Promise<void> {
+  for (let i = 0; i < inputs.length; i += SUBMISSION_UPSERT_CHUNK) {
+    const chunk = inputs.slice(i, i + SUBMISSION_UPSERT_CHUNK).map(input => {
+      const { candidateId, projectId, matchResult, createdBy, dataEnv = 'prod', breakdown } = input
+      return {
+        data_env: dataEnv,
+        candidate_id: candidateId,
+        project_id: projectId,
+        match_score: matchResult.score,
+        ai_summary: matchResult.summary,
+        ai_raw: {
+          duplicateSuspected: matchResult.duplicateSuspected,
+          ...(matchResult.ruleScore !== undefined && { ruleScore: matchResult.ruleScore }),
+          ...(breakdown && { breakdown }),
+        },
+        created_by: createdBy,
+      }
+    })
+    const { error } = await supabase
+      .from('submissions')
+      .upsert(chunk, { onConflict: 'candidate_id,project_id' })
+    if (error) throw new Error(`提案履歴の保存に失敗しました: ${error.message}`)
+  }
+}
+
 /**
  * 案件別・人材別のマッチング件数（一覧画面用）
  * ai* は AI が採点・理由付けした件数。高速モードでは上位N名だけなので、

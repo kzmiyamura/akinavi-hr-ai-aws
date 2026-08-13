@@ -15,7 +15,7 @@ import {
   saveProjectMatchWeights,
 } from '../lib/db/projects'
 import {
-  upsertSubmission,
+  upsertSubmissions,
   fetchSubmissionsByProject,
   fetchSubmissionsByCandidate,
   fetchSubmissionStats,
@@ -1133,22 +1133,21 @@ const { data: projects = [] } = useQuery({
           agentDomainMap,
         )
 
-        for (const candidate of targets) {
-          const r = resultMap.get(candidate.id)
-          if (!r) continue
-          try {
-            await upsertSubmission({
+        // 1件ずつ往復すると全件モード（最大500件）で数十秒かかるのでまとめて保存する
+        await upsertSubmissions(
+          targets.flatMap(candidate => {
+            const r = resultMap.get(candidate.id)
+            if (!r) return []
+            return [{
               candidateId: candidate.id,
               projectId,
               matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
               breakdown: r.breakdown,
               createdBy: nickname,
               dataEnv,
-            })
-          } catch (err) {
-            console.warn(`[match] ${candidate.name} スキップ: ${err}`)
-          }
-        }
+            }]
+          }),
+        )
       } finally {
         setMatchRunProgressNow(null)
       }
@@ -1187,22 +1186,20 @@ const { data: projects = [] } = useQuery({
           scoringWeights,
         )
 
-        for (const project of targetProjects) {
-          const r = resultMap.get(project.id)
-          if (!r) continue
-          try {
-            await upsertSubmission({
+        await upsertSubmissions(
+          targetProjects.flatMap(project => {
+            const r = resultMap.get(project.id)
+            if (!r) return []
+            return [{
               candidateId: candidate.id,
               projectId: project.id,
               matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
               breakdown: r.breakdown,
               createdBy: nickname,
               dataEnv,
-            })
-          } catch (err) {
-            console.warn(`[match] ${project.title} スキップ: ${err}`)
-          }
-        }
+            }]
+          }),
+        )
       } finally {
         setMatchRunProgressNow(null)
       }
@@ -1273,28 +1270,29 @@ const { data: projects = [] } = useQuery({
             console.warn(`[bulk-match] ${project.title} バッチ失敗: ${err}`)
           }
 
-          for (const candidate of targets) {
-            if (bulkCancelRequestedRef.current) {
-              setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, projectTotal) })
-              return
-            }
-            const r = resultMap.get(candidate.id)
-            if (r) {
-              try {
-                await upsertSubmission({
+          if (bulkCancelRequestedRef.current) {
+            setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, projectTotal) })
+            return
+          }
+          try {
+            await upsertSubmissions(
+              targets.flatMap(candidate => {
+                const r = resultMap.get(candidate.id)
+                if (!r) return []
+                return [{
                   candidateId: candidate.id,
                   projectId: project.id,
                   matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
-              breakdown: r.breakdown,
+                  breakdown: r.breakdown,
                   createdBy: nickname,
                   dataEnv,
-                })
-              } catch (err) {
-                console.warn(`[bulk-match] ${candidate.name} × ${project.title} スキップ: ${err}`)
-              }
-            }
-            done += 1
+                }]
+              }),
+            )
+          } catch (err) {
+            console.warn(`[bulk-match] ${project.title} 保存失敗: ${err}`)
           }
+          done += targets.length
         }
         setMessage({
           type: 'success',
@@ -1361,28 +1359,29 @@ const { data: projects = [] } = useQuery({
             console.warn(`[bulk-match] ${candidate.name} バッチ失敗: ${err}`)
           }
 
-          for (const project of targetProjects) {
-            if (bulkCancelRequestedRef.current) {
-              setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, total) })
-              return
-            }
-            const r = resultMap.get(project.id)
-            if (r) {
-              try {
-                await upsertSubmission({
+          if (bulkCancelRequestedRef.current) {
+            setMessage({ type: 'success', text: bulkMatchInterruptMessage(done, total) })
+            return
+          }
+          try {
+            await upsertSubmissions(
+              targetProjects.flatMap(project => {
+                const r = resultMap.get(project.id)
+                if (!r) return []
+                return [{
                   candidateId: candidate.id,
                   projectId: project.id,
                   matchResult: { score: r.score, summary: r.summary, duplicateSuspected: false, ruleScore: r.ruleScore },
-              breakdown: r.breakdown,
+                  breakdown: r.breakdown,
                   createdBy: nickname,
                   dataEnv,
-                })
-              } catch (err) {
-                console.warn(`[bulk-match] ${candidate.name} × ${project.title} スキップ: ${err}`)
-              }
-            }
-            done += 1
+                }]
+              }),
+            )
+          } catch (err) {
+            console.warn(`[bulk-match] ${candidate.name} 保存失敗: ${err}`)
           }
+          done += targetProjects.length
         }
         setMessage({
           type: 'success',
