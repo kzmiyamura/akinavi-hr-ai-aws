@@ -114,7 +114,7 @@ export const PROJECT_FIELDS_RULES = `あなたはSES営業の案件紹介文の�
 // 背景: 「Windows/Azure/M365 という Microsoft 知識全般を問う案件」は単語一致では拾えず、
 // 辞書拡充でも本質に届かなかった（HANDOFF.md §0）。スコア計算はルールのままにして、
 // AIには①複数名前提かどうか ②本文が暗に求める関連スキル、の2点だけ解釈させる。
-export const PROJECT_INTERPRET_RULES = `あなたはSES案件のマッチング条件を解釈する係です。以下の案件テキストを読んで2点だけ判断してください。
+export const PROJECT_INTERPRET_RULES = `あなたはSES案件のマッチング条件を解釈する係です。以下の案件テキストを読んで4点だけ判断してください。
 
 1. multiPerson: この案件は複数名の募集で、かつ「チーム全体でスキル要件を満たせばよい」
    （1人が全要件を満たす必要はない）と読めるか。
@@ -130,10 +130,57 @@ export const PROJECT_INTERPRET_RULES = `あなたはSES案件のマッチング�
    - 各スキルに reason（なぜ関連するか・30字以内）を付ける
    - 自信のあるものだけ最大8件。無ければ []
 
+3. specialist: 必須スキルが「ある技術圏（エコシステム）にまとまっていて、
+   個々のスキルを別々に持つ人ではなく、その圏に広く精通した人を求めている」と読めるか。
+   - 例: Azure Functions・Microsoft 365・PowerShell・Entra ID が並ぶ案件は
+     Microsoft 圏のスペシャリスト案件。個別に1つ持つ人ではなく、
+     Windows/Azure/M365 を横断して運用できる人が要る
+   - ecosystem: 圏の名前（"Microsoft" / "AWS" / "Google Cloud" / "Salesforce" / "SAP" 等）
+   - coreSkills: その圏で精通を裏付ける具体的な技術名を最大12件。
+     案件に書かれているものだけでなく、その圏の実務者なら持っているはずのものを含める
+     （例: Active Directory, Intune, Exchange Online, SharePoint, Teams,
+       Power Platform, Windows Server, Azure AD, Microsoft Graph）
+   - reason: なぜそう読めるか（60字以内・本文の根拠に触れる）
+   - 必須スキルが複数の圏にまたがる／特定の圏に寄っていない場合は null
+
+4. summary: この案件がどんな人を求めているかの所見を1〜2文（120字以内）。
+   営業が読んで納得できる日本語で書く。単なるスキルの列挙にしない
+
 出力は次のJSONのみ（説明文・コードフェンス禁止）:
-{"multiPerson":false,"evidence":null,"relatedSkills":[{"name":"","reason":""}],"confidence":"high または low"}
+{"multiPerson":false,"evidence":null,"relatedSkills":[{"name":"","reason":""}],"specialist":{"ecosystem":"","coreSkills":[],"reason":""},"summary":"","confidence":"high または low"}
 
 --- 以下案件テキスト ---
+`
+
+// 候補者1名の「推薦所見」。点数化だけでは営業が使えない（2026-08-13 指摘:
+// 「こんな人材じゃないと受けてもらえない、逆にこの経験が絶対に役に立つはず、
+//   みたいな後押しコメントが出ないとこのアプリの意味がない」）。
+// 案件本文と経歴の**両方**を読ませ、根拠を必ず経歴の記述から引かせる。
+// スコアは渡さない（点数に引きずられた追認コメントになるため）。
+export const RECOMMEND_RULES = `あなたはSES営業の提案担当です。案件と候補者の経歴を読み、
+この候補者を提案すべきかを判断し、営業がそのまま使える所見を書いてください。
+
+厳守:
+- 経歴に書かれていないことを書かない。推測で経験を作らない
+- 良いことだけ書かない。足りない点は必ず挙げる（それが提案の質を決める）
+- 「スキルが合致しています」のような一般論は書かない。**どの経験がこの案件のどの要求に効くか**を書く
+
+出力する項目:
+- required: この案件が本当に求めている人物像。単なるスキルの列挙ではなく
+  「この条件を満たせない人は通らない」という要点を1〜2文（100字以内）
+- verdict: "推せる" | "条件付き" | "見送り" のいずれか
+- pitch: 営業がこの人を推すときの後押し文（150字以内）。
+  「この案件にはこういう人が要る。この方は◯◯の経験があるのでそこが効く」という形で書く。
+  verdict が "見送り" のときは、なぜ厳しいかを同じ長さで書く
+- strengths: この案件で効く経験。各項目 {point: 何が効くか, evidence: 経歴のどの記述か}。
+  evidence は経歴に実際にある表現を短く引く。最大4件
+- gaps: 足りない点・確認が必要な点。最大3件。無ければ []
+- 読み取りに自信が持てない場合は confidence を "low" にする
+
+出力は次のJSONのみ（説明文・コードフェンス禁止）:
+{"required":"","verdict":"推せる","pitch":"","strengths":[{"point":"","evidence":""}],"gaps":[],"confidence":"high または low"}
+
+--- 以下、案件と候補者 ---
 `
 
 export const BODY_FIELDS_RULES = `あなたはSES営業メールの読み取り係です。以下のメール本文から候補者(要員)の基本情報を転記してください。

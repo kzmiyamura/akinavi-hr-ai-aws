@@ -67,6 +67,13 @@ for (const p of rows) {
   const ai = patch.raw_data.aiInterpretation
   console.log(`  複数名前提: ${ai.multiPerson}${ai.evidence ? `（根拠:「${ai.evidence}」）` : ''}`)
   console.log(`  確信度: ${ai.confidence}`)
+  if (ai.summary) console.log(`  所見: ${ai.summary}`)
+  if (ai.specialist) {
+    console.log(`  技術圏: ${ai.specialist.ecosystem} — ${ai.specialist.reason ?? ''}`)
+    console.log(`    採用: ${ai.specialist.coreSkills.join(' / ')}`)
+  } else if (r.specialist?.ecosystem) {
+    console.log(`  技術圏: ${r.specialist.ecosystem} → 辞書に足りず不採用（AI案: ${(r.specialist.coreSkills ?? []).join(' / ')}）`)
+  }
   const dropped = (r.relatedSkills ?? []).filter((s) => !ai.relatedSkills.some((a) => a.name === s?.name))
   for (const s of ai.relatedSkills) console.log(`  関連スキル採用: ${s.name} — ${s.reason ?? ''}`)
   for (const s of dropped) console.log(`  不採用(辞書外/重複): ${s?.name}`)

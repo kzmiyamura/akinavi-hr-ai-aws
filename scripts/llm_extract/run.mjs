@@ -8,7 +8,7 @@
 //   環境変数 ANTHROPIC_API_KEY があればAPI直、なければ claude -p (サブスク枠)
 import fs from 'fs'
 import { buildGridInput, buildTextGridInput, skillYearsFromProjects } from './lib.mjs'
-import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES, BODY_FIELDS_BATCH_RULES, PROJECT_FIELDS_RULES, PROJECT_INTERPRET_RULES } from './prompts.mjs'
+import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES, BODY_FIELDS_BATCH_RULES, PROJECT_FIELDS_RULES, PROJECT_INTERPRET_RULES, RECOMMEND_RULES } from './prompts.mjs'
 import { callModel } from './caller.mjs'
 import { verifyOutput, shouldEscalate } from './verify.mjs'
 
@@ -115,7 +115,41 @@ export async function extractProjectInterpretation(bodyText) {
     multiPerson: r.data?.multiPerson === true,
     evidence: typeof r.data?.evidence === 'string' ? r.data.evidence.slice(0, 100) : null,
     relatedSkills: Array.isArray(r.data?.relatedSkills) ? r.data.relatedSkills : [],
+    // 「この案件は◯◯圏に広く精通した人を求めている」という読み。
+    // 必須スキルの単語一致では表せない要求を扱う（2026-08-13）
+    specialist: r.data?.specialist && typeof r.data.specialist === 'object' ? r.data.specialist : null,
+    summary: typeof r.data?.summary === 'string' ? r.data.summary.slice(0, 200) : null,
     confidence: r.data?.confidence ?? 'low',
+    costUsd: r.costUsd ?? 0,
+  }
+}
+
+/**
+ * 候補者1名の推薦所見。案件本文と経歴の両方を渡す。
+ * スコアは渡さない（点数の追認コメントにさせないため）。
+ */
+export async function extractRecommendation(projectText, candidateText) {
+  const prompt = `${RECOMMEND_RULES}
+【案件】
+${projectText.slice(0, 6000)}
+
+【候補者の経歴】
+${candidateText.slice(0, 8000)}
+`
+  const r = await callModel('haiku', prompt)
+  const d = r.data ?? {}
+  const str = (v, n) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : null)
+  return {
+    model: 'haiku',
+    required: str(d.required, 200),
+    verdict: ['推せる', '条件付き', '見送り'].includes(d.verdict) ? d.verdict : null,
+    pitch: str(d.pitch, 300),
+    strengths: (Array.isArray(d.strengths) ? d.strengths : [])
+      .map((s) => ({ point: str(s?.point, 120), evidence: str(s?.evidence, 160) }))
+      .filter((s) => s.point)
+      .slice(0, 4),
+    gaps: (Array.isArray(d.gaps) ? d.gaps : []).map((g) => str(g, 120)).filter(Boolean).slice(0, 3),
+    confidence: d.confidence ?? 'low',
     costUsd: r.costUsd ?? 0,
   }
 }

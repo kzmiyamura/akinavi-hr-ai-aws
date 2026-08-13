@@ -156,8 +156,36 @@ export function MatchingInputs({ project: p, requiredSkillCount, niceCount, weig
     },
   ]
 
+  const ai = getAiInterpretation(p.raw_data)
+
   return (
     <div className={`rounded border border-gray-200 bg-gray-50 p-2 space-y-1 ${compact ? '' : 'mt-2'}`}>
+      {/* AIが案件本文を読んで出した所見。単語一致では表せない要求（技術圏全体への精通など）は
+          ここにしか出ない。営業がスコアを信用できるよう、必ず根拠と一緒に出す（2026-08-13） */}
+      {(ai?.summary || ai?.specialist) && (
+        <div className="rounded border border-violet-200 bg-violet-50 p-1.5 space-y-1">
+          <div className="text-xs font-medium text-violet-700">
+            AIの読み <span className="font-normal text-violet-400">（案件本文から）</span>
+          </div>
+          {ai.summary && <p className="text-xs text-gray-700 leading-snug">{ai.summary}</p>}
+          {ai.specialist && (
+            <div className="text-xs text-gray-600">
+              <span className="font-medium text-violet-700">
+                {ai.specialist.ecosystem}圏のスペシャリスト案件
+              </span>
+              {ai.specialist.reason && <span className="text-gray-500">：{ai.specialist.reason}</span>}
+              <div className="mt-0.5 flex flex-wrap gap-1">
+                {ai.specialist.coreSkills.map((s) => (
+                  <span key={s} className="text-xs rounded px-1.5 py-0.5 bg-white border border-violet-200 text-violet-700">{s}</span>
+                ))}
+              </div>
+              <div className="text-gray-400 leading-snug">
+                候補者がこの圏をどれだけ押さえているかを、ランキングの各カードに「{ai.specialist.ecosystem}圏 N/{ai.specialist.coreSkills.length}」として出します
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       <div className="text-xs font-medium text-gray-600">マッチングに使う条件</div>
       <table className="w-full text-xs">
         <tbody>

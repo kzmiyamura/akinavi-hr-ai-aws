@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail, SlidersHorizontal, RotateCcw, Reply, ExternalLink } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { CandidateProfileFields } from './CandidatePage'
-import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates, DEFAULT_SCORING_WEIGHTS, calcProjectWeights } from '../lib/db/candidates'
+import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates, DEFAULT_SCORING_WEIGHTS } from '../lib/db/candidates'
 import type { ScoringWeights } from '../lib/db/candidates'
 import { logError } from '../lib/errorLog'
 import {
@@ -24,7 +24,9 @@ import { supabase } from '../lib/supabase'
 import { getMatchingSettings, MATCHING_DEFAULTS } from '../lib/db/matchingSettings'
 import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
 import { fetchSkillMatches, NO_MATCHES } from '../lib/db/skillMatch'
-import { getAiInterpretation, aiRelatedSkillMap } from '../lib/projectInterpretation'
+import { getAiInterpretation, aiRelatedSkillMap, ecosystemCoverage } from '../lib/projectInterpretation'
+import type { AiSpecialist } from '../lib/projectInterpretation'
+import { RecommendationNote, getRecommendation } from '../components/RecommendationNote'
 import { MatchingInputs, MatchingWeightsLine, resolveScoringWeights } from '../components/MatchingInputs'
 import type { SkillMatcher } from '../lib/db/skillMatch'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
@@ -507,6 +509,7 @@ function ProjectModeRankCard({
   requiredSkills = [],
   niceToHaveSkills = [],
   aiNiceSkills,
+  specialist,
   skillMatcher = NO_MATCHES,
   agentDomainMap,
 }: {
@@ -520,6 +523,8 @@ function ProjectModeRankCard({
   niceToHaveSkills?: string[]
   /** AIが解釈で足した尚可スキル（name小文字→根拠）。出所バッジ表示用 */
   aiNiceSkills?: Map<string, string | null>
+  /** AIが読んだ「この案件が求める技術圏」。押さえ具合をカードに出す */
+  specialist?: AiSpecialist | null
   /** スキル一致判定。サーバの skill_satisfies と同じ結果になる（src/lib/db/skillMatch.ts） */
   skillMatcher?: SkillMatcher
   agentDomainMap?: Map<string, { license_status: string }>
@@ -652,6 +657,30 @@ function ProjectModeRankCard({
             const unmatched = allSkills.filter(sk => !skillMatch(sk, requiredSkills) && !skillMatch(sk, niceToHaveSkills))
             return <SkillTagsWithAccordion skills={[...reqMatched, ...niceMatched, ...unmatched]} highlightSkills={reqMatched} niceHighlightSkills={niceMatched} />
           })()}
+          {/* 技術圏の押さえ具合。必須スキルの個数だけでは
+              「Microsoft圏に広く精通した人」を見分けられない（2026-08-13 指摘） */}
+          {specialist && (() => {
+            const cov = ecosystemCoverage(specialist, (s.candidate.skills as string[]) ?? [], skillMatcher)
+            if (!cov) return null
+            const strong = cov.ratio >= 0.6
+            return (
+              <div className={`mt-1.5 rounded-md border px-2.5 py-1.5 ${strong ? 'bg-violet-50 border-violet-200' : 'bg-slate-50 border-slate-100'}`}>
+                <span className={`text-xs font-medium ${strong ? 'text-violet-700' : 'text-gray-500'}`}>
+                  {specialist.ecosystem}圏 {cov.hit.length}/{cov.total}
+                </span>
+                <span className="text-[10px] text-gray-400 ml-1">
+                  {strong ? 'この圏に広く精通' : '部分的'}
+                </span>
+                {cov.hit.length > 0 && (
+                  <div className="mt-0.5 flex flex-wrap gap-1">
+                    {cov.hit.map(h => (
+                      <span key={h} className="text-[10px] rounded px-1 py-0.5 bg-white border border-violet-200 text-violet-700">{h}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
           {(requiredSkills.length > 0 || niceToHaveSkills.length > 0) && (() => {
             const allSkills = (s.candidate.skills as string[]) ?? []
             const skillMatch = (req: string) => allSkills.some(sk => skillMatcher(sk, req))
@@ -728,6 +757,11 @@ function ProjectModeRankCard({
                 {receivedAt && <span>{new Date(receivedAt).toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
               </p>
             )
+          })()}
+          {/* 点数の前に、営業がそのまま使える所見を出す（2026-08-13 指摘） */}
+          {(() => {
+            const rec = getRecommendation(s.ai_raw)
+            return rec ? <RecommendationNote rec={rec} /> : null
           })()}
           <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0 space-y-2">
             {s.ai_summary && (
@@ -929,6 +963,10 @@ function CandidateModeRankCard({
           {/* 案件ごとに配点が違うので、どの案件がどの軸を重く見ているかを行単位で出す。
               値が取れていない軸は順位に効かないため赤で示す（2026-08-13） */}
           {p && <MatchingWeightsLine project={p} />}
+          {(() => {
+            const rec = getRecommendation(s.ai_raw)
+            return rec ? <RecommendationNote rec={rec} /> : null
+          })()}
           <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0 space-y-2">
             {s.ai_summary && (
               <>
@@ -2039,6 +2077,7 @@ const { data: projects = [] } = useQuery({
                               requiredSkills={selectedProject.required_skills as string[]}
                               niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
                               aiNiceSkills={aiRelatedSkillMap(selectedProject.raw_data)}
+                              specialist={getAiInterpretation(selectedProject.raw_data)?.specialist}
                               skillMatcher={projectSkillMatcher}
                               agentDomainMap={agentDomainMap}
                             />
@@ -2055,6 +2094,7 @@ const { data: projects = [] } = useQuery({
                                 requiredSkills={selectedProject.required_skills as string[]}
                                 niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
                                 aiNiceSkills={aiRelatedSkillMap(selectedProject.raw_data)}
+                              specialist={getAiInterpretation(selectedProject.raw_data)?.specialist}
                                 agentDomainMap={agentDomainMap}
                               />
                             ))}

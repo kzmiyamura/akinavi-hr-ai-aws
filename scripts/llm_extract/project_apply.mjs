@@ -180,6 +180,33 @@ export function buildInterpretationPatch(p, r, skillMasterNormSet) {
     if (related.length >= 8) break
   }
 
+  // 「この案件は技術圏全体への精通を求めている」という読み。
+  // 必須スキルの単語一致だけでは、Azure・M365・PowerShell・EntraID が並ぶ案件を
+  // 「Microsoft スペシャリスト案件」と読めなかった（2026-08-13 指摘）。
+  // coreSkills は skill_master にあるものだけ残す（無い語は skill_satisfies が判定できない）
+  const sp = r.specialist
+  let specialist = null
+  if (!lowConf && sp && typeof sp === 'object' && typeof sp.ecosystem === 'string' && sp.ecosystem.trim()) {
+    const core = []
+    const seen = new Set()
+    for (const name of Array.isArray(sp.coreSkills) ? sp.coreSkills : []) {
+      const n = typeof name === 'string' ? name.trim() : ''
+      const k = normTech(n)
+      if (!n || !k || seen.has(k)) continue
+      if (skillMasterNormSet && !skillMasterNormSet.has(k)) continue
+      seen.add(k)
+      core.push(n)
+      if (core.length >= 12) break
+    }
+    if (core.length >= 3) {
+      specialist = {
+        ecosystem: sp.ecosystem.trim().slice(0, 40),
+        coreSkills: core,
+        reason: typeof sp.reason === 'string' ? sp.reason.trim().slice(0, 80) : null,
+      }
+    }
+  }
+
   const multiPerson = !lowConf && r.multiPerson === true
   rd.aiInterpretation = {
     at: new Date().toISOString(),
@@ -188,7 +215,12 @@ export function buildInterpretationPatch(p, r, skillMasterNormSet) {
     multiPerson,
     evidence: multiPerson ? (r.evidence ?? null) : null,
     relatedSkills: lowConf ? [] : related,
+    specialist,
+    summary: !lowConf && typeof r.summary === 'string' && r.summary.trim()
+      ? r.summary.trim().slice(0, 200)
+      : null,
   }
+  if (specialist) changes.push(`${specialist.ecosystem}圏の精通を要求`)
 
   if (!lowConf && related.length) {
     const cur = Array.isArray(rd.niceToHaveSkills) ? rd.niceToHaveSkills : []
