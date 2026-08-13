@@ -25,7 +25,7 @@ import { getMatchingSettings, MATCHING_DEFAULTS } from '../lib/db/matchingSettin
 import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
 import { fetchSkillMatches, NO_MATCHES } from '../lib/db/skillMatch'
 import { getAiInterpretation, aiRelatedSkillMap } from '../lib/projectInterpretation'
-import { MatchingInputs } from '../components/MatchingInputs'
+import { MatchingInputs, MatchingWeightsLine, resolveScoringWeights } from '../components/MatchingInputs'
 import type { SkillMatcher } from '../lib/db/skillMatch'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
@@ -900,6 +900,9 @@ function CandidateModeRankCard({
           {p?.work_location && (
             <p className="text-xs text-gray-400 mt-0.5 break-words">{p.work_location}</p>
           )}
+          {/* 案件ごとに配点が違うので、どの案件がどの軸を重く見ているかを行単位で出す。
+              値が取れていない軸は順位に効かないため赤で示す（2026-08-13） */}
+          {p && <MatchingWeightsLine project={p} />}
           <div className="mt-2 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 min-w-0 space-y-2">
             {s.ai_summary && (
               <>
@@ -1435,12 +1438,9 @@ const { data: projects = [] } = useQuery({
   // 案件選択時: 保存済みウェイト → なければ案件内容から自動計算。派遣案件なら派遣フィルターを自動ON
   useEffect(() => {
     if (!selectedProject) return
-    const saved = (selectedProject.raw_data as Record<string, unknown>)?.matchWeights as Partial<ScoringWeights> | undefined
-    if (saved && typeof saved === 'object' && saved.skill != null) {
-      setScoringWeights({ skill: saved.skill, exp: saved.exp ?? 15, rate: saved.rate ?? 15, location: saved.location ?? 20, remote: saved.remote ?? 10 })
-    } else {
-      setScoringWeights(calcProjectWeights(selectedProject))
-    }
+    // 解決順（保存済み → 案件から計算）は resolveScoringWeights に一本化してある。
+    // ここで別に書くと、画面に出す配点と実際に採点する配点がズレる
+    setScoringWeights(resolveScoringWeights(selectedProject))
     // 契約形態が「派遣」なら派遣免許フィルターを自動ON
     setRequireHaken(selectedProject.contract_type === '派遣')
   }, [selectedProject?.id]) // selectedProject?.id: プロジェクトが非同期ロードされた後も再発火させるため

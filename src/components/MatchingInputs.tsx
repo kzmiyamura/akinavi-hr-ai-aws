@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import type { Project } from '../lib/db/projects'
 import type { ScoringWeights } from '../lib/db/candidates'
-import { calcProjectWeights } from '../lib/db/candidates'
+import { calcProjectWeights, DEFAULT_SCORING_WEIGHTS } from '../lib/db/candidates'
 import { fetchGenericSkills } from '../lib/db/skillMatch'
 import { getAiInterpretation } from '../lib/projectInterpretation'
 
@@ -13,8 +13,71 @@ import { getAiInterpretation } from '../lib/projectInterpretation'
  */
 export function resolveScoringWeights(p: Project): ScoringWeights {
   const saved = (p.raw_data as Record<string, unknown> | null)?.matchWeights as Partial<ScoringWeights> | undefined
-  const calc = calcProjectWeights(p)
-  return saved && Object.keys(saved).length > 0 ? { ...calc, ...saved } : calc
+  if (saved && typeof saved === 'object' && saved.skill != null) {
+    return {
+      skill: saved.skill,
+      exp: saved.exp ?? DEFAULT_SCORING_WEIGHTS.exp,
+      rate: saved.rate ?? DEFAULT_SCORING_WEIGHTS.rate,
+      location: saved.location ?? DEFAULT_SCORING_WEIGHTS.location,
+      remote: saved.remote ?? DEFAULT_SCORING_WEIGHTS.remote,
+    }
+  }
+  return calcProjectWeights(p)
+}
+
+/** 案件が採点に使える値を持っているか（持っていない軸は全候補者が横並びになる） */
+function axisValues(p: Project) {
+  return [
+    { axis: 'スキル', key: 'skill' as const, ok: ((p.required_skills as string[] | null) ?? []).length > 0 },
+    { axis: '勤務地', key: 'location' as const, ok: Boolean(p.work_prefecture) },
+    { axis: '単価', key: 'rate' as const, ok: p.budget_max != null },
+    { axis: '経験', key: 'exp' as const, ok: p.required_experience_years != null },
+    { axis: 'リモート', key: 'remote' as const, ok: Boolean(p.remote_policy) },
+  ]
+}
+
+/**
+ * 案件ごとの配点を1行で出す。
+ *
+ * 人材モードは1人に対して案件が並ぶ画面で、案件ごとに配点が違う。
+ * 表を案件の数だけ出すと画面が潰れるので、ここでは軸と点数だけを並べ、
+ * 値が取れていない軸（＝その点数が全候補者に一律で入り、順位に効かない）を
+ * 赤で出す。詳しい内訳は案件画面・マッチング画面の案件モードで見る。
+ */
+export function MatchingWeightsLine({ project: p, weights }: {
+  project: Project
+  weights?: ScoringWeights
+}) {
+  const w = weights ?? resolveScoringWeights(p)
+  const skillWeights = p.skill_weights && Object.keys(p.skill_weights).length > 0
+    ? Object.entries(p.skill_weights).sort((a, b) => b[1] - a[1])
+    : []
+
+  return (
+    <div className="mt-1 space-y-0.5">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px]">
+        <span className="text-gray-400">配点</span>
+        {axisValues(p).map(({ axis, key, ok }) => (
+          <span key={axis} className={ok ? 'text-gray-500' : 'text-red-500'}>
+            {axis}
+            <span className="font-medium">{w[key]}</span>
+            {!ok && <span className="ml-0.5">未取得</span>}
+          </span>
+        ))}
+        {p.contract_type === '派遣' && <span className="text-orange-600">派遣免許で絞込</span>}
+      </div>
+      {skillWeights.length > 0 && (
+        <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-[11px]">
+          <span className="text-gray-400">スキルの重み</span>
+          {skillWeights.map(([skill, weight]) => (
+            <span key={skill} className={weight >= 4 ? 'text-green-700 font-medium' : 'text-gray-500'}>
+              {skill}<span className="opacity-60">×{weight}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 /**
