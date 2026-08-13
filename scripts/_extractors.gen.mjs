@@ -5,6 +5,13 @@
 // ── 対象関数が参照する定数 ──
 const PROJ_MON= { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }
 const _skillRegexCache = new Map()
+const PROJ_TECHCOL = /(使用言語|開発言語|^言語|ＯＳ|^OS|サーバ|データベース|^DB|フレームワーク|ミドル|ツール|機種|開発環境|環境・言語|環境\/言語|得意技術|利用技術|^技術$|技術・環境|環境等|ＤＢ|使用ＤＢ|使用DB|DB関連|FW\/Tool|FW\/ツール)/
+const PROJ_PERIODCOL = /(期間|稼働)/
+const KAKKO_TECH = /^(OS|ＯＳ|言語|開発言語|使用言語|DB|ＤＢ|データベース|FW|フレームワーク|ミドル|ミドルウェア|サーバ|MW)/
+const KAKKO_SKIP = /^(役割|規模|担当|フェーズ|工程|人数|チーム|概要|プロジェクト|業務|実績|取り組|備考|ツール|その他|IDE|環境|機材|計測|画像処理)/
+const PROJ_JUNK = /^(SDK|ver|version|v|IDE|pro|＋|拡張機能|既存コード解析|ライブラリ|エディタ|各種|他|その他|等|ＦＷ|Framework|フレームワーク|画像処理ライブラリ|計測器|開発ツール|開発環境|Server|Basic|Studio|Code|Cloud|on|Native)$/i
+const PROJ_KEEP_WHOLE = /(SQL\s*Server|Visual\s*Basic|Visual\s*Studio|Transact[- ]?SQL|PL\/?SQL|Ruby\s*on\s*Rails|Amazon\s*Web\s*Services|Google\s*Cloud|Windows\s*Server|Objective[- ]?C|Node\.?js|Power\s*Automate|Power\s*BI|Power\s*Query|\.NET\s*Core|ASP\.NET)/gi
+const PROJ_PREFIX_RE = /(OS|ＯＳ|言語|開発言語|使用言語|DB|ＤＢ|データベース|FW|フレームワーク|ミドル|ミドルウェア|サーバ|MW|役割|規模|担当|工程|人数|チーム)[-－:：]/g
 
 // ── parseDurationToMonths ──
 function parseDurationToMonths(text){
@@ -2446,6 +2453,108 @@ function deriveWorkStyleTag(phrase){
   return null
 }
 
+// ── extractSkillYearsVisualProject ──
+function extractSkillYearsVisualProject(cells, deadline = 0){
+  if (deadline && Date.now() > deadline) return null
+  const nowMonth = new Date().getFullYear() * 12 + (new Date().getMonth() + 1)
+  const byRow= {}
+  for (const c of cells) if (c.value.trim()) (byRow[c.row] ??= []).push(c)
+  const rows = Object.keys(byRow).map(Number).sort((a, b) => a - b)
+  // 各行が日付セルを含むか（案件表ヘッダーは「下に日付データが続く」ことで判別。PR/要約欄の
+  // 単発tech語の誤選択を防ぐ）
+  const PROJ_ABS = /(19|20)\d{2}\s*[\/年.\-]\s*\d{1,2}|\d{2}[\/.]\d{1,2}|(\d{2})年[A-Za-z]{3}|平成|令和|昭和/
+  const dateRow= {}
+  for (const r of rows) dateRow[r] = byRow[r].some((c) => PROJ_ABS.test(c.value.replace(/\s/g, '')))
+  // ヘッダー検出: tech列見出し数＋期間見出し＋直下に日付行が続くかで加点
+  let hdr = -1, best = -1, tcols = [], pcols = []
+  for (const r of rows) {
+    const tc = [], pc = []
+    // 見出しは字間スペースを除去してから照合（"O S"→"OS"、"期 間"→"期間"）。長い結合見出し
+    // （"開発環境（OS／言語…）"等）も30字までは substring で拾う。
+    for (const c of byRow[r]) { const v = c.value.replace(/\s/g, '').trim(); if (v.length <= 30 && PROJ_TECHCOL.test(v)) tc.push(c.col); if (v.length <= 10 && PROJ_PERIODCOL.test(v)) pc.push(c.col) }
+    for (const c of byRow[r]) { if (/【\s*(OS|ＯＳ|言語|DB|ＤＢ)/.test(c.value) && !tc.includes(c.col)) tc.push(c.col) }
+    if (tc.length === 0) continue
+    const below = rows.filter((x) => x > r && x <= r + 30 && dateRow[x]).length
+    // tech列数を強めに重み付け（2行ヘッダーで「期間/開発環境」の粗い行より、ＯＳ/ＤＢ/言語と
+    // 細かく分かれた行=本物の列見出しを優先）
+    const score = tc.length * 3 + (pc.length ? 3 : 0) + (below >= 2 ? 10 : 0) + Math.min(below, 5)
+    if (score > best) { best = score; hdr = r; tcols = [...new Set(tc)]; pcols = pc }
+  }
+  if (hdr < 0 || tcols.length < 2) return null // 信頼ゲート①: tech列2本以上
+  // 案件ブロック化: tech列の結合セル ＋「結合セル(rowspan2〜20)を持つ任意の列」を案件境界に使う。
+  // No列や内容列が縦結合で案件を定義する表(No毎に1案件・c0=Noがrowspanで全行を覆う型)でも、
+  // 結合されていない tech(言語/DB)をその案件範囲に正しく束ねられる。span>20の巨大結合は除外。
+  const blocks  = []
+  for (const c of cells) {
+    if (c.row <= hdr || !c.value.trim()) continue
+    const span = c.rowEnd - c.row + 1
+    if (tcols.includes(c.col) || (span >= 2 && span <= 20)) blocks.push({ r0: c.row, r1: c.rowEnd })
+  }
+  blocks.sort((a, b) => a.r0 - b.r0)
+  const merged  = []
+  for (const b of blocks) { const last = merged[merged.length - 1]; if (last && b.r0 <= last.r1) last.r1 = Math.max(last.r1, b.r1); else merged.push({ ...b }) }
+  if (merged.length < 3) return null // 信頼ゲート②: 案件3件以上
+  const minTech = Math.min(...tcols)
+  const colv = (r0, r1, col) => cells.filter((c) => c.col <= col && c.colEnd >= col && c.row >= r0 && c.row <= r1).map((c) => c.value).join(' \n ')
+  const skillIv= {}, skillFloat= {}
+  for (const b of merged) {
+    // 期間はブロック内の「tech列でない全セル」から抽出（期間列はtech列の左右どちらにもあり得る。
+    // projParsePeriodが日付/期間だけ拾い他テキストは無視するため、位置を限定しない）
+    const perText = cells.filter((c) => c.row >= b.r0 && c.row <= b.r1 && !tcols.some((tc) => c.col <= tc && c.colEnd >= tc)).map((c) => c.value).join(' ')
+    const { start, end, dur } = projParsePeriod(perText, nowMonth)
+    const techs = new Set()
+    for (const tc of tcols) for (const t of projParseKakko(colv(b.r0, b.r1, tc))) techs.add(t)
+    if (techs.size === 0) continue
+    if (start !== null && end !== null && end >= start && end - start <= 600) { for (const t of techs) (skillIv[t] ??= []).push([start, end]) }
+    else if (dur !== null) { for (const t of techs) skillFloat[t] = (skillFloat[t] ?? 0) + dur }
+  }
+  const res= {}
+  for (const sk of new Set([...Object.keys(skillIv), ...Object.keys(skillFloat)])) res[sk] = projMergeMonths(skillIv[sk] ?? []) + (skillFloat[sk] ?? 0)
+  return Object.keys(res).length >= 3 ? res : null // 信頼ゲート③: 結果3件以上
+}
+
+// ── projSplitTokens ──
+function projSplitTokens(s){
+  // 複合名を退避(KWH記号)→空白分割→復元。実バージョン番号(Windows2012等)と衝突しない
+  const held = []
+  s = s.replace(PROJ_KEEP_WHOLE, (m) => { held.push(m.replace(/\s+/g, ' ').trim()); return `KWH${held.length - 1}KWH` })
+  const restore = (x) => x.replace(/KWH(\d+)KWH/g, (_, i) => held[+i] || '')
+  return s.split(/[\/／、,\n\r・（(）)]|\s{2,}|　| /).map((x) => x.replace(/^[◆■●・\s]+/, '').trim())
+    .map((x) => /KWH\d+KWH/.test(x) ? restore(x) : restore(x.replace(/[\s]*\d+(\.\d+)*[a-z]?$/i, '').replace(/等$|など$/, '').trim()))
+    .filter((x) => x && x.length >= 2 && x.length <= 24 && !/^[-―ー~〜:：+＋]+$/.test(x) && !/^\d+$/.test(x)
+      && !/(作成|開発|設計|テスト|実装|運用|保守|担当|業務|効率|改修|移行|対応|管理)$/.test(x) && !PROJ_JUNK.test(x))
+}
+
+// ── projParseKakko ──
+function projParseKakko(text){
+  const out = []
+  // ① 【カテゴリ】値 形式
+  const parts = text.split(/【([^】]*)】/)
+  if (parts.length > 1) {
+    out.push(...projSplitTokens(parts[0])) // 最初の【】より前の平文もtechとして拾う(隣の説明セルが横に混入する型)
+    for (let i = 1; i < parts.length; i += 2) {
+      const cat = parts[i].trim(); const val = parts[i + 1] || ''
+      if (KAKKO_SKIP.test(cat)) continue
+      if (KAKKO_TECH.test(cat)) out.push(...projSplitTokens(val))
+    }
+    return out
+  }
+  // ② 「言語-…」「OS-…」「DB-MySQL」等の接頭辞形式（ハイフン/コロン区切り）
+  const markers = [...text.matchAll(PROJ_PREFIX_RE)]
+  if (markers.length > 0) {
+    for (let i = 0; i < markers.length; i++) {
+      const cat = markers[i][1]
+      const s = markers[i].index + markers[i][0].length
+      const e = i + 1 < markers.length ? markers[i + 1].index : text.length
+      if (KAKKO_SKIP.test(cat)) continue
+      if (KAKKO_TECH.test(cat)) out.push(...projSplitTokens(text.slice(s, e)))
+    }
+    return out
+  }
+  // ③ 接頭辞なし→そのまま分割
+  return projSplitTokens(text)
+}
+
 // ── extractSkillYearsFromCareerBlocks ──
 function extractSkillYearsFromCareerBlocks(
   text,
@@ -3572,6 +3681,9 @@ export {
   findWorkStyleIn,
   extractLicenseNumbers,
   deriveWorkStyleTag,
+  extractSkillYearsVisualProject,
+  projSplitTokens,
+  projParseKakko,
   extractSkillYearsFromCareerBlocks,
   _careerTermRe,
   projParsePeriod,

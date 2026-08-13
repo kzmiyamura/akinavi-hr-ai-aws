@@ -43,6 +43,9 @@ const TARGET_FUNCTIONS = [
   'findWorkStyleIn',        // extractWorkStyleNote が呼ぶ（本文優先・添付は案件説明を弾く）
   'extractLicenseNumbers',  // 派遣・職業紹介の許可番号（旧表記 般/特・全角に対応）
   'deriveWorkStyleTag',
+  'extractSkillYearsVisualProject',    // 案件ブロック区間union（_extractMethod=61）
+  'projSplitTokens',                   // ↑が呼ぶトークン分割
+  'projParseKakko',                    // ↑が呼ぶ【カテゴリ】/接頭辞の解釈
   'extractSkillYearsFromCareerBlocks', // 叙述型の職務経歴書（主にPDF）の期間ブロック×スキル
   '_careerTermRe',                     // ↑が呼ぶ語境界つき照合regex
   'projParsePeriod',                   // ↑が呼ぶ期間パーサ（Excel視覚エンジンと共用）
@@ -240,7 +243,8 @@ function stripTs(code) {
   // パラメータ位置に残っている場合
   code = code.replace(/(\b\w+)\s*:\s*__REMOVED_TYPE__(?=\s*[,)])/g, '$1')
   // 戻り値型位置
-  code = code.replace(/\)\s*:\s*__REMOVED_TYPE__\s*(?=[{(]|=>|\n)/g, ')')
+  // ユニオン付き（`): Record<string, number> | null {`）も対象にする
+  code = code.replace(/\)\s*:\s*__REMOVED_TYPE__(?:\s*\|\s*(?:__REMOVED_TYPE__|[\w[\]]+))*\s*(?=[{(]|=>|\n)/g, ')')
   // 残留クリーンアップ
   code = code.replace(/:\s*__REMOVED_TYPE__/g, '')
 
@@ -350,6 +354,14 @@ function extractFunction(src, name) {
 const TARGET_CONSTS = [
   'PROJ_MON',          // projParsePeriod が使う英語3文字月名
   '_skillRegexCache',  // _cachedSkillRegex のキャッシュ
+  // extractSkillYearsVisualProject（案件ブロックunion）が参照する判定regex群
+  'PROJ_TECHCOL',
+  'PROJ_PERIODCOL',
+  'KAKKO_TECH',
+  'KAKKO_SKIP',
+  'PROJ_JUNK',
+  'PROJ_KEEP_WHOLE',
+  'PROJ_PREFIX_RE',
 ]
 
 /** `const NAME = ...` の1行宣言を取り出す */

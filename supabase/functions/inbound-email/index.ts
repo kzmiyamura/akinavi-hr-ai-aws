@@ -6231,6 +6231,47 @@ function extractSkillYearsFromSheetJson(rows: any[]): Record<string, number> {
  *   - 過剰に長いキー（30文字超）
  * 内部メタキー（_ プレフィックス）はそのまま保持。
  */
+/**
+ * スキル別経験月数を「その人の職歴の長さ」で頭打ちにする。
+ *
+ * スキルの経験年数が本人の経験年数を超えることは原理的にありえない。
+ * それでも実際に起きる（2026-08-13 実害: 25歳・経験2年10ヶ月の人材で
+ * PHP 16.3年 / Linux 16年 と表示された）。営業が画面で見て一目で嘘と分かる値が
+ * 1件でも出ると数字全体が信用されなくなるので、抽出経路がどれであっても
+ * 保存直前にここを通す。
+ *
+ * 上限の作り方:
+ *   ・経験年数が分かっていれば「経験年数 + 1年」。**年齢基準より優先する**。
+ *     画面には「経験2年」と並べて出るので、緩い方（年齢-18=7年）に倒すと
+ *     「経験2年 / PHP 7年」となって矛盾が残り、直したことにならない
+ *   ・経験年数が無いときだけ年齢から「年齢 - 18歳」
+ *   ・どちらも無ければ従来どおり無制限（filterSkillYears の40年上限だけ効く）
+ * 超えた値は捨てずに上限へ丸める。スキル自体はあるので落とすと情報が減る。
+ */
+function capSkillYearsByCareer(
+  sy: Record<string, number>,
+  opts: { experienceYears?: number | null; age?: number | null },
+): Record<string, number> {
+  let cap: number | null = null
+  if (typeof opts.experienceYears === 'number' && opts.experienceYears > 0) {
+    cap = (opts.experienceYears + 1) * 12
+  } else if (typeof opts.age === 'number' && opts.age >= 20) {
+    cap = (opts.age - 18) * 12
+  }
+  if (cap === null) return sy
+  const out: Record<string, number> = {}
+  let capped = 0
+  for (const [k, v] of Object.entries(sy)) {
+    // 内部キー（_totalProjectMonths 等）は経験年数推定の材料なので触らない
+    if (k.startsWith('_')) { out[k] = v; continue }
+    if (typeof v === 'number' && v > cap) { out[k] = cap; capped++ } else { out[k] = v }
+  }
+  if (capped > 0) {
+    console.log(`[skillYears-cap] ${capped}件を上限${cap}ヶ月(${(cap / 12).toFixed(1)}年)に丸めた（経験${opts.experienceYears ?? '—'}年・年齢${opts.age ?? '—'}）`)
+  }
+  return out
+}
+
 function filterSkillYears(sy: Record<string, number>): Record<string, number> {
   // スキル名として不適切なヘッダーラベル・金額・業務語をフィルター
   // 例: 「言語／FW」「OS／MW」「概要」「105万」等
@@ -10204,7 +10245,11 @@ Deno.serve(async (req: Request) => {
                   // 優先順位: careerYears < bodyYears < nameYears < Excel（後が上書き）
                   // 保存直前に必ずゴミフィルタを通す（抽出経路がgrid/cells/視覚/本文いずれでも、
                   // 期間表記・日付・見出し語キーがここで最終的に落ちる）
-                  const merged = filterSkillYears({ ...careerYears, ...bodyYears, ...nameYears, ...display })
+                  // 職歴の長さを超えるスキル年数はありえないので保存直前に丸める
+                  const merged = capSkillYearsByCareer(
+                    filterSkillYears({ ...careerYears, ...bodyYears, ...nameYears, ...display }),
+                    { experienceYears: blockRegexFields.experienceYears, age: blockRegexFields.age },
+                  )
                   return Object.keys(merged).filter(k => !k.startsWith('_')).length > 0 ? merged : undefined
                 })(),
                 // Excel スキルシートの「スキルサマリ」セル（selfPR・agentComment と並列の独自フィールド）
@@ -10830,7 +10875,11 @@ Deno.serve(async (req: Request) => {
             // 保存直前に必ずゴミフィルタを通す（抽出経路がgrid/cells/視覚/Word/本文いずれでも、
             // 期間表記・日付・見出し語キーがここで最終的に落ちる）
             const finalizeSkillYears = (sy: Record<string, number>): Record<string, number> | undefined => {
-              const f = filterSkillYears(sy)
+              // 職歴の長さを超えるスキル年数はありえないので保存直前に丸める
+              const f = capSkillYearsByCareer(filterSkillYears(sy), {
+                experienceYears: resolvedExperienceYears,
+                age: regexFields.age,
+              })
               return Object.keys(f).filter(k => !k.startsWith('_')).length > 0 ? f : undefined
             }
             if (Object.keys(displayExcel).length > 0) return finalizeSkillYears(normalizeKeys({ ...bodyYears, ...nameYears, ...displayExcel }))
