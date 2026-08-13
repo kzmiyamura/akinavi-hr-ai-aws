@@ -22,6 +22,7 @@ for (const line of envText.split(/\r?\n/)) {
 
 // --service を付けると service_role で呼ぶ（anon のロール別 statement_timeout の切り分け用）
 const USE_SERVICE = process.argv.includes('--service')
+const NO_NICE = process.argv.includes('--no-nice')
 let url = process.env.VITE_SUPABASE_URL
 let key = process.env.VITE_SUPABASE_ANON_KEY
 if (USE_SERVICE) {
@@ -68,6 +69,10 @@ async function run(label, skills) {
     p_work_prefecture: p.work_prefecture ?? null,
     p_required_exp_years: p.required_experience_years ?? null,
     p_skill_weights: p.skill_weights ?? null,
+    // 尚可スキルも本番と同じように渡す（skill_hit_weights がもう1回走るので所要時間が変わる）。
+    // --no-nice を付けると渡さない（尚可加点そのものの所要時間を切り分けるため）
+    p_nice_skills: NO_NICE ? null
+      : (Array.isArray(p.raw_data?.niceToHaveSkills) ? p.raw_data.niceToHaveSkills.map(String) : null),
   })
   const ms = Date.now() - t0
   const status = error ? `NG (${error.message.slice(0, 40)})` : `OK ${data.length}件`

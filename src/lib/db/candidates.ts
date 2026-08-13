@@ -213,6 +213,12 @@ export interface ProjectScoreParams {
   requiredExpYears?: number | null
   /** 必須スキルごとの重み。渡すと配点が「一致した重みの合計 ÷ 全体の重み合計」になる */
   skillWeights?: Record<string, number> | null
+  /**
+   * 尚可（歓迎）スキル。必須の分母は増やさず、スキル比率を最大 +10% 底上げする。
+   * match-batch（表示スコア）だけが見ていて順位側が無視していたため、
+   * 尚可を満たす人が順位で不利なまま画面のスコアだけ高い状態になっていた（2026-08-13）
+   */
+  niceToHaveSkills?: string[] | null
   remotePolicy?: string | null
   /** 案件の契約形態。'派遣' のとき人材の hakenOk で加減点する（match-batch と同じ扱い） */
   contractType?: string | null
@@ -249,6 +255,7 @@ export async function fetchCandidatesForProject(
       p_work_prefecture: params.workPrefecture ?? null,
       p_required_exp_years: params.requiredExpYears ?? null,
       p_skill_weights:   params.skillWeights ?? null,
+      p_nice_skills:     params.niceToHaveSkills ?? null,
     })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as (Candidate & { rule_score: number })[]

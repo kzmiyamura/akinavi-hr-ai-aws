@@ -279,15 +279,17 @@ function calcRuleScore(
       hitWeight += (hits - before) * w
     }
   }
-  // 歓迎スキル: 一致ごとに +1pt（部分一致 +0.5pt）
+  // 歓迎（尚可）スキル: 一致ごとに +1pt。
+  // 判定は必須と同じ skill_satisfies（satisfiedRequired には尚可スキルも入れて渡している）。
+  // 旧ルールの双方向部分一致（+0.5pt）は必須側と同じ理由で廃止した。
+  // 「C」が Microsoft 365 に、「Shell」が PowerShell に合致していた（2026-08-13）
   const niceToHave = project.niceToHaveSkills ?? []
   let niceHits = 0
   if (niceToHave.length > 0) {
     for (const n of niceToHave) {
       const nt = n.toLowerCase().trim()
       if (!nt) continue
-      if (cSet.has(nt)) niceHits += 1
-      else if ([...cSet].some(s => s.includes(nt) || nt.includes(s))) niceHits += 0.5
+      if (satisfiedRequired?.has(n) || cSet.has(nt)) niceHits += 1
     }
   }
   // 重み付き比率。順位付けをする fetch_candidates_for_project と同じ式にする
@@ -297,9 +299,11 @@ function calcRuleScore(
     : 0.5
   skillRatio = Math.min(1.0, skillRatio + (niceToHave.length > 0 ? niceHits / niceToHave.length * 0.1 : 0))
   const cappedSkillScore = Math.min(wSkill, Math.round(skillRatio * wSkill))
+  // 尚可の充足は加点の根拠なので内訳に出す（スコアの根拠は画面で確認できるようにする）
+  const niceDetail = niceToHave.length > 0 ? `・尚可${niceToHave.length}中${niceHits}合致` : ''
   const skillDetail = required.length > 0
-    ? `スキル${cappedSkillScore}/${wSkill}(必須${required.length}中${Math.round(hits)}合致)`
-    : `スキル${cappedSkillScore}/${wSkill}(必須スキル未設定)`
+    ? `スキル${cappedSkillScore}/${wSkill}(必須${required.length}中${Math.round(hits)}合致${niceDetail})`
+    : `スキル${cappedSkillScore}/${wSkill}(必須スキル未設定${niceDetail})`
 
   // ── 経験年数 ──
   // 優先順位:
@@ -790,10 +794,14 @@ Deno.serve(async (req) => {
         })
       }
 
-      // 必須スキルの充足判定を1往復でまとめて取る（判定は skill_satisfies に一本化）
+      // 必須スキルの充足判定を1往復でまとめて取る（判定は skill_satisfies に一本化）。
+      // 尚可スキルも同じ往復で判定する（別に呼ぶと往復が倍になる）
       const satisfiedMap = await fetchSatisfiedRequired(
         (candidates as CandidateInput[]).map(c => c.skills ?? []),
-        (projectRequirements as ProjectReq).requiredSkills ?? [],
+        [...new Set([
+          ...((projectRequirements as ProjectReq).requiredSkills ?? []),
+          ...((projectRequirements as ProjectReq).niceToHaveSkills ?? []),
+        ])],
       )
       // ルールスコアで全員採点 → ソート
       const scored = candidates.map((c, i) => {
@@ -868,7 +876,9 @@ Deno.serve(async (req) => {
 
       // 1人 × 複数案件。全案件の必須スキルを合わせて1往復で判定し、案件ごとに絞って渡す
       // （案件ごとに呼ぶと案件数ぶん往復する）
-      const allWant = [...new Set((projects as ProjectReq[]).flatMap(p => p.requiredSkills ?? []))]
+      const allWant = [...new Set((projects as ProjectReq[]).flatMap(
+        p => [...(p.requiredSkills ?? []), ...(p.niceToHaveSkills ?? [])],
+      ))]
       const satisfiedOne = await fetchSatisfiedRequired([(candidateProfile as CandidateInput).skills ?? []], allWant)
       const satisfiedSet = satisfiedOne ? (satisfiedOne.get(0) ?? new Set<string>()) : null
       const scored = projects.map(p => {
