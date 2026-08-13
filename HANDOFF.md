@@ -6,37 +6,54 @@
 
 ## 0. 次にやること
 
-### ★★ 最優先: マッチングRPCが anon で必ずタイムアウトする（8/13 発見・未修正）
+### ✅ 解決済み: マッチングRPCが anon でタイムアウトしていた（8/13 修正・デプロイ済み）
 
-**UI の「再実行」は open 8案件中5案件で毎回失敗している。** スコアが古いまま／
+**UI の「再実行」は open 8案件中5案件で毎回失敗していた。** スコアが古いまま／
 「未実施」のままだったのはこれが原因。スキル判定の問題ではなかった。
 
-- `fetch_candidates_for_project` の実測は **10.5秒**（精密機器案件・service_role で計測）
-- anon ロールの `statement_timeout`（Supabase 既定8秒）に引っかかり
-  `canceling statement due to statement timeout` で切られる
-- 画面もスクリプトも anon なので**本番で誰も再マッチングできない**
-- 失敗するのは必須スキルが広い案件。単独で試すと
-  **SQL・テスト・基本設計 は NG / Java(984人)・C#(463)・VB.net(202) は OK**。
-  充足人数 1,000 人あたりが境目
-- 切り分け: `node scripts/probe_fetch_candidates_timing.mjs <案件id先頭> [--service]`
+**anon の `statement_timeout` は 3秒**（authenticated は8秒、service_role は実質8秒）。
+本アプリは認証なしなので常に anon。ここに 7.3秒の RPC を投げていた。
 
-§3 の「RPC 1.6〜7.1秒、timeout 30秒なので余裕」は **CLI（superuser）での計測**なので
-anon の実態と違う。ベンチを anon で取り直すこと。
+関数の先頭に `PERFORM set_config('statement_timeout','30000',true)` があるが
+**実行中の文には効かない**（タイマーは文の開始時に決まる）。`ALTER FUNCTION ... SET` も同じ。
+§3 の「1.6〜7.1秒・timeout 30秒なので余裕」は CLI（superuser）計測だったので実態と違っていた。
 
-対応案（未着手・要判断）:
-1. `skill_hit_weights` の高速化（本筋。1,000人超で急に重くなる原因を見る）
-2. anon の `statement_timeout` を引き上げる（DB設定変更なので要承認）
-3. 再マッチングを Edge Function 側（service_role）に寄せる
+やったこと:
 
-暫定回避として `--service` を付ければバッチは通る:
+1. **`fetch_candidates_for_project` の高速化**（`20260813_fetch_candidates_perf.sql`）
+   7.34秒 → **3.2秒**。`candidates_lite` は `raw_profile - 'text' - 'parsedGrid'` を
+   行ごとに評価するビューで、旧実装は ORDER BY / LIMIT の**前に全該当者ぶん**展開していた。
+   スコア計算を軽い列だけで先に済ませ、**返す500件に対してだけ**ビューを結合するよう変更。
+   配点・判定は一切変えていない
+2. **anon の statement_timeout を 3秒 → 15秒**（`20260813_anon_statement_timeout.sql`）
+   3.2秒でも3秒の壁は越えられないため。戻すときは `ALTER ROLE anon SET statement_timeout = '3s';`
+3. **open 8案件すべて再マッチング済み**（合計約3,000件 upsert・Groq 70B）
+
+確認したこと:
+- 移行の前後で背中合わせにスナップショットを取り、**7案件で候補者IDの並びまで完全一致**
+  （1件は変更前がタイムアウトで比較不能）
+- anon で 8案件×3周＝24回、**失敗ゼロ**（変更前は 2〜4件/8 が失敗していた）
+- test_skill_matching.sql 28/28、rpc_parity 1,570人・食い違い0、
+  test_match_skill_strings PASS、vitest skillMatch 7/7
+
+**注意**: スナップショットを時間差で2回取ると必ず差分が出る。裏でワーカーが人材を
+更新しているのと、同点が多い案件（英語のみ等）で並びが揺れるため。
+関数変更の検証は**変更の直前直後**に取った2点で比べること。
+
+内訳の実測（次に遅くなったとき用）:
+`skill_hit_weights` 0.77秒 / `candidates_lite` 500件の組み立て 0.74秒 / 残り約1.7秒。
+
+切り分けツール:
 ```
-node scripts/rematch_open_projects.mjs --project <id先頭> --service
-node scripts/rematch_open_projects.mjs --service          # 全案件
+node scripts/probe_fetch_candidates_timing.mjs <案件id先頭> [--service]  # スキルを足し引きして計測
+node scripts/snapshot_rpc_ranking.mjs <出力> [--anon]                    # 並びを保存
+node scripts/compare_rpc_ranking.mjs <before> <after>                    # 差分
+npx supabase db query --linked -f scripts/sql/inspect_role_timeouts.sql  # ロール別の上限
 ```
 
-**8/13 に精密機器案件（82da71a0）だけ再マッチング済み**（500件 upsert・Groq 70B）。
-順位は正常化した（上位3名が必須6/6完全一致。旧1位の M.K は SQL のみで圏外）。
-**残り7案件は古いスコアのまま。**
+**egress に注意**: 上記スナップショットは1回で約8MB（500件×約2KB×8案件）使う。
+日次の目安は166MB。**安定性の確認は1案件・少件数で足りる**。8/13 は3回×2セット回して
+約35MB を無駄にした。
 
 ### ★ スキル緑表示の件: 白と確定（8/13 目視完了）
 
@@ -297,8 +314,10 @@ LLMが余計なものを足すので次のガードを入れた。
 - C-ROSTER-CAP / C-ROW-LINK-SKIP / D-UNASSIGNED が減ったか
   （`npx supabase db query --linked -f scripts/sql/audit_roster_drops.sql`）
 - egress: 8/11 は PostgREST 86.5MB（8/10 の366MBから76%減）。無料枠 5GB/月 ＝ 約166MB/日
-- マッチングRPCの実行時間: 案件あたり 1.6〜7.1秒（`scripts/sql/bench_fetch_candidates.sql`）。
-  RPC 内の `statement_timeout` は30秒なので余裕はあるが、遅くなったらここを見る
+- マッチングRPCの実行時間: 高速化後で **3.2秒**（anon の上限は15秒＝8/13に3秒から引き上げ）。
+  `scripts/sql/bench_fetch_candidates.sql` は CLI（superuser）で測るので**本番の余裕は分からない**。
+  本番の条件で見るなら `probe_fetch_candidates_timing.mjs`（anon）を使う。
+  RPC 内の `PERFORM set_config('statement_timeout',...)` は効かないので当てにしない
 
 ---
 
