@@ -369,15 +369,34 @@ const accordionSummaryCls =
  */
 const SCORE_LOGIC_UPDATED_AT = Date.parse('2026-08-13T08:10:00Z')
 
+/** 内訳テキスト「必須5中3合致」から保存時の合致数を読む。読めなければ null */
+export function parseSavedSkillHits(breakdown: string): { total: number; hits: number } | null {
+  const m = breakdown.match(/必須(\d+)中(\d+)合致/)
+  if (!m) return null
+  return { total: Number(m[1]), hits: Number(m[2]) }
+}
+
 /**
  * スコア内訳。保存済みの計算結果なので、いつ算出したものかを必ず出す。
- * 判定ルール更新より古いものは「再マッチングで変わる」ことを明示する
- * （必須スキルの緑表示は毎回サーバに問い合わせる live 判定なので、
- *   古い内訳と合致数が食い違って見える）
+ *
+ * 必須スキルの緑／グレーは毎回サーバに問い合わせる live 判定なので、
+ * 保存済みの内訳と合致数が食い違う。「食い違うことがあります」と
+ * 曖昧に書いていたが、それでは何個が正しいのか分からない（2026-08-13 指摘:
+ * 「緑色が5個中4個あるのになぜ3個なの？」）。live の合致数を渡して、
+ * 保存時と最新の数を両方そのまま出す。
  */
-function ScoreBreakdown({ breakdown, updatedAt }: { breakdown: string, updatedAt?: string | null }) {
+function ScoreBreakdown({ breakdown, updatedAt, liveHits }: {
+  breakdown: string
+  updatedAt?: string | null
+  /** 最新判定での必須スキル合致数。渡せない画面（人材モード）では undefined */
+  liveHits?: number
+}) {
   const at = updatedAt ? Date.parse(updatedAt) : NaN
-  const stale = Number.isFinite(at) && at < SCORE_LOGIC_UPDATED_AT
+  const saved = parseSavedSkillHits(breakdown)
+  const disagrees = saved != null && liveHits != null && saved.hits !== liveHits
+  // 判定ルール更新より前のものは、合致数が一致していても他の軸が変わっている可能性がある
+  const olderThanLogic = Number.isFinite(at) && at < SCORE_LOGIC_UPDATED_AT
+  const stale = disagrees || olderThanLogic
   return (
     <>
       <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
@@ -391,7 +410,9 @@ function ScoreBreakdown({ breakdown, updatedAt }: { breakdown: string, updatedAt
       <p className="text-xs text-gray-600 break-words leading-relaxed font-mono">{breakdown}</p>
       {stale && (
         <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-1.5 py-1">
-          スキル判定ルールを更新する前の結果です。上の必須スキルの緑／グレーは最新の判定なので、合致数が食い違うことがあります。「再マッチング」で更新されます。
+          {disagrees && saved
+            ? <>この内訳は保存時（{saved.total}中{saved.hits}合致）の値です。最新の判定では <span className="font-semibold">{saved.total}中{liveHits}合致</span>（上の緑がその結果）です。スキルの点数と合計スコアは、再計算するとこの内訳より{liveHits! > saved.hits ? '高く' : '低く'}なります。「再マッチング」で更新されます。</>
+            : <>スキル判定ルールを更新する前の結果です。上の必須スキルの緑／グレーは最新の判定なので、合致数が食い違うことがあります。「再マッチング」で更新されます。</>}
         </p>
       )}
     </>
@@ -719,6 +740,11 @@ function ProjectModeRankCard({
               <ScoreBreakdown
                 breakdown={String((s.ai_raw as Record<string, unknown>).breakdown)}
                 updatedAt={s.updated_at}
+                // 緑バッジと同じ live 判定で数え直した合致数。内訳の保存値と突き合わせる
+                liveHits={requiredSkills.length > 0
+                  ? requiredSkills.filter(req =>
+                      ((s.candidate.skills as string[]) ?? []).some(sk => skillMatcher(sk, req))).length
+                  : undefined}
               />
             ) : !s.ai_summary && (
               <>
