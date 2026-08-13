@@ -4,15 +4,40 @@
 
 ---
 
-## 0-b. マッチング判断の再設計（8/14・設計確定）
+## 0-b. マッチング判断の再設計（8/14・実装順①まで完了）
 
-PMO歴10年の人が実装案件の1位（95点）になった件を受け、設計を見直した。
+PMO歴10年の Y.T が実装案件の1位（95点）になった件を受け、設計を見直した。
 **全文は `docs/matching_redesign.md`**。要点:
 
 - ルール＝リコール（ゲート＋候補出しの内部値）、AI＝プレシジョン（verdict が最終判断）
-- 実装順: ①所見のワーカーキュー化＋verdict 並び替え＋llama採点廃止
-  → ②skillYears を順序付けに反映 → ③roleProfile/requiredRole → ④採否ラベルで precision 計測
-- 応急処置は済み: verdict バッジをスコア真横に表示（`79ae96f`）
+- 実装順: ①所見のワーカーキュー化＋verdict 並び替え → ②skillYears を順序付けに反映
+  → ③roleProfile/requiredRole → ④採否ラベルで precision 計測（→llama採点廃止は①の完了後）
+- 応急処置: verdict バッジをスコア真横に表示（`79ae96f`）
+
+### ① 実装済み（`d09ef9b`・デプロイ・ワーカー稼働確認済み）
+
+1. **recommendCycle**（`shadow_worker.mjs`）: open prod 案件×上位10人（`REC_TOP_N`）の
+   submissions に所見が無いペアを5分サイクルごとに5件（`REC_MAX_PER_CYCLE`）生成。
+   - 出力不能でも `ai_raw.recommendation = {at, skipped}` の印を書く（永久再拾い防止）
+   - **再マッチングの upsert は ai_raw を丸ごと置き換える**（`src/lib/db/submissions.ts`）ので、
+     顔ぶれ・スコアが変わるとマーカーが消えて自動的に再生成対象へ戻る。明示的な無効化は無い
+   - 入力テキストの組み立ては `recommend_lib.mjs` に集約（CLI `recommend.mjs` と共通）
+   - 8/14 06:20 JST 時点で 14/約80 ペア生成済み。全 open 案件が埋まるまで数時間
+2. **verdict 並び替え**（`RecommendationNote.tsx` の `compareByVerdictThenScore`）:
+   推せる(0) > 条件付き(1) > 未評価(2) > **見送り(3)** → ルール点数。
+   見送りはAIが明示的に否と判断したものなので未評価の11位以下より下に沈める。
+   テスト: `src/components/__tests__/recommendationSort.test.ts`（6件）
+
+### 次にやること（llama 採点廃止 → 実装順②）
+
+- **llama 採点（match-batch の Cerebras/Groq/Gemini）の廃止は所見のカバレッジが
+  埋まってから**。今消すと所見の無い案件で AI テキストがゼロになる。
+  カバレッジ確認: `sb-query.mjs "submissions?select=count&data_env=eq.prod&ai_raw->recommendation=not.is.null"`
+  廃止時は保存スコア＝ルール値になる点に注意（match_score の意味が変わる。
+  ai_summary / スコア内訳の表示との整合も見ること）
+- **② skillYears をルール順序付けに反映**: `fetch_candidates_for_project` のスキル点を
+  有無から「年数（capped）×直近性」の重み付けへ。**手で書き写さず機械生成方式**
+  （`scripts/gen_fetch_candidates_nice.py` 参照）。変更前後で snapshot/compare を1案件で
 
 ---
 
