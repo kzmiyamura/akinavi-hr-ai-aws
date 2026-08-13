@@ -28,8 +28,34 @@ export interface LlmChangeRow {
   before: string | null
   /** 現在の値。オブジェクト・配列は要約に落とす */
   after: string | null
-  /** fields の元表記に付いていた補足（例: "+1件・regexが0件のため補完"） */
+  /** fields の元表記に付いていた補足のうち、件数の増減を除いた説明部分 */
   note: string | null
+  /** 配列・オブジェクトの件数差（before/after から実測）。件数で表せないときは null */
+  delta: number | null
+}
+
+/** 配列・オブジェクトなら件数を返す。それ以外は null */
+function countOf(v: unknown): number | null {
+  if (Array.isArray(v)) return v.length
+  if (v != null && typeof v === 'object') return Object.keys(v as Record<string, unknown>).length
+  return null
+}
+
+/**
+ * fields の補足から「+1」「+1件」「5件」といった件数表記だけを取り除く。
+ *
+ * ワーカーが書いた件数は**その1回の実行時点**の差分で、複数回適用されると
+ * 画面の before→after（最初の regex 値からの累計）と食い違う。
+ * 実データで「3件 → 5件（+1）」と出ていた（2026-08-13 指摘）。
+ * 件数は before/after から計算し直すので、文字列側の数字は捨てて説明だけ残す。
+ */
+function stripCountNote(note: string | null): string | null {
+  if (!note) return null
+  const rest = note
+    .replace(/^[+＋\-−]?\d+\s*件?/, '')
+    .replace(/^[・、,]\s*/, '')
+    .trim()
+  return rest || null
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -88,11 +114,14 @@ export function describeLlmChanges(
     const m = raw.match(/^([^(（]+)[(（](.*?)[)）]?$/)
     const key = (m ? m[1] : raw).trim()
     const note = m ? m[2].trim() || null : null
+    const beforeCount = countOf(backup?.[key])
+    const afterCount = countOf(current[key])
     rows.push({
       label: FIELD_LABELS[key] ?? key,
       before: summarize(backup?.[key]),
       after: summarize(current[key]),
-      note,
+      note: stripCountNote(note),
+      delta: beforeCount != null && afterCount != null ? afterCount - beforeCount : null,
     })
   }
   return rows
@@ -145,6 +174,9 @@ export function AiAppliedNote({ applied, backup, current }: {
                   {r.before != null
                     ? <><span className="text-gray-400 line-through">{r.before}</span>{' → '}{r.after ?? '—'}</>
                     : <><span className="text-gray-400">取得できず</span>{' → '}{r.after ?? '—'}</>}
+                  {r.delta != null && r.delta !== 0 && (
+                    <span className="ml-1 text-gray-400">({r.delta > 0 ? `+${r.delta}` : r.delta})</span>
+                  )}
                   {r.note && <span className="ml-1 text-gray-400">({r.note})</span>}
                 </td>
               </tr>

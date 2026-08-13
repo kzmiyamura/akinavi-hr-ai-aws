@@ -25,6 +25,7 @@ import { getMatchingSettings, MATCHING_DEFAULTS } from '../lib/db/matchingSettin
 import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
 import { fetchSkillMatches, NO_MATCHES } from '../lib/db/skillMatch'
 import { getAiInterpretation, aiRelatedSkillMap } from '../lib/projectInterpretation'
+import { MatchingInputs } from '../components/MatchingInputs'
 import type { SkillMatcher } from '../lib/db/skillMatch'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
@@ -1968,6 +1969,16 @@ const { data: projects = [] } = useQuery({
                         </p>
                       )}
                     </div>
+                    {/* 順位を見ている画面で「なぜこの順なのか」が分かるように、
+                        案件画面と同じ配点表・スキルの重みをここにも出す（2026-08-13 指摘）。
+                        ウェイトは調整中の scoringWeights を渡す＝実際に採点している値そのもの */}
+                    <MatchingInputs
+                      project={selectedProject}
+                      requiredSkillCount={((selectedProject.required_skills as string[] | null) ?? []).length}
+                      niceCount={(((selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] | null) ?? []).length}
+                      weights={scoringWeights}
+                      compact
+                    />
                     {matchByProjectMutation.isPending && matchByProjectMutation.variables === selectedProject.id && matchRunProgress && (
                       <p className="text-xs text-blue-700 bg-blue-50 rounded px-3 py-2">
                         {formatMatchRunProgressLine(matchRunProgress)}
