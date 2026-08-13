@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { extractRecommendation } from './run.mjs'
+import { projectText, candidateText, buildRecommendationRecord } from './recommend_lib.mjs'
 
 for (const line of readFileSync(join(homedir(), '.akinavi_shadow.env'), 'utf8').split(/\r?\n/)) {
   const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/)
@@ -42,37 +43,6 @@ async function rest(pathq, opts = {}) {
   return t.trim() ? JSON.parse(t) : null
 }
 
-/** 案件をAIに渡すテキストに整える。本文があれば本文が正（項目は抽出済みの再掲） */
-function projectText(p) {
-  const rd = p.raw_data ?? {}
-  const head = [
-    `案件名: ${p.title ?? ''}`,
-    p.client ? `クライアント: ${p.client}` : null,
-    `必須スキル: ${((p.required_skills ?? [])).join('、') || 'なし'}`,
-    rd.niceToHaveSkills?.length ? `尚可スキル: ${rd.niceToHaveSkills.join('、')}` : null,
-    p.work_location ? `勤務地: ${p.work_location}` : null,
-    p.remote_policy ? `リモート: ${p.remote_policy}` : null,
-    p.contract_type ? `契約形態: ${p.contract_type}` : null,
-    p.budget_max != null ? `単価上限: ${p.budget_max}万円` : null,
-  ].filter(Boolean).join('\n')
-  const body = String(rd.text ?? '')
-  return body.length > 50 ? `${head}\n\n--- 元メール本文 ---\n${body}` : head
-}
-
-/** 候補者をAIに渡すテキストに整える。経歴本文があればそれを使う */
-function candidateText(c) {
-  const rp = c.raw_profile ?? {}
-  const head = [
-    `氏名: ${c.name ?? ''}`,
-    c.experience_years != null ? `総経験年数: ${c.experience_years}年` : null,
-    c.desired_rate ? `希望単価: ${c.desired_rate}` : null,
-    c.from_company ? `所属: ${c.from_company}` : null,
-    `保有スキル: ${((c.skills ?? [])).join('、') || 'なし'}`,
-  ].filter(Boolean).join('\n')
-  const body = String(rp.attachmentText ?? rp.text ?? '')
-  return body.length > 50 ? `${head}\n\n--- 経歴書・メール本文 ---\n${body}` : head
-}
-
 const [p] = await rest(`projects?select=id,title,client,required_skills,raw_data,work_location,remote_policy,contract_type,budget_max&id=eq.${PROJECT_ID}`) ?? []
 if (!p) { console.error('案件が見つかりません'); process.exit(1) }
 console.log(`■ ${p.title}\n`)
@@ -97,21 +67,14 @@ for (const sub of subs) {
 
   // 確信度が low でも書く。実データではモデルが保守的に low を付けるが内容は使えた
   // （2026-08-13 実測）。画面側で「確信度：低」と出して営業に判断させる
-  if (RUN && r.pitch) {
+  if (RUN) {
     const [cur] = await rest(`submissions?select=ai_raw&id=eq.${sub.id}`) ?? []
     const aiRaw = { ...(cur?.ai_raw ?? {}) }
-    aiRaw.recommendation = {
-      at: new Date().toISOString(),
-      model: r.model,
-      required: r.required, verdict: r.verdict, pitch: r.pitch,
-      strengths: r.strengths, gaps: r.gaps, confidence: r.confidence,
-    }
+    aiRaw.recommendation = buildRecommendationRecord(r)
     await rest(`submissions?id=eq.${sub.id}`, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ ai_raw: aiRaw }),
     })
-    console.log('  → 書き込み済み')
-  } else if (RUN) {
-    console.log('  → 低確信のため書き込みません')
+    console.log(aiRaw.recommendation.skipped ? '  → 出力不能の印のみ書き込み' : '  → 書き込み済み')
   }
   console.log('')
 }

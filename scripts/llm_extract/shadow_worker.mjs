@@ -12,7 +12,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { buildGridInput, buildTextGridInput, normTech } from './lib.mjs'
-import { extractProjects, extractBodyFields, extractBodyFieldsBatch, extractProjectFields, extractProjectInterpretation } from './run.mjs'
+import { extractProjects, extractBodyFields, extractBodyFieldsBatch, extractProjectFields, extractProjectInterpretation, extractRecommendation } from './run.mjs'
+import { projectText, candidateText, buildRecommendationRecord } from './recommend_lib.mjs'
 import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE, isUsableName } from './apply.mjs'
 import { buildProjectPatch, buildInterpretationPatch, DEFAULT_TITLE } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
@@ -521,6 +522,58 @@ async function projectInterpretCycle() {
   }
 }
 
+// ── 提案所見サイクル（docs/matching_redesign.md 実装順①・2026-08-14） ──
+// open prod 案件の上位N人の submissions に、案件本文×経歴を読み合わせた所見
+// （推せる/条件付き/見送り・根拠付き）を書く。これが最終判断の本体で、
+// ルール点数は候補出しの内部値という位置づけ。
+// キュー方式: ai_raw.recommendation が無い上位ペアを拾う。出力不能でも印を書く。
+// 再マッチングの upsert は ai_raw を丸ごと置き換えるので、顔ぶれ・スコアが変わると
+// マーカーが消えて自動的に再生成対象へ戻る（明示的な無効化処理は不要）。
+const REC_TOP_N = 10           // 案件ごとの対象順位
+const REC_MAX_PER_CYCLE = 5    // 1サイクルの生成数（1件あたり約60〜90秒）
+
+async function recommendCycle() {
+  if (state.dayCount >= MAX_PER_DAY) return
+  const projects = await rest(
+    'projects?select=id,title,client,required_skills,raw_data,work_location,remote_policy,contract_type,budget_max' +
+    '&data_env=eq.prod&status=eq.open&order=created_at.desc&limit=20')
+  if (!projects?.length) return
+  let made = 0
+  for (const p of projects) {
+    if (made >= REC_MAX_PER_CYCLE || state.dayCount >= MAX_PER_DAY) return
+    // ai_raw 丸ごとは重いのでマーカーだけ取る（egress 節約）
+    const subs = await rest(
+      `submissions?select=id,candidate_id,match_score,rec_at:ai_raw->recommendation->>at` +
+      `&project_id=eq.${p.id}&data_env=eq.prod&order=match_score.desc&limit=${REC_TOP_N}`)
+    const todo = (subs ?? []).filter((s) => !s.rec_at)
+    if (!todo.length) continue
+    const pText = projectText(p)
+    for (const sub of todo) {
+      if (made >= REC_MAX_PER_CYCLE || state.dayCount >= MAX_PER_DAY) return
+      try {
+        const [c] = await rest(`candidates?select=id,name,skills,experience_years,desired_rate,from_company,raw_profile&id=eq.${sub.candidate_id}`) ?? []
+        if (!c) continue
+        const r = await extractRecommendation(pText, candidateText(c))
+        state.dayCost += r.costUsd || 0
+        // 読み直してからマージ（生成中に再マッチングで ai_raw が置き換わっている可能性がある。
+        // その場合もこの書き込みは新しい ai_raw に所見を足すだけなので壊さない）
+        const [cur] = await rest(`submissions?select=ai_raw&id=eq.${sub.id}`) ?? []
+        const aiRaw = { ...(cur?.ai_raw ?? {}), recommendation: buildRecommendationRecord(r) }
+        if (APPLY) await rest(`submissions?id=eq.${sub.id}`, {
+          method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ ai_raw: aiRaw }),
+        })
+        log(`所見[${p.title}] ${c.name}(${sub.match_score}点): ${r.verdict ?? '出力不能'} ${r.pitch ? r.pitch.slice(0, 60) : ''}`)
+        made++
+        state.dayCount++
+        saveState()
+      } catch (e) {
+        // 失敗時は印を書かない＝次サイクルで再試行（上位Nに限られ暴走リスクは小さい）
+        log(`所見[${p.title}] ${sub.candidate_id} 失敗:`, String(e).slice(0, 200))
+      }
+    }
+  }
+}
+
 // ── Box経歴書再解析キュー ──
 // 対象: ①UI「AI取込」ボタン（box_status='fetch_requested'、全env）
 //       ②全自動取込（box_status='pending' かつ resume_url なし、prodのみ・2026-08-08ユーザー判断）
@@ -645,6 +698,7 @@ while (true) {
   try { await cycle() } catch (e) { log('cycle error:', String(e).slice(0, 300)) }
   try { await projectCycle() } catch (e) { log('project cycle error:', String(e).slice(0, 300)) }
   try { await projectInterpretCycle() } catch (e) { log('project interpret error:', String(e).slice(0, 300)) }
+  try { await recommendCycle() } catch (e) { log('recommend cycle error:', String(e).slice(0, 300)) }
   for (let i = 0; i < CYCLE_MS / BOX_POLL_MS; i++) {
     try { await boxQueue() } catch (e) { log('box queue error:', String(e).slice(0, 200)) }
     await new Promise(r => setTimeout(r, BOX_POLL_MS))

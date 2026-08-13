@@ -26,7 +26,7 @@ import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
 import { fetchSkillMatches, NO_MATCHES } from '../lib/db/skillMatch'
 import { getAiInterpretation, aiRelatedSkillMap, ecosystemCoverage } from '../lib/projectInterpretation'
 import type { AiSpecialist } from '../lib/projectInterpretation'
-import { RecommendationNote, getRecommendation, VERDICT_STYLE } from '../components/RecommendationNote'
+import { RecommendationNote, getRecommendation, VERDICT_STYLE, compareByVerdictThenScore } from '../components/RecommendationNote'
 import { MatchingInputs, MatchingWeightsLine, resolveScoringWeights } from '../components/MatchingInputs'
 import type { SkillMatcher } from '../lib/db/skillMatch'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
@@ -1147,11 +1147,11 @@ const { data: projects = [] } = useQuery({
   })
 
   const sortedSelectedProjectSubs = useMemo(
-    () => [...submissionsForSelectedProject].sort((a, b) => b.match_score - a.match_score),
+    () => [...submissionsForSelectedProject].sort(compareByVerdictThenScore),
     [submissionsForSelectedProject],
   )
   const sortedSelectedCandidateSubs = useMemo(
-    () => [...submissionsForSelectedCandidate].sort((a, b) => b.match_score - a.match_score),
+    () => [...submissionsForSelectedCandidate].sort(compareByVerdictThenScore),
     [submissionsForSelectedCandidate],
   )
 

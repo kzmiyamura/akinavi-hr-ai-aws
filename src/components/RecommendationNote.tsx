@@ -30,6 +30,28 @@ export function getRecommendation(aiRaw: unknown): Recommendation | null {
   return rec.pitch ? rec : null
 }
 
+/**
+ * 並び替え用の段階。数字が小さいほど上に出す。
+ * 「見送り」はAIが明示的に否と判断したもので、未評価（所見なし）より下に沈める。
+ * ルール点数は候補出しの内部値で、最終判断はAIの verdict（docs/matching_redesign.md）。
+ */
+export function verdictTier(aiRaw: unknown): number {
+  const v = getRecommendation(aiRaw)?.verdict
+  if (v === '推せる') return 0
+  if (v === '条件付き') return 1
+  if (v === '見送り') return 3
+  return 2 // 所見なし（未評価）
+}
+
+/** ランキングの並び: verdict 段階 → ルール点数の辞書順 */
+export function compareByVerdictThenScore(
+  a: { ai_raw: unknown; match_score: number },
+  b: { ai_raw: unknown; match_score: number },
+): number {
+  const t = verdictTier(a.ai_raw) - verdictTier(b.ai_raw)
+  return t !== 0 ? t : b.match_score - a.match_score
+}
+
 export const VERDICT_STYLE: Record<string, string> = {
   '推せる': 'bg-green-100 text-green-800 border-green-300',
   '条件付き': 'bg-amber-100 text-amber-800 border-amber-300',
