@@ -26,7 +26,7 @@ import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
 import { fetchSkillMatches, NO_MATCHES } from '../lib/db/skillMatch'
 import { getAiInterpretation, aiRelatedSkillMap, ecosystemCoverage } from '../lib/projectInterpretation'
 import type { AiSpecialist } from '../lib/projectInterpretation'
-import { RecommendationNote, getRecommendation } from '../components/RecommendationNote'
+import { RecommendationNote, getRecommendation, VERDICT_STYLE } from '../components/RecommendationNote'
 import { MatchingInputs, MatchingWeightsLine, resolveScoringWeights } from '../components/MatchingInputs'
 import type { SkillMatcher } from '../lib/db/skillMatch'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
@@ -814,6 +814,19 @@ function ProjectModeRankCard({
           <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500 sm:hidden">スコア</span>
           {s.match_score}
         </div>
+        {/* 点数は単語一致ベースで職種の適合（PMO≠実装者）を見ない。所見の判断を
+            点数の真横に出し、「95点」と「条件付き」が同時に見えるようにする（2026-08-14 指摘） */}
+        {(() => {
+          const v = getRecommendation(s.ai_raw)?.verdict
+          return v ? (
+            <span
+              className={`inline-flex items-center justify-center rounded border text-xs font-medium px-2 py-0.5 ${VERDICT_STYLE[v] ?? ''}`}
+              title="AIが案件本文と経歴を読み合わせた判断。根拠はカード内の「提案所見」"
+            >
+              AI: {v}
+            </span>
+          ) : null
+        })()}
 
         {s.status === 'accepted' ? (
           <span className="inline-flex items-center justify-center gap-1 rounded-md bg-green-50 text-green-700 text-xs font-medium px-2 py-1">
@@ -995,6 +1008,19 @@ function CandidateModeRankCard({
           <span className="text-[10px] font-medium uppercase tracking-wide text-gray-500 sm:hidden">スコア</span>
           {s.match_score}
         </div>
+        {/* 点数は単語一致ベースで職種の適合（PMO≠実装者）を見ない。所見の判断を
+            点数の真横に出し、「95点」と「条件付き」が同時に見えるようにする（2026-08-14 指摘） */}
+        {(() => {
+          const v = getRecommendation(s.ai_raw)?.verdict
+          return v ? (
+            <span
+              className={`inline-flex items-center justify-center rounded border text-xs font-medium px-2 py-0.5 ${VERDICT_STYLE[v] ?? ''}`}
+              title="AIが案件本文と経歴を読み合わせた判断。根拠はカード内の「提案所見」"
+            >
+              AI: {v}
+            </span>
+          ) : null
+        })()}
 
         {s.status === 'accepted' ? (
           <span className="inline-flex items-center justify-center gap-1 rounded-md bg-green-50 text-green-700 text-xs font-medium px-2 py-1">

@@ -30,7 +30,7 @@ export function getRecommendation(aiRaw: unknown): Recommendation | null {
   return rec.pitch ? rec : null
 }
 
-const VERDICT_STYLE: Record<string, string> = {
+export const VERDICT_STYLE: Record<string, string> = {
   '推せる': 'bg-green-100 text-green-800 border-green-300',
   '条件付き': 'bg-amber-100 text-amber-800 border-amber-300',
   '見送り': 'bg-gray-100 text-gray-600 border-gray-300',
