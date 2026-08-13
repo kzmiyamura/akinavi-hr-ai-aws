@@ -181,11 +181,25 @@ function getRegion(prefCore: string): string | null {
 // ─── ルールベーススコアリング ─────────────────────────────────────────────────
 
 /** 希望単価（文字列 or 数値）を月額万円に変換 */
+/**
+ * 希望単価の文字列から「万」単位の金額を読む。
+ *
+ * 複数の金額が書かれている場合は**最大値**を採る。
+ * 先頭だけを見ると「55万円以上希望（PMOなどは67万円）」が 55 と解釈され、
+ * 予算65万の案件で満点になっていた（2026-08-13 実害）。実際に求めているのは
+ * 条件次第で67万なので、予算超過の判定には高い方を使う。
+ * 「80万（140～180h）」のような稼働時間は「万」が付かないので混ざらない。
+ */
 function parseRateWan(rate: string | number | null | undefined): number | null {
   if (rate == null) return null
   if (typeof rate === 'number') return rate > 0 ? rate : null
-  const m = rate.match(/(\d+(?:\.\d+)?)[\s　]*万/)
-  return m ? parseFloat(m[1]) : null
+  const found: number[] = []
+  for (const m of rate.matchAll(/(\d+(?:\.\d+)?)[\s　]*万/g)) {
+    const n = parseFloat(m[1])
+    // 単価として現実的な範囲だけ採る（人月単価。桁違いの誤読を弾く）
+    if (Number.isFinite(n) && n > 0 && n <= 500) found.push(n)
+  }
+  return found.length > 0 ? Math.max(...found) : null
 }
 
 interface RuleResult {

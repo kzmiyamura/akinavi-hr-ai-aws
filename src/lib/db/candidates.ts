@@ -214,6 +214,8 @@ export interface ProjectScoreParams {
   /** 必須スキルごとの重み。渡すと配点が「一致した重みの合計 ÷ 全体の重み合計」になる */
   skillWeights?: Record<string, number> | null
   remotePolicy?: string | null
+  /** 案件の契約形態。'派遣' のとき人材の hakenOk で加減点する（match-batch と同じ扱い） */
+  contractType?: string | null
   weights?: ScoringWeights
 }
 
@@ -243,6 +245,7 @@ export async function fetchCandidatesForProject(
       p_weight_location: w.location,
       p_weight_remote:   w.remote,
       p_require_haken:   requireHaken,
+      p_contract_type:   params.contractType ?? null,
       p_work_prefecture: params.workPrefecture ?? null,
       p_required_exp_years: params.requiredExpYears ?? null,
       p_skill_weights:   params.skillWeights ?? null,
