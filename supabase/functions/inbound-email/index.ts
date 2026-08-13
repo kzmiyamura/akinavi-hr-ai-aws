@@ -348,6 +348,11 @@ const CORP_SUFFIX_EN_SRC = '(?:Corporation|Incorporated|Company|Holdings|Co\\.?\
 function sanitizeFromCompany(value: string | null | undefined): string | null {
   if (!value) return null
   let trimmed = value.trim()
+  // 行頭の記号・箇条書き（「ーPlayGram株式会社」「・NG：株式会社◯◯」）を落とす
+  trimmed = trimmed.replace(/^[・･\-‐−ー–—:：、。\s　]+/, '')
+  // 末尾の敬称（「株式会社エクスプラザ様」）を落とす。宛先判定をすり抜けて
+  // 社名の一部として取り込まれることがある
+  trimmed = trimmed.replace(/(?:様|御中|ご担当(?:者様)?)\s*$/, '').trim()
   // 自社名・空文字は null に落とす
   if (!trimmed) return null
   for (const own of OWN_COMPANY_NAMES) {
@@ -2511,7 +2516,25 @@ function extractCandidateFieldsRegex(
   // 宛先行チェック: マッチ位置の直後に「様」「御中」「ご担当」が続く場合は宛先として除外
   function isSalutation(text: string, matchIndex: number, matchLen: number): boolean {
     const after = text.slice(matchIndex + matchLen, matchIndex + matchLen + 40)
-    return /^[\r\n　 ]*(?:様|御中|ご担当|担当者様|採用担当|ご関係者)/.test(after)
+    // 社名の直後に略称の括弧が入る書き方がある（「株式会社◯◯（NRI）様」）。
+    // 括弧を1つだけ読み飛ばしてから敬称を見る
+    return /^[\r\n　 ]*(?:[（(][^）)]{0,20}[）)])?[\r\n　 ]*(?:様|御中|ご担当|担当者様|採用担当|ご関係者)/.test(after)
+  }
+
+  /**
+   * 「NG先」として書かれた会社名かどうか。
+   *
+   * 人材メールには「・NG：株式会社◯◯（NRI）様」のように、**就業したくない会社**を
+   * 書く欄がある。これを所属会社として登録してしまう実害があった（2026-08-13。
+   * 所属は直フリーランスなのに NG 先が会社名として画面に出ていた）。
+   * 判定範囲はマッチの**手前だけでなくマッチ自身も含めた行頭からの部分**にする。
+   * 後株の正規表現は直前の文字も社名の一部として飲み込むため（「・NG：株式会社」を
+   * まるごと社名として拾う）、手前だけを見ると素通りする。
+   */
+  function isNgContext(text: string, matchIndex: number, matchLen: number): boolean {
+    const lineStart = text.lastIndexOf('\n', matchIndex - 1) + 1
+    const upToMatchEnd = text.slice(lineStart, matchIndex + matchLen)
+    return /(?:^|[^A-Za-z])(?:NG|ＮＧ|不可|お断り|避けたい|回避|除外|お控え)/i.test(upToMatchEnd)
   }
 
   // 全マッチを収集して宛先以外の最後のマッチを採用（送信者署名は末尾に近いため）
@@ -2525,16 +2548,19 @@ function extractCandidateFieldsRegex(
     // （実害: 「ＷｅａＬｉｖｅ株式会社　徳田　です」→「株式会社徳田」と人名を誤抽出）
     const prevCh = m.index > 0 ? sigArea[m.index - 1] : ''
     if (prevCh && /[A-Za-zＡ-Ｚａ-ｚ0-9０-９ァ-ヶーｦ-ﾟ一-龯々]/.test(prevCh)) continue
-    if (!isSalutation(sigArea, m.index, m[0].length)) bestPre = m
+    if (!isSalutation(sigArea, m.index, m[0].length) && !isNgContext(sigArea, m.index, m[0].length)) bestPre = m
   }
   if (bestPre) fromCompany = sanitizeFromCompany(`${bestPre[0].match(CORP_PRE_HEAD)?.[0] ?? ''}${bestPre[1]}`)
 
   // 後株（法人格が後・日本語＋略記）: 「XXX株式会社」「XXX（株）」等（半角・全角スペース対応）
   if (!fromCompany) {
-    const POST_RE = new RegExp(`([^（(（\\s　\\n、。！【】「」]{2,20})[　 ]?(?:${CORP_SUFFIX_SRC})`, 'g')
+    // 英字の社名は語の間に半角スペースが入る（「Next IT Consulting株式会社」）。
+    // 空白を跨げないと直前の1語しか拾えず「Consulting株式会社」になる実害があった。
+    // 先行する英数字の語を3つまで取り込む（日本語社名の挙動は変えない）
+    const POST_RE = new RegExp(`((?:[A-Za-z0-9&.\\-]{1,20}[ \\t]){0,3}[^（(（\\s　\\n、。！【】「」]{2,20})[　 ]?(?:${CORP_SUFFIX_SRC})`, 'g')
     let bestPost: RegExpExecArray | null = null
     while ((m = POST_RE.exec(sigArea)) !== null) {
-      if (!isSalutation(sigArea, m.index, m[0].length)) bestPost = m
+      if (!isSalutation(sigArea, m.index, m[0].length) && !isNgContext(sigArea, m.index, m[0].length)) bestPost = m
     }
     if (bestPost) fromCompany = sanitizeFromCompany(`${bestPost[1]}${bestPost[0].match(new RegExp(`(?:${CORP_SUFFIX_SRC})$`))?.[0] ?? ''}`)
   }
@@ -2544,7 +2570,7 @@ function extractCandidateFieldsRegex(
     const POST_EN_RE = new RegExp(`([A-Za-z][A-Za-z0-9&.\\- ]{1,40}?)[ \\t]*,?[ \\t]*${CORP_SUFFIX_EN_SRC}(?![A-Za-z])`, 'g')
     let bestEn: RegExpExecArray | null = null
     while ((m = POST_EN_RE.exec(sigArea)) !== null) {
-      if (!isSalutation(sigArea, m.index, m[0].length)) bestEn = m
+      if (!isSalutation(sigArea, m.index, m[0].length) && !isNgContext(sigArea, m.index, m[0].length)) bestEn = m
     }
     if (bestEn) fromCompany = sanitizeFromCompany(bestEn[0].trim())
   }
