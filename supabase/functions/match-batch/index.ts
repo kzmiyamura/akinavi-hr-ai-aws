@@ -77,6 +77,10 @@ interface ProjectReq {
   budgetMin?: number | null
   budgetMax?: number | null
   workLocation?: string | null
+  // 正規化済みの都道府県。work_location は「東品川（最寄りは青物横丁または品川シーサイド）」
+  // のように都道府県を含まない書き方が普通にあり、文字列から切り出すと勤務地20点が丸ごと
+  // 0点になる。fetch_candidates_for_project と同じくこちらを正とする
+  workPrefecture?: string | null
   remotePolicy?: string | null
   contractType?: string | null               // 契約形態（'派遣'/'業務委託'/'準委任'/'請負'）
   description?: string | null
@@ -287,7 +291,7 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
 
   // ── 勤務地・居住地マッチング ──
   const isFullRemote = /フルリモート|完全リモート|100[%％]リモート/.test(project.remotePolicy ?? '')
-  const projLoc = (project.workLocation ?? '').toLowerCase()
+  const projLoc = (project.workPrefecture ?? project.workLocation ?? '').toLowerCase()
   let locRatio = 0
   let locationDetail: string
   if (isFullRemote) {
@@ -297,7 +301,8 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
     const candPref = (candidate.prefecture ?? '').toLowerCase()
     const prefOnly = (candPref.match(/^(.+?[都道府県])/) ?? [])[1] ?? candPref.split(/[\s　]/)[0]
     const prefCore = prefOnly.replace(/[都道府県]$/, '')
-    const projPrefCoreForMatch = extractPrefCore(project.workLocation ?? '')
+    // 正規化済みの work_prefecture を優先する。無いときだけ work_location から切り出す
+    const projPrefCoreForMatch = extractPrefCore(project.workPrefecture ?? project.workLocation ?? '')
     if (prefCore && projPrefCoreForMatch && prefCore === projPrefCoreForMatch) {
       locRatio = 1.0
       locationDetail = `勤務地${wLoc}/${wLoc}(${candidate.prefecture ?? ''}・一致)`

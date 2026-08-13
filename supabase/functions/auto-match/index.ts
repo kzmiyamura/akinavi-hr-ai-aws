@@ -98,7 +98,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: projects, error: projectsErr } = await supabase
       .from('projects')
-      .select('id, title, client, description, required_skills, budget_min, budget_max, work_location, remote_policy, contract_type, role_summary, industry, raw_data, data_env')
+      .select('id, title, client, description, required_skills, budget_min, budget_max, work_location, work_prefecture, remote_policy, contract_type, role_summary, industry, raw_data, data_env')
       .eq('data_env', 'prod')
       .gte('created_at', since)
 
@@ -202,6 +202,9 @@ Deno.serve(async (req: Request) => {
           budgetMin: project.budget_min ?? null,
           budgetMax: project.budget_max ?? null,
           workLocation: project.work_location ?? null,
+          // 正規化済みの都道府県。work_location に都道府県が無い案件で勤務地20点が
+          // 丸ごと0点になっていた（「東品川（最寄りは青物横丁…）」型）
+          workPrefecture: project.work_prefecture ?? null,
           remotePolicy: project.remote_policy ?? null,
           contractType: project.contract_type ?? null,
           roleSummary: project.role_summary ?? null,

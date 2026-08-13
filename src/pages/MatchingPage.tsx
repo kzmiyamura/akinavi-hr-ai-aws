@@ -196,6 +196,7 @@ async function matchBatchCandidateToProjects(
     budgetMin: p.budget_min ?? null,
     budgetMax: p.budget_max ?? null,
     workLocation: p.work_location ?? null,
+    workPrefecture: p.work_prefecture ?? null,
     remotePolicy: p.remote_policy ?? null,
     description: p.description ?? null,
     roleSummary: p.role_summary ?? null,

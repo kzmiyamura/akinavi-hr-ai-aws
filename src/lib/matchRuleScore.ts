@@ -19,6 +19,9 @@ export interface ProjectForScore {
   budgetMin?: number | null
   budgetMax?: number | null
   workLocation?: string | null
+  // 正規化済みの都道府県。work_location は「東品川（最寄りは青物横丁または品川シーサイド）」
+  // のように都道府県を含まない書き方が普通にあり、文字列一致だと勤務地20点が丸ごと0点になる
+  workPrefecture?: string | null
   remotePolicy?: string | null
 }
 
@@ -106,7 +109,8 @@ export function calcRuleScore(candidate: CandidateForScore, project: ProjectForS
 
   // ── 勤務地 ──
   const isFullRemote = /フルリモート|完全リモート|100[%％]リモート/.test(project.remotePolicy ?? '')
-  const projLoc = (project.workLocation ?? '').toLowerCase()
+  // 正規化済みの work_prefecture を優先する（無いときだけ work_location の文字列で見る）
+  const projLoc = (project.workPrefecture ?? project.workLocation ?? '').toLowerCase()
   let locationScore = 0
   let locationDetail: string
   if (isFullRemote) {
