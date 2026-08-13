@@ -56,31 +56,55 @@ export async function upsertSubmission(input: UpsertSubmissionInput): Promise<Su
   return data as Submission
 }
 
-/** 案件別・人材別のマッチング件数（一覧画面用） */
+/**
+ * 案件別・人材別のマッチング件数（一覧画面用）
+ * ai* は AI が採点・理由付けした件数。高速モードでは上位N名だけなので、
+ * 「保存件数」と「AI採点件数」は必ず分けて出す
+ */
 export interface SubmissionStats {
   countByProjectId: Record<string, number>
   countByCandidateId: Record<string, number>
+  aiCountByProjectId: Record<string, number>
+  aiCountByCandidateId: Record<string, number>
 }
 
+interface SubmissionCountRow {
+  kind: 'project' | 'candidate'
+  ref_id: string
+  n: number
+  n_ai: number
+}
+
+/**
+ * 集計は SQL 側（submission_counts RPC）でやる。
+ * 以前は submissions を全行引いて JS で数えていたが、PostgREST の既定上限 1000 行で
+ * 黙って頭打ちになり、502 件ある案件が「308件」と表示されていた（2026-08-13）
+ */
 export async function fetchSubmissionStats(dataEnv: DataEnv): Promise<SubmissionStats> {
-  const { data, error } = await supabase
-    .from('submissions')
-    .select('project_id, candidate_id')
-    .eq('data_env', dataEnv)
+  const { data, error } = await supabase.rpc('submission_counts', { p_data_env: dataEnv })
 
   if (error) throw new Error(`提案履歴の集計に失敗しました: ${error.message}`)
 
-  const countByProjectId: Record<string, number> = {}
-  const countByCandidateId: Record<string, number> = {}
-
-  for (const row of data ?? []) {
-    const pid = row.project_id as string
-    const cid = row.candidate_id as string
-    countByProjectId[pid] = (countByProjectId[pid] ?? 0) + 1
-    countByCandidateId[cid] = (countByCandidateId[cid] ?? 0) + 1
+  const stats: SubmissionStats = {
+    countByProjectId: {},
+    countByCandidateId: {},
+    aiCountByProjectId: {},
+    aiCountByCandidateId: {},
   }
 
-  return { countByProjectId, countByCandidateId }
+  for (const row of (data ?? []) as SubmissionCountRow[]) {
+    const n = Number(row.n) || 0
+    const nAi = Number(row.n_ai) || 0
+    if (row.kind === 'project') {
+      stats.countByProjectId[row.ref_id] = n
+      stats.aiCountByProjectId[row.ref_id] = nAi
+    } else {
+      stats.countByCandidateId[row.ref_id] = n
+      stats.aiCountByCandidateId[row.ref_id] = nAi
+    }
+  }
+
+  return stats
 }
 
 /** 案件に対するマッチングランキングを取得（スコア降順） */

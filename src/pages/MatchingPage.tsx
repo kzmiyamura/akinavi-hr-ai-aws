@@ -1416,6 +1416,8 @@ const { data: projects = [] } = useQuery({
 
   const countByProject = stats?.countByProjectId ?? {}
   const countByCandidate = stats?.countByCandidateId ?? {}
+  const aiCountByProject = stats?.aiCountByProjectId ?? {}
+  const aiCountByCandidate = stats?.aiCountByCandidateId ?? {}
 
   const selectedProject = projectList.find((p) => p.id === selectedProjectId) ?? null
   const selectedCandidate = candidateList.find((c) => c.id === selectedCandidateId) ?? null
@@ -1806,6 +1808,7 @@ const { data: projects = [] } = useQuery({
                   <p className="text-xs text-gray-400 px-3 py-4">該当する案件がありません。</p>
                 ) : filteredProjectList.map((p) => {
                   const n = isLoadingStats ? null : (countByProject[p.id] ?? 0)
+                  const nAi = aiCountByProject[p.id] ?? 0
                   const isSelected = selectedProjectId === p.id
                   const isBusy = matchByProjectMutation.isPending && matchByProjectMutation.variables === p.id
                   return (
@@ -1840,7 +1843,12 @@ const { data: projects = [] } = useQuery({
                           ) : n === 0 ? (
                             <span className="text-amber-600">未実施</span>
                           ) : n !== null ? (
-                            <span className="text-gray-400">{n}件のマッチング</span>
+                            <span
+                              className="text-gray-400"
+                              title="保存済みのスコア件数です。AI が採点・理由付けしたのはうち上位の数名だけで、残りはルールスコアのみです"
+                            >
+                              保存済み {n}件（AI採点 {nAi}件）
+                            </span>
                           ) : null}
                         </div>
                       </div>
@@ -1947,8 +1955,15 @@ const { data: projects = [] } = useQuery({
                       <p className="text-sm text-gray-500">マッチング未実施、または「再実行」で算出してください。</p>
                     ) : (
                       <div className="space-y-3">
+                        {/* 「AI 判定です」と一律に書いていたが、AI が見るのは上位N名だけ。
+                            残りはルールスコアのみなので、内訳を出して区別できるようにする */}
                         <p className="text-xs font-medium text-gray-500">
-                          マッチングランキング（全 {selectedProjectRanked.length} 名）— スコアと理由は AI 判定です
+                          マッチングランキング（全 {selectedProjectRanked.length} 名
+                          {(() => {
+                            const ai = selectedProjectRanked.filter(s => s.ai_summary).length
+                            return `：AI採点 ${ai} 名／ルールスコアのみ ${selectedProjectRanked.length - ai} 名`
+                          })()}
+                          ）
                         </p>
                         <div className="space-y-3">
                           {selectedProjectRanked.slice(0, RANK_HEAD).map((s, i) => (
@@ -2067,6 +2082,7 @@ const { data: projects = [] } = useQuery({
                   <p className="text-xs text-gray-400 px-3 py-4">該当する人材がありません。</p>
                 ) : filteredCandidateList.slice(0, candidateDisplayLimit).map((c) => {
                   const n = isLoadingStats ? null : (countByCandidate[c.id] ?? 0)
+                  const nAi = aiCountByCandidate[c.id] ?? 0
                   const isSelected = selectedCandidateId === c.id
                   const isBusy = matchByCandidateMutation.isPending && matchByCandidateMutation.variables === c.id
                   return (
@@ -2096,7 +2112,12 @@ const { data: projects = [] } = useQuery({
                           ) : n === 0 ? (
                             <span className="text-amber-600">未実施</span>
                           ) : n !== null ? (
-                            <span className="text-gray-400">{n}件のマッチング</span>
+                            <span
+                              className="text-gray-400"
+                              title="保存済みのスコア件数です。AI が採点・理由付けしたのはうち上位の数名だけで、残りはルールスコアのみです"
+                            >
+                              保存済み {n}件（AI採点 {nAi}件）
+                            </span>
                           ) : null}
                         </div>
                       </div>
