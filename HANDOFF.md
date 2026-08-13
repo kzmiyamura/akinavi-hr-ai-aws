@@ -105,7 +105,10 @@
   必須/既存尚可と正規化キー重複なし・confidence=low は記録のみで**未適用**・最大8件
 - ワーカー: `shadow_worker.mjs` の `projectInterpretCycle`（キュー方式・
   `raw_data->>aiInterpretation is null` の open prod 案件・結果ゼロでも印を書く）。
-  **ThinkCentre 側は git pull + `pm2 restart akinavi-shadow` が必要（未実施）**
+  **この作業マシンが ThinkCentre 本体だった**（8/13 判明）。pm2 デーモンごと落ちて
+  ワーカーが約75分停止していたのを `pm2 resurrect` で復旧し、新コードで稼働中。
+  resurrect の罠（motion-lab-server の EADDRINUSE 再起動ループ）はメモリ
+  `akinavi-shadow-worker-ops` 参照
 - 手動実行/検証: `node scripts/llm_extract/interpret_projects.mjs [--run|--id X --force]`
   （既定ドライラン・ワーカーと同じ関数を使う）
 - 純関数テスト: `node scripts/llm_extract/test_interpretation_patch.mjs`（17 PASS）
