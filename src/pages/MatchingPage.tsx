@@ -525,6 +525,12 @@ function ProjectModeRankCard({
             const nearestStation = rp2?.nearestStation as string | null
             const wantsFullRemote = rp2?.wantsFullRemote as boolean | null
             const agentComment = rp2?.agentComment as string | null
+            // スコアの根拠になっている項目は画面に出す。
+            // 内訳に「リモート5/5(常駐可・派遣案件)」と書いてあっても、カードに可否が
+            // 出ていないと営業が裏を取れず、判定そのものが疑われる（2026-08-13 指摘）
+            const remoteAvailable = rp2?.remoteAvailable as boolean | null | undefined
+            const hakenOk = rp2?.hakenOk as boolean | null | undefined
+            const workStyleNote = rp2?.workStyleNote as string | null
             const location = [prefecture, nearestStation].filter(Boolean).join(' / ')
             return (
               <>
@@ -541,8 +547,30 @@ function ProjectModeRankCard({
                   {wantsFullRemote && (
                     <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">リモートのみ</span>
                   )}
-                  {/* 「リモート可」は当たり前なので表示しない */}
+                  {/* リモート可否はスコア内訳の根拠。3値をそのまま出す（記載なしを「不可」と書かない） */}
+                  {!wantsFullRemote && remoteAvailable === true && (
+                    <span className="text-[10px] bg-blue-50 text-blue-700 rounded px-1.5 py-0.5" title={workStyleNote ?? undefined}>リモート可</span>
+                  )}
+                  {remoteAvailable === false && (
+                    <span className="text-[10px] bg-gray-100 text-gray-600 rounded px-1.5 py-0.5" title={workStyleNote ?? undefined}>リモート可の記載なし</span>
+                  )}
+                  {remoteAvailable == null && (
+                    <span className="text-[10px] bg-gray-100 text-gray-500 rounded px-1.5 py-0.5">リモート記載なし</span>
+                  )}
+                  {/* 派遣可否も内訳で±する（派遣NG=20pt上限 / 常駐可=+5pt）ので出す */}
+                  {hakenOk === true && (
+                    <span className="text-[10px] bg-emerald-50 text-emerald-700 rounded px-1.5 py-0.5">常駐・派遣可</span>
+                  )}
+                  {hakenOk === false && (
+                    <span className="text-[10px] bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">派遣NG</span>
+                  )}
                 </div>
+                {/* 判定の元になった原文。これが無いと可否の裏が取れない */}
+                {workStyleNote && (
+                  <p className="text-[10px] text-gray-400 mt-0.5 truncate" title={workStyleNote}>
+                    勤務形態: {workStyleNote}
+                  </p>
+                )}
                 {agentComment && (
                   <div className="mt-1.5 bg-amber-50 border border-amber-100 rounded px-2 py-1.5">
                     <p className="text-[10px] font-semibold text-amber-600 mb-0.5">エージェントコメント</p>
