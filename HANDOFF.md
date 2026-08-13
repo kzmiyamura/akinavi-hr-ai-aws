@@ -95,9 +95,30 @@
 この案件の肝は「2名セット・2名で補完できれば全部満たさなくてもOK」で、
 1人あたりの充足率で測る限り読めない。
 
-**次にやる（ユーザー合意済み）**: 案件登録時に**1回だけ**LLMに条件を解釈させ、
-`複数名前提` フラグと `関連スキル（尚可扱い・必須の分母を増やさない別枠）` を立てる。
-スコア計算はルールのままにして、AIが何を足したか画面で見える形にする。
+**→ 対応済み（8/13 実装・prod 8案件に適用済み）**: 案件登録時に**1回だけ**LLMに
+条件を解釈させ、`複数名前提` フラグと `関連スキル` を立てる仕組みを入れた。
+
+- 保存先は `raw_data.aiInterpretation`（multiPerson / evidence / relatedSkills+根拠 / confidence）。
+  関連スキルは `raw_data.niceToHaveSkills` に**統合**（＝既存の尚可経路にそのまま乗る。
+  必須の分母は増えない）。元の尚可は `_regex_backup.niceToHaveSkills` に退避
+- 受け入れ条件: skill_master にある技術名のみ（無いものは判定できず足しても効かない）・
+  必須/既存尚可と正規化キー重複なし・confidence=low は記録のみで**未適用**・最大8件
+- ワーカー: `shadow_worker.mjs` の `projectInterpretCycle`（キュー方式・
+  `raw_data->>aiInterpretation is null` の open prod 案件・結果ゼロでも印を書く）。
+  **ThinkCentre 側は git pull + `pm2 restart akinavi-shadow` が必要（未実施）**
+- 手動実行/検証: `node scripts/llm_extract/interpret_projects.mjs [--run|--id X --force]`
+  （既定ドライラン・ワーカーと同じ関数を使う）
+- 純関数テスト: `node scripts/llm_extract/test_interpretation_patch.mjs`（17 PASS）
+- 画面: 案件詳細・マッチング画面の尚可チップに **点線+「AI」バッジ**（title に根拠）、
+  複数名前提は「複数名で補完可 AI解釈」バッジ（title に本文の根拠引用）
+- 実測: 営業指摘の Azure Functions 案件で multiPerson=true
+  （根拠「2名セット、2名で補完できるようであればすべてを満たさなくてもOK」）。
+  他案件で SQL/SWIFT/Excel VBA/Git 等が尚可入り
+- **注意**: スコアは再マッチングするまで変わらない（保存値のまま）。
+  複数名前提フラグは**表示のみ**でスコアには未反映（充足率の按分は次の判断待ち）。
+  LLM出力は揺れる（同じ案件でも回によって confidence が high/low に割れた）。
+  `PostgreSQL`（Spring Boot の推測）のような当て推量が混ざることがある——尚可なので
+  減点にはならないが、気になるならプロンプトの「推測禁止」を強める
 
 **⚠ skill_master を触るときの鉄則**: 新規行を作らず**既存行の別名を増やす**。
 `EntraID` を新しい行として作ったら充足者が 28人→1人 に落ちた

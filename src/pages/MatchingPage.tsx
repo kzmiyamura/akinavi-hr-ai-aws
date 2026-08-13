@@ -24,6 +24,7 @@ import { supabase } from '../lib/supabase'
 import { getMatchingSettings, MATCHING_DEFAULTS } from '../lib/db/matchingSettings'
 import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
 import { fetchSkillMatches, NO_MATCHES } from '../lib/db/skillMatch'
+import { getAiInterpretation, aiRelatedSkillMap } from '../lib/projectInterpretation'
 import type { SkillMatcher } from '../lib/db/skillMatch'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
@@ -483,6 +484,7 @@ function ProjectModeRankCard({
   duplicates,
   requiredSkills = [],
   niceToHaveSkills = [],
+  aiNiceSkills,
   skillMatcher = NO_MATCHES,
   agentDomainMap,
 }: {
@@ -494,6 +496,8 @@ function ProjectModeRankCard({
   duplicates?: DuplicateCandidate[]
   requiredSkills?: string[]
   niceToHaveSkills?: string[]
+  /** AIが解釈で足した尚可スキル（name小文字→根拠）。出所バッジ表示用 */
+  aiNiceSkills?: Map<string, string | null>
   /** スキル一致判定。サーバの skill_satisfies と同じ結果になる（src/lib/db/skillMatch.ts） */
   skillMatcher?: SkillMatcher
   agentDomainMap?: Map<string, { license_status: string }>
@@ -648,12 +652,18 @@ function ProjectModeRankCard({
                   <div>
                     <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">尚可スキル</p>
                     <div className="flex flex-wrap gap-1">
-                      {niceToHaveSkills.map(nice => (
-                        <span key={nice} className={skillMatch(nice)
-                          ? 'text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5 font-medium'
-                          : 'text-xs bg-gray-100 text-gray-400 rounded px-1.5 py-0.5'
-                        }>{nice}</span>
-                      ))}
+                      {niceToHaveSkills.map(nice => {
+                        const aiReason = aiNiceSkills?.get(nice.trim().toLowerCase())
+                        const isAi = aiNiceSkills?.has(nice.trim().toLowerCase()) ?? false
+                        return (
+                          <span key={nice}
+                            title={isAi ? `AIの解釈: ${aiReason ?? '業務内容から読める関連スキル'}` : undefined}
+                            className={skillMatch(nice)
+                              ? `text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5 font-medium${isAi ? ' border border-dashed border-violet-300' : ''}`
+                              : `text-xs bg-gray-100 text-gray-400 rounded px-1.5 py-0.5${isAi ? ' border border-dashed border-gray-300' : ''}`
+                            }>{nice}{isAi && <span className="opacity-60 ml-0.5">AI</span>}</span>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -1908,7 +1918,9 @@ const { data: projects = [] } = useQuery({
                       {(() => {
                         const req = (selectedProject.required_skills as string[] | null) ?? []
                         const nice = ((selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] | null) ?? []
-                        if (req.length === 0 && nice.length === 0) return null
+                        const ai = getAiInterpretation(selectedProject.raw_data)
+                        const aiSkills = aiRelatedSkillMap(selectedProject.raw_data)
+                        if (req.length === 0 && nice.length === 0 && !ai?.multiPerson) return null
                         return (
                           <div className="flex flex-wrap gap-1">
                             {req.slice(0, 10).map(s => (
@@ -1917,9 +1929,22 @@ const { data: projects = [] } = useQuery({
                             {req.length > 10 && (
                               <span className="text-gray-400 text-xs">+{req.length - 10}</span>
                             )}
-                            {nice.map(s => (
-                              <span key={s} className="px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded text-xs">{s}</span>
-                            ))}
+                            {nice.map(s => aiSkills.has(s.trim().toLowerCase())
+                              ? (
+                                <span key={s} title={`AIの解釈: ${aiSkills.get(s.trim().toLowerCase()) ?? '業務内容から読める関連スキル'}`}
+                                  className="px-1.5 py-0.5 bg-violet-50 text-violet-700 border border-dashed border-violet-300 rounded text-xs">
+                                  {s}<span className="opacity-60 ml-0.5">AI</span>
+                                </span>
+                              )
+                              : <span key={s} className="px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded text-xs">{s}</span>)}
+                            {ai?.multiPerson && (
+                              <span
+                                className="px-1.5 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded text-xs"
+                                title={`AIの解釈: チーム全体でスキル要件を満たせばよい案件${ai.evidence ? `（本文:「${ai.evidence}」）` : ''}`}
+                              >
+                                複数名で補完可 <span className="opacity-60">AI解釈</span>
+                              </span>
+                            )}
                           </div>
                         )
                       })()}
@@ -1976,6 +2001,7 @@ const { data: projects = [] } = useQuery({
                               duplicates={duplicatesMap[s.candidate.id]}
                               requiredSkills={selectedProject.required_skills as string[]}
                               niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
+                              aiNiceSkills={aiRelatedSkillMap(selectedProject.raw_data)}
                               skillMatcher={projectSkillMatcher}
                               agentDomainMap={agentDomainMap}
                             />
@@ -1991,6 +2017,7 @@ const { data: projects = [] } = useQuery({
                                 onDecide={(sub) => decideMutation.mutate(sub)}
                                 requiredSkills={selectedProject.required_skills as string[]}
                                 niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
+                                aiNiceSkills={aiRelatedSkillMap(selectedProject.raw_data)}
                                 agentDomainMap={agentDomainMap}
                               />
                             ))}

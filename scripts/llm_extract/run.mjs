@@ -8,7 +8,7 @@
 //   環境変数 ANTHROPIC_API_KEY があればAPI直、なければ claude -p (サブスク枠)
 import fs from 'fs'
 import { buildGridInput, buildTextGridInput, skillYearsFromProjects } from './lib.mjs'
-import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES, BODY_FIELDS_BATCH_RULES, PROJECT_FIELDS_RULES } from './prompts.mjs'
+import { TRANSCRIBE_RULES, TRANSCRIBE_RULES_TEXT, BODY_FIELDS_RULES, BODY_FIELDS_BATCH_RULES, PROJECT_FIELDS_RULES, PROJECT_INTERPRET_RULES } from './prompts.mjs'
 import { callModel } from './caller.mjs'
 import { verifyOutput, shouldEscalate } from './verify.mjs'
 
@@ -102,6 +102,19 @@ export async function extractProjectFields(bodyText) {
   return {
     model: 'haiku',
     projects: r.data?.projects ?? [],
+    confidence: r.data?.confidence ?? 'low',
+    costUsd: r.costUsd ?? 0,
+  }
+}
+
+/** 案件条件の解釈（複数名前提・関連スキル）。登録時に1回だけ呼ぶ想定 */
+export async function extractProjectInterpretation(bodyText) {
+  const r = await callModel('haiku', PROJECT_INTERPRET_RULES + bodyText)
+  return {
+    model: 'haiku',
+    multiPerson: r.data?.multiPerson === true,
+    evidence: typeof r.data?.evidence === 'string' ? r.data.evidence.slice(0, 100) : null,
+    relatedSkills: Array.isArray(r.data?.relatedSkills) ? r.data.relatedSkills : [],
     confidence: r.data?.confidence ?? 'low',
     costUsd: r.costUsd ?? 0,
   }

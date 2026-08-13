@@ -23,6 +23,7 @@ import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../l
 import { getIsImportActive } from '../lib/db/emailSettings'
 import { supabase } from '../lib/supabase'
 import { calcProjectWeights } from '../lib/db/candidates'
+import { getAiInterpretation, aiRelatedSkillMap } from '../lib/projectInterpretation'
 
 interface Props {
   nickname: string
@@ -113,6 +114,7 @@ export function ProjectProfileFields({
   const nice = Array.isArray(rawNice) ? rawNice.map(String).filter(Boolean) : []
   const required = (p.required_skills as string[]) ?? []
   const requiredSkillYears = rawData.requiredSkillYears ?? {}
+  const aiSkills = aiRelatedSkillMap(p.raw_data)
   const mailFrom = typeof rawData.from === 'string' ? rawData.from : null
   const mailSubject = typeof rawData.subject === 'string' ? rawData.subject : null
   const needsToggle = !detailMode && ((required.length + nice.length) > 12 || (p.description?.length ?? 0) > 240)
@@ -258,9 +260,18 @@ export function ProjectProfileFields({
           {nice.length > 0 && (
             <div className="flex flex-wrap gap-1 items-center">
               <span className="text-xs text-gray-400 w-12 shrink-0">尚可</span>
-              {(showAll ? nice : nice.slice(0, 10)).map((s) => (
-                <span key={s} className="text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5">{s}</span>
-              ))}
+              {(showAll ? nice : nice.slice(0, 10)).map((s) => {
+                // AIが解釈で足した関連スキルは出所が分かるようバッジを変える（根拠は title）
+                const aiReason = aiSkills.get(s.trim().toLowerCase())
+                return aiSkills.has(s.trim().toLowerCase()) ? (
+                  <span key={s} title={aiReason ? `AIの解釈: ${aiReason}` : 'AIが業務内容から解釈した関連スキル'}
+                    className="text-xs bg-violet-50 text-violet-700 border border-dashed border-violet-300 rounded px-1.5 py-0.5">
+                    {s}<span className="opacity-60 ml-0.5">AI</span>
+                  </span>
+                ) : (
+                  <span key={s} className="text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5">{s}</span>
+                )
+              })}
               {!showAll && nice.length > 10 && (
                 <span className="text-xs text-gray-400">+{nice.length - 10}</span>
               )}
@@ -313,6 +324,14 @@ function RecruitSummary({ project: p, required }: { project: Project; required: 
         <span className="font-normal text-gray-600">
           {p.headcount != null ? ` を ${p.headcount}名` : ' を募集'}
         </span>
+        {getAiInterpretation(p.raw_data)?.multiPerson && (
+          <span
+            className="ml-2 align-middle text-xs bg-indigo-50 border border-indigo-200 text-indigo-700 rounded px-1.5 py-0.5 font-normal"
+            title={`AIの解釈: チーム全体でスキル要件を満たせばよい案件${getAiInterpretation(p.raw_data)?.evidence ? `（本文:「${getAiInterpretation(p.raw_data)?.evidence}」）` : ''}`}
+          >
+            複数名で補完可 <span className="opacity-60">AI解釈</span>
+          </span>
+        )}
       </div>
 
       <div className="flex flex-wrap items-baseline gap-1.5">
@@ -456,6 +475,12 @@ function MatchingInputs({ project: p, requiredSkillCount, niceCount }: {
         <div className="text-xs text-gray-500 border-t border-gray-200 pt-1">
           尚可スキル{niceCount}件は必須スキルの点（40点）を最大 +10% 底上げします。
           <span className="text-gray-400">必須の分母は増えないので、満たさなくても減点にはなりません</span>
+          {(() => {
+            const aiCount = getAiInterpretation(p.raw_data)?.relatedSkills?.length ?? 0
+            return aiCount > 0
+              ? <span className="block text-violet-500">うち{aiCount}件はAIが業務内容から解釈した関連スキル（点線バッジ）。明記されたスキルと同じ尚可扱いです</span>
+              : null
+          })()}
         </div>
       )}
     </div>

@@ -12,9 +12,9 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { buildGridInput, buildTextGridInput, normTech } from './lib.mjs'
-import { extractProjects, extractBodyFields, extractBodyFieldsBatch, extractProjectFields } from './run.mjs'
+import { extractProjects, extractBodyFields, extractBodyFieldsBatch, extractProjectFields, extractProjectInterpretation } from './run.mjs'
 import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE, isUsableName } from './apply.mjs'
-import { buildProjectPatch, DEFAULT_TITLE } from './project_apply.mjs'
+import { buildProjectPatch, buildInterpretationPatch, DEFAULT_TITLE } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
 import {
   trimBodyForLlm, projectLooksComplete, parseSkillFilterValue, buildSkillFilterClause, pacedAllowance,
@@ -480,6 +480,47 @@ async function projectCycle() {
   }
 }
 
+// ── 案件条件のAI解釈サイクル（2026-08-13 ユーザー合意） ──
+// 案件登録時に1回だけLLMに条件を「解釈」させ、複数名前提フラグと関連スキル（尚可扱い）を立てる。
+// 転記（projectCycle）と違い、書いていないことを読む役割。スコア計算はルールのまま。
+// キュー方式: raw_data.aiInterpretation が無い open 案件を拾う。結果ゼロ・スキップでも
+// 必ず印（aiInterpretation）を書くので同じ案件を二度は処理しない。
+const INTERPRET_MAX_PER_CYCLE = 3
+
+async function projectInterpretCycle() {
+  if (state.dayCount >= MAX_PER_DAY) return
+  const rows = await rest(
+    `projects?select=${PROJ_SELECT}&data_env=eq.prod&status=eq.open` +
+    `&raw_data->>aiInterpretation=is.null&order=created_at.desc&limit=${INTERPRET_MAX_PER_CYCLE}`)
+  if (!rows?.length) return
+  log(`AI解釈の未処理案件 ${rows.length}件`)
+  for (const p of rows) {
+    try {
+      const text = String(p.raw_data?.text ?? '')
+      const batchSize = p.raw_data?.batchSize ?? 1
+      // 解釈できないものにも印を書く（書かないと永久に拾い続ける）
+      const skip = text.length < 50 ? '本文なし'
+        : batchSize > 1 ? `複数案件メール由来(${batchSize}件)・対応付け不能` : null
+      if (skip) {
+        const rd = { ...(p.raw_data || {}), aiInterpretation: { at: new Date().toISOString(), skipped: skip } }
+        if (APPLY) await rest(`projects?id=eq.${p.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ raw_data: rd }) })
+        log(`案件解釈[${p.title}] スキップ: ${skip}`)
+      } else {
+        const r = await extractProjectInterpretation(text.slice(0, 8000))
+        state.dayCost += r.costUsd || 0
+        const { patch, changes } = buildInterpretationPatch(p, r, await skillMasterSet())
+        if (APPLY) await rest(`projects?id=eq.${p.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(patch) })
+        log(`案件解釈[${p.title}] ${changes.length ? changes.join(', ') : '追加なし（印のみ記録）'}`)
+        state.dayCount++
+        saveState()
+      }
+    } catch (e) {
+      // 失敗時は印を書かない＝次サイクルで再試行（案件は数が少なく暴走リスクが小さい）
+      log(`案件解釈[${p.title}] 失敗:`, String(e).slice(0, 200))
+    }
+  }
+}
+
 // ── Box経歴書再解析キュー ──
 // 対象: ①UI「AI取込」ボタン（box_status='fetch_requested'、全env）
 //       ②全自動取込（box_status='pending' かつ resume_url なし、prodのみ・2026-08-08ユーザー判断）
@@ -603,6 +644,7 @@ try {
 while (true) {
   try { await cycle() } catch (e) { log('cycle error:', String(e).slice(0, 300)) }
   try { await projectCycle() } catch (e) { log('project cycle error:', String(e).slice(0, 300)) }
+  try { await projectInterpretCycle() } catch (e) { log('project interpret error:', String(e).slice(0, 300)) }
   for (let i = 0; i < CYCLE_MS / BOX_POLL_MS; i++) {
     try { await boxQueue() } catch (e) { log('box queue error:', String(e).slice(0, 200)) }
     await new Promise(r => setTimeout(r, BOX_POLL_MS))

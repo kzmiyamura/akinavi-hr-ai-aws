@@ -146,5 +146,63 @@ export function buildProjectPatch(p, f, skillMasterNormSet) {
   return { patch: { ...top, raw_data: rd }, changes }
 }
 
+/**
+ * 案件条件のAI解釈（extractProjectInterpretation の結果）を raw_data パッチにする。
+ *
+ * 方針（2026-08-13 ユーザー合意・HANDOFF.md §0）:
+ *  - スコア計算はルールのまま。AIが足すのは「複数名前提フラグ」と「関連スキル」だけ
+ *  - 関連スキルは尚可扱い（niceToHaveSkills に統合）。必須の分母は増やさない
+ *  - AIが何を足したかは raw_data.aiInterpretation に残し、画面で見える形にする
+ *  - aiInterpretation は結果ゼロでも必ず書く（ワーカーの「1回だけ」の印を兼ねる）
+ *
+ * 関連スキルの受け入れ条件:
+ *  - skill_master にある技術名のみ（無いものは skill_satisfies が判定できず足しても効かない）
+ *  - 必須・既存尚可と正規化キーが重複しないもののみ（転記の言い換えは解釈ではない）
+ *  - confidence が low のときは記録だけして適用しない
+ */
+export function buildInterpretationPatch(p, r, skillMasterNormSet) {
+  const rd = { ...(p.raw_data || {}) }
+  const changes = []
+  const lowConf = r.confidence === 'low'
+
+  const existingKeys = new Set(
+    [...(p.required_skills ?? []), ...(Array.isArray(rd.niceToHaveSkills) ? rd.niceToHaveSkills : [])]
+      .map(normTech).filter(Boolean))
+  const related = []
+  for (const s of r.relatedSkills ?? []) {
+    const name = typeof s?.name === 'string' ? s.name.trim() : ''
+    if (!name) continue
+    const k = normTech(name)
+    if (!k || existingKeys.has(k)) continue
+    if (skillMasterNormSet && !skillMasterNormSet.has(k)) continue
+    existingKeys.add(k)
+    related.push({ name, reason: typeof s?.reason === 'string' ? s.reason.trim().slice(0, 60) : null })
+    if (related.length >= 8) break
+  }
+
+  const multiPerson = !lowConf && r.multiPerson === true
+  rd.aiInterpretation = {
+    at: new Date().toISOString(),
+    model: r.model ?? null,
+    confidence: r.confidence ?? null,
+    multiPerson,
+    evidence: multiPerson ? (r.evidence ?? null) : null,
+    relatedSkills: lowConf ? [] : related,
+  }
+
+  if (!lowConf && related.length) {
+    const cur = Array.isArray(rd.niceToHaveSkills) ? rd.niceToHaveSkills : []
+    const backup = { ...(rd._regex_backup || {}) }
+    if (!('niceToHaveSkills' in backup)) backup.niceToHaveSkills = cur
+    rd._regex_backup = backup
+    rd.niceToHaveSkills = [...cur, ...related.map((x) => x.name)]
+    changes.push(`関連スキル+${related.length}(尚可扱い)`)
+  }
+  if (multiPerson) changes.push('複数名前提')
+  if (lowConf) changes.push('低確信のため未適用')
+
+  return { patch: { raw_data: rd }, changes }
+}
+
 /** normTech の再輸出（dryrun スクリプト用） */
 export { normTech }
