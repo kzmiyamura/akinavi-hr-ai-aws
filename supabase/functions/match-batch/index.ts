@@ -240,6 +240,8 @@ function calcRuleScore(
   // 「必須5中1合致」は人が数を確認するための表示なので重みを掛けない
   let hits = 0
   let hitWeight = 0
+  // どの必須スキルで合致したか。数字だけ出しても人が確認できないので内訳に名前を出す
+  const hitNames: string[] = []
   const totalWeight = required.reduce((a, r) => a + weightOf(r), 0)
   if (required.length > 0) {
     for (const r of required) {
@@ -276,6 +278,7 @@ function calcRuleScore(
       // 廃止した。「C」が Microsoft 365 / Azure Functions に、「Shell」が PowerShell に
       // 合致して必須5中3合致と出る実害があった（2026-08-13）。
       // 表記ゆれ・包含関係は skill_satisfies（satisfiedRequired）が扱う
+      if (hits > before) hitNames.push(r)
       hitWeight += (hits - before) * w
     }
   }
@@ -285,11 +288,12 @@ function calcRuleScore(
   // 「C」が Microsoft 365 に、「Shell」が PowerShell に合致していた（2026-08-13）
   const niceToHave = project.niceToHaveSkills ?? []
   let niceHits = 0
+  const niceHitNames: string[] = []
   if (niceToHave.length > 0) {
     for (const n of niceToHave) {
       const nt = n.toLowerCase().trim()
       if (!nt) continue
-      if (satisfiedRequired?.has(n) || cSet.has(nt)) niceHits += 1
+      if (satisfiedRequired?.has(n) || cSet.has(nt)) { niceHits += 1; niceHitNames.push(n) }
     }
   }
   // 重み付き比率。順位付けをする fetch_candidates_for_project と同じ式にする
@@ -300,9 +304,11 @@ function calcRuleScore(
   skillRatio = Math.min(1.0, skillRatio + (niceToHave.length > 0 ? niceHits / niceToHave.length * 0.1 : 0))
   const cappedSkillScore = Math.min(wSkill, Math.round(skillRatio * wSkill))
   // 尚可の充足は加点の根拠なので内訳に出す（スコアの根拠は画面で確認できるようにする）
-  const niceDetail = niceToHave.length > 0 ? `・尚可${niceToHave.length}中${niceHits}合致` : ''
+  const niceDetail = niceToHave.length > 0
+    ? `・尚可${niceToHave.length}中${niceHits}合致${niceHitNames.length > 0 ? `:${niceHitNames.join('・')}` : ''}`
+    : ''
   const skillDetail = required.length > 0
-    ? `スキル${cappedSkillScore}/${wSkill}(必須${required.length}中${Math.round(hits)}合致${niceDetail})`
+    ? `スキル${cappedSkillScore}/${wSkill}(必須${required.length}中${Math.round(hits)}合致${hitNames.length > 0 ? `:${hitNames.join('・')}` : ''}${niceDetail})`
     : `スキル${cappedSkillScore}/${wSkill}(必須スキル未設定${niceDetail})`
 
   // ── 経験年数 ──

@@ -358,6 +358,44 @@ const SKILL_HEAD = 12
 const accordionSummaryCls =
   'flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden'
 
+/**
+ * スキル判定ルールを最後に変えた日時（UTC）。
+ * これより前に保存されたスコア内訳は、いまの緑/グレー表示と食い違うことがある
+ * （2026-08-13 に Microsoft スタックの表記ゆれを skill_master に入れ、
+ *   尚可スキルと重み付けを順位付けSQLに反映した）。
+ * 判定を変えたらこの値も更新すること。
+ */
+const SCORE_LOGIC_UPDATED_AT = Date.parse('2026-08-13T08:10:00Z')
+
+/**
+ * スコア内訳。保存済みの計算結果なので、いつ算出したものかを必ず出す。
+ * 判定ルール更新より古いものは「再マッチングで変わる」ことを明示する
+ * （必須スキルの緑表示は毎回サーバに問い合わせる live 判定なので、
+ *   古い内訳と合致数が食い違って見える）
+ */
+function ScoreBreakdown({ breakdown, updatedAt }: { breakdown: string, updatedAt?: string | null }) {
+  const at = updatedAt ? Date.parse(updatedAt) : NaN
+  const stale = Number.isFinite(at) && at < SCORE_LOGIC_UPDATED_AT
+  return (
+    <>
+      <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+        スコア内訳（ルールベース）
+        {Number.isFinite(at) && (
+          <span className="ml-1 font-normal normal-case text-gray-400">
+            算出 {new Date(at).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+          </span>
+        )}
+      </p>
+      <p className="text-xs text-gray-600 break-words leading-relaxed font-mono">{breakdown}</p>
+      {stale && (
+        <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-100 rounded px-1.5 py-1">
+          スキル判定ルールを更新する前の結果です。上の必須スキルの緑／グレーは最新の判定なので、合致数が食い違うことがあります。「再マッチング」で更新されます。
+        </p>
+      )}
+    </>
+  )
+}
+
 function SkillTagsWithAccordion({ skills, highlightSkills = [], niceHighlightSkills = [] }: { skills: string[], highlightSkills?: string[], niceHighlightSkills?: string[] }) {
   if (skills.length === 0) return null
   const hlSet = new Set(highlightSkills.map(s => s.toLowerCase()))
@@ -667,10 +705,10 @@ function ProjectModeRankCard({
               </>
             )}
             {(s.ai_raw as Record<string, unknown>)?.breakdown ? (
-              <>
-                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">スコア内訳（ルールベース）</p>
-                <p className="text-xs text-gray-600 break-words leading-relaxed font-mono">{String((s.ai_raw as Record<string, unknown>).breakdown)}</p>
-              </>
+              <ScoreBreakdown
+                breakdown={String((s.ai_raw as Record<string, unknown>).breakdown)}
+                updatedAt={s.updated_at}
+              />
             ) : !s.ai_summary && (
               <>
                 <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
@@ -859,10 +897,10 @@ function CandidateModeRankCard({
               </>
             )}
             {(s.ai_raw as Record<string, unknown>)?.breakdown ? (
-              <>
-                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">スコア内訳（ルールベース）</p>
-                <p className="text-xs text-gray-600 break-words leading-relaxed font-mono">{String((s.ai_raw as Record<string, unknown>).breakdown)}</p>
-              </>
+              <ScoreBreakdown
+                breakdown={String((s.ai_raw as Record<string, unknown>).breakdown)}
+                updatedAt={s.updated_at}
+              />
             ) : !s.ai_summary && (
               <>
                 <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">マッチング理由（AI）</p>
