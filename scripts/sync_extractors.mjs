@@ -43,6 +43,11 @@ const TARGET_FUNCTIONS = [
   'findWorkStyleIn',        // extractWorkStyleNote が呼ぶ（本文優先・添付は案件説明を弾く）
   'extractLicenseNumbers',  // 派遣・職業紹介の許可番号（旧表記 般/特・全角に対応）
   'deriveWorkStyleTag',
+  'extractSkillYearsFromCareerBlocks', // 叙述型の職務経歴書（主にPDF）の期間ブロック×スキル
+  '_careerTermRe',                     // ↑が呼ぶ語境界つき照合regex
+  'projParsePeriod',                   // ↑が呼ぶ期間パーサ（Excel視覚エンジンと共用）
+  'projMergeMonths',                   // ↑が呼ぶ区間union
+  '_cachedSkillRegex',                 // _careerTermRe が呼ぶregexキャッシュ
   'extractSkillYearsFromCells',
   'extractSkillYearsPeriodHeader',
   'extractSkillYearsRepeatPeriodHeader',
@@ -169,6 +174,30 @@ function stripTs(code) {
     }
   }
 
+  // 2c. 変数宣言のオブジェクトリテラル型注釈 `const heads: { line: number }[] = []` → `const heads = []`
+  //     （2b は戻り値注釈だけを見ているのでこちらは素通りし、`const x: {` が残って
+  //      「Missing initializer in const declaration」で落ちる）
+  {
+    const RE = /\b(const|let|var)\s+(\w+)\s*:\s*\{/g
+    let m3
+    while ((m3 = RE.exec(code)) !== null) {
+      const braceStart = code.indexOf('{', m3.index + m3[0].length - 1)
+      let depth = 0
+      let j = braceStart
+      for (; j < code.length; j++) {
+        if (code[j] === '{') depth++
+        else if (code[j] === '}') { depth--; if (depth === 0) { j++; break } }
+      }
+      if (depth !== 0) continue
+      // 型注釈の後は `[]` の繰り返しやユニオン（`| null` 等）を挟んで `=` が来るはず。
+      // 来なければ型注釈ではない
+      const rest = code.slice(j).match(/^(\s*(?:\[\])*(?:\s*\|\s*[\w[\]]+)*)\s*=/)
+      if (!rest) continue
+      code = code.slice(0, m3.index) + `${m3[1]} ${m3[2]} ` + code.slice(j + rest[1].length)
+      RE.lastIndex = m3.index
+    }
+  }
+
   // 3. 既知TypeScript型名に続く <...> を括弧対応を数えて丸ごと除去。
   //    旧実装は [^>]* の非貪欲マッチだったため Array<Record<string, string>> のような
   //    入れ子ジェネリクスで内側の > までしか消えず、壊れたJSを生成する実害があった
@@ -229,7 +258,10 @@ function stripTs(code) {
 
   // 5. パラメータ型注釈 (param: type) — コロン後が型名の場合
   //    シンプルな型: string, number, boolean, null, unknown, any
-  code = code.replace(/(\b\w+)\s*:\s*(?:string|number|boolean|null|unknown|any|void)(?:\s*\[\])*(?=\s*[,)=])/g, '$1')
+  //    null 単体は対象外。オブジェクトリテラルの `{ start: null, end: null }` を
+  //    型注釈と誤認して `{ start, end }` に潰す実害があった（projParsePeriod）。
+  //    `string | null` のようなユニオンは後段の規則が扱う
+  code = code.replace(/(\b\w+)\s*:\s*(?:string|number|boolean|unknown|any|void)(?:\s*\[\])*(?=\s*[,)=])/g, '$1')
   // string[][] / string[] / number[] の配列型
   code = code.replace(/(\b\w+)\s*:\s*string\[\]\[\](?=\s*[,)=])/g, '$1')
   code = code.replace(/(\b\w+)\s*:\s*string\[\](?=\s*[,)=])/g, '$1')
@@ -238,6 +270,8 @@ function stripTs(code) {
   code = code.replace(/(\b\w+)\s*:\s*(?:string|number|boolean)\s*\|\s*(?:string|number|boolean|null|undefined)(?=\s*[,)=])/g, '$1')
   // 5b. カスタム型（大文字始まりクラス名）パラメータ: SpanCell[] / XlsxCell | undefined 等
   code = code.replace(/(\b\w+)\s*:\s*[A-Z]\w*(?:\[\])*(?:\s*\|\s*(?:[A-Z]\w*(?:\[\])*|null|undefined))*(?=\s*[,)=])/g, '$1')
+  // 5c. タプル型パラメータ: iv: [number, number][] （projMergeMonths 等の区間配列）
+  code = code.replace(/(\b\w+)\s*:\s*\[[^\][]*\](?:\[\])*(?=\s*[,)=])/g, '$1')
   // 6. 変数型注釈 let/const x: Type  (= あり・なし両方)
   //    シンプルな型 + ユニオン型 + 大文字始まりクラス名 + 空オブジェクト
   code = code.replace(/\b(const|let|var)\s+(\w+)\s*:\s*(?:[A-Z]\w*(?:\s*\|\s*\w+)*|[\w[\]]+(?:\s*\|\s*[\w[\]]+)*)\s*(?=[=\n;])/g, '$1 $2')
@@ -310,12 +344,34 @@ function extractFunction(src, name) {
   return body
 }
 
+// 抽出対象の定数（対象関数が参照するモジュールレベルの const）。
+// 1行で完結する宣言だけを対象にする。関数だけを移すと gen 側で ReferenceError になる
+// （実例: projParsePeriod は PROJ_MON、_cachedSkillRegex は _skillRegexCache を参照する）。
+const TARGET_CONSTS = [
+  'PROJ_MON',          // projParsePeriod が使う英語3文字月名
+  '_skillRegexCache',  // _cachedSkillRegex のキャッシュ
+]
+
+/** `const NAME = ...` の1行宣言を取り出す */
+function extractConst(src, name) {
+  const re = new RegExp(`^const ${name.replace(/[$]/g, '\\$&')}\\b.*$`, 'm')
+  const m = src.match(re)
+  return m ? m[0] : null
+}
+
 // ── メイン ────────────────────────────────────────────────────────
 
 const src = readFileSync(SRC, 'utf-8')
 
 const extracted = []
 const missing = []
+const consts = []
+
+for (const name of TARGET_CONSTS) {
+  const line = extractConst(src, name)
+  if (!line) { missing.push(`const ${name}`); continue }
+  consts.push(stripTs(line))
+}
 
 for (const name of TARGET_FUNCTIONS) {
   const body = extractFunction(src, name)
@@ -333,6 +389,7 @@ const output = [
   `// DO NOT EDIT — ${new Date().toISOString().slice(0, 10)} に index.ts から生成`,
   `// 再生成: node scripts/sync_extractors.mjs`,
   ``,
+  ...(consts.length ? [`// ── 対象関数が参照する定数 ──`, ...consts, ``] : []),
   ...extracted.map(({ name, js }) => `// ── ${name} ──\n${js}\n`),
   ``,
   `export {`,

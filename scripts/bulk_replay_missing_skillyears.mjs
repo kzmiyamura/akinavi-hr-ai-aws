@@ -38,9 +38,12 @@ const LIMIT = Number(limitAt >= 0 ? args[limitAt + 1] : 0) || Infinity
 const DAYS = Number(args.find((a, i) => /^\d+$/.test(a) && (limitAt < 0 || i !== limitAt + 1)) ?? 7)
 const idAt = args.indexOf('--id')
 const ONLY_ID = idAt >= 0 ? args[idAt + 1] : null
-// skillYears が取れるのは実質 Excel だけ。PDF/Word を混ぜると無駄打ちになる
-// （2026-08-12 実測: 対象241件のうち152件がPDFで、再解析しても空のまま）
+// 以前は「skillYears が取れるのは実質 Excel だけ」だった（2026-08-12 実測: 対象241件のうち
+// 152件がPDFで、再解析しても空のまま）。2026-08-13 に叙述型の職務経歴書から期間ブロックで
+// 復元する抽出（extractSkillYearsFromCareerBlocks）を入れたので PDF も対象になった。
+// 実測サンプル30件で50%が復元する。--pdf でPDFだけを回せる
 const EXCEL_ONLY = args.includes('--excel')
+const PDF_ONLY = args.includes('--pdf')
 const since = new Date(Date.now() - DAYS * 86400000).toISOString()
 
 const headers = { apikey: KEY, Authorization: `Bearer ${KEY}` }
@@ -69,11 +72,12 @@ const targets = ONLY_ID
   // --id 指定時は skillYears 空の条件を外す（抽出器の修正を1人で検証し直す用途）
   ? rows.filter((c) => c.id === ONLY_ID)
   : rows.filter((c) => !hasSy(c.sy) && String(c.resume_url).includes('supabase.co/storage')
-      && (!EXCEL_ONLY || /\.(xlsx?|xlsm)($|\?)/i.test(String(c.resume_url))))
+      && (!EXCEL_ONLY || /\.(xlsx?|xlsm)($|\?)/i.test(String(c.resume_url)))
+      && (!PDF_ONLY || /\.pdf($|\?)/i.test(String(c.resume_url))))
 console.log(ONLY_ID
   ? `対象: ${targets.length}件（--id 指定）`
   : `対象: ${targets.length}件（直近${DAYS}日・resume_url=Storage・skillYears空` +
-    `${EXCEL_ONLY ? '・Excelのみ' : ''}）` +
+    `${EXCEL_ONLY ? '・Excelのみ' : ''}${PDF_ONLY ? '・PDFのみ' : ''}）` +
     (Number.isFinite(LIMIT) ? ` → 先頭${LIMIT}件のみ実行` : ''))
 
 if (!RUN) {

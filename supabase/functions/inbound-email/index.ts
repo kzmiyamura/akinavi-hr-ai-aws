@@ -5299,9 +5299,12 @@ function projParsePeriod(text: string, nowMonth: number): { start: number | null
   const v = text.replace(/\s/g, '')
   const nums: number[] = []
   let now = /現在|現時点|継続|至現在/.test(v)
-  for (const m of v.matchAll(/(19|20)(\d{2})[年\/.\-](\d{1,2})/g)) nums.push((+`${m[1]}${m[2]}`) * 12 + +m[3])
+  // 月は 1〜12 のみ採用する。検証しないと「(2026/05/18 現在)」の "05/18" が
+  // 2005年18月として通り、そこから現在までの20年ブロックに化ける（PDF経歴書で実害）
+  const mo12 = (n: number) => n >= 1 && n <= 12
+  for (const m of v.matchAll(/(19|20)(\d{2})[年\/.\-](\d{1,2})/g)) { if (mo12(+m[3])) nums.push((+`${m[1]}${m[2]}`) * 12 + +m[3]) }
   for (const m of v.matchAll(/(\d{2})年([A-Za-z]{3})/g)) { const mo = PROJ_MON[m[2].toLowerCase()]; if (mo) nums.push((2000 + +m[1]) * 12 + mo) }
-  for (const m of v.matchAll(/\b(\d{2})[\/.](\d{1,2})\b/g)) { if (+m[1] <= 40) nums.push((2000 + +m[1]) * 12 + +m[2]) }
+  for (const m of v.matchAll(/\b(\d{2})[\/.](\d{1,2})\b/g)) { if (+m[1] <= 40 && mo12(+m[2])) nums.push((2000 + +m[1]) * 12 + +m[2]) }
   let dur: number | null = null
   const dm = v.match(/(\d{1,2})年(\d{1,2})[ヶかカ]月|(\d{1,2})年(?!\d)|(\d{1,3})[ヶかカ]月/)
   if (dm) { const mo = dm[1] ? +dm[1] * 12 + +dm[2] : dm[3] ? +dm[3] * 12 : +dm[4]; if (mo >= 1 && mo <= 600) dur = mo }
@@ -5358,6 +5361,116 @@ function projMergeMonths(iv: [number, number][]): number {
   for (let i = 1; i < s.length; i++) { const [a, b] = s[i]; if (a <= ce + 1) { if (b > ce) ce = b } else { t += ce - cs + 1; cs = a; ce = b } }
   return t + ce - cs + 1
 }
+/**
+ * 叙述型の職務経歴書テキストから「期間ブロック × そのブロックに出てくるスキル」で
+ * スキル別経験月数を組み立てる。主に PDF 経歴書向け。
+ *
+ * PDF の skillYears 取得率は 42%（Excel は 95%）で、空の116件を実測したところ
+ * スキャンPDFは0件・全件テキストもスキルも取れていた（2026-08-13）。
+ * 取れていなかったのは年数だけで、理由は「PDFに年数の入る場所が無い」から。
+ * Excel はスキル表のセルに年数が入るが、叙述型の職務経歴書はこう書かれる:
+ *
+ *   2017年4月〜2023年4月 ｜ 株式会社W
+ *   ● サーバリプレイス・インフラ移行： オンプレミス→CCMS
+ *   2023年5月〜2025年3月 ｜ 株式会社B
+ *   ・メガバンク基幹システム刷新の PMO
+ *
+ * つまり年数は期間見出しにしか無く、スキルは配下の行にある。
+ * extractSkillYearsFromBodyText は「Java 5年」型の明示表記しか拾えないので
+ * この形は素通りしていた。ここは extractSkillYearsVisualProject（Excelの案件ブロック
+ * union）のテキスト版で、期間の重なりを union する点まで意味論を合わせてある。
+ *
+ * 照合コストに注意: masterSkills 全件（約1,660件×別名）の走査は全文に対して1回だけ行い、
+ * ブロックごとの判定はそこでヒットした数十件に絞る。ブロック数×全件を回すと
+ * 546（WORKER_RESOURCE_LIMIT）に落ちる（既知の実害あり）。
+ */
+function extractSkillYearsFromCareerBlocks(
+  text: string,
+  masterSkills: SkillMasterEntry[],
+  nowMonth: number,
+): Record<string, number> {
+  if (!text || masterSkills.length === 0) return {}
+  const lines = text.split(/\r?\n/)
+
+  // ① 期間見出し行を拾う。
+  // 範囲記号を必須にするのが肝。これが無いと「2026年7月13日現在」（作成日）が
+  // 「その月から現在まで」の巨大ブロックとして全文を覆ってしまう。
+  const RANGE_RE = /[〜～~]|から/
+  const DATE_RE = /(19|20)\d{2}\s*[年\/.\-]/
+  const heads: { line: number; start: number; end: number }[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]
+    // 見出し行自体に年が要る。これが無いと「プロジェクト人数」のような無関係な行が
+    // 後続2行を巻き込んで見出しに化ける
+    if (!DATE_RE.test(l)) continue
+    // 長い散文は見出しではない（「要件定義〜運用保守まで一貫して…」等）
+    if (l.replace(/\s/g, '').length > 60) continue
+    // 期間が3行に分かれる表がある（PDFの表を行復元するとこうなる）:
+    //   01 2025年5月12 ヶ月 データ統合開発 …
+    //   ～ Azureパイプライン・snowflakeデータメンテ …
+    //   現在 【担当フェーズ】 …
+    // 開始・範囲記号・終了が別行なので1行では判定できない。後続2行まで含めて見る
+    // 窓は必要な分だけ広げる。常に3行つなぐと隣の案件の日付まで拾って期間が膨らむ
+    // （実測: 1案件3.8年のスキルが20.3年になった）。1行で解ければ1行で確定させる
+    let head: { start: number; end: number } | null = null
+    for (let w = 1; w <= 3 && !head; w++) {
+      const win = lines.slice(i, i + w).join(' ')
+      if (!RANGE_RE.test(win)) continue
+      const { start, end } = projParsePeriod(win, nowMonth)
+      if (start === null || end === null || end < start || end - start > 600) continue
+      head = { start, end }
+    }
+    if (!head) continue
+    heads.push({ line: i, start: head.start, end: head.end })
+  }
+  // 信頼ゲート①: 期間見出しが2つ以上（1つだけの表は経歴表とみなせない）
+  if (heads.length < 2) return {}
+
+  // ② 全文に対して1回だけ全スキル照合し、以降の対象を絞る
+  const present: { name: string; terms: string[] }[] = []
+  for (const skill of masterSkills) {
+    // 資格は期間に紐づかない（取得年であって従事期間ではない）ので対象外
+    if (skill.category === 'certifications') continue
+    const terms = [skill.name, ...skill.aliases].filter((t) => t && t.length >= 2)
+    if (terms.some((t) => _careerTermRe(t).test(text))) present.push({ name: skill.name, terms })
+  }
+  if (present.length === 0) return {}
+
+  // ③ 見出しごとに、次の見出しの直前までを配下ブロックとみなす
+  const skillIv: Record<string, [number, number][]> = {}
+  for (let k = 0; k < heads.length; k++) {
+    const from = heads[k].line + 1
+    // 最後の見出しは以降全部。ただし署名・フッタまで飲み込まないよう行数を制限する
+    const to = k + 1 < heads.length ? heads[k + 1].line : Math.min(lines.length, from + 60)
+    if (to <= from) continue
+    const blockText = lines.slice(from, to).join('\n').slice(0, 4000)
+    if (!blockText.trim()) continue
+    for (const sk of present) {
+      if (sk.terms.some((t) => _careerTermRe(t).test(blockText))) {
+        (skillIv[sk.name] ??= []).push([heads[k].start, heads[k].end])
+      }
+    }
+  }
+
+  const res: Record<string, number> = {}
+  for (const [name, iv] of Object.entries(skillIv)) {
+    const months = projMergeMonths(iv)
+    if (months > 0) res[name] = Math.min(months, 360)
+  }
+  // 信頼ゲート②: 3件以上取れたときだけ採用（誤検出した見出し1本で数件だけ出る型を弾く）
+  return Object.keys(res).length >= 3 ? res : {}
+}
+
+/** extractSkillYearsFromCareerBlocks 用の語境界つきスキル照合regex（extractAndRemoveSkills と同じ規則） */
+function _careerTermRe(term: string): RegExp {
+  const escaped = term.replace(/[.+*?()[\]{}\\|^$]/g, '\\$&')
+  // 純粋な英小文字2〜3文字（go 等）は英語自然文と区別できないため直後を限定する
+  const pattern = /^[a-z]{2,3}$/.test(term)
+    ? `(?<![a-zA-Z0-9_#])${escaped}(?=[\\s\\u3000-\\u9FFF、。！？）」』]|$)`
+    : `(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_.])`
+  return _cachedSkillRegex(pattern)
+}
+
 function extractSkillYearsVisualProject(cells: SpanCell[], deadline = 0): Record<string, number> | null {
   if (deadline && Date.now() > deadline) return null
   const nowMonth = new Date().getFullYear() * 12 + (new Date().getMonth() + 1)
@@ -10074,10 +10187,24 @@ Deno.serve(async (req: Request) => {
                     decodeHtmlEntities([block, blockAttachLabel].join('\n'))
                       + (matchedTextContent ? '\n' + blockAttachText : '')
                   )
-                  // 優先順位: bodyYears < nameYears < Excel（後が上書き）
+                  // 叙述型の職務経歴書（主にPDF）は年数が期間見出しにしか無く bodyYears では拾えない。
+                  // Excel/Word のスキル表が取れているときは触らない（取得率95%の経路を動かさない）。
+                  // 対象テキストは bodyYears と同じく matchedTextContent のときの添付だけに限る
+                  // （ケースB/C の共有プールを混ぜると他人の経歴書の期間を拾う）
+                  // 名簿が1人だけなら添付は本人のものしかあり得ないので、割当が
+                  // 確定していなくても使ってよい（1人メールが名簿パスに入り、添付が
+                  // 共有プール扱い＝matchedTextContent が null になる型が実在する）
+                  const careerAttachOk = matchedTextContent != null || multiBlocks.length === 1
+                  const careerYears = (Object.keys(display).length === 0 && careerAttachOk)
+                    ? extractSkillYearsFromCareerBlocks(blockAttachText, masterSkills, new Date().getFullYear() * 12 + (new Date().getMonth() + 1))
+                    : {}
+                  if (Object.keys(careerYears).length > 0) {
+                    console.log(`[skillYears-career] ${Object.keys(careerYears).length}件（叙述型の期間ブロックから復元・名簿ブロック blocks=${multiBlocks.length}）`)
+                  }
+                  // 優先順位: careerYears < bodyYears < nameYears < Excel（後が上書き）
                   // 保存直前に必ずゴミフィルタを通す（抽出経路がgrid/cells/視覚/本文いずれでも、
                   // 期間表記・日付・見出し語キーがここで最終的に落ちる）
-                  const merged = filterSkillYears({ ...bodyYears, ...nameYears, ...display })
+                  const merged = filterSkillYears({ ...careerYears, ...bodyYears, ...nameYears, ...display })
                   return Object.keys(merged).filter(k => !k.startsWith('_')).length > 0 ? merged : undefined
                 })(),
                 // Excel スキルシートの「スキルサマリ」セル（selfPR・agentComment と並列の独自フィールド）
@@ -10691,6 +10818,15 @@ Deno.serve(async (req: Request) => {
             // 本文・添付テキストの文章パターンからスキル年数を抽出（常に実行してマージ）
             // Excel/Word/nameYears が空のキーを補完する。重複キーはExcel/Word優先（後が上書き）
             const bodyYears = extractSkillYearsFromBodyText(bodyText + '\n' + attachText)
+            // 叙述型の職務経歴書（主にPDF）は年数が期間見出しにしか無く、bodyYears では拾えない。
+            // Excel/Word でスキル表が取れているときは触らない（取得率95%の経路にキーを足すと
+            // 既存の値が動く。ここは PDF 等で年数がまるごと空になる型だけを救う）。
+            const careerYears = (Object.keys(displayExcel).length === 0 && Object.keys(wordSkillYearsForDisplay).length === 0)
+              ? extractSkillYearsFromCareerBlocks(attachText, masterSkills, new Date().getFullYear() * 12 + (new Date().getMonth() + 1))
+              : {}
+            if (Object.keys(careerYears).length > 0) {
+              console.log(`[skillYears-career] ${Object.keys(careerYears).length}件（叙述型の期間ブロックから復元）`)
+            }
             // 保存直前に必ずゴミフィルタを通す（抽出経路がgrid/cells/視覚/Word/本文いずれでも、
             // 期間表記・日付・見出し語キーがここで最終的に落ちる）
             const finalizeSkillYears = (sy: Record<string, number>): Record<string, number> | undefined => {
@@ -10699,8 +10835,11 @@ Deno.serve(async (req: Request) => {
             }
             if (Object.keys(displayExcel).length > 0) return finalizeSkillYears(normalizeKeys({ ...bodyYears, ...nameYears, ...displayExcel }))
             if (Object.keys(wordSkillYearsForDisplay).length > 0) return finalizeSkillYears(normalizeKeys({ ...bodyYears, ...nameYears, ...wordSkillYearsForDisplay }))
-            if (Object.keys(nameYears).length > 0) return finalizeSkillYears(normalizeKeys({ ...bodyYears, ...nameYears }))
-            if (Object.keys(bodyYears).length > 0) return finalizeSkillYears(normalizeKeys(bodyYears))
+            // careerYears は最下位。明示表記（bodyYears）や名簿の年数が有ればそちらを優先する
+            if (Object.keys(nameYears).length > 0) return finalizeSkillYears(normalizeKeys({ ...careerYears, ...bodyYears, ...nameYears }))
+            if (Object.keys(bodyYears).length > 0 || Object.keys(careerYears).length > 0) {
+              return finalizeSkillYears(normalizeKeys({ ...careerYears, ...bodyYears }))
+            }
             return undefined
           })(),
           // Excel スキルシートの JSON 化データ（HF Spaces 品質チェック用）
