@@ -10,6 +10,8 @@ import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
 import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
+import { AiAppliedNote } from '../components/AiAppliedNote'
+import type { LlmApplied } from '../components/AiAppliedNote'
 import { AgentCompaniesModal } from '../components/AgentCompaniesModal'
 import type { AgentCompany } from '../lib/db/agentCompanies'
 import type { DataEnv } from '../lib/dataEnv'
@@ -579,6 +581,24 @@ export function CandidateProfileFields({
             : <><ChevronDown size={13} />すべて表示（{totalSkills}件）</>
           }
         </button>
+      )}
+
+      {/* 経験年数・年齢・スキル年数などは常駐AIが regex の値を書き換えていることがある。
+          マッチングのスコアはこれらを使うので、詳細画面では「AIが直した項目」を出す。
+          一覧行は raw_profile を取っていない（egress 対策）ので詳細のみ */}
+      {detailMode && (
+        <AiAppliedNote
+          applied={(raw as { _llm_applied?: LlmApplied })._llm_applied}
+          backup={(raw as { _regex_backup?: Record<string, unknown> })._regex_backup}
+          current={{
+            ...(raw as Record<string, unknown>),
+            name: c.name,
+            experience_years: c.experience_years,
+            desired_rate: c.desired_rate,
+            from_company: c.from_company,
+            skills: c.skills,
+          }}
+        />
       )}
     </div>
   )

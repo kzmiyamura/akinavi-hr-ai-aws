@@ -14,6 +14,8 @@ import {
 } from '../lib/db/projects'
 import type { Project } from '../lib/db/projects'
 import type { DataEnv } from '../lib/dataEnv'
+import { AiAppliedNote } from '../components/AiAppliedNote'
+import type { LlmApplied } from '../components/AiAppliedNote'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
 import { DemoProjectCandidateGen } from '../components/DemoProjectCandidateGen'
 import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../lib/fileParser'
@@ -267,6 +269,15 @@ export function ProjectProfileFields({
       )}
 
       {detailMode && <MatchingInputs project={p} requiredSkillCount={required.length} niceCount={nice.length} />}
+      {/* 案件の条件は regex が登録したあと常駐AIが直している。必須スキルのように
+          スコアの分母を動かす項目もあるので、AIが書き換えた項目は画面に出す */}
+      {detailMode && (
+        <AiAppliedNote
+          applied={(p.raw_data as { _llm_applied?: LlmApplied })?._llm_applied}
+          backup={(p.raw_data as { _regex_backup?: Record<string, unknown> })?._regex_backup}
+          current={{ ...(p.raw_data ?? {}), ...(p as unknown as Record<string, unknown>) }}
+        />
+      )}
     </div>
   )
 }
@@ -426,8 +437,9 @@ function MatchingInputs({ project: p, requiredSkillCount, niceCount }: {
         </div>
       )}
       {niceCount > 0 && (
-        <div className="text-xs text-gray-400 border-t border-gray-200 pt-1">
-          尚可スキル{niceCount}件は抽出済みですが、現在スコアには加算していません
+        <div className="text-xs text-gray-500 border-t border-gray-200 pt-1">
+          尚可スキル{niceCount}件は必須スキルの点（40点）を最大 +10% 底上げします。
+          <span className="text-gray-400">必須の分母は増えないので、満たさなくても減点にはなりません</span>
         </div>
       )}
     </div>
