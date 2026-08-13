@@ -318,6 +318,9 @@ LLMが余計なものを足すので次のガードを入れた。
   `scripts/sql/bench_fetch_candidates.sql` は CLI（superuser）で測るので**本番の余裕は分からない**。
   本番の条件で見るなら `probe_fetch_candidates_timing.mjs`（anon）を使う。
   RPC 内の `PERFORM set_config('statement_timeout',...)` は効かないので当てにしない
+- **接続の詰まり**: anon を 15秒に緩めた副作用（長時間クエリの居座りで接続を食い潰す）は
+  8/13 に確認して**発生なし**（非 idle は自分自身の1本のみ・実行秒0）。画面の体感も速いまま。
+  重くなったら `npx supabase db query --linked -f scripts/sql/inspect_active_queries.sql`
 
 ---
 
