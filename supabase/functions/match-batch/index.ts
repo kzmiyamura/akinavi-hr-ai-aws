@@ -19,6 +19,51 @@
 //   results  … AI スコアを持つ topN 件
 //   ruleOnly … ルールスコアのみ（AIなし）の残り件数
 
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+/**
+ * 必須スキルの充足判定を DB（skill_satisfies）に問い合わせる。
+ *
+ * 判定は 2026-08-12 に skill_satisfies へ集約したが、ここだけ自前の双方向部分一致
+ * （`have.includes(want) || want.includes(have)` で +0.5）が残っていて、画面の
+ * 「スコア内訳」だけ旧ルールで動いていた。実害（2026-08-13）:
+ *   必須 = 基本設計/Microsoft 365/PowerShell/EntraID/Azure Functions に対し
+ *   候補者スキル「C」「Shell」が Microsoft 365・Azure Functions・PowerShell に
+ *   部分一致して「必須5中3合致」。目視では基本設計しか合っていない。
+ *
+ * バッチ全体を1往復で解決する（1人ずつ match_skill_strings を呼ぶと20往復になる）。
+ * 失敗時は完全一致のみに退化させる。旧ルールには戻さない（戻すと誤合致が復活する）。
+ */
+async function fetchSatisfiedRequired(
+  haves: string[][],
+  want: string[],
+): Promise<Map<number, Set<string>> | null> {
+  if (want.length === 0 || haves.length === 0) return new Map()
+  const url = Deno.env.get('SUPABASE_URL')
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_ANON_KEY')
+  if (!url || !key) {
+    console.warn('[skill-match] SUPABASE_URL/KEY が無いため完全一致のみで採点する')
+    return null
+  }
+  try {
+    const supabase = createClient(url, key)
+    const { data, error } = await supabase.rpc('match_skill_hits_batch', {
+      p_haves: haves,
+      p_want: want,
+    })
+    if (error) throw new Error(error.message)
+    const map = new Map<number, Set<string>>()
+    for (const row of (data ?? []) as { idx: number; want: string }[]) {
+      if (!map.has(row.idx)) map.set(row.idx, new Set())
+      map.get(row.idx)!.add(row.want)
+    }
+    return map
+  } catch (e) {
+    console.warn('[skill-match] match_skill_hits_batch 失敗、完全一致のみで採点する:', String(e))
+    return null
+  }
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -145,7 +190,14 @@ interface RuleResult {
  * ルールベーススコアを計算（合計はウェイト合計に依存）
  * ウェイトが指定されない場合はデフォルト（スキル40/経験15/単価15/勤務地20/リモート10）を使用
  */
-function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: ScoringWeights = DEFAULT_WEIGHTS): RuleResult {
+function calcRuleScore(
+  candidate: CandidateInput,
+  project: ProjectReq,
+  weights: ScoringWeights = DEFAULT_WEIGHTS,
+  // DB（skill_satisfies）が「充足した」と判定した必須スキル。
+  // null のときは RPC が使えなかった場合で、完全一致のみに退化する
+  satisfiedRequired?: Set<string> | null,
+): RuleResult {
   const wSkill = weights.skill
   const wExp = weights.exp
   const wRate = weights.rate
@@ -161,7 +213,16 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
       const rt = r.toLowerCase().trim()
       if (!rt) continue
       const isEnglish = rt === '英語' || rt === 'english' || rt.includes('英語')
-      if (cSet.has(rt)) {
+      // skill_satisfies による判定（正規化＋包含関係＋語境界）。完全一致もここに含まれる
+      if (satisfiedRequired?.has(r)) {
+        if (isEnglish) {
+          if (candidate.englishLevel === 'business') hits += 1.5
+          else if (candidate.englishLevel === 'daily') hits += 0.8
+          else hits += 1
+        } else {
+          hits += 1
+        }
+      } else if (cSet.has(rt)) {
         if (isEnglish) {
           // 英語レベルで重みを変える: ビジネス=1.5倍 / 日常会話=0.8倍 / 不明=1.0
           if (candidate.englishLevel === 'business') hits += 1.5
@@ -175,9 +236,11 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
         // ビジネスレベル=1.0点 / 日常会話=0.5点
         if (candidate.englishLevel === 'business') hits += 1.0
         else hits += 0.5
-      } else if ([...cSet].some(s => s.includes(rt) || rt.includes(s))) {
-        hits += 0.5
       }
+      // 旧ルールにあった双方向部分一致（`s.includes(rt) || rt.includes(s)` で +0.5）は
+      // 廃止した。「C」が Microsoft 365 / Azure Functions に、「Shell」が PowerShell に
+      // 合致して必須5中3合致と出る実害があった（2026-08-13）。
+      // 表記ゆれ・包含関係は skill_satisfies（satisfiedRequired）が扱う
     }
   }
   // 歓迎スキル: 一致ごとに +1pt（部分一致 +0.5pt）
@@ -346,12 +409,14 @@ function calcRuleScore(candidate: CandidateInput, project: ProjectReq, weights: 
     remoteScore = wRemote
     remoteDetail = `リモート${wRemote}/${wRemote}(可・週リモート案件)`
   } else if (candidate.remoteAvailable == null) {
-    // リモート可否不明 → 中間点
+    // 人材側にリモートの記載が無い → 中間点。「不可」と断定しない
+    // （断定すると、根拠が無いのに減点しているように見えて判定全体が疑われる）
     remoteScore = Math.round(wRemote * 0.5)
-    remoteDetail = `リモート${Math.round(wRemote * 0.5)}/${wRemote}(可否不明)`
+    remoteDetail = `リモート${Math.round(wRemote * 0.5)}/${wRemote}(人材側に記載なし)`
   } else {
     remoteScore = 0
-    remoteDetail = `リモート0/${wRemote}(${candidate.remoteAvailable ? '可・案件リモートなし' : '不可'})`
+    // 何を根拠に0点にしたかを書く。「不可」だけだと確認しようがない
+    remoteDetail = `リモート0/${wRemote}(${candidate.remoteAvailable ? '可・案件側リモートなし' : '常駐可と記載'})`
   }
 
   let total = Math.max(0, Math.min(wSkill + wExp + wRate + wLoc + wRemote, cappedSkillScore + expScore + rateScore + locationScore + remoteScore))
@@ -461,10 +526,12 @@ function buildBatchProjectToCandidatesPrompt(
       project.requiredSkills ?? [],
       project.niceToHaveSkills ?? [],
     )
-    // calcRuleScore の breakdown をそのまま渡してAIが事実記述できるようにする
-    const rule = calcRuleScore(c, project)
+    // 採点済みの breakdown をそのまま渡してAIが事実記述できるようにする。
+    // ここで calcRuleScore を呼び直すと skill_satisfies の判定結果を持たないぶん
+    // 保存される内訳と食い違うため、算出済みのものを使う
+    const breakdown = c.ruleBreakdown ?? calcRuleScore(c, project).breakdown
     return (
-      `[${i + 1}] id="${c.id}" score=${c.ruleScore} breakdown="${rule.breakdown}"` +
+      `[${i + 1}] id="${c.id}" score=${c.ruleScore} breakdown="${breakdown}"` +
       ` matchedSkills=${JSON.stringify(skills)}` +
       (c.preferredJobTypes?.length ? ` wantedJobs=${JSON.stringify(c.preferredJobTypes)}` : '') +
       (c.summary ? ` summary="${c.summary.slice(0, 80)}"` : '') +
@@ -663,8 +730,16 @@ Deno.serve(async (req) => {
         })
       }
 
+      // 必須スキルの充足判定を1往復でまとめて取る（判定は skill_satisfies に一本化）
+      const satisfiedMap = await fetchSatisfiedRequired(
+        (candidates as CandidateInput[]).map(c => c.skills ?? []),
+        (projectRequirements as ProjectReq).requiredSkills ?? [],
+      )
       // ルールスコアで全員採点 → ソート
-      const scored = candidates.map(c => { const r = calcRuleScore(c, projectRequirements, weights); return { ...c, ruleScore: r.total, ruleBreakdown: r.breakdown } })
+      const scored = candidates.map((c, i) => {
+        const r = calcRuleScore(c, projectRequirements, weights, satisfiedMap ? (satisfiedMap.get(i) ?? new Set<string>()) : null)
+        return { ...c, ruleScore: r.total, ruleBreakdown: r.breakdown }
+      })
       scored.sort((a, b) => b.ruleScore - a.ruleScore)
 
       const aiTargets = scored.slice(0, topN)
@@ -731,7 +806,15 @@ Deno.serve(async (req) => {
         })
       }
 
-      const scored = projects.map(p => { const r = calcRuleScore(candidateProfile, p, weights); return { ...p, ruleScore: r.total, ruleBreakdown: r.breakdown } })
+      // 1人 × 複数案件。全案件の必須スキルを合わせて1往復で判定し、案件ごとに絞って渡す
+      // （案件ごとに呼ぶと案件数ぶん往復する）
+      const allWant = [...new Set((projects as ProjectReq[]).flatMap(p => p.requiredSkills ?? []))]
+      const satisfiedOne = await fetchSatisfiedRequired([(candidateProfile as CandidateInput).skills ?? []], allWant)
+      const satisfiedSet = satisfiedOne ? (satisfiedOne.get(0) ?? new Set<string>()) : null
+      const scored = projects.map(p => {
+        const r = calcRuleScore(candidateProfile, p, weights, satisfiedSet)
+        return { ...p, ruleScore: r.total, ruleBreakdown: r.breakdown }
+      })
       scored.sort((a, b) => b.ruleScore - a.ruleScore)
 
       const aiTargets = scored.slice(0, topN)

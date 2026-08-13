@@ -2696,6 +2696,25 @@ const PROSE_INDUSTRIES: Array<{ re: RegExp; label: string }> = [
   { re: /マーケ(?:ティング)?(?:業界|職)?|広告(?:代理店|業界)?|デジタルマーケ/, label: 'マーケティング' },
 ]
 
+/**
+ * リモート可否を三値で決める。true=可 / false=不可 / null=記載なし。
+ *
+ * 以前は boolean 固定で、既定が false だった。そのためメールにリモートの記載が
+ * 一切無い人材まで「リモート0/10(不可)」と断定して表示していた（2026-08-13 実害。
+ * 営業から「人材の情報が足りていないのに不可と書くと、判定そのものが疑われる」と指摘）。
+ * match-batch 側は null を「可否不明」として中間点にする実装が既にあるので、
+ * 分からないものは null で渡す。
+ */
+function deriveRemoteAvailable(
+  aiRemoteAvailable: boolean | null | undefined,
+  workStyle: string | null,
+): boolean | null {
+  if (aiRemoteAvailable === true) return true
+  if (workStyle === 'フルリモート' || workStyle === 'リモート可' || workStyle === 'リモート希望') return true
+  if (workStyle === '常駐可') return false   // 常駐と明記されている＝根拠のある「不可」
+  return null                                 // 記載なし。false（不可）と混同しない
+}
+
 const PROSE_WORKSTYLE: Array<{ re: RegExp; label: string }> = [
   { re: /フルリモート|完全リモート|100%リモート/,      label: 'フルリモート' },
   { re: /週[234]日.*リモート|リモート.*週[234]日/,     label: 'リモート可' },
@@ -10045,9 +10064,7 @@ Deno.serve(async (req: Request) => {
                 continue
               }
             }
-            const blockRemoteAvailable = blockProseFields.workStyle === 'フルリモート'
-              || blockProseFields.workStyle === 'リモート可'
-              || blockProseFields.workStyle === 'リモート希望'
+            const blockRemoteAvailable = deriveRemoteAvailable(null, blockProseFields.workStyle)
             const blockBoxUrls = extractBoxUrls(block)
             if (blockBoxUrls.length > 0) allBlockBoxUrls.push(...blockBoxUrls)
 
@@ -10638,10 +10655,7 @@ Deno.serve(async (req: Request) => {
       const resolvedIndustries = (analyzed.industries?.length ?? 0) > 0
         ? analyzed.industries!
         : proseFields.industries
-      const resolvedRemoteAvailable = analyzed.remoteAvailable
-        || proseFields.workStyle === 'フルリモート'
-        || proseFields.workStyle === 'リモート可'
-        || proseFields.workStyle === 'リモート希望'
+      const resolvedRemoteAvailable = deriveRemoteAvailable(analyzed.remoteAvailable, proseFields.workStyle)
       // フルリモート希望: 常駐案件を避けマッチングスコアを下げるために使用
       const resolvedWantsFullRemote = proseFields.workStyle === 'フルリモート'
       // リモート勤務スタイル（表示用文字列）

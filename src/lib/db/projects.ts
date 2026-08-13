@@ -27,6 +27,10 @@ export function projectToMatchRequirements(project: Project): AnalyzeProjectResp
     startDate: project.start_date,
     endDate: project.end_date,
     workLocation: project.work_location,
+    // 正規化済みの都道府県。work_location は「東品川（最寄りは青物横丁…）」のように
+    // 都道府県を含まない書き方が普通にあり、これを渡さないと match-batch の勤務地20点が
+    // 丸ごと0点になる（2026-08-13 実害: 東京在住の候補者が東京の案件で0点）
+    workPrefecture: project.work_prefecture,
     remotePolicy: project.remote_policy,
     contractType: project.contract_type,
     headcount: project.headcount,

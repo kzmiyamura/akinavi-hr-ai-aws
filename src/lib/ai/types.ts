@@ -116,6 +116,8 @@ export interface AnalyzeProjectResponse {
   endDate?: string | null
   /** 勤務地・オフィス・エリア（例: 田町、大阪） */
   workLocation?: string | null
+  /** 正規化済みの都道府県（projects.work_prefecture）。勤務地スコアはこちらを優先する */
+  workPrefecture?: string | null
   /** リモート・出社の要約（例: フルリモート可、週2出社、常駐） */
   remotePolicy?: string | null
   /** 契約形態（例: 業務委託、派遣、準委任） */
