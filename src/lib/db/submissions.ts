@@ -18,6 +18,14 @@ export interface Submission {
   updated_at: string
 }
 
+/**
+ * 一覧・ランキングで引く列。`*` にしない。
+ * 列が増えたときに黙って転送量が増えるのを防ぐ（ai_raw は breakdown と
+ * recommendation を画面で使うので必要）。
+ */
+const SUBMISSION_COLUMNS =
+  'id,data_env,candidate_id,project_id,match_score,ai_summary,ai_raw,status,created_by,created_at,updated_at'
+
 export interface UpsertSubmissionInput {
   candidateId: string
   projectId: string
@@ -143,7 +151,7 @@ export async function fetchSubmissionStats(dataEnv: DataEnv): Promise<Submission
 export async function fetchSubmissionsByProject(projectId: string, dataEnv: DataEnv, limit = 200): Promise<Submission[]> {
   const { data, error } = await supabase
     .from('submissions')
-    .select('*')
+    .select(SUBMISSION_COLUMNS)
     .eq('data_env', dataEnv)
     .eq('project_id', projectId)
     .order('match_score', { ascending: false })
@@ -158,7 +166,7 @@ export async function fetchSubmissionsByProjectIds(projectIds: string[], dataEnv
   if (projectIds.length === 0) return []
   const { data, error } = await supabase
     .from('submissions')
-    .select('*')
+    .select(SUBMISSION_COLUMNS)
     .eq('data_env', dataEnv)
     .in('project_id', projectIds)
 
@@ -171,7 +179,7 @@ export async function fetchSubmissionsByCandidateIds(candidateIds: string[], dat
   if (candidateIds.length === 0) return []
   const { data, error } = await supabase
     .from('submissions')
-    .select('*')
+    .select(SUBMISSION_COLUMNS)
     .eq('data_env', dataEnv)
     .in('candidate_id', candidateIds)
 
@@ -183,7 +191,7 @@ export async function fetchSubmissionsByCandidateIds(candidateIds: string[], dat
 export async function fetchSubmissionsByCandidate(candidateId: string, dataEnv: DataEnv): Promise<Submission[]> {
   const { data, error } = await supabase
     .from('submissions')
-    .select('*')
+    .select(SUBMISSION_COLUMNS)
     .eq('data_env', dataEnv)
     .eq('candidate_id', candidateId)
 

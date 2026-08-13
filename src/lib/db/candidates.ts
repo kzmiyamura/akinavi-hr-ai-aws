@@ -138,11 +138,59 @@ export async function fetchCandidateById(id: string, dataEnv: DataEnv): Promise<
  * 優先順位: 登録日時 DESC → 経験年数 DESC
  * limit デフォルト 2000（7日分の全候補者を取りこぼさないよう余裕を持たせる）
  */
+/** PostgREST の db-max-rows。1リクエストでこれ以上は返らない */
+const POSTGREST_MAX_ROWS = 1000
+
 export async function fetchCandidatesForMatching(dataEnv: DataEnv, limit = 2000): Promise<Candidate[]> {
+  // p_limit に 2000 を渡しても 1000 件で黙って切られていた（2026-08-14 実測）。
+  // prod は 1,521 人なので約3分の1が一覧から欠け、人材モードの検索・一括再マッチングの
+  // 対象から漏れていた。Range ヘッダは RPC には効かないので p_offset で回して集める。
+  const all: Candidate[] = []
+  for (let offset = 0; offset < limit; offset += POSTGREST_MAX_ROWS) {
+    const pageSize = Math.min(POSTGREST_MAX_ROWS, limit - offset)
+    const { data, error } = await supabase.rpc('fetch_candidates_for_matching', {
+      p_data_env: dataEnv,
+      p_limit: pageSize,
+      p_offset: offset,
+    })
+    if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
+    const page = (data ?? []) as Candidate[]
+    all.push(...page)
+    if (page.length < pageSize) break
+  }
+  return all
+}
+
+/**
+ * ID を指定して候補者をまとめて取得する（マッチング画面の案件モード用）
+ *
+ * 案件モードで必要なのはランキングに載っている人だけなので、
+ * 全人材（1,000件・3.6MB）を引かずにこちらを使う。
+ * candidates_lite ビュー経由なので raw_profile.text / parsedGrid は含まれない。
+ */
+export async function fetchCandidatesByIds(ids: string[], dataEnv: DataEnv): Promise<Candidate[]> {
+  if (ids.length === 0) return []
   const { data, error } = await supabase
-    .rpc('fetch_candidates_for_matching', { p_data_env: dataEnv, p_limit: limit })
+    .from('candidates_lite')
+    .select('*')
+    .eq('data_env', dataEnv)
+    .in('id', ids)
+
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
+}
+
+/** 登録人材の件数だけを取得する（本体は転送しない） */
+export async function countCandidatesForMatching(dataEnv: DataEnv): Promise<number> {
+  const { count, error } = await supabase
+    .from('candidates')
+    .select('id', { count: 'exact', head: true })
+    .eq('data_env', dataEnv)
+    .is('merged_into', null)
+    .eq('duplicate_flag', false)
+
+  if (error) throw new Error(`人材件数の取得に失敗しました: ${error.message}`)
+  return count ?? 0
 }
 
 export interface ScoringWeights {
@@ -550,6 +598,49 @@ export interface DuplicateCandidate {
   duplicateScore: number
 }
 
+function toDuplicateRow(row: Record<string, unknown>): Omit<DuplicateCandidate, 'duplicateScore'> {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    email: (row.email as string | null) ?? null,
+    raw_profile: (row.raw_profile as Record<string, unknown>) ?? {},
+    skills: Array.isArray(row.skills) ? (row.skills as string[]) : [],
+    experience_years: (row.experience_years as number | null) ?? null,
+    desired_rate: (row.desired_rate as string | null) ?? null,
+    from_company: (row.from_company as string | null) ?? null,
+    duplicate_flag: Boolean(row.duplicate_flag),
+  }
+}
+
+/**
+ * 複数人材ぶんの同名候補を1回で取得する（candidate_id → 候補配列）
+ *
+ * 以前は1人ずつ find_duplicate_candidates を叩いており、上位100人ぶんを並列で回すと
+ * 100往復・12MB になっていた（2026-08-14 実測）。RPC 側で source_id 付きの1本にまとめ、
+ * raw_profile も画面が読む5キーだけに絞ってある。
+ */
+export async function findDuplicateCandidatesBatch(
+  ids: string[],
+  dataEnv: DataEnv,
+): Promise<Record<string, Array<Omit<DuplicateCandidate, 'duplicateScore'>>>> {
+  if (ids.length === 0) return {}
+  // 1人あたり最大10件返るので、100人だとちょうど PostgREST の既定上限（1000行）に当たる。
+  // 黙って切られないよう range() で上限を明示する
+  const { data, error } = await supabase
+    .rpc('find_duplicate_candidates_batch', { p_ids: ids, p_data_env: dataEnv })
+    .range(0, ids.length * 10)
+  if (error) {
+    console.warn('[findDuplicateCandidatesBatch]', error.message)
+    return {}
+  }
+  const map: Record<string, Array<Omit<DuplicateCandidate, 'duplicateScore'>>> = {}
+  for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+    const sourceId = row.source_id as string
+    ;(map[sourceId] ??= []).push(toDuplicateRow(row))
+  }
+  return map
+}
+
 /**
  * 同名の別人材候補を取得する（RPC経由）
  * 名前の表記ゆれ（ピリオド・スペース・中点等）を除去して一致するものを返す
@@ -568,17 +659,7 @@ export async function findDuplicateCandidates(
     console.warn('[findDuplicateCandidates]', error.message)
     return []
   }
-  return (data ?? []).map((row: Record<string, unknown>) => ({
-    id: row.id as string,
-    name: row.name as string,
-    email: (row.email as string | null) ?? null,
-    raw_profile: (row.raw_profile as Record<string, unknown>) ?? {},
-    skills: Array.isArray(row.skills) ? (row.skills as string[]) : [],
-    experience_years: (row.experience_years as number | null) ?? null,
-    desired_rate: (row.desired_rate as string | null) ?? null,
-    from_company: (row.from_company as string | null) ?? null,
-    duplicate_flag: Boolean(row.duplicate_flag),
-  }))
+  return (data ?? []).map(toDuplicateRow)
 }
 
 /**

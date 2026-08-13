@@ -4,7 +4,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail, SlidersHorizontal, RotateCcw, Reply, ExternalLink } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { CandidateProfileFields } from './CandidatePage'
-import { fetchCandidatesForMatching, fetchCandidatesForProject, findDuplicateCandidates, DEFAULT_SCORING_WEIGHTS } from '../lib/db/candidates'
+import {
+  fetchCandidatesForMatching,
+  fetchCandidatesForProject,
+  fetchCandidatesByIds,
+  countCandidatesForMatching,
+  findDuplicateCandidatesBatch,
+  DEFAULT_SCORING_WEIGHTS,
+} from '../lib/db/candidates'
 import type { ScoringWeights } from '../lib/db/candidates'
 import { logError } from '../lib/errorLog'
 import {
@@ -346,13 +353,19 @@ function pickProjectsForCandidateMatch(candidate: Candidate, openProjects: Proje
 
 
 function toRankedForProject(subs: Submission[], allCandidates: Candidate[]): RankedSubmission[] {
+  // 件数 × 人数の線形探索になっていたので Map で引く
+  const byId = new Map(allCandidates.map((c) => [c.id, c]))
   return subs
     .map((s) => ({
       ...s,
-      candidate: allCandidates.find((c) => c.id === s.candidate_id)!,
+      candidate: byId.get(s.candidate_id)!,
     }))
     .filter((s): s is RankedSubmission => Boolean(s.candidate))
 }
+
+// useQuery の既定値は毎回同じ参照を返さないと、useMemo の依存が毎レンダリング変わってしまう
+const EMPTY_CANDIDATES: Candidate[] = []
+const EMPTY_DUPLICATE_ROWS: Record<string, Array<Omit<DuplicateCandidate, 'duplicateScore'>>> = {}
 
 /** 一覧に出す件数。それ以上はアコーディオン内へ */
 const RANK_HEAD = 5
@@ -1088,9 +1101,19 @@ const { data: projects = [] } = useQuery({
     queryKey: projectsQueryKeys.open(dataEnv),
     queryFn: () => fetchOpenProjects(dataEnv),
   })
+  // 全人材の一覧は人材モードの左ペイン（検索・選択）でしか使わない。
+  // 案件モードで引くと 1,000件・3.6MB を無駄に転送するので mode で切り分ける。
+  // 案件モードのランキング表示に要る人材は candidatesForRanking（IDs 指定）で取る。
   const { data: candidates = [], isLoading: isLoadingCandidates } = useQuery({
     queryKey: ['candidates', dataEnv],
     queryFn: () => fetchCandidatesForMatching(dataEnv),
+    enabled: mode === 'candidate',
+  })
+
+  // 一括ボタンの活性判定にしか使わないので件数だけ引く（本体は転送しない）
+  const { data: candidateCount = 0 } = useQuery({
+    queryKey: ['candidate-count', dataEnv],
+    queryFn: () => countCandidatesForMatching(dataEnv),
   })
   const { data: stats, isLoading: isLoadingStats } = useQuery({
     queryKey: ['submission-stats', dataEnv],
@@ -1146,6 +1169,23 @@ const { data: projects = [] } = useQuery({
     enabled: mode === 'candidate' && !!selectedCandidateId,
   })
 
+  // 案件モードのランキングに要る人材だけを ID 指定で取る（全人材を引かないため）
+  const rankingCandidateIds = useMemo(() => {
+    const ids = [...new Set(submissionsForSelectedProject.map((s) => s.candidate_id))]
+    ids.sort()
+    return ids
+  }, [submissionsForSelectedProject])
+  const rankingCandidateIdsKey = rankingCandidateIds.join(',')
+
+  const { data: candidatesForRanking = EMPTY_CANDIDATES, isLoading: isLoadingRankingCandidates } = useQuery({
+    queryKey: ['matching-ranking-candidates', dataEnv, rankingCandidateIdsKey],
+    queryFn: () => fetchCandidatesByIds(rankingCandidateIds, dataEnv),
+    enabled: mode === 'project' && rankingCandidateIds.length > 0,
+  })
+
+  // 人材モードでは既に全件持っているので使い回す
+  const rankingCandidates = mode === 'project' ? candidatesForRanking : (candidates as Candidate[])
+
   const sortedSelectedProjectSubs = useMemo(
     () => [...submissionsForSelectedProject].sort(compareByVerdictThenScore),
     [submissionsForSelectedProject],
@@ -1176,6 +1216,9 @@ const { data: projects = [] } = useQuery({
   const invalidateMatchingQueries = () => {
     queryClient.invalidateQueries({ queryKey: ['submission-stats', dataEnv] })
     queryClient.invalidateQueries({ queryKey: ['candidates', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: ['candidate-count', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: ['matching-ranking-candidates', dataEnv] })
+    queryClient.invalidateQueries({ queryKey: ['matching-duplicates', dataEnv] })
     queryClient.invalidateQueries({ queryKey: projectsQueryKeys.all(dataEnv) })
     queryClient.invalidateQueries({ queryKey: projectsQueryKeys.open(dataEnv) })
     queryClient.invalidateQueries({ queryKey: ['matching-submissions-for-project', dataEnv] })
@@ -1535,9 +1578,12 @@ const { data: projects = [] } = useQuery({
     setRequireHaken(selectedProject.contract_type === '派遣')
   }, [selectedProject?.id]) // selectedProject?.id: プロジェクトが非同期ロードされた後も再発火させるため
 
-  const selectedProjectRanked = selectedProject
-    ? toRankedForProject(sortedSelectedProjectSubs, candidateList)
-    : []
+  // メモ化必須: 毎レンダリング新しい配列を作ると、これを依存に持つ useMemo / useQuery が
+  // 毎回走り直して重複検索を取り直してしまう
+  const selectedProjectRanked = useMemo(
+    () => (selectedProject ? toRankedForProject(sortedSelectedProjectSubs, rankingCandidates) : []),
+    [selectedProject?.id, sortedSelectedProjectSubs, rankingCandidates],
+  )
   const selectedCandidateSubs = sortedSelectedCandidateSubs
 
   // 必須スキルが満たされているかの判定はサーバ（skill_satisfies）に問い合わせる。
@@ -1567,31 +1613,36 @@ const { data: projects = [] } = useQuery({
   })
 
   // 重複候補マップ: candidate_id → DuplicateCandidate[]
-  const [duplicatesMap, setDuplicatesMap] = useState<Record<string, DuplicateCandidate[]>>({})
-  useEffect(() => {
-    if (mode !== 'project' || !selectedProjectId || selectedProjectRanked.length === 0) {
-      setDuplicatesMap({})
-      return
+  //
+  // 以前は上位100人ぶんの RPC を useEffect から並列で叩いていた（100往復・12MB・
+  // React Query の外なのでキャッシュも効かず、案件を切り替えるたびに再取得していた）。
+  // 1本の batch RPC に置き換え、useQuery に載せてキャッシュを効かせる。
+  // 対象は上位100件のまま（それ以下は画面に重複バッジを出していない）。
+  const duplicateTargetIds = useMemo(
+    () => selectedProjectRanked.slice(0, 100).map((s) => s.candidate.id),
+    [selectedProjectRanked],
+  )
+  const duplicateTargetKey = duplicateTargetIds.join(',')
+
+  const { data: duplicateRowsBySource = EMPTY_DUPLICATE_ROWS } = useQuery({
+    queryKey: ['matching-duplicates', dataEnv, selectedProjectId, duplicateTargetKey],
+    queryFn: () => findDuplicateCandidatesBatch(duplicateTargetIds, dataEnv),
+    enabled: mode === 'project' && !!selectedProjectId && duplicateTargetIds.length > 0,
+  })
+
+  // スコアリングと「明らかに別人」の除外は取得と切り離す（再取得なしで再計算できる）
+  const duplicatesMap = useMemo(() => {
+    const map: Record<string, DuplicateCandidate[]> = {}
+    for (const s of selectedProjectRanked) {
+      const rows = duplicateRowsBySource[s.candidate.id]
+      if (!rows) continue
+      map[s.candidate.id] = rows
+        .map((d) => ({ ...d, duplicateScore: calcDuplicateScore(d, s.candidate) }))
+        .filter((d) => d.duplicateScore >= 50)
+        .sort((a, b) => b.duplicateScore - a.duplicateScore)
     }
-    let cancelled = false
-    // 重複チェックは上位100件のみ（全件チェックはネットワーク負荷が大きいため制限）
-    Promise.all(
-      selectedProjectRanked.slice(0, 100).map(async (s) => {
-        const raw = await findDuplicateCandidates(s.candidate.name, s.candidate.id, dataEnv)
-        const scored: DuplicateCandidate[] = raw
-          .map(d => ({ ...d, duplicateScore: calcDuplicateScore(d, s.candidate) }))
-          .filter(d => d.duplicateScore >= 50)
-          .sort((a, b) => b.duplicateScore - a.duplicateScore)
-        return { candidateId: s.candidate.id, duplicates: scored }
-      })
-    ).then(results => {
-      if (cancelled) return
-      const map: Record<string, DuplicateCandidate[]> = {}
-      results.forEach(r => { map[r.candidateId] = r.duplicates })
-      setDuplicatesMap(map)
-    }).catch(() => { /* ignore */ })
-    return () => { cancelled = true }
-  }, [mode, selectedProjectId, dataEnv, selectedProjectRanked.length])
+    return map
+  }, [duplicateRowsBySource, selectedProjectRanked])
 
   const busy =
     matchByProjectMutation.isPending ||
@@ -1852,7 +1903,7 @@ const { data: projects = [] } = useQuery({
               <button
                 type="button"
                 onClick={runBulkAllProjects}
-                disabled={projectList.length === 0 || candidateList.length === 0 || busy}
+                disabled={projectList.length === 0 || candidateCount === 0 || busy}
                 className="inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {bulkAllProjectsMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
@@ -2074,7 +2125,7 @@ const { data: projects = [] } = useQuery({
                         {formatMatchRunProgressLine(matchRunProgress)}
                       </p>
                     )}
-                    {isLoadingProjectSubs || isLoadingCandidates ? (
+                    {isLoadingProjectSubs || isLoadingRankingCandidates ? (
                       <p className="text-sm text-gray-400">読み込み中...</p>
                     ) : selectedProjectRanked.length === 0 ? (
                       <p className="text-sm text-gray-500">マッチング未実施、または「再実行」で算出してください。</p>
