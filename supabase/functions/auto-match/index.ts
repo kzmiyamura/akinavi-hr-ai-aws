@@ -170,9 +170,19 @@ Deno.serve(async (req: Request) => {
         // 別物を通していた。詳細は 20260812_skill_match_normalize.sql
         let skillFiltered = allCandidates ?? []
         if (requiredSkills.length > 0) {
+          // 汎用スキル（テスト・基本設計 等、全人材の4割超が持つもの）だけの合致では
+          // 候補にしない。マッチング画面（fetch_candidates_for_project）と同じ判定にする。
+          // ここを揃えないと「画面には出ないのに提案メールには出る」人が生まれる
+          const { data: selSkills, error: selErr } = await supabase.rpc('selective_skills', {
+            p_skills: requiredSkills,
+          })
+          if (selErr) throw new Error(`選別スキル取得エラー: ${selErr.message}`)
+          const eligibleSkills = (Array.isArray(selSkills) && selSkills.length > 0)
+            ? (selSkills as string[])
+            : requiredSkills
           const { data: hitRows, error: hitErr } = await supabase.rpc('skill_hit_weights', {
             p_data_env: 'prod',
-            p_required_skills: requiredSkills,
+            p_required_skills: eligibleSkills,
             p_skill_weights: null,
           })
           if (hitErr) throw new Error(`スキル判定エラー: ${hitErr.message}`)

@@ -14,6 +14,7 @@ import {
 } from '../lib/db/projects'
 import type { Project } from '../lib/db/projects'
 import type { DataEnv } from '../lib/dataEnv'
+import { fetchGenericSkills } from '../lib/db/skillMatch'
 import { AiAppliedNote } from '../components/AiAppliedNote'
 import type { LlmApplied } from '../components/AiAppliedNote'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
@@ -351,15 +352,30 @@ function MatchingInputs({ project: p, requiredSkillCount, niceCount }: {
   requiredSkillCount: number
   niceCount: number
 }) {
+  // 「誰でも持っているスキル」は必須に入っていても絞り込みに効かない。
+  // どれがそれなのかを画面で分かるようにする（2026-08-13）
+  const { data: genericSkills } = useQuery({
+    queryKey: ['generic-skills'],
+    queryFn: fetchGenericSkills,
+    staleTime: 30 * 60_000,
+  })
+  const required = ((p.required_skills as string[] | null) ?? [])
+  const genericInProject = genericSkills
+    ? required.filter((s) => genericSkills.has(s.toLowerCase().trim()))
+    : []
+  // 全部が汎用なら SQL 側も絞り込みを効かせない（候補が空になるため）
+  const genericIsActive = genericInProject.length > 0 && genericInProject.length < required.length
   const rows: Array<{ axis: string; weight: number | null; value: string | null; note?: string }> = [
     {
       axis: '必須スキル', weight: 40,
       value: requiredSkillCount > 0 ? `${requiredSkillCount}件を候補者スキルと照合` : null,
       note: requiredSkillCount === 0
         ? '全候補者が一律の点になり、絞り込みが効きません'
-        : p.skill_weights
-          ? undefined   // 重みは下に一覧で出す
-          : '全スキルが同じ重み。工程語だけ一致した候補者も満点になります',
+        : genericIsActive
+          ? `「${genericInProject.join('・')}」は人材の4割超が該当するため、これだけ合致する人は候補に入れません（点数には従来どおり加算）`
+          : p.skill_weights
+            ? undefined   // 重みは下に一覧で出す
+            : '全スキルが同じ重み。工程語だけ一致した候補者も満点になります',
     },
     {
       axis: '勤務地', weight: 20,
