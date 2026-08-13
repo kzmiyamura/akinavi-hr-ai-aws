@@ -31,6 +31,10 @@ export function projectToMatchRequirements(project: Project): AnalyzeProjectResp
     // 都道府県を含まない書き方が普通にあり、これを渡さないと match-batch の勤務地20点が
     // 丸ごと0点になる（2026-08-13 実害: 東京在住の候補者が東京の案件で0点）
     workPrefecture: project.work_prefecture,
+    // 順位付け（fetch_candidates_for_project）と同じ材料を表示スコア側にも渡す。
+    // これが無いと重み付けと必要経験年数が表示スコアだけ効かず、順位と食い違う
+    skillWeights: project.skill_weights,
+    requiredExpYears: project.required_experience_years,
     remotePolicy: project.remote_policy,
     contractType: project.contract_type,
     headcount: project.headcount,

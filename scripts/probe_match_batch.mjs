@@ -33,6 +33,7 @@ const projectRequirements = {
   niceToHaveSkills: p.raw_data?.niceToHaveSkills ?? [],
   budgetMin: p.budget_min, budgetMax: p.budget_max,
   workLocation: p.work_location, workPrefecture: p.work_prefecture,
+  skillWeights: p.skill_weights, requiredExpYears: p.required_experience_years,
   remotePolicy: p.remote_policy, contractType: p.contract_type,
   roleSummary: p.role_summary, description: p.description,
 }
@@ -53,7 +54,8 @@ const candidates = cands.map((c) => {
 console.log(`\n案件: ${p.title}`)
 console.log(`  work_location="${p.work_location}"  work_prefecture="${p.work_prefecture}"`)
 console.log(`  remote_policy="${p.remote_policy}"`)
-console.log(`  必須: ${JSON.stringify(projectRequirements.requiredSkills)}\n`)
+console.log(`  必須: ${JSON.stringify(projectRequirements.requiredSkills)}`)
+console.log(`  重み: ${JSON.stringify(p.skill_weights)}  必要経験年数: ${p.required_experience_years ?? '—'}\n`)
 
 const res = await fetch(`${URL}/functions/v1/match-batch`, {
   method: 'POST',

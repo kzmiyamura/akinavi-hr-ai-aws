@@ -118,6 +118,10 @@ export interface AnalyzeProjectResponse {
   workLocation?: string | null
   /** 正規化済みの都道府県（projects.work_prefecture）。勤務地スコアはこちらを優先する */
   workPrefecture?: string | null
+  /** 必須スキルごとの重み（projects.skill_weights）。順位付けと同じ配点にするために渡す */
+  skillWeights?: Record<string, number> | null
+  /** 案件が明示する必要経験年数（projects.required_experience_years） */
+  requiredExpYears?: number | null
   /** リモート・出社の要約（例: フルリモート可、週2出社、常駐） */
   remotePolicy?: string | null
   /** 契約形態（例: 業務委託、派遣、準委任） */

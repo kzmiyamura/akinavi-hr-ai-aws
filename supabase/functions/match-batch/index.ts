@@ -121,6 +121,13 @@ interface ProjectReq {
   niceToHaveSkills?: string[]
   budgetMin?: number | null
   budgetMax?: number | null
+  // 必須スキルごとの重み（skill_master のカテゴリで傾斜。languages=4 … methodologies=1）。
+  // 順位付けをする fetch_candidates_for_project は重み付きで採点しているのに、
+  // 画面に出るこちらは単純比率のままだった（2026-08-13）。同じ配点にする
+  skillWeights?: Record<string, number> | null
+  // 案件が明示している必要経験年数。順位付け側はこれを基準に採点するのに
+  // こちらは常に 10/7/5/3/1年の固定階段で、案件要件を無視していた
+  requiredExpYears?: number | null
   workLocation?: string | null
   // 正規化済みの都道府県。work_location は「東品川（最寄りは青物横丁または品川シーサイド）」
   // のように都道府県を含まない書き方が普通にあり、文字列から切り出すと勤務地20点が丸ごと
@@ -207,11 +214,25 @@ function calcRuleScore(
   // ── スキル重複（必須 + 歓迎）──
   const required = project.requiredSkills ?? []
   const cSet = new Set(candidate.skills.map(s => s.toLowerCase().trim()))
+  // 必須スキルごとの重み。fetch_candidates_for_project と同じく
+  // skill_weights のキーは元の表記なので小文字で突き合わせ、未指定は 1 とする
+  const weightLookup = new Map<string, number>()
+  for (const [k, v] of Object.entries(project.skillWeights ?? {})) {
+    const n = Number(v)
+    if (Number.isFinite(n) && n >= 0) weightLookup.set(k.toLowerCase().trim(), n)
+  }
+  const weightOf = (skill: string) => weightLookup.get(skill.toLowerCase().trim()) ?? 1
+  // 合致数（表示用）と重み付き合致（スコア用）を別に数える。
+  // 「必須5中1合致」は人が数を確認するための表示なので重みを掛けない
   let hits = 0
+  let hitWeight = 0
+  const totalWeight = required.reduce((a, r) => a + weightOf(r), 0)
   if (required.length > 0) {
     for (const r of required) {
       const rt = r.toLowerCase().trim()
       if (!rt) continue
+      const w = weightOf(r)
+      const before = hits
       const isEnglish = rt === '英語' || rt === 'english' || rt.includes('英語')
       // skill_satisfies による判定（正規化＋包含関係＋語境界）。完全一致もここに含まれる
       if (satisfiedRequired?.has(r)) {
@@ -241,6 +262,7 @@ function calcRuleScore(
       // 廃止した。「C」が Microsoft 365 / Azure Functions に、「Shell」が PowerShell に
       // 合致して必須5中3合致と出る実害があった（2026-08-13）。
       // 表記ゆれ・包含関係は skill_satisfies（satisfiedRequired）が扱う
+      hitWeight += (hits - before) * w
     }
   }
   // 歓迎スキル: 一致ごとに +1pt（部分一致 +0.5pt）
@@ -254,7 +276,11 @@ function calcRuleScore(
       else if ([...cSet].some(s => s.includes(nt) || nt.includes(s))) niceHits += 0.5
     }
   }
-  let skillRatio = required.length > 0 ? hits / required.length : 0.5
+  // 重み付き比率。順位付けをする fetch_candidates_for_project と同じ式にする
+  // （旧: hits / required.length。重みを無視していたため順位と表示スコアがズレていた）
+  let skillRatio = required.length > 0 && totalWeight > 0
+    ? Math.min(hitWeight / totalWeight, 1.0)
+    : 0.5
   skillRatio = Math.min(1.0, skillRatio + (niceToHave.length > 0 ? niceHits / niceToHave.length * 0.1 : 0))
   const cappedSkillScore = Math.min(wSkill, Math.round(skillRatio * wSkill))
   const skillDetail = required.length > 0
@@ -314,15 +340,27 @@ function calcRuleScore(
     }
   }
 
+  // 案件が必要年数を明示していれば「要件を満たすか」で採点する。
+  // fetch_candidates_for_project は既にこの基準なのに、こちらは常に固定階段で
+  // 案件要件を無視していた（2026-08-13）
+  const reqExp = project.requiredExpYears
   let expRatio = 0
-  if (exp == null) expRatio = 5.0 / 15.0
+  let expBasis = ''
+  if (typeof reqExp === 'number' && reqExp > 0) {
+    expBasis = `・要${reqExp}年`
+    if (exp == null) expRatio = 8.0 / 15.0
+    else if (exp >= reqExp) expRatio = 1.0
+    else if (exp >= reqExp - 1) expRatio = 8.0 / 15.0
+    else if (exp >= reqExp - 2) expRatio = 4.0 / 15.0
+    else expRatio = 0.0
+  } else if (exp == null) expRatio = 5.0 / 15.0
   else if (exp >= 10) expRatio = 1.0
   else if (exp >= 7) expRatio = 12.0 / 15.0
   else if (exp >= 5) expRatio = 8.0 / 15.0
   else if (exp >= 3) expRatio = 4.0 / 15.0
   else if (exp >= 1) expRatio = 2.0 / 15.0
   const expScore = Math.round(expRatio * wExp)
-  const expDetail = `経験${expScore}/${wExp}(${expLabel})`
+  const expDetail = `経験${expScore}/${wExp}(${expLabel}${expBasis})`
 
   // ── 単価合致 ──
   const rate = parseRateWan(candidate.desiredRate)
@@ -408,6 +446,12 @@ function calcRuleScore(
     // リモート可 × 週リモート案件 → 加点
     remoteScore = wRemote
     remoteDetail = `リモート${wRemote}/${wRemote}(可・週リモート案件)`
+  } else if (isFullRemote) {
+    // フルリモート案件では勤務地が満点になる（場所を問わない）。
+    // その上でリモート枠にも点を入れると同じ条件で二重に加点することになる。
+    // 順位付けをする fetch_candidates_for_project も 0点にしているので合わせる
+    remoteScore = 0
+    remoteDetail = `リモート0/${wRemote}(フルリモート案件・勤務地で加点済み)`
   } else if (candidate.remoteAvailable == null) {
     // 人材側にリモートの記載が無い → 中間点。「不可」と断定しない
     // （断定すると、根拠が無いのに減点しているように見えて判定全体が疑われる）
@@ -416,7 +460,9 @@ function calcRuleScore(
   } else {
     remoteScore = 0
     // 何を根拠に0点にしたかを書く。「不可」だけだと確認しようがない
-    remoteDetail = `リモート0/${wRemote}(${candidate.remoteAvailable ? '可・案件側リモートなし' : '常駐可と記載'})`
+    // false は「常駐可と明記」だけでなく、三値化前に取り込んだ古いレコードの既定値
+    // でもある。断定せず「リモート可の記載がない」という事実だけを書く
+    remoteDetail = `リモート0/${wRemote}(${candidate.remoteAvailable ? '可・案件側リモートなし' : 'リモート可の記載なし'})`
   }
 
   let total = Math.max(0, Math.min(wSkill + wExp + wRate + wLoc + wRemote, cappedSkillScore + expScore + rateScore + locationScore + remoteScore))
