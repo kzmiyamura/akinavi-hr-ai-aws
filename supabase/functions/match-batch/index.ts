@@ -108,6 +108,7 @@ interface CandidateInput {
   selfPR?: string | null
   skillYears?: Record<string, number> | null  // スキル別経験月数（Excelから抽出）
   desiredProject?: string | null              // 希望案件・希望分野（raw_profile.desiredProject）
+  roles?: string[] | null                     // 役割（raw_profile.roles）。先頭が主役割
   hakenOk?: boolean | null                    // 派遣・常駐OK/NG（raw_profile.hakenOk）
   englishLevel?: 'business' | 'daily' | null // 英語レベル: business=業務レベル / daily=日常会話
   employmentType?: string | null             // 雇用形態: 派遣社員/正社員/フリーランス/業務委託/SES等
@@ -134,6 +135,7 @@ interface ProjectReq {
   // 0点になる。fetch_candidates_for_project と同じくこちらを正とする
   workPrefecture?: string | null
   remotePolicy?: string | null
+  requiredRole?: string | null               // 求める役割（raw_data.aiInterpretation.requiredRole）
   contractType?: string | null               // 契約形態（'派遣'/'業務委託'/'準委任'/'請負'）
   description?: string | null
   roleSummary?: string | null
@@ -176,6 +178,45 @@ function extractPrefCore(location: string): string {
 
 function getRegion(prefCore: string): string | null {
   return REGION_MAP[prefCore] ?? null
+}
+
+// ─── 役割の合致度 ─────────────────────────────────────────────────────────────
+// ⚠ DB の role_master / role_affinity と**同じ内容**にすること
+//   （supabase/migrations/20260814_role_master.sql）。
+//   ズレると SQL が決める順位と、ここが決める表示スコアが食い違う。
+// PMO は management と support の両方に属する（2026-08-14 ユーザー指摘:
+//   「運用サポートはまさに PMO も含む」）。
+const ROLE_FAMILIES: Record<string, string[]> = {
+  'プロジェクトマネージャー': ['management'],
+  'PMO': ['management', 'support'],
+  'プロジェクトリーダー': ['management'],
+  'スクラムマスター': ['management'],
+  'コンサルタント': ['management'],
+  'システムエンジニア': ['engineering'],
+  'プログラマー': ['engineering'],
+  'テックリード': ['engineering', 'management'],
+  'アーキテクト': ['engineering', 'management'],
+  'インフラエンジニア': ['engineering'],
+  'フロントエンドエンジニア': ['engineering'],
+  'バックエンドエンジニア': ['engineering'],
+  'フルスタックエンジニア': ['engineering'],
+  'クラウドエンジニア': ['engineering'],
+  'データエンジニア': ['engineering'],
+  'MLエンジニア': ['engineering'],
+  'ヘルプデスク': ['support'],
+  '運用保守': ['support'],
+  'テストエンジニア': ['support'],
+}
+/** SQL の p_weight_role の既定値と揃える */
+const ROLE_WEIGHT = 30
+
+/** 同一 1.0 / 同系統 0.7 / 系統違い 0.2 / どちらか不明 0.5（ゲートではない） */
+function roleAffinity(required: string | null, candidate: string | null): number {
+  if (!required?.trim() || !candidate?.trim()) return 0.5
+  if (required === candidate) return 1.0
+  const a = ROLE_FAMILIES[required] ?? []
+  const b = ROLE_FAMILIES[candidate] ?? []
+  return a.some((f) => b.includes(f)) ? 0.7 : 0.2
 }
 
 // ─── ルールベーススコアリング ─────────────────────────────────────────────────
@@ -546,8 +587,27 @@ function calcRuleScore(
     }
   }
 
+  // ── 役割の合致度（2026-08-14）──
+  // 案件が求める役割（AI解釈）と人材の主役割を突き合わせる。
+  // SQL 側 fetch_candidates_for_project の役割加減点と**同じ式・同じ重み**にすること。
+  // ズレると「順位はAだが表示スコアはB」になる（配点は SQL / match-batch / フロントの
+  // 3か所にあり、片方だけ直して事故った履歴がある。CLAUDE.md 参照）
+  let roleNote = ''
+  const requiredRole = project.requiredRole ?? null
+  const mainRole = candidate.roles?.[0] ?? null
+  if (requiredRole && mainRole) {
+    const affinity = roleAffinity(requiredRole, mainRole)
+    const delta = Math.round((affinity - 0.5) * ROLE_WEIGHT)
+    if (delta !== 0) {
+      total = Math.max(0, Math.min(110, total + delta))
+      roleNote = ` [役割${delta > 0 ? '+' : ''}${delta}pt(要求:${requiredRole}／本人:${mainRole})]`
+    }
+  } else if (requiredRole && !mainRole) {
+    roleNote = ` [役割不明(要求:${requiredRole})]`
+  }
+
   const fullRemoteNote = (candidate.wantsFullRemote && !projectHasRemote) ? ' [フルリモート希望・常駐案件]' : ''
-  const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt${fullRemoteNote}${hakenNote}${employmentTypeNote}${englishNote}${hakenLicenseNote}`
+  const breakdown = `${skillDetail} ${expDetail} ${rateDetail} ${locationDetail} ${remoteDetail} → 計${total}pt${fullRemoteNote}${hakenNote}${employmentTypeNote}${englishNote}${hakenLicenseNote}${roleNote}`
 
   return { total, breakdown }
 }

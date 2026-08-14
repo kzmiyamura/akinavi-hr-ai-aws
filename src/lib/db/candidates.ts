@@ -298,6 +298,12 @@ export interface ProjectScoreParams {
   remotePolicy?: string | null
   /** 案件の契約形態。'派遣' のとき人材の hakenOk で加減点する（match-batch と同じ扱い） */
   contractType?: string | null
+  /**
+   * 案件が求める役割（AI解釈 raw_data.aiInterpretation.requiredRole）。
+   * 人材の主役割（raw_profile.roles[0]）と突き合わせて加減点する。
+   * 渡さないと SQL 側が NULL＝中立になり、役割が順位に効かない。
+   */
+  requiredRole?: string | null
   weights?: ScoringWeights
 }
 
@@ -332,6 +338,7 @@ export async function fetchCandidatesForProject(
       p_required_exp_years: params.requiredExpYears ?? null,
       p_skill_weights:   params.skillWeights ?? null,
       p_nice_skills:     params.niceToHaveSkills ?? null,
+      p_required_role:   params.requiredRole ?? null,
     })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as (Candidate & { rule_score: number })[]

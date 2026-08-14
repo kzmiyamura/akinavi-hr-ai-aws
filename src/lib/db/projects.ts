@@ -37,6 +37,11 @@ export function projectToMatchRequirements(project: Project): AnalyzeProjectResp
     requiredExpYears: project.required_experience_years,
     remotePolicy: project.remote_policy,
     contractType: project.contract_type,
+    // 案件が求める役割（AI解釈）。順位付け（fetch_candidates_for_project）に渡すのと
+    // 同じ値を表示スコア側にも渡す。片方だけだと順位と表示が食い違う
+    requiredRole:
+      ((project.raw_data?.aiInterpretation as { requiredRole?: string | null } | undefined)
+        ?.requiredRole) ?? null,
     headcount: project.headcount,
     workload: project.workload,
     settlementMin: project.settlement_min,

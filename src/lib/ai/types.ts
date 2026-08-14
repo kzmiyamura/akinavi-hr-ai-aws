@@ -142,6 +142,9 @@ export interface AnalyzeProjectResponse {
   requiresEnglish?: 'none' | 'business' | 'native'
   /** 受け入れ雇用形態（null/空配列 = 制限なし） 例: ['正社員', '派遣社員'] */
   allowedEmploymentTypes?: string[] | null
+  /** 案件が求める役割（raw_data.aiInterpretation.requiredRole）。
+   *  match-batch の役割加減点に渡す。順位側（fetch_candidates_for_project）と同じ値 */
+  requiredRole?: string | null
 }
 
 /** マッチングスコアリングのリクエスト */

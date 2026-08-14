@@ -81,6 +81,8 @@ type CandidateBatchInput = {
   prefecture?: string | null
   availableRegions?: string[] | null
   preferredJobTypes?: string[] | null
+  /** 役割（スコア降順・先頭が主役割）。match-batch の役割加減点が roles[0] を見る */
+  roles?: string[] | null
   agentComment?: string | null
   nationality?: string | null
   selfPR?: string | null
@@ -118,6 +120,8 @@ function toCandidateBatchInput(
     prefecture: (rp?.prefecture as string | null) ?? null,
     availableRegions: Array.isArray(rp?.availableRegions) ? (rp.availableRegions as string[]) : null,
     preferredJobTypes: Array.isArray(rp?.roles) ? (rp.roles as string[]) : null,
+    // 役割の加減点用。スコア降順なので先頭が主役割（match-batch 側で roles[0] を見る）
+    roles: Array.isArray(rp?.roles) ? (rp.roles as string[]) : null,
     agentComment: (rp?.agentComment as string | null) ?? null,
     nationality: (rp?.nationality as string | null) ?? null,
     selfPR: (rp?.selfPR as string | null) ?? null,
@@ -1302,7 +1306,7 @@ const { data: projects = [] } = useQuery({
       // full: SQL で上位 500 件を取得し、match-batch 内で先頭 BATCH_TOP_N だけ AI 採点
       const sqlLimit = matchingRunMode === 'fast' ? fastMaxCandidates : 500
       const targets = await fetchCandidatesForProject(
-        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, weights: scoringWeights },
+        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, weights: scoringWeights },
         dataEnv,
         sqlLimit,
         requireHaken,
@@ -1429,7 +1433,7 @@ const { data: projects = [] } = useQuery({
           // fast: SQL で上位 BATCH_TOP_N 件のみ取得してそのまま全件 AI 採点
           const sqlLimit2 = matchingRunMode === 'fast' ? BATCH_TOP_N : 500
           const targets = await fetchCandidatesForProject(
-            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, weights: scoringWeights },
+            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, weights: scoringWeights },
             dataEnv,
             sqlLimit2,
             project.contract_type === '派遣' ? requireHaken : false,
@@ -2126,9 +2130,19 @@ const { data: projects = [] } = useQuery({
                         const nice = ((selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] | null) ?? []
                         const ai = getAiInterpretation(selectedProject.raw_data)
                         const aiSkills = aiRelatedSkillMap(selectedProject.raw_data)
-                        if (req.length === 0 && nice.length === 0 && !ai?.multiPerson) return null
+                        if (req.length === 0 && nice.length === 0 && !ai?.multiPerson && !ai?.requiredRole) return null
                         return (
                           <div className="flex flex-wrap gap-1">
+                            {/* 求める役割。順位に加減点で効いているので、根拠つきで画面に出す
+                                （2026-08-13 指摘「判定に使った情報は出さないと本当か？となる」） */}
+                            {ai?.requiredRole && (
+                              <span
+                                className="px-1.5 py-0.5 bg-amber-50 border border-amber-300 text-amber-800 rounded text-xs font-medium"
+                                title={`AIの解釈: この案件は${ai.requiredRole}を求めている${ai.roleReason ? `（${ai.roleReason}）` : ''}\n役割が近い人を加点、畑違いを減点します`}
+                              >
+                                役割: {ai.requiredRole} <span className="opacity-60">AI解釈</span>
+                              </span>
+                            )}
                             {req.slice(0, 10).map(s => (
                               <span key={s} className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded font-medium text-xs">{s}</span>
                             ))}

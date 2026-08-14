@@ -31,6 +31,11 @@ export interface AiInterpretation {
   evidence?: string | null
   relatedSkills?: AiRelatedSkill[]
   specialist?: AiSpecialist | null
+  /** この案件が求めている役割（PMO / システムエンジニア / ヘルプデスク …）。
+   *  人材側の raw_profile.roles と同じラベル体系。順位付けの加減点に使う */
+  requiredRole?: string | null
+  /** そう読んだ理由（画面に出して「本当か？」に答えられるようにする） */
+  roleReason?: string | null
   /** どんな人を求めている案件かの所見（営業が読む用） */
   summary?: string | null
   /** 本文なし・複数案件メール由来などで解釈できなかったときの理由 */
