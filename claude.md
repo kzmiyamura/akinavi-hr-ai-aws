@@ -166,6 +166,23 @@ git add -A && git commit -m "fix: ..." && git push
 - **認証なし**: ニックネームを `localStorage` に保存
 - **重複管理**: email一致で自動UPDATE。名前一致 + スキルJaccard ≥ 0.4 で `duplicate_flag=true`
 
+## ⚠ Egress を使わずに検証する（2026-08-14 ユーザー指示）
+
+**実装・テスト・検証で本番からデータを引かない。egress はユーザーが画面で確認する分に取っておく。**
+
+Free Plan の egress 5GB に対し 8/14 時点で 2.98GB 消費・残り9日、
+ダッシュボードに「Grace period is over（枠を使い切るとリクエストを返せなくなる）」が出ている。
+8/13 単日 822MB のうち **94% が PostgREST**（ブラウザとスクリプトの DB 読み取り）。
+
+| やらない | 代わりに |
+|---|---|
+| 行を引いて JS 側で数える・測る | `supabase db query` で **SQL に集計させて数行だけ返す**（`count(*)` / `pg_column_size()`） |
+| 件数確認に `select=*` | `select=id` + `Prefer: count=exact` の HEAD（本文ゼロ） |
+| 本番相手の疎通確認 | `npx vitest run` / `node --check` / `npx tsc --noEmit` / `npm run build` |
+| 転送量を実データで実測 | ローカルスタック（`supabase start`＋`scripts/local_test_seed.sql`）で測る |
+
+`sb-query.mjs` は**少量の1件確認だけ**に使う。一覧取得・全件走査には使わない。
+
 ## Supabase の調査クエリ
 
 **`source ~/.akinavi_shadow.env && node -e "..."` は使わないこと。**
