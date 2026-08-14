@@ -78,6 +78,9 @@ function toCandidateBatchInput(c, agentMap) {
     prefecture: rp.prefecture ?? null,
     availableRegions: Array.isArray(rp.availableRegions) ? rp.availableRegions : null,
     preferredJobTypes: Array.isArray(rp.roles) ? rp.roles : null,
+    // 役割の加減点用（match-batch は roles[0] を主役割として見る）。
+    // preferredJobTypes とは別のフィールドなので両方渡す（2026-08-14）
+    roles: Array.isArray(rp.roles) ? rp.roles : null,
     agentComment: rp.agentComment ?? null,
     nationality: rp.nationality ?? null,
     selfPR: rp.selfPR ?? null,
@@ -102,6 +105,9 @@ function toProjectReq(p) {
     workLocation: p.work_location ?? null,
     remotePolicy: p.remote_policy ?? null,
     contractType: p.contract_type ?? null,
+    // 案件が求める役割（AI解釈）。渡さないと match-batch 側が中立扱いになり
+    // 役割の加減点が丸ごと効かない（2026-08-14）
+    requiredRole: raw.aiInterpretation?.requiredRole ?? null,
     roleSummary: p.role_summary ?? null,
     industry: p.industry ?? null,
     requiresEnglish: raw.requiresEnglish ?? 'none',
@@ -177,6 +183,11 @@ async function main() {
       p_work_prefecture:    project.work_prefecture ?? null,
       p_required_exp_years: project.required_experience_years ?? null,
       p_skill_weights:      project.skill_weights ?? null,
+      // 尚可スキルと役割も画面と揃える。渡していなかったので、この script だけ
+      // 候補者の顔ぶれが画面と食い違っていた（2026-08-14 に発見）
+      p_nice_skills:        Array.isArray(project.raw_data?.niceToHaveSkills)
+        ? project.raw_data.niceToHaveSkills : null,
+      p_required_role:      project.raw_data?.aiInterpretation?.requiredRole ?? null,
     })
     if (cErr) { console.error('  candidates 取得失敗:', cErr.message); continue }
     if (!candidates || candidates.length === 0) { console.log('  候補者なし スキップ'); continue }
@@ -232,7 +243,9 @@ async function main() {
       }
 
       if (DRY_RUN) {
-        console.log(`  [DRY] ${c.name} score=${score} rule=${ruleScore}`)
+        // 役割の加減点が効いているかを目視できるように内訳から抜き出して出す
+        const roleNote = (breakdown.match(/\[役割[^\]]*\]/) ?? [''])[0]
+        console.log(`  [DRY] ${c.name} score=${score} rule=${ruleScore} ${roleNote}`)
         upserted++
         continue
       }
