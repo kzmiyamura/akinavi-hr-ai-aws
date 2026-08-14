@@ -8,6 +8,7 @@ import {
   fetchCandidatesForMatching,
   fetchCandidatesForProject,
   fetchCandidatesByIds,
+  searchCandidatesForMatching,
   countCandidatesForMatching,
   findDuplicateCandidatesBatch,
   DEFAULT_SCORING_WEIGHTS,
@@ -365,10 +366,18 @@ function toRankedForProject(subs: Submission[], allCandidates: Candidate[]): Ran
 
 // useQuery の既定値は毎回同じ参照を返さないと、useMemo の依存が毎レンダリング変わってしまう
 const EMPTY_CANDIDATES: Candidate[] = []
+const EMPTY_SUBMISSIONS: Submission[] = []
 const EMPTY_DUPLICATE_ROWS: Record<string, Array<Omit<DuplicateCandidate, 'duplicateScore'>>> = {}
 
 /** 一覧に出す件数。それ以上はアコーディオン内へ */
 const RANK_HEAD = 5
+/** 案件を選んだ直後に引く件数。営業が見るのは上位数名で、残りはアコーディオンの中。
+ *  200件を先読みすると submissions + 人材 + 重複チェックで 1.4MB 無駄になる（2026-08-14 実測）。
+ *  RANK_HEAD より十分多く取るのは、verdict 並び替えで順位が入れ替わっても
+ *  表示分が埋まるようにするため（所見は上位5名にしか付かないので20件あれば足りる） */
+const RANK_FETCH_INITIAL = 20
+/** アコーディオンを開いたときに引く上限 */
+const RANK_FETCH_FULL = 200
 /** スキルタグの常時表示数。それ以上はアコーディオン内へ */
 const SKILL_HEAD = 12
 
@@ -488,15 +497,23 @@ function RankingRestAccordion({
   count,
   unitLabel,
   children,
+  onOpen,
+  loading,
 }: {
   count: number
   /** 例: 「名」「件の案件」 */
   unitLabel: string
   children: ReactNode
+  /** 開いたときに残りを取りに行く（閉じている間は転送しない） */
+  onOpen?: () => void
+  loading?: boolean
 }) {
   if (count <= 0) return null
   return (
-    <details className="group mt-3 rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+    <details
+      className="group mt-3 rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden"
+      onToggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open) onOpen?.() }}
+    >
       <summary
         className={`${accordionSummaryCls} px-3 sm:px-4 py-3 text-xs sm:text-sm font-medium text-blue-800 bg-slate-50 hover:bg-slate-100 border-b border-slate-100 break-words text-left`}
       >
@@ -506,7 +523,9 @@ function RankingRestAccordion({
           {unitLabel}のマッチング結果（スコア・理由）
         </span>
       </summary>
-      <div className="space-y-3 px-3 sm:px-4 py-4 bg-slate-50/40 min-w-0">{children}</div>
+      <div className="space-y-3 px-3 sm:px-4 py-4 bg-slate-50/40 min-w-0">
+        {loading ? <p className="text-sm text-gray-400">読み込み中...</p> : children}
+      </div>
     </details>
   )
 }
@@ -1066,10 +1085,11 @@ export function MatchingPage({
   const [showWeightsPanel, setShowWeightsPanel] = useState(false)
   const [savingWeights, setSavingWeights] = useState(false)
   const [requireHaken, setRequireHaken] = useState(false)
+  // エージェント会社マスタはほぼ不変。3分で失効させると画面を触るたびに引き直す
   const { data: agentDomainMap } = useQuery({
     queryKey: ['agentDomainMap'],
     queryFn: fetchAgentDomainMap,
-    staleTime: 5 * 60_000,
+    staleTime: 60 * 60_000,
   })
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
@@ -1101,19 +1121,30 @@ const { data: projects = [] } = useQuery({
     queryKey: projectsQueryKeys.open(dataEnv),
     queryFn: () => fetchOpenProjects(dataEnv),
   })
-  // 全人材の一覧は人材モードの左ペイン（検索・選択）でしか使わない。
-  // 案件モードで引くと 1,000件・3.6MB を無駄に転送するので mode で切り分ける。
+  // 人材モードの左ペインは、検索もページングもサーバー側でやる。
+  // 以前は全 1,521件（5.25MB）を引いてクライアントで絞っていた（2026-08-14 に是正）。
   // 案件モードのランキング表示に要る人材は candidatesForRanking（IDs 指定）で取る。
-  const { data: candidates = [], isLoading: isLoadingCandidates } = useQuery({
-    queryKey: ['candidates', dataEnv],
-    queryFn: () => fetchCandidatesForMatching(dataEnv),
+  const searchKeywords = useMemo(
+    () => searchQuery.trim().toLowerCase().split(/[\s　]+/).filter(Boolean),
+    [searchQuery],
+  )
+  const searchKeywordsKey = searchKeywords.join(',')
+
+  // 検索条件が変わったら表示件数を初期値へ。前の検索で 500 件まで開いていた状態を
+  // 引き継ぐと、新しい検索でいきなり 500 件引いてしまう
+  useEffect(() => { setCandidateDisplayLimit(50) }, [searchKeywordsKey, searchMode])
+
+  const { data: candidates = EMPTY_CANDIDATES, isLoading: isLoadingCandidates } = useQuery({
+    queryKey: ['candidates-page', dataEnv, searchKeywordsKey, searchMode, candidateDisplayLimit],
+    queryFn: () => searchCandidatesForMatching(dataEnv, searchKeywords, searchMode, candidateDisplayLimit),
     enabled: mode === 'candidate',
+    placeholderData: (prev) => prev, // 「もっと見る」で一覧が消えないように
   })
 
-  // 一括ボタンの活性判定にしか使わないので件数だけ引く（本体は転送しない）
+  // 「全N件」表示と一括ボタンの活性判定に使う。本体は転送しない
   const { data: candidateCount = 0 } = useQuery({
-    queryKey: ['candidate-count', dataEnv],
-    queryFn: () => countCandidatesForMatching(dataEnv),
+    queryKey: ['candidate-count', dataEnv, searchKeywordsKey, searchMode],
+    queryFn: () => countCandidatesForMatching(dataEnv, searchKeywords, searchMode),
   })
   const { data: stats, isLoading: isLoadingStats } = useQuery({
     queryKey: ['submission-stats', dataEnv],
@@ -1142,25 +1173,23 @@ const { data: projects = [] } = useQuery({
     })
   }, [projectList, searchQuery, searchMode])
 
-  const filteredCandidateList = useMemo(() => {
-    const tokens = searchQuery.trim().toLowerCase().split(/[\s\u3000]+/).filter(Boolean)
-    if (tokens.length === 0) return candidateList
-    return candidateList.filter((c) => {
-      const haystack = [
-        c.name,
-        c.email ?? '',
-        ...((c.skills as string[] | undefined) ?? []),
-      ].join(' ').toLowerCase()
-      return searchMode === 'AND'
-        ? tokens.every((t) => haystack.includes(t))
-        : tokens.some((t) => haystack.includes(t))
-    })
-  }, [candidateList, searchQuery, searchMode])
+  // \u7d5e\u308a\u8fbc\u307f\u306f search_candidates_for_matching \u304c\u6e08\u307e\u305b\u3066\u3044\u308b\u306e\u3067\u3001\u3053\u3053\u3067\u306f\u4f55\u3082\u3057\u306a\u3044
+  const filteredCandidateList = candidateList
 
-  const { data: submissionsForSelectedProject = [], isLoading: isLoadingProjectSubs } = useQuery({
-    queryKey: ['matching-submissions-for-project', dataEnv, selectedProjectId],
-    queryFn: () => fetchSubmissionsByProject(selectedProjectId!, dataEnv),
+  // アコーディオンを開くまでは上位 RANK_FETCH_INITIAL 件しか引かない。
+  // 全件先読みは submissions + 人材 + 重複チェックで 1.4MB/クリックの無駄だった
+  const [rankExpanded, setRankExpanded] = useState(false)
+  const rankFetchLimit = rankExpanded ? RANK_FETCH_FULL : RANK_FETCH_INITIAL
+
+  const {
+    data: submissionsForSelectedProject = EMPTY_SUBMISSIONS,
+    isLoading: isLoadingProjectSubs,
+    isFetching: isFetchingProjectSubs,
+  } = useQuery({
+    queryKey: ['matching-submissions-for-project', dataEnv, selectedProjectId, rankFetchLimit],
+    queryFn: () => fetchSubmissionsByProject(selectedProjectId!, dataEnv, rankFetchLimit),
     enabled: mode === 'project' && !!selectedProjectId,
+    placeholderData: (prev) => prev, // 展開時に既存の上位20件を消さない（画面がちらつく）
   })
 
   const { data: submissionsForSelectedCandidate = [], isLoading: isLoadingCandidateSubs } = useQuery({
@@ -1314,7 +1343,10 @@ const { data: projects = [] } = useQuery({
 
   const matchByCandidateMutation = useMutation({
     mutationFn: async (candidateId: string) => {
-      const candidate = (candidates as Candidate[]).find((c) => c.id === candidateId)
+      // 一覧はページングされているので、居なければ ID 指定で取り直す
+      const candidate =
+        (candidates as Candidate[]).find((c) => c.id === candidateId)
+        ?? (await fetchCandidatesByIds([candidateId], dataEnv))[0]
       if (!candidate) throw new Error('人材が見つかりません')
       if ((projects as Project[]).length === 0) throw new Error('募集中の案件がありません')
 
@@ -1461,7 +1493,9 @@ const { data: projects = [] } = useQuery({
     mutationFn: async () => {
       bulkCancelRequestedRef.current = false
       const plist = projects as Project[]
-      const clist = candidates as Candidate[]
+      // 左ペインは50件しか持っていないので、ここで全件取る。
+      // 5MB 級の転送だが「全人材を再マッチング」を押したときだけ発生する
+      const clist = await fetchCandidatesForMatching(dataEnv)
       const total =
         matchingRunMode === 'full'
           ? plist.length * clist.length
@@ -1566,7 +1600,15 @@ const { data: projects = [] } = useQuery({
   const aiCountByCandidate = stats?.aiCountByCandidateId ?? {}
 
   const selectedProject = projectList.find((p) => p.id === selectedProjectId) ?? null
-  const selectedCandidate = candidateList.find((c) => c.id === selectedCandidateId) ?? null
+  // 選択中の人材が、検索や「もっと見る」の結果いま引いているページに居ないことがある。
+  // その場合だけ ID 指定で1件取りに行く（一覧を引き直さない）
+  const selectedInPage = candidateList.find((c) => c.id === selectedCandidateId) ?? null
+  const { data: selectedCandidateFallback } = useQuery({
+    queryKey: ['matching-selected-candidate', dataEnv, selectedCandidateId],
+    queryFn: () => fetchCandidatesByIds([selectedCandidateId!], dataEnv),
+    enabled: mode === 'candidate' && !!selectedCandidateId && !selectedInPage,
+  })
+  const selectedCandidate = selectedInPage ?? selectedCandidateFallback?.[0] ?? null
 
   // 案件選択時: 保存済みウェイト → なければ案件内容から自動計算。派遣案件なら派遣フィルターを自動ON
   useEffect(() => {
@@ -1576,6 +1618,8 @@ const { data: projects = [] } = useQuery({
     setScoringWeights(resolveScoringWeights(selectedProject))
     // 契約形態が「派遣」なら派遣免許フィルターを自動ON
     setRequireHaken(selectedProject.contract_type === '派遣')
+    // 案件を切り替えたら「残りも取得済み」を畳む（次の案件でまた200件引かないため）
+    setRankExpanded(false)
   }, [selectedProject?.id]) // selectedProject?.id: プロジェクトが非同期ロードされた後も再発火させるため
 
   // メモ化必須: 毎レンダリング新しい配列を作ると、これを依存に持つ useMemo / useQuery が
@@ -1618,6 +1662,13 @@ const { data: projects = [] } = useQuery({
   // React Query の外なのでキャッシュも効かず、案件を切り替えるたびに再取得していた）。
   // 1本の batch RPC に置き換え、useQuery に載せてキャッシュを効かせる。
   // 対象は上位100件のまま（それ以下は画面に重複バッジを出していない）。
+  // ランキングの総数。stats（submission_counts RPC）は画面表示時に既に読んでいるので
+  // ここで数えるための追加クエリは要らない。取得済み件数より大きいのが普通
+  const projectRankTotal = selectedProjectId
+    ? (stats?.countByProjectId[selectedProjectId] ?? selectedProjectRanked.length)
+    : 0
+
+  // 引いた分だけを対象にする（未展開なら20人分）。上限100は据え置き
   const duplicateTargetIds = useMemo(
     () => selectedProjectRanked.slice(0, 100).map((s) => s.candidate.id),
     [selectedProjectRanked],
@@ -1652,16 +1703,16 @@ const { data: projects = [] } = useQuery({
 
   const runBulkAllProjects = () => {
     const plist = projects as Project[]
-    const clist = candidates as Candidate[]
-    if (plist.length === 0 || clist.length === 0) return
+    // 人数は件数クエリから取る（一覧は50件しか引いていない）
+    if (plist.length === 0 || candidateCount === 0) return
     const maxCalls =
       matchingRunMode === 'full'
-        ? plist.length * clist.length
+        ? plist.length * candidateCount
         : plist.length * BATCH_TOP_N
     if (
       !window.confirm(
         matchingRunMode === 'full'
-          ? `募集中の全 ${plist.length} 案件について、登録済みの全 ${clist.length} 名と AI マッチングを再実行します。\nAPI 呼び出しは最大 ${maxCalls} 回です。よろしいですか？`
+          ? `募集中の全 ${plist.length} 案件について、登録済みの全 ${candidateCount} 名と AI マッチングを再実行します。\nAPI 呼び出しは最大 ${maxCalls} 回です。よろしいですか？`
           : `高速モード：各案件につき「必須スキル重複が多い順」に並べ、最大 ${fastMaxCandidates} 名だけ AI マッチングします。\nAPI 呼び出しは最大 ${maxCalls} 回です（未評価の人材がいます）。よろしいですか？`,
       )
     ) {
@@ -1673,16 +1724,17 @@ const { data: projects = [] } = useQuery({
 
   const runBulkAllCandidates = () => {
     const plist = projects as Project[]
-    const clist = candidates as Candidate[]
-    if (plist.length === 0 || clist.length === 0) return
+    // 一覧は50件しか引いていないので、件数は件数クエリから。
+    // 実際の対象人材はミューテーション側で全件取得する
+    if (plist.length === 0 || candidateCount === 0) return
     const maxCalls =
       matchingRunMode === 'full'
-        ? plist.length * clist.length
-        : clist.reduce((sum, c) => sum + pickProjectsForCandidateMatch(c, plist, 'fast', fastMaxProjects).length, 0)
+        ? plist.length * candidateCount
+        : candidateCount * fastMaxProjects
     if (
       !window.confirm(
         matchingRunMode === 'full'
-          ? `全 ${clist.length} 名の人材について、募集中の全 ${plist.length} 案件と AI マッチングを再実行します。\nAPI 呼び出しは最大 ${maxCalls} 回です。よろしいですか？`
+          ? `全 ${candidateCount} 名の人材について、募集中の全 ${plist.length} 案件と AI マッチングを再実行します。\nAPI 呼び出しは最大 ${maxCalls} 回です。よろしいですか？`
           : `高速モード：各人材について「必須スキル重複が多い順」に並べ、最大 ${fastMaxProjects} 案件だけ AI マッチングします。\nAPI 呼び出しは最大 ${maxCalls} 回です（未評価の案件があります）。よろしいですか？`,
       )
     ) {
@@ -2045,7 +2097,7 @@ const { data: projects = [] } = useQuery({
                             setMessage(null)
                             matchByProjectMutation.mutate(selectedProject.id)
                           }}
-                          disabled={candidateList.length === 0 || busy}
+                          disabled={candidateCount === 0 || busy}
                           className="inline-flex items-center gap-1.5 bg-blue-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           {matchByProjectMutation.isPending && matchByProjectMutation.variables === selectedProject.id
@@ -2133,11 +2185,13 @@ const { data: projects = [] } = useQuery({
                       <div className="space-y-3">
                         {/* 「AI 判定です」と一律に書いていたが、AI が見るのは上位N名だけ。
                             残りはルールスコアのみなので、内訳を出して区別できるようにする */}
+                        {/* 全件数は submission_counts（既に読んでいる stats）から取る。
+                            ランキング本体は上位20件しか引いていないので length では総数にならない */}
                         <p className="text-xs font-medium text-gray-500">
-                          マッチングランキング（全 {selectedProjectRanked.length} 名
+                          マッチングランキング（全 {projectRankTotal} 名
                           {(() => {
                             const ai = selectedProjectRanked.filter(s => s.ai_summary).length
-                            return `：AI採点 ${ai} 名／ルールスコアのみ ${selectedProjectRanked.length - ai} 名`
+                            return `：うち取得済み ${selectedProjectRanked.length} 名・AI採点 ${ai} 名`
                           })()}
                           ）
                         </p>
@@ -2159,7 +2213,12 @@ const { data: projects = [] } = useQuery({
                               agentDomainMap={agentDomainMap}
                             />
                           ))}
-                          <RankingRestAccordion count={selectedProjectRanked.length - RANK_HEAD} unitLabel="名">
+                          <RankingRestAccordion
+                            count={Math.min(projectRankTotal, RANK_FETCH_FULL) - RANK_HEAD}
+                            unitLabel="名"
+                            onOpen={() => setRankExpanded(true)}
+                            loading={rankExpanded && isFetchingProjectSubs}
+                          >
                             {selectedProjectRanked.slice(RANK_HEAD).map((s, idx) => (
                               <ProjectModeRankCard
                                 key={s.id}
@@ -2206,7 +2265,7 @@ const { data: projects = [] } = useQuery({
               <button
                 type="button"
                 onClick={runBulkAllCandidates}
-                disabled={projectList.length === 0 || candidateList.length === 0 || busy}
+                disabled={projectList.length === 0 || candidateCount === 0 || busy}
                 className="inline-flex items-center gap-1.5 border border-amber-300 bg-amber-50 text-amber-900 rounded-lg px-3 py-1.5 text-xs font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {bulkAllCandidatesMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
@@ -2224,7 +2283,7 @@ const { data: projects = [] } = useQuery({
             </div>
           </div>
 
-          {candidateList.length === 0 ? (
+          {candidateCount === 0 && !isLoadingCandidates ? (
             <p className="text-sm text-gray-400 px-4 py-8">登録人材がありません。</p>
           ) : (
             <div className="flex flex-col md:flex-row">
@@ -2253,14 +2312,14 @@ const { data: projects = [] } = useQuery({
                       </button>
                     ))}
                     {searchQuery && (
-                      <span className="ml-auto text-xs text-gray-400 self-center">{filteredCandidateList.length}件</span>
+                      <span className="ml-auto text-xs text-gray-400 self-center">{candidateCount}件</span>
                     )}
                   </div>
                 </div>
                 <div className="overflow-y-auto md:max-h-[588px]">
                 {filteredCandidateList.length === 0 ? (
                   <p className="text-xs text-gray-400 px-3 py-4">該当する人材がありません。</p>
-                ) : filteredCandidateList.slice(0, candidateDisplayLimit).map((c) => {
+                ) : filteredCandidateList.map((c) => {
                   const n = isLoadingStats ? null : (countByCandidate[c.id] ?? 0)
                   const nAi = aiCountByCandidate[c.id] ?? 0
                   const isSelected = selectedCandidateId === c.id
@@ -2305,13 +2364,15 @@ const { data: projects = [] } = useQuery({
                     </div>
                   )
                 })}
-                {filteredCandidateList.length > candidateDisplayLimit && (
+                {/* 残り件数はサーバーの件数クエリから。押すと次の50件をサーバーから追加で引く */}
+                {candidateCount > filteredCandidateList.length && (
                   <button
                     type="button"
                     onClick={() => setCandidateDisplayLimit(n => n + 50)}
-                    className="w-full py-2 text-xs text-blue-600 hover:bg-blue-50 border-t border-gray-100"
+                    disabled={isLoadingCandidates}
+                    className="w-full py-2 text-xs text-blue-600 hover:bg-blue-50 border-t border-gray-100 disabled:opacity-50"
                   >
-                    もっと見る（残り{filteredCandidateList.length - candidateDisplayLimit}件）
+                    もっと見る（残り{candidateCount - filteredCandidateList.length}件）
                   </button>
                 )}
                 </div>

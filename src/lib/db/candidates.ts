@@ -180,17 +180,45 @@ export async function fetchCandidatesByIds(ids: string[], dataEnv: DataEnv): Pro
   return (data ?? []) as Candidate[]
 }
 
-/** 登録人材の件数だけを取得する（本体は転送しない） */
-export async function countCandidatesForMatching(dataEnv: DataEnv): Promise<number> {
-  const { count, error } = await supabase
-    .from('candidates')
-    .select('id', { count: 'exact', head: true })
-    .eq('data_env', dataEnv)
-    .is('merged_into', null)
-    .eq('duplicate_flag', false)
+/**
+ * マッチング画面（人材モード）の左ペイン用。検索とページングをサーバー側でやる。
+ *
+ * 以前は fetch_candidates_for_matching で全 1,521 件（5.25MB）を引いてから
+ * クライアントで絞り込んでいた。表示は50件ずつなので、ほぼ全部が捨てられていた。
+ * 絞り込み条件と並び順は fetch_candidates_for_matching と同一
+ * （既存の search_candidates は duplicate_flag を除外しないので流用できない）。
+ */
+export async function searchCandidatesForMatching(
+  dataEnv: DataEnv,
+  keywords: string[],
+  mode: 'AND' | 'OR',
+  limit: number,
+  offset = 0,
+): Promise<Candidate[]> {
+  const { data, error } = await supabase.rpc('search_candidates_for_matching', {
+    p_data_env: dataEnv,
+    p_keywords: keywords.length ? keywords : null,
+    p_mode: mode,
+    p_limit: limit,
+    p_offset: offset,
+  })
+  if (error) throw new Error(`人材の取得に失敗しました: ${error.message}`)
+  return (data ?? []) as Candidate[]
+}
 
+/** 該当件数だけを返す（本体は転送しない）。キーワード無しなら全件数 */
+export async function countCandidatesForMatching(
+  dataEnv: DataEnv,
+  keywords: string[] = [],
+  mode: 'AND' | 'OR' = 'AND',
+): Promise<number> {
+  const { data, error } = await supabase.rpc('count_candidates_for_matching', {
+    p_data_env: dataEnv,
+    p_keywords: keywords.length ? keywords : null,
+    p_mode: mode,
+  })
   if (error) throw new Error(`人材件数の取得に失敗しました: ${error.message}`)
-  return count ?? 0
+  return Number(data ?? 0)
 }
 
 export interface ScoringWeights {

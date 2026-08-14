@@ -58,8 +58,13 @@ class TabErrorBoundary extends Component<
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 60 * 3,       // 3分間はキャッシュ利用（タブ切替で再フェッチしない）
+      staleTime: 1000 * 60 * 10,      // 10分間はキャッシュ利用（タブ切替で再フェッチしない）
+      // 画面から消えたクエリを捨てるまでの時間。既定5分だと案件↔人材モードを
+      // 往復するたびに引き直しになる。egress が逼迫しているので長めに持つ（2026-08-14）
+      gcTime: 1000 * 60 * 60,
       refetchOnWindowFocus: false,     // ウィンドウフォーカス時の自動再フェッチ無効
+      refetchOnMount: false,           // 再マウントで staleTime 内なら引き直さない
+      retry: 1,                        // 既定3回。失敗クエリの再試行も転送量になる
     },
   },
 })
