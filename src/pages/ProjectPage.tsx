@@ -1060,16 +1060,18 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                         {p.client && (
                           <span className="text-xs text-gray-400 truncate">{p.client}</span>
                         )}
-                        {/* 未入力項目の警告。項目名だけを出していたため
-                            「リモート」が「リモート可」に読めていた（2026-08-14 指摘）。
-                            必ず「未入力」を添える */}
+                        {/* 未入力項目の警告。
+                            ここは「募集中」の隣＝案件の属性が並ぶ位置なので、
+                            項目名を書くと属性に読めてしまう。実際「リモート」が
+                            「リモート可の案件」に見えていた（2026-08-14 指摘・2回）。
+                            件数だけ出し、項目名は title と編集画面に寄せる */}
                         {missing.length > 0 && (
                           <span
-                            className="flex items-center gap-0.5 text-[10px] text-amber-500"
-                            title={`この案件はまだ ${missing.join('・')} が入力されていません（可否の判定ではありません）`}
+                            className="flex items-center gap-0.5 text-[10px] text-amber-700 bg-amber-100 border border-amber-300 rounded px-1.5 py-0.5"
+                            title={`未入力の項目が ${missing.length} 件あります: ${missing.join('・')}\n（項目の可否ではなく、入力がまだという意味です）`}
                           >
                             <AlertCircle size={10} />
-                            {missing.join('・')}が未入力
+                            未入力{missing.length}件
                           </span>
                         )}
                       </div>
