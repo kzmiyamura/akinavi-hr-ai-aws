@@ -31,8 +31,9 @@ console.log('■ 合成ケース')
 for (const c of (process.argv.includes('--real-only') ? [] : CASES)) {
   const buf = XLSX.write(c.wb(), { type: 'buffer', bookType: 'xlsx' })
   const grid = buildGridInput(buf)
-  t(`${c.name} → シート「${c.expectSheet}」を選ぶ`, grid?.sheet ?? null, c.expectSheet)
-  if (grid) t(`${c.name} → 行が取れている`, grid.rows.length > 0, true)
+  const label = c.expectSheet === null ? '読めない（null）を返す' : `シート「${c.expectSheet}」を選ぶ`
+  t(`${c.name} → ${label}`, grid?.sheet ?? null, c.expectSheet)
+  if (grid && c.expectSheet) t(`${c.name} → 行が取れている`, grid.rows.length > 0, true)
 }
 
 // ── 実ファイル（testData/excel・PIIのため git 管理外。無ければスキップ）──

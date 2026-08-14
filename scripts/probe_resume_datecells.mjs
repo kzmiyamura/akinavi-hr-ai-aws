@@ -9,13 +9,19 @@
 // 使い方: node scripts/probe_resume_datecells.mjs <経歴書のURL または ローカルパス>
 import XLSX from 'xlsx'
 import { worksheetToGrid } from './_extractors.gen.mjs'
+import { buildGridInput } from './llm_extract/lib.mjs'
 
 const src = process.argv[2]
 if (!src) { console.error('使い方: node scripts/probe_resume_datecells.mjs <url|path>'); process.exit(1) }
 
-const wb = /^https?:/.test(src)
-  ? XLSX.read(Buffer.from(await (await fetch(src)).arrayBuffer()), { cellDates: true })
-  : XLSX.readFile(src, { cellDates: true })
+const bytes = /^https?:/.test(src)
+  ? Buffer.from(await (await fetch(src)).arrayBuffer())
+  : null
+const wb = bytes ? XLSX.read(bytes, { cellDates: true }) : XLSX.readFile(src, { cellDates: true })
+
+// 実際に AI へ渡るシートはどれか（これが本命の確認）
+const chosen = buildGridInput(bytes ?? src)
+console.log(`▶ AIに渡すシート: ${chosen ? `「${chosen.sheet}」 dateCells=${chosen.dateCells} rows=${chosen.rows.length}` : 'なし（経歴書はAIに渡らない）'}`)
 
 // buildGridInput と同じ判定（先頭一致）と、緩めた判定（部分一致）を並べる
 const ANCHORED = /^(19|20)\d{2}[/年.\-]\d{1,2}/

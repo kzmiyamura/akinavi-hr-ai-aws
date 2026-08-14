@@ -47,6 +47,30 @@ export function withExampleSheetWorkbook() {
   return wb
 }
 
+/** **実ファイル YN と同じ構成**: 本人シートは日付が読めない形（年月が縦持ち等）で、
+ *  記入例シートだけが日付を持つ。ここで記入例を選ぶと他人の経歴を本人として登録する。
+ *  期待値は「読めない（null）」——読めないまま返すのが正しい（2026-08-14 実害あり） */
+export function unreadableOwnSheetWorkbook() {
+  const wb = XLSX.utils.book_new()
+  // 本人シート: 年と月が離れた位置にあり、行内の近傍では組にならない
+  XLSX.utils.book_append_sheet(wb, sheet([
+    ['スキルシート'],
+    ['氏名', 'テスト 次郎'],
+    ['開始年', '2023'],
+    ['開始月', '12'],
+    ['業務内容', 'ECサイト開発'],
+    ['使用技術', 'PHP, Laravel'],
+  ]), 'スキルシート')
+  const rows = [['スキルシート（記入例）'], ['No', '期間', '業務内容', '使用技術']]
+  for (let i = 0; i < 12; i++) {
+    const y = 2013 + i
+    rows.push([String(i + 1), `${y}/04/01～${y + 1}/03/31`, `ネットワーク構築 第${i + 1}期`,
+      'Zabbix, Ansible, Terraform'])
+  }
+  XLSX.utils.book_append_sheet(wb, sheet(rows), 'スキルシート(NW・SV記入例)')
+  return wb
+}
+
 /** 従来どおり素直に日付が入っているシート（変更で壊していないことの確認用） */
 export function plainDateWorkbook() {
   const wb = XLSX.utils.book_new()
@@ -73,5 +97,7 @@ if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
 export const CASES = [
   { name: '記入フォーム型（年月が別セル）', wb: formStyleWorkbook, expectSheet: 'スキルシート' },
   { name: '記入例シート付き', wb: withExampleSheetWorkbook, expectSheet: 'スキルシート' },
+  // ★実害ケース: 記入例で代替してはいけない。null が正解（他人の経歴を書かない）
+  { name: '本人シートが読めない＋記入例あり', wb: unreadableOwnSheetWorkbook, expectSheet: null },
   { name: '通常の日付表記', wb: plainDateWorkbook, expectSheet: '職務経歴' },
 ]

@@ -45,16 +45,18 @@ export function buildGridInput(xlsxSrc) {
   const wb = Buffer.isBuffer(xlsxSrc) || xlsxSrc instanceof Uint8Array
     ? XLSX.read(xlsxSrc, { cellDates: true })
     : XLSX.readFile(xlsxSrc, { cellDates: true })
-  let best = { n: -1 }, bestExample = { n: -1 }
+  let best = { n: -1 }
   for (const sn of wb.SheetNames) {
+    // 記入例シートは**絶対に使わない**。「本人シートが読めなければ記入例で代替」という
+    // フォールバックを一度入れて実害を出した（2026-08-14・YN で記入例の Zabbix/Ansible/
+    // Terraform が本人スキルとして登録され、経験年数が 3年→9年 に化けた）。
+    // 読めない経歴書は**読めないまま返す**のが正しい。他人の経歴を書くよりはるかにマシ
+    if (EXAMPLE_SHEET.test(sn)) continue
     const ws = wb.Sheets[sn]
     const grid = worksheetToGrid(ws)
     const dates = countDateCells(grid)
-    if (EXAMPLE_SHEET.test(sn)) { if (dates > bestExample.n) bestExample = { n: dates, sn, ws, grid } }
-    else if (dates > best.n) best = { n: dates, sn, ws, grid }
+    if (dates > best.n) best = { n: dates, sn, ws, grid }
   }
-  // 全シートが記入例名のときだけ記入例に落ちる（本人シートが1枚も無いファイル）
-  if (best.n < 1 && bestExample.n >= 1) best = bestExample
   if (best.n < 1) return null
   const merges = (best.ws['!merges'] || []).map(m => ({ r1: m.s.r, c1: m.s.c, r2: m.e.r, c2: m.e.c }))
   const rows = []
