@@ -9,6 +9,25 @@
 import { normTech } from './lib.mjs'
 import { mergeSkills } from './apply.mjs'
 
+/**
+ * 案件の requiredRole に許すラベル。
+ *
+ * ⚠ **3か所と完全に一致していないと役割マッチングが機能しない**:
+ *   - DB: `role_master.label`（`supabase/migrations/20260814_role_master.sql`）
+ *   - 人材側の抽出: `scoreProseRoles` の ROLE_DEFS
+ *     （`supabase/functions/inbound-email/index.ts`）
+ *   - ここ（案件側の受け入れ判定）
+ * 増やすときは3か所すべてに足すこと。ズレると role_affinity が
+ * 「系統違い(0.2)」を返して静かに順位が狂う。
+ */
+export const ROLE_LABELS = new Set([
+  'プロジェクトマネージャー', 'PMO', 'プロジェクトリーダー', 'スクラムマスター', 'コンサルタント',
+  'システムエンジニア', 'プログラマー', 'テックリード', 'アーキテクト', 'インフラエンジニア',
+  'フロントエンドエンジニア', 'バックエンドエンジニア', 'フルスタックエンジニア',
+  'クラウドエンジニア', 'データエンジニア', 'MLエンジニア',
+  'ヘルプデスク', '運用保守', 'テストエンジニア',
+])
+
 /** フィールドごとの上書き方針。'fill'=空のときだけ / 'overwrite'=常に置換
  *  ドライランで regex 劣化の実証が取れた項目だけ overwrite に昇格させること */
 export const PROJECT_FIELD_POLICY = {
@@ -207,8 +226,20 @@ export function buildInterpretationPatch(p, r, skillMasterNormSet) {
     }
   }
 
+  // 案件が求める役割。人材側の raw_profile.roles と同じラベル体系でないと突き合わせられないので、
+  // 一覧に無い言葉を LLM が作ってきたら捨てる（2026-08-14 追加）。
+  // 低確信でも採用する: 役割は本文が薄くても業務内容から読めることが多く、
+  // ここを null にすると role_affinity が全件 0.5（中立）になって効果が消える
+  const requiredRole = ROLE_LABELS.has(String(r.requiredRole ?? '').trim())
+    ? String(r.requiredRole).trim()
+    : null
+
   const multiPerson = !lowConf && r.multiPerson === true
   rd.aiInterpretation = {
+    requiredRole,
+    roleReason: requiredRole && typeof r.roleReason === 'string' && r.roleReason.trim()
+      ? r.roleReason.trim().slice(0, 60)
+      : null,
     at: new Date().toISOString(),
     model: r.model ?? null,
     confidence: r.confidence ?? null,
@@ -221,6 +252,7 @@ export function buildInterpretationPatch(p, r, skillMasterNormSet) {
       : null,
   }
   if (specialist) changes.push(`${specialist.ecosystem}圏の精通を要求`)
+  if (requiredRole) changes.push(`役割=${requiredRole}`)
 
   if (!lowConf && related.length) {
     const cur = Array.isArray(rd.niceToHaveSkills) ? rd.niceToHaveSkills : []

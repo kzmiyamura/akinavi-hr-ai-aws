@@ -2664,6 +2664,10 @@ function scoreProseRoles(prose: string, fullText: string): { roles: string[]; ro
     { re: /コンサルタント/,                              label: 'コンサルタント' },
     { re: /テスト[　 ]?(?:リード|エンジニア|設計)/,      label: 'テストエンジニア' },
     { re: /運用[　 ]?(?:保守|管理)/,                     label: '運用保守' },
+    // ヘルプデスクが抜けていた（2026-08-14 追加）。open 案件の半分が
+    // ヘルプデスク系なのに人材側にラベルが付かず、役割マッチングが成立しなかった。
+    // 「サービスデスク」「ユーザーサポート」「問い合わせ対応」も同じ役割として拾う
+    { re: /ヘルプ[　 ]?デスク|サービス[　 ]?デスク|ユーザー[　 ]?サポート|問(?:い)?合(?:わ)?せ[　 ]?対応/, label: 'ヘルプデスク' },
   ]
   const roles: string[] = []
   const roleScores: Record<string, number> = {}
