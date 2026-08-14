@@ -5,16 +5,56 @@ import { worksheetToGrid } from '../_extractors.gen.mjs'
 
 export const NOW_YM = (() => { const d = new Date(); return d.getFullYear() * 12 + d.getMonth() + 1 })()
 
-/** xlsx → {file, sheet, rows, merges} 無損失整形JSON（経歴シートは日付セル最多で選定） */
-export function buildGridInput(xlsxPath) {
-  const wb = XLSX.readFile(xlsxPath, { cellDates: true })
-  let best = { n: -1 }
+/** セル文字列が「西暦で始まる日付」か（従来の判定） */
+const ANCHORED_DATE = /^(19|20)\d{2}[/年.\-]\d{1,2}/
+
+/** 記入例・サンプルのシート。日付が大量にあるので日付数だけで選ぶと本人シートに勝ち、
+ *  **他人のサンプル記入を本人の経歴として転記する**（実例 YN の「スキルシート(NW・SV記入例)」は
+ *  12案件・109ヶ月ぶんの日付を持つ。本人は経験3年）。本人のシートが無いときだけ使う */
+const EXAMPLE_SHEET = /記入例|記載例|入力例|サンプル|見本|テンプレート|sample|example|template/i
+
+/**
+ * 日付セルを数える。年と月が別セルに分かれた記入フォーム型（`'2023' | '12'`）は
+ * 従来の先頭一致だと0件になり、**経歴書が丸ごとAIに渡っていなかった**（2026-08-14 実測 YN）。
+ * regex 経路はセル座標から期間を復元できるため、regex は読めるのに AI だけ読めない状態だった。
+ *
+ * 先頭一致が1件でもあればそちらを優先する（従来の選定を変えないため）。
+ * 1件も無いときだけ、同じ行で「西暦のセル」の近傍に「1〜12のセル」がある組を数える。
+ */
+function countDateCells(grid) {
+  const anchored = grid.flat().filter((c) => ANCHORED_DATE.test(String(c).trim())).length
+  if (anchored > 0) return anchored
+  let split = 0
+  for (const row of grid) {
+    for (let i = 0; i < row.length; i++) {
+      if (!/^(19|20)\d{2}$/.test(String(row[i]).trim())) continue
+      // 「年」の後ろに見出しや空セルを挟んで「月」が来る形まで拾う。
+      // 窓を広げすぎると無関係な数値を月と誤認するので3セルまで
+      for (let j = i + 1; j < Math.min(row.length, i + 4); j++) {
+        const m = String(row[j]).trim()
+        if (/^\d{1,2}$/.test(m) && +m >= 1 && +m <= 12) { split++; break }
+      }
+    }
+  }
+  return split
+}
+
+/** xlsx → {file, sheet, rows, merges} 無損失整形JSON（経歴シートは日付セル最多で選定）。
+ *  引数はパスでも Buffer でもよい（合成フィクスチャで回帰を回すため） */
+export function buildGridInput(xlsxSrc) {
+  const wb = Buffer.isBuffer(xlsxSrc) || xlsxSrc instanceof Uint8Array
+    ? XLSX.read(xlsxSrc, { cellDates: true })
+    : XLSX.readFile(xlsxSrc, { cellDates: true })
+  let best = { n: -1 }, bestExample = { n: -1 }
   for (const sn of wb.SheetNames) {
     const ws = wb.Sheets[sn]
     const grid = worksheetToGrid(ws)
-    const dates = grid.flat().filter(c => /^(19|20)\d{2}[\/年.\-]\d{1,2}/.test(String(c).trim())).length
-    if (dates > best.n) best = { n: dates, sn, ws, grid }
+    const dates = countDateCells(grid)
+    if (EXAMPLE_SHEET.test(sn)) { if (dates > bestExample.n) bestExample = { n: dates, sn, ws, grid } }
+    else if (dates > best.n) best = { n: dates, sn, ws, grid }
   }
+  // 全シートが記入例名のときだけ記入例に落ちる（本人シートが1枚も無いファイル）
+  if (best.n < 1 && bestExample.n >= 1) best = bestExample
   if (best.n < 1) return null
   const merges = (best.ws['!merges'] || []).map(m => ({ r1: m.s.r, c1: m.s.c, r2: m.e.r, c2: m.e.c }))
   const rows = []

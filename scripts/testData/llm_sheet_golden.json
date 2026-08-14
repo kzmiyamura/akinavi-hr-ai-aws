@@ -1,0 +1,52 @@
+{
+  "A_S.xlsx": {
+    "sheet": "技術経歴書",
+    "dateCells": 7,
+    "rows": 41
+  },
+  "H_K.xlsx": {
+    "sheet": "スキルシート",
+    "dateCells": 46,
+    "rows": 79
+  },
+  "I_Y.xlsx": {
+    "sheet": "スキルシート",
+    "dateCells": 42,
+    "rows": 73
+  },
+  "M_K.xlsx": {
+    "sheet": "スキルシート",
+    "dateCells": 28,
+    "rows": 52
+  },
+  "M_T.xlsx": {
+    "sheet": "スキルシート",
+    "dateCells": 14,
+    "rows": 31
+  },
+  "M_Y.xlsx": {
+    "sheet": "スキルシート",
+    "dateCells": 14,
+    "rows": 31
+  },
+  "TA.xlsx": {
+    "sheet": "技術経歴書",
+    "dateCells": 31,
+    "rows": 72
+  },
+  "T_N.xlsx": {
+    "sheet": "スキルシート",
+    "dateCells": 6,
+    "rows": 129
+  },
+  "YK.xlsx": {
+    "sheet": "スキルシート",
+    "dateCells": 3,
+    "rows": 38
+  },
+  "Y_O.xlsx": {
+    "sheet": "経歴書",
+    "dateCells": 24,
+    "rows": 164
+  }
+}
