@@ -403,6 +403,66 @@ function roleAffinityLabel(required: string, candidate: string):
   return { mark: '×', cls: 'bg-red-50 text-red-700', note: '系統が違う役割（-9pt）' }
 }
 
+/**
+ * 人材カード内の折りたたみ。
+ * 採点材料を全部出したら情報量が多すぎたので、判断に直結するもの（順位・スコア・
+ * 所見・役割・必須スキルの合致数）だけ開いたままにして、裏取り用の詳細は畳む
+ * （2026-08-14 ユーザー指摘「出てる情報が多すぎる」）。
+ * summary に要約を出すので、開かなくても状況は分かるようにする。
+ */
+function CardFold({ title, summary, children }: {
+  title: string
+  /** 畳んだままでも分かる一行要約 */
+  summary?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <details className="group mt-1.5 rounded-md border border-slate-100 bg-slate-50/60 overflow-hidden">
+      <summary className={`${accordionSummaryCls} px-2.5 py-1.5 text-[11px] text-slate-600 hover:bg-slate-100 cursor-pointer`}>
+        <ChevronDown size={13} className="shrink-0 text-slate-400 transition-transform group-open:rotate-180" />
+        <span className="font-medium">{title}</span>
+        {summary && <span className="ml-1 text-slate-400 font-normal truncate">{summary}</span>}
+      </summary>
+      <div className="px-2.5 pb-2 pt-1">{children}</div>
+    </details>
+  )
+}
+
+/**
+ * 技術圏の押さえ具合。必須スキルの個数だけでは
+ * 「Microsoft圏に広く精通した人」を見分けられない（2026-08-13 指摘）。
+ * 「圏」が何を指すのかが分からないという指摘（2026-08-14）を受けて title で説明する。
+ */
+function EcosystemCoverageNote({ specialist, cov }: {
+  specialist: AiSpecialist
+  cov: { hit: string[]; total: number; ratio: number }
+}) {
+  const strong = cov.ratio >= 0.6
+  // 0件なのに「部分的」と出ていて意味が通らなかった（2026-08-14 指摘）
+  const label = cov.hit.length === 0 ? '該当なし' : strong ? 'この圏に広く精通' : '一部のみ'
+  return (
+    <div className={`mt-1.5 rounded-md border px-2.5 py-1.5 ${strong ? 'bg-violet-50 border-violet-200' : 'bg-white border-slate-200'}`}>
+      <span
+        className={`text-xs font-medium ${strong ? 'text-violet-700' : 'text-gray-500'}`}
+        title={`「${specialist.ecosystem}圏」＝この案件は ${specialist.ecosystem} 系の技術に広く精通した人を求めている、という AI の読みです。`
+          + `\n${specialist.reason ? `根拠: ${specialist.reason}\n` : ''}`
+          + `圏の技術（${cov.total}件）: ${specialist.coreSkills.join('、')}`
+          + `\nこの人が持っているのは ${cov.hit.length} 件です。`}
+      >
+        {specialist.ecosystem}圏 {cov.hit.length}/{cov.total}
+      </span>
+      <span className="text-[10px] text-gray-400 ml-1">{label}</span>
+      {cov.hit.length > 0 && (
+        <div className="mt-0.5 flex flex-wrap gap-1">
+          {cov.hit.map(h => (
+            <span key={h} className="text-[10px] rounded px-1 py-0.5 bg-white border border-violet-200 text-violet-700">{h}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** 一覧に出す件数。それ以上はアコーディオン内へ */
 const RANK_HEAD = 5
 /** 案件を選んだ直後に引く件数。営業が見るのは上位数名で、残りはアコーディオンの中。
@@ -694,42 +754,15 @@ function ProjectModeRankCard({
                 {location && (
                   <p className="text-xs text-gray-400 mt-0.5">{location}</p>
                 )}
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {wantsFullRemote && (
-                    <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">リモートのみ</span>
-                  )}
-                  {/* リモート可否はスコア内訳の根拠。3値をそのまま出す（記載なしを「不可」と書かない） */}
-                  {!wantsFullRemote && remoteAvailable === true && (
-                    <span className="text-[10px] bg-blue-50 text-blue-700 rounded px-1.5 py-0.5" title={workStyleNote ?? undefined}>リモート可</span>
-                  )}
-                  {remoteAvailable === false && (
-                    <span className="text-[10px] bg-gray-100 text-gray-600 rounded px-1.5 py-0.5" title={workStyleNote ?? undefined}>リモート可の記載なし</span>
-                  )}
-                  {remoteAvailable == null && (
-                    <span className="text-[10px] bg-gray-100 text-gray-500 rounded px-1.5 py-0.5">リモート記載なし</span>
-                  )}
-                  {/* 派遣可否も内訳で±する（派遣NG=20pt上限 / 常駐可=+5pt）ので出す */}
-                  {hakenOk === true && (
-                    <span className="text-[10px] bg-emerald-50 text-emerald-700 rounded px-1.5 py-0.5">常駐・派遣可</span>
-                  )}
-                  {hakenOk === false && (
-                    <span className="text-[10px] bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">派遣NG</span>
-                  )}
-                </div>
-                {/* ── 採点に効いている残りの材料（2026-08-14）──
-                    「点数に使った情報は出さないと本当か？となる」（ユーザー指摘）。
-                    役割・雇用形態・派遣免許・英語はいずれもスコアを±させるのに
-                    画面に出ておらず、営業から見て根拠が追えなかった */}
+                {/* 役割だけは畳まない。「PMOかどうか」が一目で分かる必要がある
+                    （2026-08-14 指摘）。他の採点材料は下の折りたたみへ */}
                 {(() => {
-                  const rp2 = s.candidate.raw_profile as Record<string, unknown>
                   const mainRole = Array.isArray(rp2?.roles) ? (rp2.roles as string[])[0] ?? null : null
                   const subRoles = Array.isArray(rp2?.roles) ? (rp2.roles as string[]).slice(1, 3) : []
-                  const englishLevel = rp2?.englishLevel as string | null
                   const aff = requiredRole && mainRole ? roleAffinityLabel(requiredRole, mainRole) : null
-                  if (!mainRole && !employmentType && !englishLevel && !requiredRole) return null
+                  if (!mainRole && !requiredRole) return null
                   return (
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {/* 役割: 案件が求める役割と一致しているかを色で出す */}
+                    <div className="mt-1">
                       {mainRole ? (
                         <span
                           className={`text-[10px] rounded px-1.5 py-0.5 font-medium ${aff?.cls ?? 'bg-gray-100 text-gray-600'}`}
@@ -739,132 +772,135 @@ function ProjectModeRankCard({
                         >
                           役割: {mainRole}{aff ? ` ${aff.mark}` : ''}
                         </span>
-                      ) : requiredRole && (
+                      ) : (
                         <span className="text-[10px] bg-gray-100 text-gray-500 rounded px-1.5 py-0.5"
                           title={`経歴から役割を読み取れなかったため加減点なし（案件は ${requiredRole} を求めています）`}>
                           役割: 判定不可
                         </span>
                       )}
-                      {/* 雇用形態: 案件の許可リストから外れると20pt上限になる */}
-                      {employmentType && (
-                        <span className="text-[10px] bg-slate-100 text-slate-600 rounded px-1.5 py-0.5"
-                          title="案件が雇用形態を限定している場合、外れると20pt上限になります">
-                          {employmentType}
-                        </span>
-                      )}
-                      {/* 派遣免許: 派遣社員のときだけ ±5pt */}
-                      {isHaken && licenseStatus && (
-                        <span className={`text-[10px] rounded px-1.5 py-0.5 ${
-                          licenseStatus === 'haken' || licenseStatus === 'both'
-                            ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}
-                          title="エージェントの派遣免許。確認済みなら +5pt">
-                          派遣免許{licenseStatus === 'haken' || licenseStatus === 'both' ? '確認済' : '未確認'}
-                        </span>
-                      )}
-                      {/* 英語: 案件が英語要件を持つとき +2〜8pt */}
-                      {englishLevel && (
-                        <span className="text-[10px] bg-sky-50 text-sky-700 rounded px-1.5 py-0.5"
-                          title="案件が英語要件を持つ場合に加点されます（ビジネス +8pt / 日常会話 +2pt）">
-                          英語: {englishLevel === 'business' ? 'ビジネス' : englishLevel === 'daily' ? '日常会話' : englishLevel}
-                        </span>
-                      )}
                     </div>
                   )
                 })()}
-                {/* 判定の元になった原文。これが無いと可否の裏が取れない */}
-                {workStyleNote && (
-                  <p className="text-[10px] text-gray-400 mt-0.5 truncate" title={workStyleNote}>
-                    勤務形態: {workStyleNote}
-                  </p>
-                )}
+                {/* ── 勤務条件・雇用形態（畳む）──
+                    いずれもスコアを±させるので出すが、常時展開すると
+                    バッジが6個並んで読めなくなる（2026-08-14 指摘）。
+                    畳んだままでも要点が分かるよう summary に凝縮する */}
+                {(() => {
+                  const englishLevel = rp2?.englishLevel as string | null
+                  const remoteLabel = wantsFullRemote ? 'リモートのみ'
+                    : remoteAvailable === true ? 'リモート可'
+                    : remoteAvailable === false ? 'リモート記載なし' : 'リモート不明'
+                  const hakenLabel = hakenOk === true ? '常駐可' : hakenOk === false ? '派遣NG' : null
+                  const summary = [remoteLabel, hakenLabel].filter(Boolean).join(' ・ ')
+                  return (
+                    <CardFold title="勤務条件" summary={summary}>
+                      <div className="flex flex-wrap gap-1">
+                        {wantsFullRemote && (
+                          <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">リモートのみ</span>
+                        )}
+                        {/* リモート可否は3値をそのまま出す（記載なしを「不可」と書かない） */}
+                        {!wantsFullRemote && remoteAvailable === true && (
+                          <span className="text-[10px] bg-blue-50 text-blue-700 rounded px-1.5 py-0.5" title={workStyleNote ?? undefined}>リモート可</span>
+                        )}
+                        {remoteAvailable === false && (
+                          <span className="text-[10px] bg-gray-100 text-gray-600 rounded px-1.5 py-0.5" title={workStyleNote ?? undefined}>リモート可の記載なし</span>
+                        )}
+                        {remoteAvailable == null && (
+                          <span className="text-[10px] bg-gray-100 text-gray-500 rounded px-1.5 py-0.5">リモート記載なし</span>
+                        )}
+                        {/* 派遣NG=20pt上限 / 常駐可=+5pt */}
+                        {hakenOk === true && (
+                          <span className="text-[10px] bg-emerald-50 text-emerald-700 rounded px-1.5 py-0.5">常駐・派遣可</span>
+                        )}
+                        {hakenOk === false && (
+                          <span className="text-[10px] bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">派遣NG</span>
+                        )}
+                        {/* 雇用形態と派遣免許はカード上部のバッジ列に既にある（そちらは
+                            「免許なし」「紹介のみ」まで出す詳しい版）。ここでは重複させない */}
+                        {/* 案件が英語要件を持つとき +2〜8pt */}
+                        {englishLevel && (
+                          <span className="text-[10px] bg-sky-50 text-sky-700 rounded px-1.5 py-0.5"
+                            title="案件が英語要件を持つ場合に加点されます（ビジネス +8pt / 日常会話 +2pt）">
+                            英語: {englishLevel === 'business' ? 'ビジネス' : englishLevel === 'daily' ? '日常会話' : englishLevel}
+                          </span>
+                        )}
+                      </div>
+                      {/* 判定の元になった原文。これが無いと可否の裏が取れない */}
+                      {workStyleNote && (
+                        <p className="text-[10px] text-gray-500 mt-1 whitespace-pre-wrap break-words">
+                          勤務形態の原文: {workStyleNote}
+                        </p>
+                      )}
+                    </CardFold>
+                  )
+                })()}
                 {agentComment && (
-                  <div className="mt-1.5 bg-amber-50 border border-amber-100 rounded px-2 py-1.5">
-                    <p className="text-[10px] font-semibold text-amber-600 mb-0.5">エージェントコメント</p>
+                  <CardFold title="エージェントコメント" summary={agentComment.slice(0, 24) + (agentComment.length > 24 ? '…' : '')}>
                     <p className="text-xs text-amber-900 whitespace-pre-wrap leading-relaxed">{agentComment}</p>
-                  </div>
+                  </CardFold>
                 )}
               </>
             )
           })()}
+          {/* ── スキルの合致（畳む）──
+              保有スキル一覧・技術圏・必須/尚可の照合を1つにまとめる。
+              畳んだままでも「必須 2/5 合致」が summary で読めるようにする */}
           {(() => {
             const allSkills = (s.candidate.skills as string[]) ?? []
             const skillMatch = (sk: string, list: string[]) => list.some(r => skillMatcher(sk, r))
             const reqMatched = allSkills.filter(sk => skillMatch(sk, requiredSkills))
             const niceMatched = allSkills.filter(sk => !skillMatch(sk, requiredSkills) && skillMatch(sk, niceToHaveSkills))
             const unmatched = allSkills.filter(sk => !skillMatch(sk, requiredSkills) && !skillMatch(sk, niceToHaveSkills))
-            return <SkillTagsWithAccordion skills={[...reqMatched, ...niceMatched, ...unmatched]} highlightSkills={reqMatched} niceHighlightSkills={niceMatched} />
-          })()}
-          {/* 技術圏の押さえ具合。必須スキルの個数だけでは
-              「Microsoft圏に広く精通した人」を見分けられない（2026-08-13 指摘） */}
-          {specialist && (() => {
-            const cov = ecosystemCoverage(specialist, (s.candidate.skills as string[]) ?? [], skillMatcher)
-            if (!cov) return null
-            const strong = cov.ratio >= 0.6
-            // 0件なのに「部分的」と出ていて意味が通らなかった（2026-08-14 指摘）
-            const label = cov.hit.length === 0 ? '該当なし'
-              : strong ? 'この圏に広く精通' : '一部のみ'
+            const reqHit = requiredSkills.filter(r => allSkills.some(sk => skillMatcher(sk, r))).length
+            const cov = specialist ? ecosystemCoverage(specialist, allSkills, skillMatcher) : null
+            const summary = [
+              requiredSkills.length > 0 ? `必須 ${reqHit}/${requiredSkills.length} 合致` : null,
+              cov ? `${specialist!.ecosystem}圏 ${cov.hit.length}/${cov.total}` : null,
+            ].filter(Boolean).join(' ・ ')
             return (
-              <div className={`mt-1.5 rounded-md border px-2.5 py-1.5 ${strong ? 'bg-violet-50 border-violet-200' : 'bg-slate-50 border-slate-100'}`}>
-                <span
-                  className={`text-xs font-medium ${strong ? 'text-violet-700' : 'text-gray-500'}`}
-                  title={`「${specialist.ecosystem}圏」＝この案件は ${specialist.ecosystem} 系の技術に広く精通した人を求めている、という AI の読みです。`
-                    + `\n${specialist.reason ? `根拠: ${specialist.reason}\n` : ''}`
-                    + `圏の技術（${cov.total}件）: ${specialist.coreSkills.join('、')}`
-                    + `\nこの人が持っているのは ${cov.hit.length} 件です。`}
-                >
-                  {specialist.ecosystem}圏 {cov.hit.length}/{cov.total}
-                </span>
-                <span className="text-[10px] text-gray-400 ml-1">
-                  {label}
-                </span>
-                {cov.hit.length > 0 && (
-                  <div className="mt-0.5 flex flex-wrap gap-1">
-                    {cov.hit.map(h => (
-                      <span key={h} className="text-[10px] rounded px-1 py-0.5 bg-white border border-violet-200 text-violet-700">{h}</span>
-                    ))}
+              <CardFold title="スキルの合致" summary={summary}>
+                <SkillTagsWithAccordion skills={[...reqMatched, ...niceMatched, ...unmatched]} highlightSkills={reqMatched} niceHighlightSkills={niceMatched} />
+                {/* 案件の必須／尚可スキルとの照合 */}
+                {(requiredSkills.length > 0 || niceToHaveSkills.length > 0) && (
+                  <div className="mt-1.5 space-y-1.5">
+                    {requiredSkills.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">必須スキル</p>
+                        <div className="flex flex-wrap gap-1">
+                          {requiredSkills.map(req => (
+                            <span key={req} className={allSkills.some(sk => skillMatcher(sk, req))
+                              ? 'text-xs bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium'
+                              : 'text-xs bg-gray-100 text-gray-400 rounded px-1.5 py-0.5 line-through'
+                            }>{req}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {niceToHaveSkills.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">尚可スキル</p>
+                        <div className="flex flex-wrap gap-1">
+                          {niceToHaveSkills.map(nice => {
+                            const aiReason = aiNiceSkills?.get(nice.trim().toLowerCase())
+                            const isAi = aiNiceSkills?.has(nice.trim().toLowerCase()) ?? false
+                            return (
+                              <span key={nice}
+                                title={isAi ? `AIの解釈: ${aiReason ?? '業務内容から読める関連スキル'}` : undefined}
+                                className={allSkills.some(sk => skillMatcher(sk, nice))
+                                  ? `text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5 font-medium${isAi ? ' border border-dashed border-violet-300' : ''}`
+                                  : `text-xs bg-gray-100 text-gray-400 rounded px-1.5 py-0.5${isAi ? ' border border-dashed border-gray-300' : ''}`
+                                }>{nice}{isAi && <span className="opacity-60 ml-0.5">AI</span>}</span>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-            )
-          })()}
-          {(requiredSkills.length > 0 || niceToHaveSkills.length > 0) && (() => {
-            const allSkills = (s.candidate.skills as string[]) ?? []
-            const skillMatch = (req: string) => allSkills.some(sk => skillMatcher(sk, req))
-            return (
-              <div className="mt-1.5 rounded-md bg-slate-50 border border-slate-100 px-2.5 py-2 space-y-1.5">
-                {requiredSkills.length > 0 && (
-                  <div>
-                    <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">必須スキル</p>
-                    <div className="flex flex-wrap gap-1">
-                      {requiredSkills.map(req => (
-                        <span key={req} className={skillMatch(req)
-                          ? 'text-xs bg-green-100 text-green-700 rounded px-1.5 py-0.5 font-medium'
-                          : 'text-xs bg-gray-100 text-gray-400 rounded px-1.5 py-0.5 line-through'
-                        }>{req}</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {niceToHaveSkills.length > 0 && (
-                  <div>
-                    <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-1">尚可スキル</p>
-                    <div className="flex flex-wrap gap-1">
-                      {niceToHaveSkills.map(nice => {
-                        const aiReason = aiNiceSkills?.get(nice.trim().toLowerCase())
-                        const isAi = aiNiceSkills?.has(nice.trim().toLowerCase()) ?? false
-                        return (
-                          <span key={nice}
-                            title={isAi ? `AIの解釈: ${aiReason ?? '業務内容から読める関連スキル'}` : undefined}
-                            className={skillMatch(nice)
-                              ? `text-xs bg-violet-100 text-violet-700 rounded px-1.5 py-0.5 font-medium${isAi ? ' border border-dashed border-violet-300' : ''}`
-                              : `text-xs bg-gray-100 text-gray-400 rounded px-1.5 py-0.5${isAi ? ' border border-dashed border-gray-300' : ''}`
-                            }>{nice}{isAi && <span className="opacity-60 ml-0.5">AI</span>}</span>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
+                {/* 技術圏の押さえ具合。必須スキルの個数だけでは
+                    「Microsoft圏に広く精通した人」を見分けられない（2026-08-13 指摘） */}
+                {specialist && cov && <EcosystemCoverageNote specialist={specialist} cov={cov} />}
+              </CardFold>
             )
           })()}
           {(s.candidate.drive_url || s.candidate.resume_url) && (
