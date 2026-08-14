@@ -1,4 +1,4 @@
-import { Sparkles, AlertTriangle, CheckCircle } from 'lucide-react'
+import { Sparkles, AlertTriangle, CheckCircle, ChevronDown } from 'lucide-react'
 
 /**
  * 案件×候補者の推薦所見（AI）。
@@ -76,40 +76,61 @@ export function RecommendationNote({ rec }: { rec: Recommendation }) {
         )}
       </div>
 
-      {rec.required && (
-        <p className="text-xs text-gray-600 leading-relaxed">
-          <span className="text-gray-400">この案件が求める人：</span>{rec.required}
-        </p>
-      )}
-
+      {/* 営業がそのまま使える後押し文。ここだけは常に見せる */}
       <p className="text-xs text-gray-800 leading-relaxed">{rec.pitch}</p>
 
-      {strengths.length > 0 && (
-        <div className="space-y-0.5">
-          {strengths.map((s, i) => (
-            <div key={i} className="text-xs text-gray-700 flex gap-1.5">
-              <CheckCircle size={11} className="text-green-600 shrink-0 mt-0.5" />
-              <span className="min-w-0">
-                {s.point}
-                {/* 根拠を出さない断定はしない。経歴のどの記述から言っているかを必ず添える */}
-                {s.evidence && (
-                  <span className="block text-[10px] text-gray-400 leading-snug">経歴より：{s.evidence}</span>
-                )}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* 根拠は畳む（2026-08-14 指摘「必要な情報以外はアコーディオンでいい」）。
+          効く経験は根拠つきで4件前後・足りない点が3件前後あり、5人ぶん並べると
+          カードが読めなくなる。件数は summary に出すので畳んだままでも量は分かる。
+          「この案件が求める人」は同じ案件なら全員同じ文なので、ここに入れて重複を隠す */}
+      {(strengths.length > 0 || gaps.length > 0 || rec.required) && (
+        <details className="group rounded border border-violet-200 bg-white/60 overflow-hidden">
+          <summary className="flex items-center gap-1 px-2 py-1 text-[10px] text-violet-700 cursor-pointer select-none hover:bg-violet-50 list-none [&::-webkit-details-marker]:hidden">
+            <ChevronDown size={12} className="shrink-0 text-violet-400 transition-transform group-open:rotate-180" />
+            <span className="font-medium">根拠を見る</span>
+            <span className="text-violet-400 font-normal">
+              {[
+                strengths.length > 0 ? `効く経験 ${strengths.length}件` : null,
+                gaps.length > 0 ? `足りない点 ${gaps.length}件` : null,
+              ].filter(Boolean).join(' ・ ')}
+            </span>
+          </summary>
+          <div className="px-2 pb-2 pt-1 space-y-1.5">
+            {rec.required && (
+              <p className="text-xs text-gray-600 leading-relaxed">
+                <span className="text-gray-400">この案件が求める人：</span>{rec.required}
+              </p>
+            )}
 
-      {gaps.length > 0 && (
-        <div className="space-y-0.5 border-t border-violet-200 pt-1">
-          {gaps.map((g, i) => (
-            <div key={i} className="text-xs text-gray-600 flex gap-1.5">
-              <AlertTriangle size={11} className="text-amber-600 shrink-0 mt-0.5" />
-              <span className="min-w-0">{g}</span>
-            </div>
-          ))}
-        </div>
+            {strengths.length > 0 && (
+              <div className="space-y-0.5">
+                {strengths.map((s, i) => (
+                  <div key={i} className="text-xs text-gray-700 flex gap-1.5">
+                    <CheckCircle size={11} className="text-green-600 shrink-0 mt-0.5" />
+                    <span className="min-w-0">
+                      {s.point}
+                      {/* 根拠を出さない断定はしない。経歴のどの記述から言っているかを必ず添える */}
+                      {s.evidence && (
+                        <span className="block text-[10px] text-gray-400 leading-snug">経歴より：{s.evidence}</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {gaps.length > 0 && (
+              <div className="space-y-0.5 border-t border-violet-200 pt-1">
+                {gaps.map((g, i) => (
+                  <div key={i} className="text-xs text-gray-600 flex gap-1.5">
+                    <AlertTriangle size={11} className="text-amber-600 shrink-0 mt-0.5" />
+                    <span className="min-w-0">{g}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </details>
       )}
     </div>
   )
