@@ -376,8 +376,11 @@ const RANK_HEAD = 5
  *  RANK_HEAD より十分多く取るのは、verdict 並び替えで順位が入れ替わっても
  *  表示分が埋まるようにするため（所見は上位5名にしか付かないので20件あれば足りる） */
 const RANK_FETCH_INITIAL = 20
-/** アコーディオンを開いたときに引く上限 */
-const RANK_FETCH_FULL = 200
+/** アコーディオン内「もっと見る」1回で追加する件数。
+ *  1回押すたびに submissions + 人材 + 重複チェックが増えるので小刻みにする */
+const RANK_FETCH_STEP = 5
+/** 何回押しても引く上限（元の挙動と同じ） */
+const RANK_FETCH_MAX = 200
 /** スキルタグの常時表示数。それ以上はアコーディオン内へ */
 const SKILL_HEAD = 12
 
@@ -497,23 +500,23 @@ function RankingRestAccordion({
   count,
   unitLabel,
   children,
-  onOpen,
+  onLoadMore,
+  remaining,
   loading,
 }: {
   count: number
   /** 例: 「名」「件の案件」 */
   unitLabel: string
   children: ReactNode
-  /** 開いたときに残りを取りに行く（閉じている間は転送しない） */
-  onOpen?: () => void
+  /** 続きを引く。閉じている間はもちろん、開いても押すまで転送しない */
+  onLoadMore?: () => void
+  /** まだ取得していない件数。0 なら「もっと見る」を出さない */
+  remaining?: number
   loading?: boolean
 }) {
   if (count <= 0) return null
   return (
-    <details
-      className="group mt-3 rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden"
-      onToggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open) onOpen?.() }}
-    >
+    <details className="group mt-3 rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
       <summary
         className={`${accordionSummaryCls} px-3 sm:px-4 py-3 text-xs sm:text-sm font-medium text-blue-800 bg-slate-50 hover:bg-slate-100 border-b border-slate-100 break-words text-left`}
       >
@@ -524,7 +527,17 @@ function RankingRestAccordion({
         </span>
       </summary>
       <div className="space-y-3 px-3 sm:px-4 py-4 bg-slate-50/40 min-w-0">
-        {loading ? <p className="text-sm text-gray-400">読み込み中...</p> : children}
+        {children}
+        {onLoadMore && (remaining ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={loading}
+            className="w-full py-2 text-xs font-medium text-blue-700 bg-white border border-slate-200 rounded-lg hover:bg-blue-50 disabled:opacity-50"
+          >
+            {loading ? '読み込み中...' : `もっと見る（残り${remaining}${unitLabel}）`}
+          </button>
+        )}
       </div>
     </details>
   )
@@ -1176,10 +1189,9 @@ const { data: projects = [] } = useQuery({
   // \u7d5e\u308a\u8fbc\u307f\u306f search_candidates_for_matching \u304c\u6e08\u307e\u305b\u3066\u3044\u308b\u306e\u3067\u3001\u3053\u3053\u3067\u306f\u4f55\u3082\u3057\u306a\u3044
   const filteredCandidateList = candidateList
 
-  // アコーディオンを開くまでは上位 RANK_FETCH_INITIAL 件しか引かない。
+  // 引く件数は「上位20件」から始め、アコーディオン内の「もっと見る」で5件ずつ足す。
   // 全件先読みは submissions + 人材 + 重複チェックで 1.4MB/クリックの無駄だった
-  const [rankExpanded, setRankExpanded] = useState(false)
-  const rankFetchLimit = rankExpanded ? RANK_FETCH_FULL : RANK_FETCH_INITIAL
+  const [rankFetchLimit, setRankFetchLimit] = useState(RANK_FETCH_INITIAL)
 
   const {
     data: submissionsForSelectedProject = EMPTY_SUBMISSIONS,
@@ -1618,8 +1630,8 @@ const { data: projects = [] } = useQuery({
     setScoringWeights(resolveScoringWeights(selectedProject))
     // 契約形態が「派遣」なら派遣免許フィルターを自動ON
     setRequireHaken(selectedProject.contract_type === '派遣')
-    // 案件を切り替えたら「残りも取得済み」を畳む（次の案件でまた200件引かないため）
-    setRankExpanded(false)
+    // 案件を切り替えたら取得件数を初期値へ（次の案件で前の展開状態を引き継がない）
+    setRankFetchLimit(RANK_FETCH_INITIAL)
   }, [selectedProject?.id]) // selectedProject?.id: プロジェクトが非同期ロードされた後も再発火させるため
 
   // メモ化必須: 毎レンダリング新しい配列を作ると、これを依存に持つ useMemo / useQuery が
@@ -2214,10 +2226,11 @@ const { data: projects = [] } = useQuery({
                             />
                           ))}
                           <RankingRestAccordion
-                            count={Math.min(projectRankTotal, RANK_FETCH_FULL) - RANK_HEAD}
+                            count={Math.min(projectRankTotal, RANK_FETCH_MAX) - RANK_HEAD}
                             unitLabel="名"
-                            onOpen={() => setRankExpanded(true)}
-                            loading={rankExpanded && isFetchingProjectSubs}
+                            remaining={Math.min(projectRankTotal, RANK_FETCH_MAX) - selectedProjectRanked.length}
+                            onLoadMore={() => setRankFetchLimit((n) => Math.min(n + RANK_FETCH_STEP, RANK_FETCH_MAX))}
+                            loading={isFetchingProjectSubs}
                           >
                             {selectedProjectRanked.slice(RANK_HEAD).map((s, idx) => (
                               <ProjectModeRankCard
