@@ -373,6 +373,36 @@ const EMPTY_CANDIDATES: Candidate[] = []
 const EMPTY_SUBMISSIONS: Submission[] = []
 const EMPTY_DUPLICATE_ROWS: Record<string, Array<Omit<DuplicateCandidate, 'duplicateScore'>>> = {}
 
+/**
+ * 役割の合致度を画面用のラベルにする。
+ * ⚠ 段階は DB の role_affinity / match-batch の roleAffinity と同じ意味にすること
+ *   （同一1.0 / 同系統0.7 / 系統違い0.2）。重み30なので ±15〜-9pt になる。
+ */
+const ROLE_FAMILIES_UI: Record<string, string[]> = {
+  'プロジェクトマネージャー': ['management'], 'PMO': ['management', 'support'],
+  'プロジェクトリーダー': ['management'], 'スクラムマスター': ['management'],
+  'コンサルタント': ['management'],
+  'システムエンジニア': ['engineering'], 'プログラマー': ['engineering'],
+  'テックリード': ['engineering', 'management'], 'アーキテクト': ['engineering', 'management'],
+  'インフラエンジニア': ['engineering'], 'フロントエンドエンジニア': ['engineering'],
+  'バックエンドエンジニア': ['engineering'], 'フルスタックエンジニア': ['engineering'],
+  'クラウドエンジニア': ['engineering'], 'データエンジニア': ['engineering'],
+  'MLエンジニア': ['engineering'],
+  'ヘルプデスク': ['support'], '運用保守': ['support'], 'テストエンジニア': ['support'],
+}
+function roleAffinityLabel(required: string, candidate: string):
+  { mark: string; cls: string; note: string } {
+  if (required === candidate) {
+    return { mark: '◎', cls: 'bg-emerald-100 text-emerald-800', note: '案件が求める役割と一致（+15pt）' }
+  }
+  const a = ROLE_FAMILIES_UI[required] ?? []
+  const b = ROLE_FAMILIES_UI[candidate] ?? []
+  if (a.some((f) => b.includes(f))) {
+    return { mark: '○', cls: 'bg-emerald-50 text-emerald-700', note: '同じ系統の役割（+6pt）' }
+  }
+  return { mark: '×', cls: 'bg-red-50 text-red-700', note: '系統が違う役割（-9pt）' }
+}
+
 /** 一覧に出す件数。それ以上はアコーディオン内へ */
 const RANK_HEAD = 5
 /** 案件を選んだ直後に引く件数。営業が見るのは上位数名で、残りはアコーディオンの中。
@@ -559,6 +589,7 @@ function ProjectModeRankCard({
   niceToHaveSkills = [],
   aiNiceSkills,
   specialist,
+  requiredRole,
   skillMatcher = NO_MATCHES,
   agentDomainMap,
 }: {
@@ -574,6 +605,8 @@ function ProjectModeRankCard({
   aiNiceSkills?: Map<string, string | null>
   /** AIが読んだ「この案件が求める技術圏」。押さえ具合をカードに出す */
   specialist?: AiSpecialist | null
+  /** AIが読んだ「この案件が求める役割」。人材の主役割との合致が順位に±する */
+  requiredRole?: string | null
   /** スキル一致判定。サーバの skill_satisfies と同じ結果になる（src/lib/db/skillMatch.ts） */
   skillMatcher?: SkillMatcher
   agentDomainMap?: Map<string, { license_status: string }>
@@ -683,6 +716,61 @@ function ProjectModeRankCard({
                     <span className="text-[10px] bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">派遣NG</span>
                   )}
                 </div>
+                {/* ── 採点に効いている残りの材料（2026-08-14）──
+                    「点数に使った情報は出さないと本当か？となる」（ユーザー指摘）。
+                    役割・雇用形態・派遣免許・英語はいずれもスコアを±させるのに
+                    画面に出ておらず、営業から見て根拠が追えなかった */}
+                {(() => {
+                  const rp2 = s.candidate.raw_profile as Record<string, unknown>
+                  const mainRole = Array.isArray(rp2?.roles) ? (rp2.roles as string[])[0] ?? null : null
+                  const subRoles = Array.isArray(rp2?.roles) ? (rp2.roles as string[]).slice(1, 3) : []
+                  const englishLevel = rp2?.englishLevel as string | null
+                  const aff = requiredRole && mainRole ? roleAffinityLabel(requiredRole, mainRole) : null
+                  if (!mainRole && !employmentType && !englishLevel && !requiredRole) return null
+                  return (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {/* 役割: 案件が求める役割と一致しているかを色で出す */}
+                      {mainRole ? (
+                        <span
+                          className={`text-[10px] rounded px-1.5 py-0.5 font-medium ${aff?.cls ?? 'bg-gray-100 text-gray-600'}`}
+                          title={requiredRole
+                            ? `この案件が求める役割: ${requiredRole}／この人の主役割: ${mainRole}${subRoles.length ? `（他に ${subRoles.join('・')}）` : ''}\n${aff?.note ?? ''}`
+                            : `この人の主役割: ${mainRole}${subRoles.length ? `（他に ${subRoles.join('・')}）` : ''}`}
+                        >
+                          役割: {mainRole}{aff ? ` ${aff.mark}` : ''}
+                        </span>
+                      ) : requiredRole && (
+                        <span className="text-[10px] bg-gray-100 text-gray-500 rounded px-1.5 py-0.5"
+                          title={`経歴から役割を読み取れなかったため加減点なし（案件は ${requiredRole} を求めています）`}>
+                          役割: 判定不可
+                        </span>
+                      )}
+                      {/* 雇用形態: 案件の許可リストから外れると20pt上限になる */}
+                      {employmentType && (
+                        <span className="text-[10px] bg-slate-100 text-slate-600 rounded px-1.5 py-0.5"
+                          title="案件が雇用形態を限定している場合、外れると20pt上限になります">
+                          {employmentType}
+                        </span>
+                      )}
+                      {/* 派遣免許: 派遣社員のときだけ ±5pt */}
+                      {isHaken && licenseStatus && (
+                        <span className={`text-[10px] rounded px-1.5 py-0.5 ${
+                          licenseStatus === 'haken' || licenseStatus === 'both'
+                            ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}
+                          title="エージェントの派遣免許。確認済みなら +5pt">
+                          派遣免許{licenseStatus === 'haken' || licenseStatus === 'both' ? '確認済' : '未確認'}
+                        </span>
+                      )}
+                      {/* 英語: 案件が英語要件を持つとき +2〜8pt */}
+                      {englishLevel && (
+                        <span className="text-[10px] bg-sky-50 text-sky-700 rounded px-1.5 py-0.5"
+                          title="案件が英語要件を持つ場合に加点されます（ビジネス +8pt / 日常会話 +2pt）">
+                          英語: {englishLevel === 'business' ? 'ビジネス' : englishLevel === 'daily' ? '日常会話' : englishLevel}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })()}
                 {/* 判定の元になった原文。これが無いと可否の裏が取れない */}
                 {workStyleNote && (
                   <p className="text-[10px] text-gray-400 mt-0.5 truncate" title={workStyleNote}>
@@ -712,13 +800,22 @@ function ProjectModeRankCard({
             const cov = ecosystemCoverage(specialist, (s.candidate.skills as string[]) ?? [], skillMatcher)
             if (!cov) return null
             const strong = cov.ratio >= 0.6
+            // 0件なのに「部分的」と出ていて意味が通らなかった（2026-08-14 指摘）
+            const label = cov.hit.length === 0 ? '該当なし'
+              : strong ? 'この圏に広く精通' : '一部のみ'
             return (
               <div className={`mt-1.5 rounded-md border px-2.5 py-1.5 ${strong ? 'bg-violet-50 border-violet-200' : 'bg-slate-50 border-slate-100'}`}>
-                <span className={`text-xs font-medium ${strong ? 'text-violet-700' : 'text-gray-500'}`}>
+                <span
+                  className={`text-xs font-medium ${strong ? 'text-violet-700' : 'text-gray-500'}`}
+                  title={`「${specialist.ecosystem}圏」＝この案件は ${specialist.ecosystem} 系の技術に広く精通した人を求めている、という AI の読みです。`
+                    + `\n${specialist.reason ? `根拠: ${specialist.reason}\n` : ''}`
+                    + `圏の技術（${cov.total}件）: ${specialist.coreSkills.join('、')}`
+                    + `\nこの人が持っているのは ${cov.hit.length} 件です。`}
+                >
                   {specialist.ecosystem}圏 {cov.hit.length}/{cov.total}
                 </span>
                 <span className="text-[10px] text-gray-400 ml-1">
-                  {strong ? 'この圏に広く精通' : '部分的'}
+                  {label}
                 </span>
                 {cov.hit.length > 0 && (
                   <div className="mt-0.5 flex flex-wrap gap-1">
@@ -2235,6 +2332,7 @@ const { data: projects = [] } = useQuery({
                               niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
                               aiNiceSkills={aiRelatedSkillMap(selectedProject.raw_data)}
                               specialist={getAiInterpretation(selectedProject.raw_data)?.specialist}
+                              requiredRole={getAiInterpretation(selectedProject.raw_data)?.requiredRole}
                               skillMatcher={projectSkillMatcher}
                               agentDomainMap={agentDomainMap}
                             />
@@ -2258,6 +2356,7 @@ const { data: projects = [] } = useQuery({
                                 niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
                                 aiNiceSkills={aiRelatedSkillMap(selectedProject.raw_data)}
                               specialist={getAiInterpretation(selectedProject.raw_data)?.specialist}
+                              requiredRole={getAiInterpretation(selectedProject.raw_data)?.requiredRole}
                                 agentDomainMap={agentDomainMap}
                               />
                             ))}
