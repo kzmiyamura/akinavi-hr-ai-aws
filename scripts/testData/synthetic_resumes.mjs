@@ -96,6 +96,33 @@ export function unreadableOwnSheetWorkbook() {
   return wb
 }
 
+/** 和暦だけで書かれた経歴書（実ファイル TK / MK 型・2026-08-14 実測）。
+ *  `R7.9 ～ R8.8` `H28/4` のように元号表記しか無く、西暦セルは1つも無い。
+ *  AWS の `S3` を「昭和3年」と読まないこと（月が無いので日付ではない）。 */
+export function warekiWorkbook() {
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, sheet([
+    ['業務経歴'],
+    ['No', '開始年月', '終了年月', '業務内容', '使用技術'],
+    ['1', 'R7.9', 'R8.8', '基幹システム更改', 'Java, Oracle Database'],
+    ['2', 'R6/1', 'R7/6', 'Web API 開発', 'Java, Spring Boot'],
+    ['3', 'H28/4', 'H30/3', 'インフラ構築', 'Linux, AWS(S3, CloudFront)'],
+  ]), '業務経歴')
+  return wb
+}
+
+/** セル内で改行され、見出しの後ろに西暦が来る（実ファイル AN 型・2026-08-14 実測）。
+ *  `開始月⏎2026年4月` のため先頭一致に引っかからず、西暦があるのに捨てられていた */
+export function multilineCellWorkbook() {
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, sheet([
+    ['スキルシート'],
+    ['開始月\n2025年10月', '終了月\n2026年3月', '合計作業期間\n(0年6ヶ月)', 'ECサイト構築', 'PHP, MySQL'],
+    ['開始月\n2026年4月', '終了月\n2026年7月', '合計作業期間\n(0年4ヶ月)', '社内基幹の改修', 'Java, Oracle Database'],
+  ]), 'スキルシート')
+  return wb
+}
+
 /** 従来どおり素直に日付が入っているシート（変更で壊していないことの確認用） */
 export function plainDateWorkbook() {
   const wb = XLSX.utils.book_new()
@@ -127,4 +154,6 @@ export const CASES = [
   // 窓を右6まで広げた副作用よけ。年はあるが月が無い（資格欄）→ 日付とみなさない
   { name: '年セルだけで月が無い（資格欄）', wb: yearWithoutMonthWorkbook, expectSheet: null },
   { name: '通常の日付表記', wb: plainDateWorkbook, expectSheet: '職務経歴' },
+  { name: '和暦のみ（TK/MK型）', wb: warekiWorkbook, expectSheet: '業務経歴' },
+  { name: 'セル内改行の後ろに西暦（AN型）', wb: multilineCellWorkbook, expectSheet: 'スキルシート' },
 ]
