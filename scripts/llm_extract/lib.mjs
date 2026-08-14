@@ -8,6 +8,22 @@ export const NOW_YM = (() => { const d = new Date(); return d.getFullYear() * 12
 /** セル文字列が「西暦で始まる日付」か（従来の判定） */
 const ANCHORED_DATE = /^(19|20)\d{2}[/年.\-]\d{1,2}/
 
+/** 和暦の年月（`R7.9` `R7/6` `令和8年4月` `H28/4`）。
+ *  実ファイル TK / MK が和暦だけで書かれており、西暦セル0件として捨てられていた
+ *  （2026-08-14 実測）。元号1文字＋数字だけの `S3`（AWS S3）を拾わないよう、
+ *  **月まで揃っている場合のみ**日付とみなす。 */
+const WAREKI_DATE = /^(令和|平成|昭和|[RHSrhs])\s?(\d{1,2})\s*[年./\-]\s*(\d{1,2})/
+
+/** セル内が改行されている場合に備えて行ごとに見る。
+ *  実ファイル AN は `開始月⏎2026年4月` で、**西暦はあるのに先頭が見出し**だったため
+ *  先頭一致に引っかからず0件になっていた（2026-08-14 実測）。 */
+const cellLines = (c) => String(c).split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+
+/** そのセルが日付を含むか（西暦・和暦の両方／セル内改行も見る） */
+function cellHasDate(c) {
+  return cellLines(c).some((line) => ANCHORED_DATE.test(line) || WAREKI_DATE.test(line))
+}
+
 /** 記入例・サンプルのシート。日付が大量にあるので日付数だけで選ぶと本人シートに勝ち、
  *  **他人のサンプル記入を本人の経歴として転記する**（実例 YN の「スキルシート(NW・SV記入例)」は
  *  12案件・109ヶ月ぶんの日付を持つ。本人は経験3年）。本人のシートが無いときだけ使う */
@@ -22,7 +38,7 @@ const EXAMPLE_SHEET = /記入例|記載例|入力例|サンプル|見本|テン�
  * 1件も無いときだけ、同じ行で「西暦のセル」の近傍に「1〜12のセル」がある組を数える。
  */
 function countDateCells(grid) {
-  const anchored = grid.flat().filter((c) => ANCHORED_DATE.test(String(c).trim())).length
+  const anchored = grid.flat().filter(cellHasDate).length
   if (anchored > 0) return anchored
   let split = 0
   for (const row of grid) {
@@ -101,11 +117,21 @@ export function buildTextGridInput(text, label = 'text') {
 export const normTech = s => String(s).toLowerCase().replace(/[\s　]/g, '')
   .replace(/[Ａ-Ｚａ-ｚ０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
 
+/** 元号の開始年-1（令和1年=2019年 なので 2018 を足す） */
+const ERA_BASE = { 令和: 2018, R: 2018, 平成: 1988, H: 1988, 昭和: 1925, S: 1925 }
+
 export function parseYM(s) {
   if (!s) return null
-  if (/present|現在/.test(String(s))) return NOW_YM
-  const m = String(s).match(/(\d{4})[\/年.\-](\d{1,2})/)
-  return m ? (+m[1]) * 12 + (+m[2]) : null
+  const t = String(s)
+  if (/present|現在/.test(t)) return NOW_YM
+  const m = t.match(/(\d{4})[/年.\-](\d{1,2})/)
+  if (m) return (+m[1]) * 12 + (+m[2])
+  // プロンプトでは西暦に直すよう指示しているが、和暦のまま返ることがある。
+  // ここで拾わないと skillYears が丸ごと空になる（TK / MK は和暦だけの経歴書・2026-08-14）
+  const w = t.match(/^\s*(令和|平成|昭和|[RHSrhs])\s?(\d{1,2})\s*[年./\-]\s*(\d{1,2})/)
+  if (!w) return null
+  const base = ERA_BASE[w[1].length === 1 ? w[1].toUpperCase() : w[1]]
+  return base ? (base + +w[2]) * 12 + (+w[3]) : null
 }
 
 function unionMonths(iv) {
