@@ -3,6 +3,7 @@
 // どちらも同じ contract: callModel(model, prompt) -> {data, costUsd, ms, raw}
 import { spawn, execFileSync } from 'child_process'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 
 const IS_WIN = process.platform === 'win32'
@@ -23,6 +24,22 @@ const resolveClaudeExe = () => {
 }
 const CLAUDE_EXE = resolveClaudeExe()
 
+/**
+ * `claude -p` を走らせる作業ディレクトリ。
+ *
+ * claude -p はカレントディレクトリのプロジェクト設定（CLAUDE.md 等）をシステムプロンプトに
+ * 読み込む。ワーカーはプロジェクト直下で動いているため、**抽出のたびに約7,000トークン**を
+ * 余計に送っていた（2026-08-14 実測: プロジェクト内 15,953 / 無関係なディレクトリ 9,006）。
+ *
+ * 抽出プロンプト（prompts.mjs）は自己完結していて背景知識を必要としない。
+ * むしろ背景があると「本文に無い情報を補う」方向に働くので、渡さない方が望ましい。
+ * 空のディレクトリを1つ作ってそこで実行する。
+ */
+const PROMPT_CWD = (() => {
+  const dir = path.join(os.tmpdir(), 'akinavi-llm-cwd')
+  try { fs.mkdirSync(dir, { recursive: true }); return dir } catch { return undefined }
+})()
+
 /** stdin にプロンプトを流して claude -p を実行（execFileのinputはSync専用のためspawnで）
  *  タイムアウト時は Windows なら taskkill でプロセスツリーごと落とす */
 function spawnWithStdin(cmd, args, input, timeoutMs = 180_000) {
@@ -32,6 +49,8 @@ function spawnWithStdin(cmd, args, input, timeoutMs = 180_000) {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: IS_WIN && !useExe,
       windowsHide: true,
+      // プロジェクト設定（CLAUDE.md 等）を読み込ませないため空ディレクトリで起動する
+      cwd: cmd === 'claude' ? PROMPT_CWD : undefined,
     })
     let out = '', err = ''
     const timer = setTimeout(() => {
