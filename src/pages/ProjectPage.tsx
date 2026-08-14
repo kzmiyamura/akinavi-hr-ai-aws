@@ -1060,13 +1060,16 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                         {p.client && (
                           <span className="text-xs text-gray-400 truncate">{p.client}</span>
                         )}
+                        {/* 未入力項目の警告。項目名だけを出していたため
+                            「リモート」が「リモート可」に読めていた（2026-08-14 指摘）。
+                            必ず「未入力」を添える */}
                         {missing.length > 0 && (
                           <span
                             className="flex items-center gap-0.5 text-[10px] text-amber-500"
-                            title={`未入力: ${missing.join('・')}`}
+                            title={`この案件はまだ ${missing.join('・')} が入力されていません（可否の判定ではありません）`}
                           >
                             <AlertCircle size={10} />
-                            {missing.join('・')}
+                            {missing.join('・')}が未入力
                           </span>
                         )}
                       </div>
