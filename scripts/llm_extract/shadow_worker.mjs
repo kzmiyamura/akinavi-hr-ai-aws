@@ -52,6 +52,12 @@ const MAX_ATTEMPTS = 3
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'akinavi-shadow-'))
 // 本番 candidates への上書き。SHADOW_APPLY=0 で記録のみ（シャドー運転）に戻せる
 const APPLY = process.env.SHADOW_APPLY !== '0'
+// 処理対象のデータ環境。既定は prod（従来どおり）。
+// 'demo' にすると検証データマークの付いた人材・案件だけを処理する。
+// 検証で prod を引かないための逃げ道（2026-08-14 ユーザー方針）。
+// 常駐プロセスとは**別に**起動すること（同じ state ファイルを共有するため、
+// 日次カウンタを食い合わないよう SHADOW_MAX_PER_DAY を小さく指定して単発で回す）
+const DATA_ENV = process.env.SHADOW_DATA_ENV === 'demo' ? 'demo' : 'prod'
 
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 const state = fs.existsSync(STATE_FILE)
@@ -405,7 +411,7 @@ async function cycle() {
   if (take <= 0) { log('ペース配分により待機（今サイクルの処理枠なし）'); return }
   const { clause: skillClause, list: skillList } = await skillFilterClause()
   const q = `candidates?select=id,name,resume_url,raw_profile,created_at,desired_rate,from_company,experience_years,skills` +
-    `&data_env=eq.prod&merged_into=is.null` +
+    `&data_env=eq.${DATA_ENV}&merged_into=is.null` +
     `&raw_profile->>_llm_checked_at=is.null` +
     `&created_at=gte.${encodeURIComponent(since)}` +
     skillClause +
@@ -474,7 +480,7 @@ async function projectCycle() {
   if (state.dayCount >= MAX_PER_DAY) return
   if (!state.projWatermark) { state.projWatermark = new Date().toISOString(); saveState() }
   const rows = await rest(
-    `projects?select=${PROJ_SELECT}&data_env=eq.prod&created_at=gt.${encodeURIComponent(state.projWatermark)}` +
+    `projects?select=${PROJ_SELECT}&data_env=eq.${DATA_ENV}&created_at=gt.${encodeURIComponent(state.projWatermark)}` +
     `&order=created_at.asc&limit=${PROJ_MAX_PER_CYCLE}`)
   if (!rows?.length) return
   log(`新規案件 ${rows.length}件`)
@@ -517,7 +523,7 @@ const INTERPRET_MAX_PER_CYCLE = 3
 async function projectInterpretCycle() {
   if (state.dayCount >= MAX_PER_DAY) return
   const rows = await rest(
-    `projects?select=${PROJ_SELECT}&data_env=eq.prod&status=eq.open` +
+    `projects?select=${PROJ_SELECT}&data_env=eq.${DATA_ENV}&status=eq.open` +
     `&raw_data->>aiInterpretation=is.null&order=created_at.desc&limit=${INTERPRET_MAX_PER_CYCLE}`)
   if (!rows?.length) return
   log(`AI解釈の未処理案件 ${rows.length}件`)
@@ -569,7 +575,7 @@ async function recommendCycle() {
   }
   const projects = await rest(
     'projects?select=id,title,client,required_skills,raw_data,work_location,remote_policy,contract_type,budget_max' +
-    '&data_env=eq.prod&status=eq.open&order=created_at.desc&limit=20')
+    `&data_env=eq.${DATA_ENV}&status=eq.open&order=created_at.desc&limit=20`)
   if (!projects?.length) return
   let made = 0
   for (const p of projects) {
@@ -577,7 +583,7 @@ async function recommendCycle() {
     // ai_raw 丸ごとは重いのでマーカーだけ取る（egress 節約）
     const subs = await rest(
       `submissions?select=id,candidate_id,match_score,rec_at:ai_raw->recommendation->>at` +
-      `&project_id=eq.${p.id}&data_env=eq.prod&order=match_score.desc&limit=${REC_TOP_N}`)
+      `&project_id=eq.${p.id}&data_env=eq.${DATA_ENV}&order=match_score.desc&limit=${REC_TOP_N}`)
     const todo = (subs ?? []).filter((s) => !s.rec_at)
     if (!todo.length) continue
     const pText = projectText(p)
@@ -698,7 +704,7 @@ async function boxQueue() {
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
   const auto = manual.length >= 3 ? [] : (await rest(
     `candidates?select=${BOX_SELECT}&box_status=eq.pending&resume_url=is.null&box_url=not.is.null` +
-    `&data_env=eq.prod&raw_profile->>_llm_checked_at=not.is.null` +
+    `&data_env=eq.${DATA_ENV}&raw_profile->>_llm_checked_at=not.is.null` +
     `&created_at=gte.${encodeURIComponent(since)}` +
     `&order=created_at.desc&limit=${AUTO_BOX_PER_POLL}`)) ?? []
   for (const c of [...manual, ...auto]) {
@@ -707,7 +713,7 @@ async function boxQueue() {
   }
 }
 
-log(`ワーカー起動 mode=${APPLY ? '本番上書き' : 'シャドー記録のみ'} ` +
+log(`ワーカー起動 mode=${APPLY ? '本番上書き' : 'シャドー記録のみ'} env=${DATA_ENV} ` +
   `方式=キュー(新しい順・直近${LOOKBACK_DAYS}日) 上限=${MAX_PER_CYCLE}/cycle, ${MAX_PER_DAY}/day`)
 // 前回クラッシュで 'fetching' のまま残った依頼を復帰させる
 await rest(`candidates?box_status=eq.fetching`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'fetch_requested' }) }).catch(() => {})
