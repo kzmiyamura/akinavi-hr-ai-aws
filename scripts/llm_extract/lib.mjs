@@ -28,15 +28,31 @@ function countDateCells(grid) {
   for (const row of grid) {
     for (let i = 0; i < row.length; i++) {
       if (!/^(19|20)\d{2}$/.test(String(row[i]).trim())) continue
-      // 「年」の後ろに見出しや空セルを挟んで「月」が来る形まで拾う。
-      // 窓を広げすぎると無関係な数値を月と誤認するので3セルまで
-      for (let j = i + 1; j < Math.min(row.length, i + 4); j++) {
-        const m = String(row[j]).trim()
-        if (/^\d{1,2}$/.test(m) && +m >= 1 && +m <= 12) { split++; break }
-      }
+      if (monthCellRightOf(row, i) !== -1) split++
     }
   }
   return split
+}
+
+/**
+ * 記入フォーム型の「年」セルから見て、同じ行の右にある「月」セルの位置を返す（無ければ -1）。
+ *
+ * 実ファイル7件で数えた並び（2026-08-14・`probe_year_cell_layout.mjs`）:
+ *   2026 |    |    | 年 |    | 9 |    | 月     ← 月は右5（最多・39/41 等）
+ *   2019 | 年 | …  | 9                        ← 右2
+ * セル結合で空セルが挟まり、「年」ラベルも独立セルになるため距離は 2〜6 に散る。
+ * **想定で窓を決めて右3までにしていたため、主流の右5・右6 を取り逃していた。**
+ *
+ * 間に挟まってよいのは空セルと「年」ラベルだけにしてある。単純に右6まで数値を探すと
+ * 「資格 | … | 認定 | … | 1999 | … | 1」のような無関係な数字を月と誤認する。
+ */
+function monthCellRightOf(row, yearIdx) {
+  for (let j = yearIdx + 1; j < Math.min(row.length, yearIdx + 7); j++) {
+    const s = String(row[j] ?? '').trim()
+    if (s === '' || s === '年') continue                        // 空セル・年ラベルは飛ばす
+    return /^\d{1,2}$/.test(s) && +s >= 1 && +s <= 12 ? j : -1  // 最初の実セルが月かどうか
+  }
+  return -1
 }
 
 /** xlsx → {file, sheet, rows, merges} 無損失整形JSON（経歴シートは日付セル最多で選定）。
