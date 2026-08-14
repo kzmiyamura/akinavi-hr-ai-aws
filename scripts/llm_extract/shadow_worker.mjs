@@ -42,7 +42,7 @@ const MAX_PER_DAY = Number(process.env.SHADOW_MAX_PER_DAY ?? 100)
 // 所見は毎日の余り（実測: 8/13 は11件、8/14 は0件）しか作れなかった。
 // 所見は「各案件の上位10人」しか対象にしないので母数が小さく、
 // 一度埋まればあとは新規案件と再マッチング分の維持だけで済む
-const REC_MAX_PER_DAY = Number(process.env.SHADOW_REC_MAX_PER_DAY ?? 40)
+const REC_MAX_PER_DAY = Number(process.env.SHADOW_REC_MAX_PER_DAY ?? 100)
 // 何日前までを処理対象にするか。7日で archive-candidates がアーカイブへ移すため、
 // それより手前で切る。古いものを掘り返して予算を使い切らないための足切り
 const LOOKBACK_DAYS = Number(process.env.SHADOW_LOOKBACK_DAYS ?? 3)
@@ -548,7 +548,10 @@ async function projectInterpretCycle() {
 // キュー方式: ai_raw.recommendation が無い上位ペアを拾う。出力不能でも印を書く。
 // 再マッチングの upsert は ai_raw を丸ごと置き換えるので、顔ぶれ・スコアが変わると
 // マーカーが消えて自動的に再生成対象へ戻る（明示的な無効化処理は不要）。
-const REC_TOP_N = 10           // 案件ごとの対象順位
+// 案件ごとの対象順位。営業は上位数名しか見ず、それ以外は人材検索から辿るので
+// 10→5 に絞った（2026-08-14 ユーザー判断）。所見1件あたり60〜90秒かかるため
+// ここを絞ることが所要時間にそのまま効く
+const REC_TOP_N = 5
 const REC_MAX_PER_CYCLE = 5    // 1サイクルの生成数（1件あたり約60〜90秒）
 
 async function recommendCycle() {
