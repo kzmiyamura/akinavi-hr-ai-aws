@@ -182,6 +182,18 @@ Free Plan の egress 5GB に対し 8/14 時点で 2.98GB 消費・残り9日、
 | 転送量を実データで実測 | ローカルスタック（`supabase start`＋`scripts/local_test_seed.sql`）で測る |
 
 `sb-query.mjs` は**少量の1件確認だけ**に使う。一覧取得・全件走査には使わない。
+同じ確認を複数回流さない（8/14 に `check_range.mjs` で1000件フル取得を6回流し、
+21.4MB 使って得た結論は1行だった）。
+
+転送量を測りたいときは**本体を受け取らずに SQL で測る**:
+
+```sql
+SELECT octet_length(json_agg(t)::text) AS bytes
+FROM (SELECT * FROM candidates_lite WHERE data_env = 'prod' LIMIT 200) t;
+```
+
+**削減の残タスクは HANDOFF.md 「Egress 削減の残タスク」を参照**（最優先は
+ランキングの遅延取得：案件1クリック 1.63MB → 約230KB）。
 
 ## Supabase の調査クエリ
 
