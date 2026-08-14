@@ -118,6 +118,10 @@ export async function extractProjectInterpretation(bodyText) {
     // 「この案件は◯◯圏に広く精通した人を求めている」という読み。
     // 必須スキルの単語一致では表せない要求を扱う（2026-08-13）
     specialist: r.data?.specialist && typeof r.data.specialist === 'object' ? r.data.specialist : null,
+    // 案件が求める役割（PM / PMO / エンジニア / ヘルプデスク …）。
+    // ここで拾い忘れると buildInterpretationPatch まで届かず、静かに null になる（2026-08-14 に実際に踏んだ）
+    requiredRole: typeof r.data?.requiredRole === 'string' ? r.data.requiredRole.trim() : null,
+    roleReason: typeof r.data?.roleReason === 'string' ? r.data.roleReason.slice(0, 60) : null,
     summary: typeof r.data?.summary === 'string' ? r.data.summary.slice(0, 200) : null,
     confidence: r.data?.confidence ?? 'low',
     costUsd: r.costUsd ?? 0,

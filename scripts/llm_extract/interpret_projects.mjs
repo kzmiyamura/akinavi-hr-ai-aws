@@ -65,6 +65,7 @@ for (const p of rows) {
   const r = await extractProjectInterpretation(text.slice(0, 8000))
   const { patch, changes } = buildInterpretationPatch(p, r, master)
   const ai = patch.raw_data.aiInterpretation
+  console.log(`  求める役割: ${ai.requiredRole ?? '(判定なし)'}${ai.roleReason ? `（${ai.roleReason}）` : ''}`)
   console.log(`  複数名前提: ${ai.multiPerson}${ai.evidence ? `（根拠:「${ai.evidence}」）` : ''}`)
   console.log(`  確信度: ${ai.confidence}`)
   if (ai.summary) console.log(`  所見: ${ai.summary}`)
