@@ -2,6 +2,64 @@
 
 ---
 
+## 0-Z. このセッションで何が変わったか（8/14・要約）
+
+長いので先に結論。詳細は各節へ。
+
+| 直したもの | 効果 |
+|---|---|
+| **AIが経歴書を読めていなかった** | 読めない経歴書 **11件 → 0件** |
+| **AI校正の絞込が部分一致** | 無関係な人材が枠を食っていた分 **12%** を削減 |
+| **AI校正の状態表示が Sonnet 時代のまま** | 打ち切りが「成功」に見えていたのを「AI校正不可」に分離 |
+| **`claude -p` がCLAUDE.mdを毎回読んでいた** | **7,099トークン/回** 削減 |
+
+### ⚠ このセッションで一度データを壊している（復旧済み）
+
+「本人シートが読めなければ**記入例シートで代替**」というフォールバックを入れ、
+YN の経験年数が 3年→9年、記入例の Zabbix/Ansible/Terraform が本人スキルとして
+登録された。**原因は合成フィクスチャを実ファイルの形ではなく想定で作ったこと。**
+テストは緑のまま通り抜けた。
+
+そこから運用を2つ変えた:
+
+1. **実装の前に実ファイルの形を数える**（`probe_year_cell_layout.mjs` /
+   `probe_no_western_year.mjs`）。想定でフィクスチャを作らない
+2. **その変更の動機になった実データで確認できるまでマージしない**
+   （合成テストと demo が緑でも足りない）
+
+### ブランチ運用を始めた（8/14〜）
+
+AI経路・マッチング配点など「決定的なテストが薄い」変更は
+`git worktree` でブランチを切って作業し、確認後に main へマージする。
+
+```
+powershell -File scripts/setup_worktree.ps1 -Branch feat/xxx
+```
+
+**メインの作業ツリーで checkout してはいけない。** pm2 の常駐ワーカーが
+そのツリーをそのまま実行しているため、**本番ワーカーが実験コードになる**。
+worktree には gitignore 対象（`node_modules` / `.env.local` / `scripts/testData`）が
+入らないので、上のスクリプトが持ち込む（無いと vitest が環境要因で4ファイル落ちる）。
+
+regex 抽出器のように Golden 207件が守ってくれる範囲は main 直で構わない。
+**ただし Excel Golden は AI 経路を守らない**（別モジュールなので壊しても緑になる）。
+AI経路の回帰は `node scripts/test_llm_sheet_selection.mjs`。
+
+### 検証は demo（検証データマーク）で行う
+
+prod を引かずに、再現したいケースを自分で作って `data_env='demo'` に置く。
+
+```
+node scripts/seed_demo_candidate.mjs --body <本文> [--attach <経歴書>]
+node scripts/llm_extract/correct_candidate.mjs <id> [--run]   # 1人だけ即AI校正
+```
+
+demo は人材53件なので画面確認1回の egress が prod の数十分の一。
+ワーカーも `SHADOW_DATA_ENV=demo` で demo だけを処理できる（既定は prod）。
+**大量データテストはやらない**（2026-08-14 ユーザー指示）。
+
+---
+
 ## 0-A. 次にやること（8/14 セッション末の申し送り）
 
 ### ✅ 対応済み: 経歴書が AI に渡っていなかった（8/14・ブランチ運用1本目）
@@ -106,6 +164,28 @@ YN の実測（再適用後）:
 
 MK の経験年数が倍以上動いたので**メール本文で裏を取った**。regex の9年が誤りで、
 AI の22年が正しい（前回の「3年→9年」は汚染だったが、今回は是正）。
+
+### 既存11件の流し直し（8/14 実施済み）
+
+抽出器の修正は「これから解析する人材」にしか効かないので、
+`correct_candidate.mjs --run` で該当11件を個別に流し直した（YN は先行適用済み）。
+
+| 人材 | skillYears | 経験年数 | 裏取り |
+|---|---|---|---|
+| MK | 2 → **59** | 9 → **22** | 本文「IT業界経験約22年」と一致（46歳） |
+| AN | 6 → **39** | — | |
+| KY | 0 → **18** | 10 → 11 | |
+| TK | 8 → **25** | — | projects 39件 |
+| N.H | 16 → 19 | 12 → **27** | 55歳。28歳スタートで妥当 |
+| HT | 30 → 28 | 5 → **12** | 34歳。22歳スタートで妥当（旧値が過小） |
+| K.W | 62 → 61 | 37 → **29** | 58歳。旧37年は21歳スタートで無理がある |
+| H.K(1) | 17 → 17 | — | projects 3件 |
+| H.K(2) | 23 → 20 | — | |
+| I.Y | 45 → 32 | — | projects 4件 |
+
+**経験年数が動いた4件はすべて年齢と突き合わせて確認した**（前回の汚染がこの形だったため）。
+skillYears が減っている数件は、regex が拾っていた断片（`Boot` `TW` 等）が
+正しい名前に統合された結果で、劣化ではない。
 
 **まだ残る汚れ**: `PHP 8.3` `MySQL 8.0` `Java 21` のような**バージョン付きキー**が残る。
 AI が経歴書の表記をそのまま転記するため。skillYears には skill_master 照合による
@@ -952,11 +1032,11 @@ LLMが余計なものを足すので次のガードを入れた。
 
 - ~~AI が読めない経歴書の残り4件（西暦表記が無い型）~~
   → **8/14 対応済み。11件すべて読めるようになった**（和暦・セル内改行）。詳細は §0-A
-- **既存レコードの取り込み直しが未実施**。上記の修正は「これから解析する人材」に効く。
-  すでに `_llm_checked_at` が付いた人材は**ワーカーが二度と拾わない**ので、
-  経歴書が読めるようになっても値は古いまま。個別に流すなら
-  `node scripts/llm_extract/correct_candidate.mjs <id> --run`
-  （実測: TK は skillYears 8→26件、MK は 2→53件・経験年数 9→22年に是正）
+- **修正は「これから解析する人材」にしか効かない**（重要）。
+  すでに `_llm_checked_at` が付いた人材は**ワーカーが二度と拾わない**ため、
+  抽出器を直しても値は古いまま残る。抽出を直したら**既存分の流し直しを別途考えること**。
+  1人ずつなら `node scripts/llm_extract/correct_candidate.mjs <id> --run`。
+  8/14 に該当11件は流し直し済み（結果は §0-A 末尾）
 - **skillYears にバージョン付きキーが残る**（`PHP 8.3` / `MySQL 8.0` / `Java 21`）。
   skill_master 照合による正規化が skillYears には無い。マッチングのスキル年数に
   効かない可能性がある。`skills` 列（`mergeSkills` が照合）とは扱いが違う
@@ -1011,7 +1091,12 @@ env を変えて再起動する場合は `pm2 restart akinavi-shadow --update-en
 pm2 list                                        # akinavi-shadow が online か
 npm run build                                   # ★ tsc -b。Vercel が使うのはこちら
 npx vitest run                                  # フロントのテスト（87件）
-node scripts/test_excel_anomalies.mjs           # 合成異常系203ケース
+node scripts/test_excel_anomalies.mjs           # 合成異常系205ケース
+node scripts/test_llm_sheet_selection.mjs       # ★AI経路のシート選定（Goldenは守らない）
+node scripts/test_parse_ym.mjs                  # 和暦を含む年月パース
+node scripts/llm_extract/skill_filter_selftest.mjs   # AI校正の絞込（語境界一致）
+node scripts/audit_llm_unreadable_resumes.mjs   # AIが読めない経歴書の分類
+node scripts/bench_prompt_overhead.mjs          # claude -p の固定オーバーヘッド
 node scripts/test_excel_parsing.mjs --compact   # Excel回帰（10件）＋Golden一致率
 node scripts/audit_recent_quality.mjs 10        # 直近10件の読み取り品質
 node scripts/audit_skillyears_gap.mjs 7         # スキル年数が取れない原因の内訳
