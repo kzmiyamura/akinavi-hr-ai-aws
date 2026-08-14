@@ -81,6 +81,34 @@ export function parseSkillFilterValue(value) {
   return list.length ? list : null
 }
 
+/** 語境界とみなさない文字。CLAUDE.md §6 の skill_satisfies と同じ集合
+ *  （英数字・`#`・`+` に挟まれていたら別の語）。 */
+const PG_WORD_CHARS = 'a-zA-Z0-9#+'
+
+/** PostgreSQL の正規表現メタ文字を無害化する。
+ *  バックスラッシュを使うと PostgREST の二重引用符内でさらにエスケープが要るので、
+ *  1文字のブラケット式（`[.]` 等）に置き換える。`]` は先頭に置く必要があるため `[]]`。
+ *  バックスラッシュと二重引用符を含むスキル名は表現できないので null を返す（呼び側で従来の部分一致に退避）。 */
+export function pgRegexEscape(s) {
+  let out = ''
+  for (const c of s) {
+    if (c === '\\' || c === '"') return null
+    if (c === ']') out += '[]]'
+    else if ('.^$*+?()[{}|-'.includes(c)) out += `[${c}]`
+    else out += c
+  }
+  return out
+}
+
+/** 本文からスキル名を「語として」拾う PostgreSQL 正規表現。
+ *  `Java` が `JavaScript` に、`C` が `C#` に当たらない。
+ *  フロント側の同等実装は src/lib/skillWordMatch.ts（両方直すこと）。 */
+export function pgSkillWordPattern(skill) {
+  const esc = pgRegexEscape(skill)
+  if (esc === null) return null
+  return `(^|[^${PG_WORD_CHARS}])${esc}([^${PG_WORD_CHARS}]|$)`
+}
+
 /**
  * スキル絞り込みの PostgREST 条件を組み立てる。
  *
@@ -88,16 +116,22 @@ export function parseSkillFilterValue(value) {
  *   ① skills 列 … regex抽出済みで skill_master 照合を通っているため表記ゆれに強い
  *   ② メール本文 … skills が空（regexが取れなかった）人材を落とさないための保険
  *
- * ②は部分一致なので "Java" は "JavaScript" にも当たる。絞りが甘くなるが、
- * 該当者を落とすと営業機会を失うため多めに拾う側に倒している。
+ * ②はかつて `ilike *Java*` の部分一致で、**本文に JavaScript があるだけの人材が
+ * Java 枠でキューに入っていた**（2026-08-14 実測: 直近3日 prod で 637→561人＝76人が誤ヒット）。
+ * CLAUDE.md §6 の「部分一致は使わない」に合わせ、語境界付きの正規表現（imatch）にした。
+ *
  * 値だけを encode する（カンマ・括弧・ドットは PostgREST の構文なので壊さない）。
+ * 正規表現自体が括弧・カンマを含むため、値は二重引用符で囲んで構文と切り分ける。
  */
 export function buildSkillFilterClause(list) {
   if (!list?.length) return ''
   const terms = []
   for (const s of list) {
     terms.push(`skills.cs.${encodeURIComponent(JSON.stringify([s]))}`)
-    terms.push(`raw_profile->>text.ilike.${encodeURIComponent(`*${s}*`)}`)
+    const pattern = pgSkillWordPattern(s)
+    // 正規表現化できない名前だけ従来の部分一致に退避（取りこぼしより甘さを取る）
+    if (pattern === null) terms.push(`raw_profile->>text.ilike.${encodeURIComponent(`*${s}*`)}`)
+    else terms.push(`raw_profile->>text.imatch."${encodeURIComponent(pattern)}"`)
   }
   return `&or=(${terms.join(',')})`
 }

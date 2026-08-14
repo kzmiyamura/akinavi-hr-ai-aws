@@ -7,7 +7,7 @@
 //   ・C# の # は URL のフラグメント記号なので必ずエンコードされること
 //
 // 実行: node scripts/llm_extract/skill_filter_selftest.mjs
-import { parseSkillFilterValue, buildSkillFilterClause } from './shadow_worker_lib.mjs'
+import { parseSkillFilterValue, buildSkillFilterClause, pgSkillWordPattern, pgRegexEscape } from './shadow_worker_lib.mjs'
 
 let pass = 0, fail = 0
 const t = (label, got, expect) => {
@@ -39,7 +39,32 @@ const one = buildSkillFilterClause(['Java'])
 t('or() で囲む', one.startsWith('&or=(') && one.endsWith(')'), true)
 t('skills と本文の2条件が出る', one.split(',').length, 2)
 t('skills は jsonb 包含でエンコードされる', one.includes(encodeURIComponent('["Java"]')), true)
-t('本文は前後ワイルドカードの ilike', one.includes('raw_profile->>text.ilike.*Java*'), true)
+t('本文は語境界付きの imatch', one.includes('raw_profile->>text.imatch.'), true)
+t('本文の部分一致（ilike）は残っていない', one.includes('ilike'), false)
+
+// ── 語境界の正規表現 ──
+// Java が JavaScript を拾っていた（2026-08-14）。CLAUDE.md §6「部分一致は使わない」
+const pgTest = (skill, text) => {
+  const p = pgSkillWordPattern(skill)
+  // PostgreSQL の ARE 相当として JS 正規表現で近似検証する（メタ文字はブラケット式で無害化済み）
+  return new RegExp(p, 'i').test(text)
+}
+t('Java は JavaScript に当たらない', pgTest('Java', 'JavaScript、jQuery、Figma'), false)
+t('Java は Java に当たる', pgTest('Java', 'Java / Spring Boot'), true)
+t('Java は日本語に挟まれても当たる', pgTest('Java', 'Java経験5年'), true)
+t('Java は行頭・行末でも当たる', pgTest('Java', 'Java'), true)
+t('C は C# に当たらない', pgTest('C', 'C#, VB.net'), false)
+t('C# は C#.NET に当たる', pgTest('C#', 'C#.NET 開発'), true)
+t('C++ は C に当たらない', pgTest('C', 'C++ での開発'), false)
+t('C++ は C++ に当たる', pgTest('C++', '言語: C++'), true)
+t('Shell は PowerShell に当たらない', pgTest('Shell', 'PowerShell スクリプト'), false)
+t('.NET のドットはメタ文字にならない', pgTest('.NET', '使用: .NET Framework'), true)
+t('ドットが任意1文字にならない', pgTest('.NET', '使用: XNET'), false)
+
+t('メタ文字はブラケット式になる', pgRegexEscape('C++'), 'C[+][+]')
+t('バックスラッシュを含む名前は表現不能', pgRegexEscape('a\\b'), null)
+const backslash = buildSkillFilterClause(['a\\b'])
+t('表現不能な名前は ilike に退避する', backslash.includes('ilike'), true)
 
 // # をエンコードし損ねると URL のフラグメント扱いになり条件が丸ごと消える
 const sharp = buildSkillFilterClause(['C#'])

@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
+import { matchesSkillFilter } from '../lib/skillWordMatch'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
 import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills } from '../lib/db/candidates'
@@ -72,53 +73,70 @@ function formatDate(iso: string) {
  *  ワーカー側を変えたらここも合わせること */
 const AI_LOOKBACK_DAYS = 3
 
-/** 常駐AIの校正状態。ワーカーが raw_profile に記録した進行段階をそのまま表示する
- * （2026-08-10 ユーザー指定。時間による推測は行わない）。
- *   null       … 校正完了、または対象外    → 何も表示しない
- *   'waiting'  … これから校正する予定      → 「AI校正待ち」
- *   'body'     … 本文をHaikuで解析済       → 「AI校正開始」
+/** 常駐AIの校正状態。ワーカーが raw_profile に記録した実際の印だけで決める
+ * （時間による推測は行わない・2026-08-10 ユーザー指定）。
+ *
+ * **2026-08-14 に Haiku 単独運用の実態へ再定義した。** 旧定義は Haiku→検証→Sonnet 昇格が
+ * あった頃のもので、到達しない段階（'sonnet'）を持つ一方、実際に起きる「失敗して再試行中」
+ * 「3回失敗して打ち切り」を表現できず、打ち切りが成功と同じ「表示なし」になっていた。
+ *
+ * | ワーカーが書く印                      | 意味                    | 表示          |
+ * |---|---|---|
+ * | 印なし・キュー対象                     | 未処理・順番待ち          | AI校正待ち     |
+ * | 印なし・キュー対象外（3日超/絞込外/demo） | 校正しない（正常）        | 表示なし       |
+ * | `_llm_attempts>=1` かつ未完            | 失敗・次サイクルで再試行   | AI校正エラー   |
+ * | `_llm_stage='body'`                   | 本文済み・添付解析中       | AI校正中       |
+ * | `_llm_checked_at` + `'done'`          | 完了                     | 表示なし       |
+ * | `_llm_checked_at` + `'failed'`        | 3回失敗で打ち切り         | AI校正不可     |
  *
  * 「待ち」は**実際に校正する予定のものにだけ**出す（2026-08-10 ユーザー指定）。
  * ワーカーは直近 AI_LOOKBACK_DAYS 日の人材しかキューに入れないため、それより古い
  * 人材に「待ち」を出すと永久に来ない順番を待たせることになる（実測1,446件中841件が該当）。
  * 同様に、スキル絞込（app_config.llm_filter_skills）が有効なときは対象外の人材も
  * キューに入らない（2026-08-12 実測: 3日以内の未校正571件中255件が絞込対象外）。
- * 対象外の人材はルールベースのみで確定した正常な状態なので、何も表示しない。
  *
- * 'sonnet'（→「AI校正中」）は Sonnet 昇格をやめた時点で到達不能になったため廃止した。
- * 残骸はワーカーが起動時に掃除する。古い値が万一残っても「AI校正開始」に寄せて
- * 進行中であることは伝わるようにしてある。 */
+ * 廃止した 'sonnet' の残骸はワーカーが起動時に掃除する。万一残っても「AI校正中」に寄せる。 */
 type AiStage = { label: string; cls: string; title: string } | null
 
 function aiCorrectionStage(c: {
   raw_profile?: Record<string, unknown>
   llm_checked_at?: string | null
   llm_stage?: string | null
+  llm_attempts?: string | number | null
   created_at?: string | null
   skills?: string[]
 }, filterSkills?: string[] | null): AiStage {
   // 一覧は raw_profile を取らず JSON パスで取り出した llm_checked_at / llm_stage を持つ。
   // 検索・絞り込み経由（candidates_lite）は raw_profile を持つ。どちらでも動くようにする
-  if (c.llm_checked_at ?? c.raw_profile?._llm_checked_at) return null
   const stage = (c.llm_stage ?? c.raw_profile?._llm_stage) as string | undefined
+  if (c.llm_checked_at ?? c.raw_profile?._llm_checked_at) {
+    // 打ち切りは「もう来ない」ので完了と混ぜない。営業には手当てが要ることを見せる
+    if (stage === 'failed') {
+      return { label: 'AI校正不可', cls: 'bg-rose-50 text-rose-600 border-rose-200',
+        title: '経歴書の解析に3回失敗したため打ち切りました。ルールベースの結果のみです' }
+    }
+    return null
+  }
   if (stage === 'body' || stage === 'sonnet') {
-    return { label: 'AI校正開始', cls: 'bg-sky-50 text-sky-600 border-sky-200',
+    return { label: 'AI校正中', cls: 'bg-sky-50 text-sky-600 border-sky-200',
       title: 'メール本文の解析が完了。添付経歴書の解析を実施中' }
+  }
+  // 失敗して再試行を待っている状態。「待ち」に混ぜると詰まりに気づけない
+  const attempts = Number(c.llm_attempts ?? c.raw_profile?._llm_attempts ?? 0)
+  if (attempts >= 1) {
+    return { label: 'AI校正エラー', cls: 'bg-amber-50 text-amber-700 border-amber-200',
+      title: `解析に失敗しました（${attempts}回）。次のサイクルで再試行します` }
   }
   // キューに入らない古い人材に「待ち」は出さない（永久に来ない順番になるため）。
   // ルールベースのみで確定した正常な状態として、何も表示しない
   const created = c.created_at ? Date.parse(c.created_at) : NaN
   if (!Number.isFinite(created) || Date.now() - created > AI_LOOKBACK_DAYS * 86_400_000) return null
   // スキル絞込が有効な場合、対象外の人材はキューに入らないので「待ち」を出さない。
-  // 判定はワーカーの二本立て（skills列の一致 or 本文の部分一致）に合わせるが、
+  // 判定はワーカーの二本立て（skills列の一致 or 本文の語一致）に合わせるが、
   // 一覧行は本文（raw_profile.text）を持たないため skills 列だけで近似する
   if (filterSkills?.length) {
-    const text = typeof c.raw_profile?.text === 'string' ? (c.raw_profile.text as string).toLowerCase() : null
-    const hit = filterSkills.some((f) => {
-      const fl = f.toLowerCase()
-      return (c.skills ?? []).some((s) => s.toLowerCase() === fl) || (text?.includes(fl) ?? false)
-    })
-    if (!hit) return null
+    const text = typeof c.raw_profile?.text === 'string' ? (c.raw_profile.text as string) : null
+    if (!matchesSkillFilter(filterSkills, c.skills, text)) return null
   }
   return { label: 'AI校正待ち', cls: 'bg-gray-100 text-gray-500 border-gray-200',
     title: 'ルールベース解析のみ。常駐AIの順番待ちです' }

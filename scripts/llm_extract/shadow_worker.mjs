@@ -113,10 +113,16 @@ async function skillMasterSet() {
 }
 
 /** AI校正の進行状態を raw_profile._llm_stage に記録する（UI表示用）。
- *  段階（2026-08-10 ユーザー指定 → 同日 Haiku 単独運用に伴い 'sonnet' を廃止）:
- *    印なし  … ルールベースのみ           → UI「AI校正待ち」
- *    'body'  … 本文をHaikuで解析済        → UI「AI校正開始」
- *    _llm_checked_at あり … 完了           → UI 表示なし
+ *
+ *  状態（2026-08-14 に Haiku 単独運用の実態へ再定義。'sonnet' 廃止・'failed' 追加）:
+ *    印なし                        … 未処理             → UI「AI校正待ち」（キュー対象のときだけ）
+ *    _llm_attempts>=1 かつ未完      … 失敗・再試行中     → UI「AI校正エラー」
+ *    'body'                        … 本文Haiku済・添付解析中 → UI「AI校正中」
+ *    checked_at + 'done'           … 完了               → UI 表示なし
+ *    checked_at + 'failed'         … MAX_ATTEMPTS 打ち切り → UI「AI校正不可」
+ *
+ *  打ち切りにも checked_at を付けるのは再処理を止めるため。'done' と同じ印にすると
+ *  「成功して直すところが無かった人」と区別できなくなるので stage で分ける。
  *  raw_profile は丸ごと送り返す必要がある（PostgREST の PATCH は列単位の置換のため）。
  *  進行表示のための書き込みなので、経歴書の解析が続く場合だけ呼ぶ（無駄書きを避ける） */
 async function markStage(c, stage) {
@@ -127,9 +133,10 @@ async function markStage(c, stage) {
   c.raw_profile = rp   // 後続の PATCH が古い raw_profile で上書きしないよう手元も更新
 }
 
-/** 「AI校正が済んだ」印を残す。変更が無かった人・解析対象が無かった人にも必ず付ける。 */
-async function markLlmChecked(c) {
-  const rp = { ...(c.raw_profile || {}), _llm_checked_at: new Date().toISOString(), _llm_stage: 'done' }
+/** 「AI校正が済んだ」印を残す。変更が無かった人・解析対象が無かった人にも必ず付ける。
+ *  打ち切り時は stage='failed' を渡す（再処理は止めるが、成功と混ぜない）。 */
+async function markLlmChecked(c, stage = 'done') {
+  const rp = { ...(c.raw_profile || {}), _llm_checked_at: new Date().toISOString(), _llm_stage: stage }
   await rest(`candidates?id=eq.${c.id}`, {
     method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ raw_profile: rp }),
   })
@@ -352,8 +359,8 @@ async function processCandidate(c, preBody = null) {
  *   ① skills 列 … regex抽出済みで skill_master 照合を通っているため表記ゆれに強い
  *   ② メール本文 … skills が空（regexが取れなかった）人材を落とさないための保険
  *
- * ②は部分一致なので "Java" は "JavaScript" にも当たる。絞りが甘くなるが、
- * 該当者を落とすと営業機会を失うため多めに拾う側に倒している。
+ * ②は語境界付きの正規表現（imatch）。かつては部分一致で "Java" が "JavaScript" にも
+ * 当たっていた（2026-08-14 修正・詳細は buildSkillFilterClause）。
  * サーバー側で絞るので Supabase の転送量も同時に減る。
  */
 async function skillFilterClause() {
@@ -437,7 +444,7 @@ async function cycle() {
     if (state.dayCount >= pacedAllowance(MAX_PER_DAY)) { log('ペース配分により中断、以降は次回'); break }
     if (givenUp(c)) {
       log(`打ち切り（${MAX_ATTEMPTS}回失敗）: ${c.name}`)
-      await markLlmChecked(c).catch(() => {})
+      await markLlmChecked(c, 'failed').catch(() => {})
       continue
     }
     log(`処理: ${c.name} (${c.id})`)

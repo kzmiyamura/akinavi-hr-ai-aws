@@ -4,31 +4,51 @@
 
 ## 0-A. 次にやること（8/14 セッション末の申し送り）
 
-### ★ 未着手・調査で見つけた不具合: ワーカーのスキル絞込が部分一致
+### ✅ 対応済み: ワーカーのスキル絞込が部分一致だった（8/14 修正）
 
-`scripts/llm_extract/shadow_worker_lib.mjs:100`
+`buildSkillFilterClause` の本文条件が `ilike *Java*` の部分一致で、
+**本文に「JavaScript」があるだけの人材が Java 枠でキューに入っていた**。
+実例: 門倉 由佳（Webデザイナー）はスキルが `JavaScript、jQuery、Figma…` で
+Java も C# も無いのに「AI校正待ち」だった。CLAUDE.md §6 の鉄則
+「部分一致は使わない」がワーカーの絞込にだけ適用されていなかった。
 
-```js
-terms.push(`raw_profile->>text.ilike.*${s}*`)   // 本文の部分一致
-```
+**実測: 直近3日の prod で 637人 → 561人（76人・12% が誤ヒット）。**
+100件/日の枠の1割強を無関係な人材に使っていた。
 
-`app_config.llm_filter_skills` は現在 **Java, C#**。この行のせいで
-**本文に「JavaScript」がある人材が `*Java*` にマッチしてキューに入る**。
-実例: 門倉 由佳（Webデザイナー・8/14 13:15 登録）はスキルが
-`JavaScript、jQuery、Figma…` で Java も C# も無いのに「AI校正待ち」になっていた。
+- 語境界付き正規表現（PostgREST `imatch`）にした。境界の集合は `skill_satisfies` と同じ
+  「英数字・`#`・`+` 以外」。`Java`⊄`JavaScript` / `C`⊄`C#` / `Shell`⊄`PowerShell`
+- 正規表現は括弧を含むので **値を二重引用符で囲む**（`or()` 構文と切り分け）。
+  メタ文字は `[.]` のような1文字ブラケット式で無害化する（PostgREST 内での
+  バックスラッシュ二重エスケープを避けるため）
+- **3か所すべてを合わせた**: ワーカー `shadow_worker_lib.mjs` /
+  一覧の優先スキル取得 `src/lib/db/candidates.ts` /「AI校正待ち」バッジ `CandidatePage.tsx`。
+  フロント側の実装は **`src/lib/skillWordMatch.ts` に集約**（node から TS を読めないため
+  ワーカーとは二重管理。**vitest でパターン文字列の一致を検証している**ので片肺修正は落ちる）
+- テスト: `node scripts/llm_extract/skill_filter_selftest.mjs`（37 PASS）/
+  `src/lib/__tests__/skillWordMatch.test.ts`（10 PASS）
 
-CLAUDE.md §6 の鉄則に書いてある失敗そのもの:
-> **部分一致は使わない**（`JavaScript` が `Java` に、`Shell` が `PowerShell` に一致していた）
+### AI校正の状態遷移を再定義した（8/14・Sonnet 時代の名残を除去）
 
-マッチング側は `skill_satisfies`（語境界＋正規化＋包含関係）に直したが、
-**ワーカーの絞込だけ部分一致のまま残っていた**。
-100件/日の枠を Java 案件と無関係な JavaScript 人材に使っている。
+旧定義は Haiku→検証→**Sonnet 昇格**があった頃のままで、
+**到達しない段階（`'sonnet'`）を持つ一方、実際に起きる失敗系を表現できていなかった**。
+特に「3回失敗して打ち切り」が `_llm_stage='done'` ＝ 成功と同じ「表示なし」になっており、
+**AIが直せなかった人材が画面上は校正済みに見えていた**。
 
-- 影響量は未計測。まず「絞込ヒットのうち skills 列に無く本文だけで当たった人数」を数える
-- 直すなら `skill_norm_map` / `skill_satisfies` に寄せるのが筋（判定を増やさない）
-- 副作用に注意: 絞込を厳しくすると「AI校正待ち」バッジの出る人も減る
-  （`CandidatePage.tsx:115-122` がワーカーと同じ二本立てで近似しているため、
-   ワーカー側だけ直すとバッジと実際のキューがズレる。**両方直すこと**）
+| ワーカーが書く印 | 意味 | 画面 |
+|---|---|---|
+| 印なし・キュー対象（prod・3日以内・絞込一致） | 未処理 | **AI校正待ち** |
+| 印なし・キュー対象外（3日超 / 絞込外 / demo / merged） | 校正しない（正常） | 表示なし |
+| `_llm_attempts>=1` かつ `_llm_checked_at` なし | 失敗・次サイクルで再試行 | **AI校正エラー**（新設） |
+| `_llm_stage='body'` | 本文Haiku済・添付経歴書を解析中 | **AI校正中**（旧「AI校正開始」） |
+| `_llm_checked_at` + `_llm_stage='done'` | 完了（変更なし・対象なしを含む） | 表示なし |
+| `_llm_checked_at` + `_llm_stage='failed'` | 3回失敗で打ち切り | **AI校正不可**（新設） |
+
+- 打ち切りにも `_llm_checked_at` を付けるのは**再処理を止めるため**（費用が出続ける）。
+  成功と混ざらないよう `_llm_stage='failed'` で分けた
+- `'sonnet'` は廃止。残骸はワーカー起動時に掃除（`clear_stale_stage.mjs` も同じ処理）
+- 8/14 時点の prod 実測: `done` 304 / `body` 0 / `sonnet` 0 / 失敗中 0。
+  **`body` は数分で消える過渡状態**なので、画面でほぼ見えないのが正常
+- 一覧は `llm_attempts:raw_profile->>_llm_attempts` を追加取得している（数十バイト）
 
 ### 人材解析における AI の限界効用（8/14 実測）
 
