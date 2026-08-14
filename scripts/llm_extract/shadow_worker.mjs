@@ -37,6 +37,12 @@ const BODY_BATCH_SIZE = Number(process.env.SHADOW_BODY_BATCH ?? 5)
 // 根拠: 同日 regex 側の skillYears を修正（回帰 2Pass→8Pass）して素の品質が上がり、
 // AI補正の限界効用が下がった。新しい順に処理するので少数でも価値は落ちにくい
 const MAX_PER_DAY = Number(process.env.SHADOW_MAX_PER_DAY ?? 100)
+// 提案所見の日次上限。プロフィール解析とは別枠にする。
+// 同じ枠を共有していたとき、到着750件/日の解析が先に100枠を食い切り、
+// 所見は毎日の余り（実測: 8/13 は11件、8/14 は0件）しか作れなかった。
+// 所見は「各案件の上位10人」しか対象にしないので母数が小さく、
+// 一度埋まればあとは新規案件と再マッチング分の維持だけで済む
+const REC_MAX_PER_DAY = Number(process.env.SHADOW_REC_MAX_PER_DAY ?? 40)
 // 何日前までを処理対象にするか。7日で archive-candidates がアーカイブへ移すため、
 // それより手前で切る。古いものを掘り返して予算を使い切らないための足切り
 const LOOKBACK_DAYS = Number(process.env.SHADOW_LOOKBACK_DAYS ?? 3)
@@ -50,8 +56,22 @@ const APPLY = process.env.SHADOW_APPLY !== '0'
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 const state = fs.existsSync(STATE_FILE)
   ? JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))
-  : { watermark: new Date().toISOString(), day: '', dayCount: 0, dayCost: 0 }
+  : { watermark: new Date().toISOString(), day: '', dayCount: 0, dayCost: 0, recDayCount: 0 }
+// 既存の state ファイルには recDayCount が無い。undefined のまま ++ すると NaN になり
+// 上限判定が永久に false（NaN >= n）になって暴走するので、読み込み時に埋める
+if (typeof state.recDayCount !== 'number') state.recDayCount = 0
 const saveState = () => fs.writeFileSync(STATE_FILE, JSON.stringify(state))
+
+/** 日付が変わったら各カウンタを戻す。cycle() と recommendCycle() の両方から呼ぶ
+ *  （cycle() が例外で落ちた日に所見側のカウンタが繰り越されないように） */
+function rollDay() {
+  const today = new Date().toISOString().slice(0, 10)
+  if (state.day === today) return
+  state.day = today
+  state.dayCount = 0
+  state.dayCost = 0
+  state.recDayCount = 0
+}
 
 async function rest(pathq, opts = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${pathq}`, {
@@ -346,8 +366,7 @@ async function skillFilterClause() {
 }
 
 async function cycle() {
-  const today = new Date().toISOString().slice(0, 10)
-  if (state.day !== today) { state.day = today; state.dayCount = 0; state.dayCost = 0 }
+  rollDay()
   if (state.dayCount >= MAX_PER_DAY) { log(`日次上限${MAX_PER_DAY}到達、スキップ`); return }
   // 上限を24時間に均す。均さないと能力いっぱいで走って朝の数時間で使い切り、
   // 営業時間中に届いた人材が当日処理されない（新しい順にした意味が消える）
@@ -533,14 +552,18 @@ const REC_TOP_N = 10           // 案件ごとの対象順位
 const REC_MAX_PER_CYCLE = 5    // 1サイクルの生成数（1件あたり約60〜90秒）
 
 async function recommendCycle() {
-  if (state.dayCount >= MAX_PER_DAY) return
+  rollDay()
+  if (state.recDayCount >= REC_MAX_PER_DAY) {
+    log(`所見の日次上限${REC_MAX_PER_DAY}到達、スキップ`)
+    return
+  }
   const projects = await rest(
     'projects?select=id,title,client,required_skills,raw_data,work_location,remote_policy,contract_type,budget_max' +
     '&data_env=eq.prod&status=eq.open&order=created_at.desc&limit=20')
   if (!projects?.length) return
   let made = 0
   for (const p of projects) {
-    if (made >= REC_MAX_PER_CYCLE || state.dayCount >= MAX_PER_DAY) return
+    if (made >= REC_MAX_PER_CYCLE || state.recDayCount >= REC_MAX_PER_DAY) return
     // ai_raw 丸ごとは重いのでマーカーだけ取る（egress 節約）
     const subs = await rest(
       `submissions?select=id,candidate_id,match_score,rec_at:ai_raw->recommendation->>at` +
@@ -549,7 +572,7 @@ async function recommendCycle() {
     if (!todo.length) continue
     const pText = projectText(p)
     for (const sub of todo) {
-      if (made >= REC_MAX_PER_CYCLE || state.dayCount >= MAX_PER_DAY) return
+      if (made >= REC_MAX_PER_CYCLE || state.recDayCount >= REC_MAX_PER_DAY) return
       try {
         const [c] = await rest(`candidates?select=id,name,skills,experience_years,desired_rate,from_company,raw_profile&id=eq.${sub.candidate_id}`) ?? []
         if (!c) continue
@@ -564,7 +587,7 @@ async function recommendCycle() {
         })
         log(`所見[${p.title}] ${c.name}(${sub.match_score}点): ${r.verdict ?? '出力不能'} ${r.pitch ? r.pitch.slice(0, 60) : ''}`)
         made++
-        state.dayCount++
+        state.recDayCount++
         saveState()
       } catch (e) {
         // 失敗時は印を書かない＝次サイクルで再試行（上位Nに限られ暴走リスクは小さい）
