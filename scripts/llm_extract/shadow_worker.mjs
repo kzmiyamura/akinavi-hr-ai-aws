@@ -698,13 +698,19 @@ async function boxQueue() {
   const manual = await rest(
     `candidates?select=${BOX_SELECT}&box_status=eq.fetch_requested&order=created_at.asc&limit=3`) ?? []
   // ② 全自動取込: 経歴書未取得（resume_url なし）の pending prod 人材。
-  //    「本サイクル通過済み」を保証して本文LLM処理との競合を避ける。
-  //    キュー方式に変えたため watermark ではなく校正済みの印そのもので判定する（2026-08-10）。
-  //    古い在庫を掘り返さないよう本サイクルと同じ LOOKBACK_DAYS の足切りも入れる
+  //    旧条件は「_llm_checked_at がある＝AI校正済み」を要求していた（2026-08-10）。
+  //    本文LLM処理との競合を避ける意図だったが、ワーカーは cycle() → boxQueue() を
+  //    順に回す単一スレッドで、同時実行は起こらない。実害の方が大きかった:
+  //      - 校正はペース配分で1人あたり13〜17分。校正が届かない人は Box にも永久に進まない
+  //      - 2026-08-16 時点で pending 9件の全てが _llm_checked_at=null で、自動取得は0件稼働
+  //      - 上書きで印を剥がすようにした（同日の inbound-email 修正）ため、この条件は更に外れやすい
+  //    順序としてもBoxで経歴書を取ってから校正する方が良い（校正時に経歴書を読める）。
+  //    進行中のものだけは触らないよう _llm_stage で除外する。
+  //    古い在庫を掘り返さないよう本サイクルと同じ LOOKBACK_DAYS の足切りは残す
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
   const auto = manual.length >= 3 ? [] : (await rest(
     `candidates?select=${BOX_SELECT}&box_status=eq.pending&resume_url=is.null&box_url=not.is.null` +
-    `&data_env=eq.${DATA_ENV}&raw_profile->>_llm_checked_at=not.is.null` +
+    `&data_env=eq.${DATA_ENV}&raw_profile->>_llm_stage=is.null` +
     `&created_at=gte.${encodeURIComponent(since)}` +
     `&order=created_at.desc&limit=${AUTO_BOX_PER_POLL}`)) ?? []
   for (const c of [...manual, ...auto]) {
