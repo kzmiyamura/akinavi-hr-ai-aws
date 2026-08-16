@@ -61,6 +61,7 @@ const TARGET_FUNCTIONS = [
   'worksheetToGrid',
   'worksheetToCells',
   'scoreProseRoles',
+  'sameMailConflicts',      // 同一メール内の同名を別人と判定する（駅・県・年齢・単価の食い違い）
 ]
 
 // ── TypeScript → JavaScript 簡易変換 ──────────────────────────────

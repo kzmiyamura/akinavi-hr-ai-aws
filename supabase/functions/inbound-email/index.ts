@@ -247,6 +247,32 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(bin)
 }
 
+/** sameMailConflicts が見る属性（未取得は null/undefined） */
+type DedupAttrs = { station?: unknown; prefecture?: unknown; age?: unknown; rate?: unknown }
+
+/** 同一メール内で同名だった2ブロックが「別人」と言えるかを判定し、食い違った項目名を返す。
+ *
+ * 一斉配信メールは表示名がイニシャル（K.H）なので、同姓同名が同じメールに並ぶ。
+ * 名前一致だけで UPDATE すると後勝ちで前の人が消える
+ * （2026-08-16 フォスターネット: 18名紹介のうち K.H×2・S.Y×2 が潰れて 16件しか残らなかった）。
+ * 一方で本文＋添付のように同一人物が複数ブロックに割れるケースもあるため、
+ * 「両方に値があって食い違う」項目だけを別人の根拠にする（片方 null は根拠にしない）。
+ * 1項目でも食い違えば別人（2026-08-16 ユーザー判断。同姓同名の別人を混ぜる害の方が大きい）。
+ */
+function sameMailConflicts(a: DedupAttrs, b: DedupAttrs): string[] {
+  const norm = (v: unknown) => (v === '' || v === undefined ? null : v)
+  const out: string[] = []
+  const check = (label: string, x: unknown, y: unknown) => {
+    const p = norm(x), q = norm(y)
+    if (p !== null && q !== null && String(p) !== String(q)) out.push(label)
+  }
+  check('駅', a.station, b.station)
+  check('都道府県', a.prefecture, b.prefecture)
+  check('年齢', a.age, b.age)
+  check('単価', a.rate, b.rate)
+  return out
+}
+
 /** AI の skills 配列を trim・重複除去（大文字小文字無視） */
 /** "27年9ヶ月" や "5" など様々な形式の経験年数を整数に変換する */
 function toExperienceYears(value: unknown): number | null {
@@ -9924,8 +9950,18 @@ Deno.serve(async (req: Request) => {
         type BlockResult = { id: string; name: string; skills: number }
         const results: BlockResult[] = []
         const allBlockBoxUrls: string[] = []
-        // 同一メール内のループ内重複防止: このバッチで既に登録/更新した name → id のマップ
-        const batchNameToId = new Map<string, string>()
+        // 同一メール内のループ内重複防止: このバッチで既に登録/更新した name → 登録情報のマップ。
+        // 一斉配信メールは同じイニシャル（K.H が2人 等）が並ぶため、id だけでなく
+        // 別人判定に使う属性も持たせる（2026-08-16。詳細は sameMailDistinct のコメント）
+        type BatchEntry = {
+          id: string
+          station: string | null
+          prefecture: string | null
+          age: number | null
+          rate: string | null
+        }
+        // 同名が3人以上並ぶこともあるため name → 登録済みエントリの配列で持つ
+        const batchNameToId = new Map<string, BatchEntry[]>()
 
         // ── Pre-pass: 全ブロックの名前・駅名を一括抽出 → 添付ファイルとの「全体最適」割当を先に確定 ──
         // 旧版は各ブロックの for-loop 内で個別に findMatchingTextContent を呼んでおり、
@@ -10326,12 +10362,30 @@ Deno.serve(async (req: Request) => {
               console.log(`[reanalyze] block[0] target_candidate_id 強制 UPDATE: ${targetCandidateId}`)
             }
             // ① 同一メール内の既処理ブロックと名前が一致 → そのIDに UPDATE（DB未コミット分も補足）
+            // 　 ただし駅・都道府県・年齢・単価が1つでも食い違えば同姓同名の別人として新規登録する
+            let blockSameMailDistinct = false
             if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明' && batchNameToId.has(blockResolvedName)) {
-              blockExistingId = batchNameToId.get(blockResolvedName)!
+              const mine = {
+                station: blockRegexFields.nearestStation,
+                prefecture: blockRegexFields.prefecture,
+                age: blockRegexFields.age,
+                rate: blockRegexFields.desiredRate,
+              }
+              const prevs = batchNameToId.get(blockResolvedName)!
+              // 食い違わない相手が1人でもいればその人と同一人物。全員と食い違えば別人
+              const same = prevs.find(p => sameMailConflicts(mine, p).length === 0)
+              if (same) {
+                blockExistingId = same.id
+              } else {
+                blockSameMailDistinct = true
+                const why = sameMailConflicts(mine, prevs[prevs.length - 1]).join('・')
+                console.log(`[multi-candidate] 同一メール内の同名 "${blockResolvedName}" だが ${why} が不一致 → 別人として新規登録`)
+              }
             }
             // ② 同エージェント（同一 from）から同名が既に登録済み → UPDATE 判定
             // 　 件名一致 → 同一メール確定。件名違い → 駅・都道府県・年齢・経験年数の2つ以上一致で同一人物
-            if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明') {
+            // 　 ①で別人と判定した場合は飛ばす（件名一致＝同一メールなので、ここで必ず拾い直してしまう）
+            if (!blockExistingId && !blockSameMailDistinct && blockResolvedName && blockResolvedName !== '不明') {
               // raw_profile 全体（1件20〜60KB）は取らず、判定に使うキーだけJSON射影で取る（egress削減）
               const { data: sameAgent } = await supabase
                 .from('candidates').select('id, experience_years, subject:raw_profile->>subject, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture, age:raw_profile->age')
@@ -10366,7 +10420,7 @@ Deno.serve(async (req: Request) => {
               }
             }
             // ③ DBに同名が存在するか確認（Jaccard類似度による同一人物判定）
-            if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明') {
+            if (!blockExistingId && !blockSameMailDistinct && blockResolvedName && blockResolvedName !== '不明') {
               const { data: similar } = await supabase
                 .from('candidates').select('id, skills, experience_years, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture')
                 .eq('data_env', inboundDataEnv)
@@ -10452,9 +10506,20 @@ Deno.serve(async (req: Request) => {
               blockSavedId = blockData.id
             }
 
-            // バッチ内重複防止: 処理済み名前を記録
+            // バッチ内重複防止: 処理済み名前と、別人判定に使う属性を記録
             if (blockResolvedName && blockResolvedName !== '不明') {
-              batchNameToId.set(blockResolvedName, blockSavedId)
+              const entry: BatchEntry = {
+                id: blockSavedId,
+                station: blockRegexFields.nearestStation ?? null,
+                prefecture: blockRegexFields.prefecture ?? null,
+                age: blockRegexFields.age ?? null,
+                rate: blockRegexFields.desiredRate ?? null,
+              }
+              const list = batchNameToId.get(blockResolvedName) ?? []
+              const at = list.findIndex(e => e.id === blockSavedId)
+              if (at >= 0) list[at] = entry
+              else list.push(entry)
+              batchNameToId.set(blockResolvedName, list)
             }
 
             // candidate_skills INSERT
