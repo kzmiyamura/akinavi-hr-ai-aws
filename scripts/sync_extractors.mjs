@@ -62,6 +62,7 @@ const TARGET_FUNCTIONS = [
   'worksheetToCells',
   'scoreProseRoles',
   'sameMailConflicts',      // 同一メール内の同名を別人と判定する（駅・県・年齢・単価の食い違い）
+  'mergeRawProfileOnUpdate', // 既存レコード上書き時の raw_profile 合成（AI校正の印は引き継がない）
 ]
 
 // ── TypeScript → JavaScript 簡易変換 ──────────────────────────────

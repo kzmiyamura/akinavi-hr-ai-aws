@@ -247,6 +247,30 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(bin)
 }
 
+/** AI校正ワーカーの進捗管理用キー。既存レコードを新しい内容で上書きしたとき、
+ *  これらを引き継いではいけない。ワーカーは「_llm_checked_at が無い人」をキューに拾うため、
+ *  印が残ると中身だけ新しくなった人が二度と校正されない
+ *  （2026-08-16 フォスターネット16件。年齢が null の3人が埋まらない直接の原因）。
+ *  剥がすと未校正に戻り、created_at も同時に更新されるのでキューの先頭で拾われる。 */
+/** 既存 raw_profile と今回の raw_profile を合成する。
+ *  今回 null/undefined の項目は既存値を残す（後続ブロックの劣化データが正しい値を潰すのを防ぐ）。
+ *  ただし AI校正の進捗管理キーだけは引き継がず、未校正に戻す（LLM_BOOKKEEPING_KEYS 参照）。 */
+function mergeRawProfileOnUpdate(
+  existing: Record<string, unknown>,
+  fresh: Record<string, unknown>,
+): Record<string, unknown> {
+  const LLM_BOOKKEEPING_KEYS = new Set([
+    '_llm_checked_at', '_llm_stage', '_llm_applied', '_llm_attempts', '_llm_last_error', '_regex_backup',
+  ])
+  const merged: Record<string, unknown> = { ...fresh }
+  for (const [k, v] of Object.entries(existing)) {
+    if (LLM_BOOKKEEPING_KEYS.has(k)) continue
+    if (merged[k] == null && v != null) merged[k] = v
+  }
+  for (const k of LLM_BOOKKEEPING_KEYS) delete merged[k]
+  return merged
+}
+
 /** sameMailConflicts が見る属性（未取得は null/undefined） */
 type DedupAttrs = { station?: unknown; prefecture?: unknown; age?: unknown; rate?: unknown }
 
@@ -10476,10 +10500,8 @@ Deno.serve(async (req: Request) => {
                 .from('candidates').select('raw_profile')
                 .eq('id', blockExistingId).maybeSingle()
               const existingRp = (existingRow?.raw_profile ?? {}) as Record<string, unknown>
-              const mergedRp: Record<string, unknown> = { ...(blockPayload.raw_profile as Record<string, unknown>) }
-              for (const [k, v] of Object.entries(existingRp)) {
-                if (mergedRp[k] == null && v != null) mergedRp[k] = v
-              }
+              const mergedRp = mergeRawProfileOnUpdate(
+                existingRp, blockPayload.raw_profile as Record<string, unknown>)
               const blockUpdatePayload: Record<string, unknown> = {
                 raw_profile: mergedRp,
                 created_at: new Date().toISOString(),
