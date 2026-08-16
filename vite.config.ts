@@ -3,8 +3,15 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// ビルドごとに変わる ID。永続キャッシュ（localStorage）の buster に使う。
+// デプロイすると値が変わり、古い形のデータを復元しなくなる（src/lib/queryPersist.ts）
+const buildId = String(Date.now())
+
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    __APP_BUILD_ID__: JSON.stringify(buildId),
+  },
   plugins: [
     react(),
     tailwindcss(),
