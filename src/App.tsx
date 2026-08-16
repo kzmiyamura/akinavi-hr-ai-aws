@@ -1,13 +1,20 @@
 import { lazy, Suspense, useEffect, useMemo, useState, Component } from 'react'
 import type { ReactNode } from 'react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient } from '@tanstack/react-query'
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
+import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister'
+import {
+  PERSIST_KEY,
+  PERSIST_MAX_AGE_MS,
+  persistBuster,
+  shouldPersistQuery,
+} from './lib/queryPersist'
 import { useNickname } from './hooks/useNickname'
 import { NicknameModal } from './components/NicknameModal'
 import { Layout } from './components/Layout'
 import type { Page } from './components/Layout'
 import { MatchingPage } from './pages/MatchingPage'
 import { AuthCallbackPage } from './pages/AuthCallbackPage'
-import { fetchCandidatesPage } from './lib/db/candidates'
 
 const CandidatePage = lazy(() => import('./pages/CandidatePage').then(m => ({ default: m.CandidatePage })))
 const ProjectPage = lazy(() => import('./pages/ProjectPage').then(m => ({ default: m.ProjectPage })))
@@ -66,6 +73,27 @@ const queryClient = new QueryClient({
       refetchOnMount: false,           // 再マウントで staleTime 内なら引き直さない
       retry: 1,                        // 既定3回。失敗クエリの再試行も転送量になる
     },
+  },
+})
+
+// キャッシュを localStorage に載せる（2026-08-17）。
+// メモリのみだったため、F5・タブの開き直しのたびに一覧を引き直していた。
+// 営業5人運用だと Free Plan の egress 5GB/月に対して現実的でないため永続化する。
+// 容量オーバー時は古いクエリから捨てて書き直す（removeOldestQuery）。
+const persister = createSyncStoragePersister({
+  storage: window.localStorage,
+  key: PERSIST_KEY,
+  throttleTime: 1000,
+  retry: ({ persistedClient, error }) => {
+    // localStorage の容量（約5MB）を超えたときのフォールバック。
+    // 古い順に1つ落として再試行し、それでも入らなければ諦める（キャッシュ無しで動く）
+    console.warn('[queryPersist] 保存に失敗したため古いクエリを捨てて再試行します', error)
+    const queries = persistedClient.clientState.queries
+    if (queries.length <= 1) return undefined
+    return {
+      ...persistedClient,
+      clientState: { ...persistedClient.clientState, queries: queries.slice(1) },
+    }
   },
 })
 
@@ -150,19 +178,12 @@ function AppInner() {
     }
   }, [tabPage, dataEnv])
 
-  // 人材タブへ切り替える前に候補者データをバックグラウンド prefetch
-  // （マッチングタブ表示中に先読みしておくことで、タブ切替時に即時表示できる）
-  useEffect(() => {
-    queryClient.prefetchInfiniteQuery({
-      queryKey: ['candidates-paged', dataEnv],
-      queryFn: ({ pageParam }) => fetchCandidatesPage(dataEnv, pageParam as number),
-      initialPageParam: 0,
-      getNextPageParam: (lastPage) =>
-        lastPage.candidates.length < 100 ? undefined : lastPage.candidates.length,
-      staleTime: 60_000,
-      pages: 1,
-    })
-  }, [dataEnv])
+  // 人材タブの先読み prefetch は 2026-08-17 に削除した。
+  // キーが ['candidates-paged', dataEnv] の2要素で、CandidatePage が実際に使うキー
+  // （['candidates-paged', dataEnv, activePrioritySkills] の3要素・CandidatePage.tsx:1107）と
+  // 一致していなかったため、**誰にも読まれないまま毎回100件を引いていた**。
+  // 先読みの速度効果はゼロで、ページ読み込みのたびに約130KB を捨てていたことになる。
+  // 人材タブを開いたときは CandidatePage 自身のクエリが取得する（従来どおり）。
 
   if (!nickname) {
     return <NicknameModal onSave={saveNickname} />
@@ -256,8 +277,16 @@ function AppInner() {
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister,
+        maxAge: PERSIST_MAX_AGE_MS,
+        buster: persistBuster(),
+        dehydrateOptions: { shouldDehydrateQuery: shouldPersistQuery },
+      }}
+    >
       <AppInner />
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   )
 }
