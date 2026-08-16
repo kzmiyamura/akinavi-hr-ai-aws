@@ -20,7 +20,10 @@ const SRC = resolve(__dirname, '../supabase/functions/inbound-email/index.ts')
 const OUT = resolve(__dirname, '_zone_functions.gen.ts')
 
 const src = readFileSync(SRC, 'utf-8')
-const lines = src.split('\n')
+// CRLF を落として分割する。split('\n') のままだと Windows チェックアウトでは各行の末尾に
+// '\r' が残り、下の `lines[i] === '}'` が永久に一致せず「終了 } が見つからない」で落ちる
+// （Linux では LF なので動く。2026-08-16 に Windows 側で発覚）
+const lines = src.split(/\r?\n/)
 
 /** トップレベル宣言（開始行の正規表現）から、カラム0の `}` 行までを抽出 */
 function extractBlock(startRe) {
