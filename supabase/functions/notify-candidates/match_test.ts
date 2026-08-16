@@ -22,10 +22,12 @@ Deno.test('matchesRule', () => {
   assert('名前不一致', !matchesRule(rule({ name_keyword: 'S.I' }), cand({ name: 'T.K' })))
   assert('スキル1件一致（部分一致・大小文字無視）',
     matchesRule(rule({ skill_keywords: ['java'] }), cand({})))
-  assert('スキル複数はAND（全部含めばマッチ）',
-    matchesRule(rule({ skill_keywords: ['Java', 'AWS'] }), cand({})))
-  assert('スキルANDで1つ欠けたら不一致',
-    !matchesRule(rule({ skill_keywords: ['Java', 'Python'] }), cand({})))
+  assert('スキル複数はOR（1つでも持っていればマッチ・2026-08-17 に AND から変更）',
+    matchesRule(rule({ skill_keywords: ['Java', 'Python'] }), cand({})))
+  assert('スキルORで1つも持っていなければ不一致',
+    !matchesRule(rule({ skill_keywords: ['Go', 'Python'] }), cand({})))
+  assert('AS/400 と AS400 は同じものとして扱う',
+    matchesRule(rule({ skill_keywords: ['AS400'] }), cand({ skills: ['AS/400'] })))
   assert('駅の部分一致', matchesRule(rule({ station_keyword: '西船橋' }), cand({})))
   assert('都道府県でも一致', matchesRule(rule({ station_keyword: '千葉' }), cand({})))
   assert('複合条件はAND（名前+スキル両方満たす）',

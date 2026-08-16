@@ -165,8 +165,8 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
               onChange={(e) => setForm({ ...form, name_keyword: e.target.value })} />
           </label>
           <label className="text-xs text-gray-500 space-y-1">
-            <span>スキル（カンマ区切り・すべて含む）</span>
-            <input className={inputCls} value={form.skills} placeholder="例: Java, AWS"
+            <span>スキル（カンマ区切り・いずれかを含む）</span>
+            <input className={inputCls} value={form.skills} placeholder="例: Java, C#, AS400"
               onChange={(e) => setForm({ ...form, skills: e.target.value })} />
           </label>
           <label className="text-xs text-gray-500 space-y-1">
@@ -176,7 +176,9 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
           </label>
         </div>
         <p className="text-[11px] text-gray-400">
-          条件は指定したものすべてを満たす人材に通知します（AND）。名前・スキル・最寄駅のどれか1つ以上が必須。
+          名前・スキル・最寄駅は指定したものをすべて満たす人材に通知します（AND）。
+          ただし<b>スキル欄の中は「いずれか1つ」（OR）</b>です（例:「大阪府」＋「Java, C#」＝大阪府で Java か C# の人）。
+          どれか1つ以上の条件が必須。
         </p>
         {formError && <p className="text-xs text-red-600">{formError}</p>}
         <div className="flex gap-2">
@@ -223,7 +225,8 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
               <div className="text-xs text-gray-500 flex flex-wrap gap-x-4 gap-y-0.5">
                 {rule.name_keyword && <span>名前: <b className="text-gray-700">{rule.name_keyword}</b></span>}
                 {rule.skill_keywords.length > 0 && (
-                  <span>スキル: <b className="text-gray-700">{rule.skill_keywords.join(' + ')}</b></span>
+                  // OR 判定なので区切りも「+」ではなく「/」で見せる（2026-08-17）
+                  <span>スキル: <b className="text-gray-700">{rule.skill_keywords.join(' / ')}</b>のいずれか</span>
                 )}
                 {rule.station_keyword && <span>駅: <b className="text-gray-700">{rule.station_keyword}</b></span>}
                 <span>→ {rule.notify_email}</span>
