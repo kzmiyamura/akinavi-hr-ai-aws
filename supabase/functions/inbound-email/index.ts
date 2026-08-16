@@ -10295,9 +10295,12 @@ Deno.serve(async (req: Request) => {
                 from, subject,
                 emailReceivedAt,
                 attachmentCount: allAttachments.length,
+                // 受信時点の生の添付数。抽出の成否に左右されないので「添付があったか」は
+                // これだけで判定できる。sourceAttachmentCount はテキスト抽出に成功した
+                // Word/Excel/PDF しか数えず、スキャンPDF等の空振りを取りこぼす（2026-08-16）
+                rawAttachmentCount: attachments.length,
                 // 元メールに実際に含まれていた添付の総数（Excel/Word等のoffice文書も含む）。
-                // attachmentCount は画像/PDF等のみをカウントしatxlsx/docxを含まないため、
-                // 「このメールに添付が本当になかったか」を判定する際は必ずこちらを参照すること。
+                // attachmentCount は画像のみをカウントし xlsx/docx/pdf を含まない。
                 sourceAttachmentCount: allAttachments.length + officeTextContents.length + unrecognizedAttachments.length,
                 // Word/Excel/PDFのいずれとも判定されず無視された添付（未対応形式）の一覧。
                 // 空なら undefined にして raw_profile を肥大化させない。
@@ -10908,6 +10911,8 @@ Deno.serve(async (req: Request) => {
           from, subject,
           emailReceivedAt,
           attachmentCount: allAttachments.length,
+          // 受信時点の生の添付数（抽出の成否に左右されない。2026-08-16）
+          rawAttachmentCount: attachments.length,
           // 元メールに実際に含まれていた添付の総数（画像/PDFに加えExcel/Word等も含む）
           sourceAttachmentCount: allAttachments.length + officeTextContents.length + unrecognizedAttachments.length,
                 // Word/Excel/PDFのいずれとも判定されず無視された添付（未対応形式）の一覧。
@@ -11634,6 +11639,8 @@ Deno.serve(async (req: Request) => {
         subject,
         emailReceivedAt,
         attachmentCount: allAttachments.length,
+        // 受信時点の生の添付数（抽出の成否に左右されない。2026-08-16）
+        rawAttachmentCount: attachments.length,
         // 元メールに実際に含まれていた添付の総数（画像/PDFに加えExcel/Word等も含む）
         sourceAttachmentCount: allAttachments.length + officeTextContents.length + unrecognizedAttachments.length,
                 // Word/Excel/PDFのいずれとも判定されず無視された添付（未対応形式）の一覧。
