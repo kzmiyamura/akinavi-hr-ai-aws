@@ -16,7 +16,12 @@ DECLARE
   fn_url text := 'https://argizomylbolpqxgmvim.supabase.co/functions/v1/notify-candidates';
   cmd text;
 BEGIN
-  SELECT (regexp_match(command, '"Authorization"\s*:\s*"(Bearer [^"]+)"'))[1]
+  -- 既存ジョブは jsonb_build_object('Authorization', 'Bearer ...') の形（実測 2026-08-17）。
+  -- JSON リテラル形式 ("Authorization":"Bearer ...") で書かれている場合にも当たるよう両方見る。
+  SELECT coalesce(
+           (regexp_match(command, $re$'Authorization'\s*,\s*'(Bearer [^']+)'$re$))[1],
+           (regexp_match(command, '"Authorization"\s*:\s*"(Bearer [^"]+)"'))[1]
+         )
     INTO auth_header
     FROM cron.job
    WHERE jobname = 'poll-email-every-5-minutes';
