@@ -7772,8 +7772,9 @@ function createLedger(rid: string) {
         list.push(r.detail ? `${r.code}(${r.detail.slice(0, 60)})` : r.code)
         byEntry.set(r.entryId, list)
       }
+      // メール単位の行は少数なので、添付インベントリだけはファイル名が切れないよう長めに残す
       const emailCodes = rows.filter(r => r.entryId == null)
-        .map(r => (r.detail ? `${r.code}(${r.detail.slice(0, 60)})` : r.code))
+        .map(r => (r.detail ? `${r.code}(${r.detail.slice(0, r.code === 'A-ATT-INVENTORY' ? 400 : 60)})` : r.code))
       const trace: Record<string, unknown> = {
         assigned: Object.fromEntries(
           assignedEntryIds.filter(id => byEntry.has(id)).map(id => [id, byEntry.get(id)]),
@@ -9387,6 +9388,14 @@ Deno.serve(async (req: Request) => {
 
     tracePhase = 'step1_body_normalized'
     const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
+
+    // ── 添付インベントリ（受信時点の事実を必ず1行残す） ──
+    // 「添付が無かった」のか「記録されなかった」のかを後から区別できるようにする。
+    // 0件でも必ず記録する。ここを省くと pipeline_trace が undefined になり、
+    // 添付ゼロのメールと台帳が動かなかったメールが DB 上で見分けられない（2026-08-16）。
+    ledger.log(null, 'A-ATT-INVENTORY',
+      `添付${attachments.length}件(対応${supportedAttachments.length}件) ` +
+      attachments.map(a => `${a.name ?? '(名前なし)'}[${a.mimeType}${SUPPORTED_MIME.includes(a.mimeType) ? '' : '/非対応'}]`).join(', '))
 
     // Word/Excelのテキスト抽出（MIMEタイプ + 拡張子の両方で判定）
     const officeTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment; jsonRows?: Array<Record<string, string>>; skillSummary?: string; grid?: string[][]; links?: { cell: string; url: string }[]; totalProjectMonths?: number }[] = []
