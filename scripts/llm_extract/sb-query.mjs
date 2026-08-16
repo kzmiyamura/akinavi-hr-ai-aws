@@ -9,8 +9,13 @@
 //   node scripts/llm_extract/sb-query.mjs "candidates?id=eq.<uuid>&select=name,raw_profile"
 //   node scripts/llm_extract/sb-query.mjs "candidates?select=id,name&limit=5" --raw
 //
+//   node scripts/llm_extract/sb-query.mjs "candidates?data_env=eq.prod&select=id" --count --anon
+//
 // オプション:
-//   --raw   整形せず生 JSON を出力（既定は読みやすく要約表示）
+//   --raw    整形せず生 JSON を出力（既定は読みやすく要約表示）
+//   --count  HEAD + Prefer: count=exact で件数だけ取る（本体を転送しないので egress ほぼゼロ）
+//   --anon   service key ではなく anon キーで叩く（.env.local の VITE_SUPABASE_ANON_KEY）。
+//            画面と同じ権限・同じ statement_timeout で再現したいとき用
 //
 // 恒久許可の例（.claude/settings.json）:
 //   "Bash(node scripts/llm_extract/sb-query.mjs *)"
@@ -45,6 +50,8 @@ function loadEnv(path) {
 
 const args = process.argv.slice(2)
 const raw = args.includes('--raw')
+const countOnly = args.includes('--count')
+const useAnon = args.includes('--anon')
 const query = args.find((a) => !a.startsWith('--'))
 
 if (!query) {
@@ -60,19 +67,48 @@ if (/^\s*(insert|update|delete|upsert)\b/i.test(query) || query.includes('..rpc/
 
 const env = loadEnv(ENV_PATH)
 const url = env.SUPABASE_URL
-const key = env.SUPABASE_SERVICE_KEY
+let key = env.SUPABASE_SERVICE_KEY
 
 if (!url || !key) {
   console.error(`SUPABASE_URL / SUPABASE_SERVICE_KEY が ${ENV_PATH} にありません`)
   process.exit(1)
 }
 
+if (useAnon) {
+  // 画面（ブラウザ）と同じロールで再現するため anon キーを使う。
+  // anon は statement_timeout が短く（15秒・2026-08-13 に 3→15 へ変更）、
+  // service_role では出ない失敗が出ることがある
+  const local = loadEnv(join(process.cwd(), '.env.local'))
+  if (!local.VITE_SUPABASE_ANON_KEY) {
+    console.error('.env.local に VITE_SUPABASE_ANON_KEY がありません（プロジェクト直下で実行すること）')
+    process.exit(1)
+  }
+  key = local.VITE_SUPABASE_ANON_KEY
+}
+
 const endpoint = `${url.replace(/\/$/, '')}/rest/v1/${query.replace(/^\//, '')}`
 
+const headers = { apikey: key, Authorization: `Bearer ${key}` }
+if (countOnly) headers.Prefer = 'count=exact'
+
+const started = Date.now()
 const res = await fetch(endpoint, {
-  method: 'GET',
-  headers: { apikey: key, Authorization: `Bearer ${key}` },
+  method: countOnly ? 'HEAD' : 'GET',
+  headers,
 })
+const elapsedMs = Date.now() - started
+
+if (countOnly) {
+  // HEAD なので本文は無い。件数は Content-Range ヘッダに入る（例: `*/1881`）
+  console.log(`role: ${useAnon ? 'anon' : 'service_role'}`)
+  console.log(`HTTP ${res.status} ${res.statusText}  (${elapsedMs}ms)`)
+  console.log(`content-range: ${res.headers.get('content-range')}`)
+  const bodyHint = res.headers.get('x-envoy-upstream-service-time')
+  if (bodyHint) console.log(`upstream-time: ${bodyHint}ms`)
+  // HEAD の直後に process.exit すると Windows の node が libuv のアサートで落ちるため
+  // exitCode を立てて自然終了させる
+  process.exitCode = res.ok ? 0 : 1
+}
 
 if (!res.ok) {
   console.error(`HTTP ${res.status} ${res.statusText}`)
