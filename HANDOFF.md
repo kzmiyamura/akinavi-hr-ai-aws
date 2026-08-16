@@ -1,4 +1,88 @@
-# 引き継ぎ（2026-08-14 時点）
+# 引き継ぎ（2026-08-16 時点）
+
+---
+
+## 0-ZZ. このセッションで何が変わったか（8/16・要約）
+
+きっかけは「フォスターネットの一斉配信メール（エンジニア18名）が DB に16件しか
+入っていない」という1件の調査。掘ったら記録の欠落と抽出バグが芋づるで出てきた。
+
+**7件すべて main にマージ・デプロイ済み。1件ずつ別ブランチで作業した。**
+
+| # | 直したもの | commit | 効果 |
+|---|---|---|---|
+| 1 | 受信メールの添付を必ず1行記録 | `3a6c489` | 「添付が無かった」と「記録されなかった」が区別できるようになった |
+| 2 | 同一メール内の同名を別人として登録 | `7de306b` | 18名が16件に潰れていたのが18件に |
+| 3 | `K.H（男性/42歳）` から年齢・性別を取得 | `2935e25` | 実メールで年齢 0/18 → **18/18** |
+| 4 | 上書き時に AI校正の印を剥がす | `b3b20cb` | 更新された人が永久に未校正のまま残るのを解消 |
+| 5 | `sync_zone_functions.mjs` が Windows で落ちる | `44a37f9` | 分岐網羅テストが古い実装を見ていた状態を解消 |
+| 6 | 生の添付数 `rawAttachmentCount` を記録 | `1d9cd7d` | 抽出の成否に左右されない添付数 |
+| 7 | 登録に至らなかったメールも `ai_logs` に残す | `7d3bfac` | Edgeログ失効後も追える（`status='skipped'`） |
+| — | Box自動取得の条件を修正（ワーカー） | `1bc56fe` | 自動取得が0件稼働だったのが動き出した |
+
+データ修復として、8/16 のフォスターネット分を新コードで流し直した
+（`replay_email_group.mjs`）。16件 → **18件**、年齢は18件全部埋まった。
+
+### この日いちばん効いた教訓: 存在しないキーの null を根拠にするな
+
+「添付は無かった」の裏取りに `raw_profile.attachmentName` を引いて null を見て
+断定した。**そんなキーは存在しない**（正しくは `attachmentNames` 複数形）。
+存在しないキーは常に null を返すので、あれは何の証拠にもなっていなかった。
+ユーザーに指摘されて発覚。**まず1件 `select=raw_profile` して `Object.keys()` を見る。**
+
+同じ回で「16件全てで0だった」と件数を稼ぐ書き方もした。`attachmentCount` は
+メール単位の値を人材行に複写しているだけなので、**16行見ても情報は1件分**。
+
+### 添付の有無を調べる（今後の正しい手順）
+
+```bash
+node scripts/check_attachments.mjs --subject "件名の一部"
+node scripts/check_attachments.mjs <candidate_id>
+```
+
+出力の読み方:
+
+| 表示 | 意味 |
+|---|---|
+| `添付0件(対応0件)` | 添付が無かったことが**記録されている**（事実） |
+| `添付2件(対応1件) 経歴書.xlsx[...], 案内.pdf[.../非対応]` | 添付あり。`非対応` は無視された形式 |
+| `(インベントリ記録なし)` | 8/16 の修正より前の取り込み。**添付の有無は不明** |
+
+カウンタが3つあるので使い分ける。
+
+| キー | 中身 | 用途 |
+|---|---|---|
+| `rawAttachmentCount` | 受信時点の生の添付数 | **「添付があったか」はこれだけで判定できる**（8/16 追加） |
+| `sourceAttachmentCount` | 画像＋テキスト抽出に成功した Word/Excel/PDF＋未対応形式 | スキャンPDF等の空振りを取りこぼす |
+| `attachmentCount` | **画像の数だけ**（SUPPORTED_MIME から PDF を除いた残り） | 名前に反して総数ではない |
+
+### 同名別人の判定（`sameMailConflicts`）
+
+1通の中に同じ表示名が2回以上出たとき、**駅・都道府県・年齢・単価のどれか1つでも
+食い違えば別人**として登録する（2026-08-16 ユーザー判断）。両方に値がある項目だけを
+根拠にし、片方 null は根拠にしない（本文＋添付で片方が欠ける正常ケースを潰さないため）。
+①で別人と判定したら②③の判定は飛ばす（②は件名一致だけで無条件マージするため）。
+テストは `scripts/same_mail_dedup_selftest.mjs`。
+
+### AI校正の印は上書きで剥がす（`mergeRawProfileOnUpdate`）
+
+複数人材メールの経路は既存 `raw_profile` のキーを埋め戻すため、中身を新しくしても
+「校正済み」の印が古いまま残っていた。ワーカーは印が無い人を拾うので、
+**更新された人は二度と校正されない**。8/16 の16件は印が 8/10 のままで、
+年齢 null の3人が埋まらない直接の原因だった。
+`_llm_checked_at` / `_llm_stage` / `_llm_applied` / `_llm_attempts` /
+`_llm_last_error` / `_regex_backup` は引き継がない。
+上書き時は `created_at` も更新されるので、剥がせばキューの先頭で拾われる。
+テストは `scripts/llm_mark_reset_selftest.mjs`。
+
+### やり残し（8/16）
+
+- **`box_status='pending'` のまま残る8件**。既に `resume_url` があるので Box 取得は
+  不要だが、状態が永久に `pending`。意味を変えると画面表示に影響するので触っていない
+- **8/10 に登録された同件名の4人**（Y.H / S.S / H.Y / K.S）。流し直しの対象外で古いまま
+- **`deno` がこのマシンに入っていない**。`check-and-deploy-edge.sh` の型チェックは
+  素通りする（元からそう）。検証は `npx tsc --noEmit` で行うこと。
+  **「deno check クリーン」と報告してはいけない**（8/16 に誤報告した）
 
 ---
 
@@ -1091,7 +1175,10 @@ env を変えて再起動する場合は `pm2 restart akinavi-shadow --update-en
 pm2 list                                        # akinavi-shadow が online か
 npm run build                                   # ★ tsc -b。Vercel が使うのはこちら
 npx vitest run                                  # フロントのテスト（87件）
-node scripts/test_excel_anomalies.mjs           # 合成異常系205ケース
+node scripts/test_excel_anomalies.mjs           # 合成異常系210ケース
+node scripts/check_attachments.mjs --subject "件名"   # ★そのメールに添付があったか
+node scripts/same_mail_dedup_selftest.mjs       # 同一メール内の同名を別人と判定する
+node scripts/llm_mark_reset_selftest.mjs        # 上書き時にAI校正の印を剥がす
 node scripts/test_llm_sheet_selection.mjs       # ★AI経路のシート選定（Goldenは守らない）
 node scripts/test_parse_ym.mjs                  # 和暦を含む年月パース
 node scripts/llm_extract/skill_filter_selftest.mjs   # AI校正の絞込（語境界一致）
