@@ -72,8 +72,9 @@ function createLedger(rid: string) {
         list.push(r.detail ? `${r.code}(${r.detail.slice(0, 60)})` : r.code)
         byEntry.set(r.entryId, list)
       }
+      // メール単位の行は少数なので、添付インベントリだけはファイル名が切れないよう長めに残す
       const emailCodes = rows.filter(r => r.entryId == null)
-        .map(r => (r.detail ? `${r.code}(${r.detail.slice(0, 60)})` : r.code))
+        .map(r => (r.detail ? `${r.code}(${r.detail.slice(0, r.code === 'A-ATT-INVENTORY' ? 400 : 60)})` : r.code))
       const trace: Record<string, unknown> = {
         assigned: Object.fromEntries(
           assignedEntryIds.filter(id => byEntry.has(id)).map(id => [id, byEntry.get(id)]),
@@ -192,11 +193,14 @@ const DRIVE_SKIP_KEYWORDS = ['ポートフォリオ', '作品集', 'portfolio', 
 const EXCEL_MIME = [
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
+  'application/vnd.ms-excel.sheet.macroEnabled.12',                        // .xlsm（マクロ有効）
+  'application/vnd.ms-excel.sheet.binary.macroEnabled.12',                 // .xlsb（バイナリ）
 ]
 
 const WORD_MIME = [
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/msword',
+  'application/vnd.ms-word.document.macroEnabled.12',                      // .docm
 ]
 
 function looksLikeZipBytes(ab: ArrayBuffer): boolean {
@@ -209,7 +213,7 @@ async function fetchSheetsEntry(link: { id: string; gid: string }, ledger: Ledge
   const fp = await fetchCsvFingerprint(link.id, link.gid)
   const sourceUrl = `https://docs.google.com/spreadsheets/d/${link.id}/edit#gid=${link.gid}`
   try {
-    const res = await fetchWithTimeout(`https://docs.google.com/spreadsheets/d/${link.id}/export?format=xlsx`, 20000)
+    const res = await fetchWithTimeout(`https://docs.google.com/spreadsheets/d/${link.id}/export?format=xlsx`, 1800)
     if (res.ok) {
       const ab = await res.arrayBuffer()
       if (!looksLikeZipBytes(ab)) {
@@ -247,7 +251,7 @@ async function fetchDocsEntry(link: { id: string }, ledger: Ledger): Promise<Sou
   const entryId = ledger.nextEntryId()
   const sourceUrl = `https://docs.google.com/document/d/${link.id}/edit`
   try {
-    const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=docx`, 20000)
+    const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=docx`, 1800)
     if (res.ok) {
       const ab = await res.arrayBuffer()
       if (!looksLikeZipBytes(ab)) throw new Error('docxがHTML応答(レート制限/権限なし)')
@@ -265,7 +269,7 @@ async function fetchDocsEntry(link: { id: string }, ledger: Ledger): Promise<Sou
   } catch (e) { ledger.log(entryId, 'A-FETCH-FAIL', `docs docx ${e instanceof Error ? e.message : String(e)}`) }
   // 保険: txtエクスポート（旧本流）
   try {
-    const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=txt`, 20000)
+    const res = await fetchWithTimeout(`https://docs.google.com/document/d/${link.id}/export?format=txt`, 1800)
     if (res.ok && !/text\/html/.test(res.headers.get('content-type') ?? '')) {
       ledger.log(entryId, 'A-TXT-FB', `docs ${link.id}`)
       return {
@@ -288,7 +292,7 @@ async function fetchDriveEntry(link: { id: string; index: number }, body: string
   const entryId = ledger.nextEntryId()
   const sourceUrl = `https://drive.google.com/file/d/${link.id}/view`
   try {
-    const res = await fetchWithTimeout(`https://drive.google.com/uc?export=download&id=${link.id}`, 20000)
+    const res = await fetchWithTimeout(`https://drive.google.com/uc?export=download&id=${link.id}`, 1800)
     if (!res.ok) { ledger.log(entryId, 'A-FETCH-FAIL', `drive status=${res.status}`); return null }
     const ct = (res.headers.get('content-type') ?? '').split(';')[0].trim()
     if (ct === 'text/html') {
@@ -297,8 +301,8 @@ async function fetchDriveEntry(link: { id: string; index: number }, body: string
       return null
     }
     const filename = filenameFromDisposition(res) ?? `drive_${link.id}`
-    const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xlsx?|ods)$/i.test(filename)
-    const isWord = WORD_MIME.includes(ct) || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(docx?)$/i.test(filename)
+    const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xls[xmb]?|ods)$/i.test(filename)
+    const isWord = WORD_MIME.includes(ct) || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(doc[xm]?)$/i.test(filename)
     const isPdf = ct.includes('pdf') || /\.pdf$/i.test(filename)
     if (isPdf) {
       const b64 = arrayBufferToBase64(await res.arrayBuffer())
@@ -389,20 +393,39 @@ function colIndexFromCellRef(cell: string): number {
   return n - 1
 }
 
-const MULTI_CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏名)[　 ]*[：:]|[■●▪▶]?[ 　]*(?:最寄(?:り?駅?)|希望単価|希望単金|スキル|業務経験|稼働開始|稼働時期|アピール)/
+const MULTI_CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏[ 　]*名)[　 ]*[：:]|[■●▪▶]?[ 　]*(?:最寄(?:り?駅?)|希望単価|希望単金|スキル|業務経験|稼働開始|稼働時期|アピール)/
 
-const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
+const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏[ 　]*名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
 
 function looksLikeRosterName(s: string): boolean {
   const t = s.trim()
   if (t.length < 1 || t.length > 25) return false
-  // 経歴書・スキルシートの見出し語/セクション語は人名ではない
-  if (/生年月日|年月日|学歴|学　*歴|住所|住　*所|期間|概要|案件|要件|作業|工程|役割|人数|規模|環境|備考|資格|スキル|言語|OS\b|フレームワーク|ツール|自己PR|経験|年数|性別|年齢|最寄|駅|単価|金額|稼働|開始|終了|合計|小計|通勤|沿線|会社|所属|部署|電話|メール|mail|TEL|FAX|プロジェクト|システム|開発|設計|テスト|運用|保守|担当|内容|詳細|日付|時期|現在|以上|以下|合否|評価|№|No\.?|保有|得意|分野|技術|職種|職務|要約|サマリ|紹介|実績|成果|履歴/i.test(t)) return false
+  // 経歴書・スキルシートの見出し語/セクション語は人名ではない。
+  // 「年　数」「期　間」のような全角スペース入り見出しがすり抜けた実害があるため、
+  // 判定はスペースを除去した文字列に対して行う（eyebrains 2026-08-05）
+  const tNoSpace = t.replace(/[　 ]/g, '')
+  // 職務経歴書の学歴欄の学校名（早稲田大学/愛知県立刈谷工科高等学校（三年制） 等）を
+  // 名簿の人材行と誤認して人材登録した実害（2026-08-08 ブライトスター経歴書で量産）。
+  // 「学」1字の人名（中村 学 等）は含まれないので誤爆しない
+  if (/大学|高等学校|高校|学院|学校|短大|専門学校|学部|学科|卒業|入学|中退|大卒|高卒|院卒|専卒/.test(tNoSpace)) return false
+  // 「勤務地」「場所」「常駐先」は案件表の列見出し。個人スキルシートの勤務地列を氏名列と
+  // 誤認し、勤務地の駅名を人材として登録した実害（2026-08-10 トリニタス）
+  // 「顧客」は経歴書の顧客欄セルが氏名列に並ぶと、取引先企業名の幽霊人材を量産する
+  // （2026-08-11 Trinitas 経歴書で11件隔離: 日新火災・野村証券・中外製薬…）
+  if (/生年月日|年月日|学歴|住所|期間|概要|案件|要件|作業|工程|役割|人数|規模|環境|備考|資格|スキル|言語|OS\b|フレームワーク|ツール|自己PR|経験|年数|性別|年齢|最寄|駅|単価|金額|稼働|開始|終了|合計|小計|通勤|沿線|会社|所属|部署|電話|メール|mail|TEL|FAX|プロジェクト|システム|開発|設計|テスト|運用|保守|担当|内容|詳細|日付|時期|現在|以上|以下|合否|評価|№|No\.?|保有|得意|分野|技術|職種|職務|要約|サマリ|紹介|実績|成果|履歴|勤務|場所|常駐|出社|拠点|顧客/i.test(tNoSpace)) return false
+  // スキルシートのカテゴリ見出し（データベース/ネットワーク等のカタカナ分類語）は人名ではない。
+  // 1人分のスキルシートを名簿と誤検出し、分類セルを人名行として展開する事故を防ぐ（Y.M_沼津.xlsx 実害）
+  if (/^(?:データベース|ネットワーク|サーバ(?:ー)?|ミドルウェア|インフラ(?:ストラクチャ)?|クラウド|セキュリティ|ストレージ|プラットフォーム|アプリケーション|オペレーティングシステム|ハードウェア|ソフトウェア|プログラミング|マネジメント|コミュニケーション|プログラム|アーキテクチャ)$/.test(t)) return false
   // 日付・数字始まり（1989年4月、2026/05 等）は人名ではない
   if (/^[\d０-９(（]/.test(t)) return false
+  // 全角英字は半角に正規化してから判定（「ＯＳ」「ＷＥＢ」が半角前提の判定をすり抜けた実害）
+  const tAscii = t.replace(/[Ａ-Ｚａ-ｚ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
   // 英字1単語3文字以上（Unix/PHP/Mysql/Apa等の技術用語）は除外。
   // イニシャル（A.M / K.T / OH）とスペース区切りローマ字（Tanaka Taro）は許容
-  if (/^[A-Za-z]{3,}$/.test(t)) return false
+  if (/^[A-Za-z]{3,}$/.test(tAscii)) return false
+  // スキルシートの2文字セクション見出し。イニシャル（OH等）と形が同じため、
+  // 実害が確認された語のみ個別除外（OS/DB は 2026-08-08 に人材として登録された）
+  if (/^(?:OS|DB|NW)$/i.test(tAscii)) return false
   return true
 }
 
@@ -445,6 +468,8 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
         })
         dataRows.push({ name, rowText, links: rowLinks })
       }
+      // 氏名列の過半数が駅名 = 最寄駅列を誤って掴んでいる → この見出し行は名簿ではない
+      if (dataRows.length >= 2 && isMostlyStationNames(dataRows.map((x) => x.name))) continue
       if (dataRows.length >= 2) return { isRoster: true, rows: dataRows }
     }
 
@@ -492,6 +517,7 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
           })
           dataRows.push({ name, rowText: [otherFields, summaryCell].filter(Boolean).join('\n'), links: rowLinks })
         }
+        if (isMostlyStationNames(dataRows.map((x) => x.name))) return null
         const distinct = new Set(dataRows.map(x => x.name.replace(/[.\s　・]/g, '').toLowerCase()))
         return dataRows.length >= 2 && distinct.size >= 2 ? dataRows : null
       }
@@ -537,6 +563,7 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
     }
     // 相異なる氏名が2人以上いて初めて名簿。1人の経歴書は表紙と本文などで同じ氏名ラベルが
     // 2回出ることが多く（実例: 実DOCXで同一人物が2候補者に分裂した）、同名のみなら単票扱い
+    if (isMostlyStationNames(rows.map((r) => r.name))) continue
     const distinctNames = new Set(rows.map(r => r.name.replace(/[.\s　・]/g, '').toLowerCase()))
     if (rows.length >= 2 && distinctNames.size >= 2) return { isRoster: true, rows }
   }
@@ -557,16 +584,16 @@ async function fetchLinkedResume(url: string, ledger: Ledger, depth: number): Pr
   return await extractEntry(fetched, ledger)
 }
 
-const ROSTER_MAX_ROWS = 15
+const ROSTER_MAX_ROWS = 70
 
-const ROSTER_LINK_FETCH_BUDGET_MS = 60_000
+const ROSTER_LINK_FETCH_BUDGET_MS = 2500
 
 async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger, linkBudgetMs = ROSTER_LINK_FETCH_BUDGET_MS, priorityNames: string[] = []): Promise<SourceEntry[]> {
   const linkFetchStart = Date.now()
   const out: SourceEntry[] = []
   // 本文で紹介されている人材の行を先頭へ（安定ソート）。
-  // 15行上限・リンク取得60秒予算は先頭から消費されるため、並べ替えないと
-  // 「本文に名前がある人が名簿の16行目以降にいる」場合に行情報とリンク先経歴書ごと失われる。
+  // 行数上限（ROSTER_MAX_ROWS）とリンク取得予算は先頭から消費されるため、並べ替えないと
+  // 「本文に名前がある人が名簿の後方行にいる」場合に行情報とリンク先経歴書ごと失われる。
   const normName = (s: string) => s.replace(/[.\s　・]/g, '').toLowerCase()
   const priNorms = priorityNames.map(normName).filter(n => n.length >= 2)
   const isPriority = (rowName: string) => {
@@ -574,6 +601,12 @@ async function expandRosterEntries(entries: SourceEntry[], ledger: Ledger, linkB
     return rn.length >= 2 && priNorms.some(p => p.includes(rn) || rn.includes(p))
   }
   for (const entry of entries) {
+    // 本文で名指しされた人本人の経歴書は名簿判定にかけない（幽霊量産の構造的な防止）
+    if (isOwnersResumeFile(entry.filename ?? entry.label ?? '', priorityNames)) {
+      ledger.log(entry.entryId, 'C-OWNER-RESUME', `本人の経歴書のため名簿判定せず:${entry.filename ?? entry.label}`)
+      out.push(entry)
+      continue
+    }
     const roster = detectRoster(entry)
     if (!roster.isRoster) {
       out.push(entry)
@@ -690,13 +723,31 @@ function promoteUnassignedRosterEntries(
   const norm = (s: string) => s.replace(/[.\s　・]/g, '').toLowerCase()
   const known = new Set(existingBlockNames.filter((n): n is string => !!n).map(norm))
   const out: { name: string; rowText: string }[] = []
+  const perEntry = new Map<string, number>()
   for (const e of rosterEntries) {
     if (!e.rosterRowName) continue
     const n = norm(e.rosterRowName)
     if (n.length < 2 || known.has(n)) continue
+    const score = personAttrScore(e.content)
+    if (score < 2) {
+      ledger.log(e.entryId, 'D-PROMOTE-REJ', `人の属性${score}種のみ:${e.rosterRowName}`)
+      continue
+    }
     known.add(n)
     ledger.log(e.entryId, 'D-NEWBLOCK', e.rosterRowName)
+    // 由来（同一添付/リンク）ごとの生成数。entryId は行ごとに一意なので親IDで束ねる
+    const originId = String(e.entryId).replace(/[#:].*$/, '')
+    perEntry.set(originId, (perEntry.get(originId) ?? 0) + 1)
     out.push({ name: e.rosterRowName, rowText: e.content })
+  }
+  // 異常膨張ガード: 1つの添付から上限を超えて人が生まれるのは名簿誤検出の疑いが濃い。
+  // 静かに大量登録するより、全件捨てて記録を残す（取りこぼしは再解析で回復できる）
+  for (const [originId, count] of perEntry) {
+    if (count > MAX_PROMOTED_PER_ENTRY) {
+      ledger.log(originId, 'D-PROMOTE-ABORT', `${count}人は異常膨張のため全件却下`)
+      console.error(`[roster-anomaly] entry=${originId} が${count}人を生成しようとしたため全件却下`)
+      return []
+    }
   }
   return out
 }
@@ -724,7 +775,8 @@ async function resolveResumeUrl(
 ): Promise<string | null> {
   const uploadOne = async (name: string | undefined, mimeType: string, data: string, entryId: number | null): Promise<string | null> => {
     const ext = (name ?? 'bin').split('.').pop() ?? 'bin'
-    const safeName = `${(candName ?? 'cand').replace(/[.\s　]/g, '_')}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.${ext}`
+    // 内容ハッシュベースの安定名（再処理での重複複製を防ぐ・stableResumeName のコメント参照）
+    const safeName = await stableResumeName(candName ?? 'cand', data, ext)
     const url = await uploadToStorage(safeName, mimeType, data)
     if (url) ledger.log(entryId, 'E-STO-OK', safeName)
     else ledger.log(entryId, 'E-STO-FAIL', name ?? '')
