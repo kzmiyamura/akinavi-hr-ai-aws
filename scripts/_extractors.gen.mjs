@@ -3676,6 +3676,23 @@ function sameMailConflicts(a, b){
   return out
 }
 
+// ── mergeRawProfileOnUpdate ──
+function mergeRawProfileOnUpdate(
+  existing,
+  fresh,
+){
+  const LLM_BOOKKEEPING_KEYS = new Set([
+    '_llm_checked_at', '_llm_stage', '_llm_applied', '_llm_attempts', '_llm_last_error', '_regex_backup',
+  ])
+  const merged= { ...fresh }
+  for (const [k, v] of Object.entries(existing)) {
+    if (LLM_BOOKKEEPING_KEYS.has(k)) continue
+    if (merged[k] == null && v != null) merged[k] = v
+  }
+  for (const k of LLM_BOOKKEEPING_KEYS) delete merged[k]
+  return merged
+}
+
 
 export {
   parseDurationToMonths,
@@ -3722,4 +3739,5 @@ export {
   worksheetToCells,
   scoreProseRoles,
   sameMailConflicts,
+  mergeRawProfileOnUpdate,
 }
