@@ -2304,6 +2304,10 @@ function stripInitialSuffix(name){
   const remainder = name.slice(initM[1].length)
   if (/^[A-Za-zＡ-Ｚａ-ｚ]/.test(remainder)) return name          // 4文字以上の氏名 → 切らない
   if (/^[\s　]*[\(（]\d{2}[才歳]?[\)）]?/.test(remainder)) return name  // 年齢が続く → 切らない
+  // 「K.H（男性/42歳）」のように性別が先に来る形式も構造化情報なので切らない。
+  // 切ると直後の年齢・性別抽出が丸ごと失敗する（2026-08-16 フォスターネット18名は
+  // 全員この形式で、regex の年齢取得率が 0/18 だった）。
+  if (/^[\s　]*[\(（][^）)]{0,20}(?:\d{2}[才歳]|男性|女性)/.test(remainder)) return name
   return initM[1]
 }
 
