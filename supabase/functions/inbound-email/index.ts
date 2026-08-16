@@ -85,6 +85,46 @@ function getEnv(key: string): string {
   return val
 }
 
+/** 人材・案件を1件も登録せずに終わったメールを ai_logs に1行残して 200 を返す。
+ *
+ *  これまでスキップは Edge のログにしか出ておらず、ログが失効すると
+ *  「そのメールが来ていたのか」「添付が付いていたのか」を後から追えなかった。
+ *  status='skipped' で success と混ぜずに残す（2026-08-16）。
+ *  ログの失敗で本処理を止めないよう例外は握りつぶす。 */
+async function respondSkipped(
+  reason: string,
+  ctx: { rid: string; type?: string; from: string; subject: string; attachments?: Attachment[]; body?: string },
+  extra: Record<string, unknown> = {},
+): Promise<Response> {
+  const atts = ctx.attachments ?? []
+  console.warn(`[SKIP_${reason}]`, { rid: ctx.rid, from: ctx.from, subject: ctx.subject, att: atts.length, ...extra })
+  try {
+    const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
+    await supabase.from('ai_logs').insert({
+      type: ctx.type ?? 'unknown',
+      model: 'no-ai',
+      from_address: ctx.from,
+      subject: ctx.subject,
+      status: 'skipped',
+      prompt_length: 0,
+      ai_result: {
+        reason,
+        rid: ctx.rid,
+        rawAttachmentCount: atts.length,
+        attachmentNames: atts.map(a => a.name ?? '(名前なし)'),
+        ...extra,
+      },
+      raw_body: ctx.body ? decodeHtmlEntities(ctx.body).slice(0, 3000) : null,
+    })
+  } catch (e) {
+    console.error('[ai_logs skip insert error]', String(e).slice(0, 200))
+  }
+  return new Response(
+    JSON.stringify({ ok: true, skipped: true, reason, ...extra }),
+    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+  )
+}
+
 /** Microsoft Graph API の from フィールド（JSON文字列の場合も）からメールアドレスを取り出す */
 function parseFrom(from: string): string {
   try {
@@ -9340,11 +9380,7 @@ Deno.serve(async (req: Request) => {
 
     // ── MAILER-DAEMON: 配信失敗通知は無条件スキップ ──────────────────────
     if (/^mailer-daemon/i.test(from) || /^mailer-daemon/i.test(subject)) {
-      console.warn('[SKIP_MAILER_DAEMON]', { rid: traceRid, from, subject })
-      return new Response(
-        JSON.stringify({ ok: true, skipped: true, reason: 'MAILER_DAEMON' }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      )
+      return await respondSkipped('MAILER_DAEMON', { rid: traceRid, from, subject, attachments })
     }
 
     // ── 自社ドメインスキップ: force=true（手動登録・再解析）またはデモ環境はバイパス ──────
@@ -9355,11 +9391,7 @@ Deno.serve(async (req: Request) => {
       if (ownDomain) {
         const fromDomain = from.split('@')[1]?.toLowerCase() ?? ''
         if (fromDomain === ownDomain.toLowerCase()) {
-          console.warn('[SKIP_OWN_DOMAIN]', { rid: traceRid, from, ownDomain })
-          return new Response(
-            JSON.stringify({ ok: true, skipped: true, reason: 'OWN_DOMAIN' }),
-            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-          )
+          return await respondSkipped('OWN_DOMAIN', { rid: traceRid, from, subject, attachments }, { ownDomain })
         }
       }
     }
@@ -9563,11 +9595,8 @@ Deno.serve(async (req: Request) => {
     const plainBodyLength = body.trim().length
     if (plainBodyLength > 0 && plainBodyLength < 50 && attachments.length === 0) {
       tracePhase = 'skip_too_short'
-      console.warn('[SHORT_BODY] 本文が短すぎるためスキップ', { rid: traceRid, bodyLen: plainBodyLength, subject })
-      return new Response(
-        JSON.stringify({ ok: true, skipped: true, reason: 'BODY_TOO_SHORT', bodyLen: plainBodyLength }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      )
+      return await respondSkipped('BODY_TOO_SHORT',
+        { rid: traceRid, type, from, subject, attachments, body }, { bodyLen: plainBodyLength })
     }
 
     // ② 研修報告・案件紹介メールをスキップ（人材メールボックスの誤登録対策）
@@ -9712,11 +9741,7 @@ Deno.serve(async (req: Request) => {
       const isSubjectSkip = SUBJECT_SKIP_KEYWORDS.some(kw => subject.includes(kw)) || isJobRequirementSubject
       if (isTraining || isSolicitation || isCommercial || isSubjectSkip) {
         const skipReason = isTraining ? 'TRAINING_REPORT' : isSolicitation ? 'PROJECT_SOLICITATION' : isSubjectSkip ? 'SUBJECT_KEYWORD' : 'COMMERCIAL_SOLICITATION'
-        console.warn(`[SKIP_IRRELEVANT] ${skipReason}`, { rid: traceRid, subject })
-        return new Response(
-          JSON.stringify({ ok: true, skipped: true, reason: skipReason }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        )
+        return await respondSkipped(skipReason, { rid: traceRid, type, from, subject, attachments, body })
       }
     }
 
@@ -9733,22 +9758,14 @@ Deno.serve(async (req: Request) => {
         inboundDataEnv,
         receivedKeys: rawKeys,
       })
-      return new Response(
-        JSON.stringify({
-          ok: true,
-          skipped: true,
-          reason: 'EMPTY_BODY_AND_ATTACHMENTS',
+      return await respondSkipped('EMPTY_BODY_AND_ATTACHMENTS',
+        { rid: traceRid, type, from, subject, attachments }, {
           message: '本文・添付ともに無いため取り込みをスキップしました（Make の後続処理は続行できます）',
           receivedKeys: rawKeys,
           bodyLengthAfterPick: body.trim().length,
           type,
           inboundDataEnv,
-        }),
-        {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        },
-      )
+        })
     }
 
     tracePhase = 'supabase_connect'
@@ -9763,11 +9780,7 @@ Deno.serve(async (req: Request) => {
     const { isDuplicate, configKey: _dedupConfigKey } = await checkEmailDuplicate(supabase, from, subject, body, dedupSalt)
     dedupConfigKey = _dedupConfigKey
     if (isDuplicate && !forceProcess) {
-      console.warn('[DEDUP] 重複メールのためスキップ', { rid: traceRid, subject, from: from.slice(0, 80) })
-      return new Response(
-        JSON.stringify({ ok: true, skipped: true, reason: 'DUPLICATE_EMAIL' }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      )
+      return await respondSkipped('DUPLICATE_EMAIL', { rid: traceRid, type, from, subject, attachments })
     }
     // 重複なし → ハッシュをまだ記録しない（処理成功後に記録する）
 
@@ -9784,11 +9797,8 @@ Deno.serve(async (req: Request) => {
         .gte('created_at', todayStart.toISOString())
         .filter('raw_profile->>from', 'eq', from)
       if ((senderCount ?? 0) >= SENDER_DAILY_LIMIT) {
-        console.warn(`[RATE_LIMIT] 送信者上限超過スキップ from=${from} count=${senderCount}`)
-        return new Response(
-          JSON.stringify({ ok: true, skipped: true, reason: 'SENDER_DAILY_LIMIT' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        )
+        return await respondSkipped('SENDER_DAILY_LIMIT',
+          { rid: traceRid, type, from, subject, attachments }, { senderCount, limit: SENDER_DAILY_LIMIT })
       }
     }
 
@@ -11260,10 +11270,8 @@ Deno.serve(async (req: Request) => {
         .eq('key', 'inbound_project_enabled')
         .maybeSingle()
       if (projectEnabledRow?.value !== 'true' && !forceProcess) {
-        return new Response(
-          JSON.stringify({ ok: true, skipped: true, reason: 'PROJECT_INBOUND_DISABLED' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        )
+        return await respondSkipped('PROJECT_INBOUND_DISABLED',
+          { rid: traceRid, type, from, subject, attachments })
       }
       tracePhase = 'project_regex_extract'
       const durationMs = 0
