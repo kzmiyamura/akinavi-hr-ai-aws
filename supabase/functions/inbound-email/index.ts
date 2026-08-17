@@ -3054,6 +3054,50 @@ function deriveWorkStyleTag(phrase: string | null): string | null {
   return null
 }
 
+/**
+ * 営業の「他にもこういう人がいます」定型文を落とす。
+ *
+ * SES の紹介メールには、本人と無関係な売り込み文が入る:
+ *   ※※※※※※※※
+ *   以下要員以外にも多数
+ *   開発、テスター、インフラ(SV,NW運用監視～構築設計)、ヘルプデスク,キッティング等
+ *   エンジニアがおりますので案件を頂けますと幸いです。
+ *   ※※※※※※※※
+ * ここを本人の役割として拾うと、その送信元の人材全員に「ヘルプデスク」「運用保守」が付く。
+ * 複数人材メールは区切り線で人ごとに分割されるため混ざらないが、
+ * **1人だけのメールは本文全体が本人の欄になるので混ざる**
+ * （2026-08-17 ユーザー指摘。実測: ai・more 由来のヘルプデスク率 17.4% vs 他社 11.3%）。
+ *
+ * 落とすのは「他の要員がいる」と明示している文の周辺だけ。
+ * 本人の記述を巻き込まないよう、宣伝の合図から次の空行までに限定する。
+ */
+function stripAgentSolicitation(text: string): string {
+  const lines = String(text ?? '').split(/\r?\n/)
+  // 宣伝の始まり: 「以下要員以外にも」「上記以外にも」「他にも多数」など
+  // 「要員/人材/エンジニア」という語を伴う売り込みだけを対象にする。
+  // 「業務システム以外にも経験があります」のような本人の記述を巻き込まないため、
+  // 単なる「以外にも」では発動させない（合成ケースで固定）
+  const START_RE = /(?:要員|人材|エンジニア|技術者)\s*以外にも|他にも多数|多数(?:の)?(?:エンジニア|技術者|要員|人材)\s*が?(?:おり|ござい)/
+  // 宣伝の終わり: 依頼文で締めることが多い
+  const END_RE = /(?:おりますので|幸いです|お願い(?:致します|いたします|します)|ご紹介可能|募集中)/
+  const out: string[] = []
+  let dropping = false
+  for (const line of lines) {
+    if (!dropping && START_RE.test(line)) {
+      dropping = true
+      continue
+    }
+    if (dropping) {
+      // 空行・区切り線・締めの文まで捨てる（最大でもその範囲で必ず抜ける）
+      if (line.trim() === '' || /^[※*＊\-－—ー=＝_]{3,}$/.test(line.trim())) { dropping = false; continue }
+      if (END_RE.test(line)) { dropping = false; continue }
+      continue
+    }
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
 function extractFromProse(bodyText: string, attachText: string): {
   roles: string[]
   industries: string[]
@@ -3061,7 +3105,8 @@ function extractFromProse(bodyText: string, attachText: string): {
   roleScores: Record<string, number>
 } {
   // URL を除去（"https://example.com/cc.php" 等が PHP/HTTPS に誤マッチするのを防ぐ）
-  const cleanedBody = stripUrlsForSkillMatching(bodyText)
+  // あわせて営業の「他にも多数おります」定型文を落とす（本人の役割ではないため）
+  const cleanedBody = stripUrlsForSkillMatching(stripAgentSolicitation(bodyText))
   const cleanedAttach = stripUrlsForSkillMatching(attachText)
   const allText = cleanedBody + '\n' + cleanedAttach
 
