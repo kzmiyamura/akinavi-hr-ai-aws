@@ -121,8 +121,23 @@ function compareGolden(golden, result) {
 
 // ── メイン ────────────────────────────────────────────────────────
 
+/** testData/excel と testData/failures は PII のため git 管理外。
+ *  未取得のマシンでは ENOENT で全体が起動できず、他のテストまで動かせなかったので
+ *  「無ければ空扱い」にして、件数0の警告だけ出す（取得は download_failing_excels.mjs）。 */
+function readdirOrEmpty(dir) {
+  try {
+    return readdirSync(dir)
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      console.warn(`⚠ ${dir} が無いためスキップ（PIIのためgit管理外。node scripts/download_failing_excels.mjs で取得）`)
+      return []
+    }
+    throw e
+  }
+}
+
 // 1. Excel テスト（testData/excel/*.xlsx）
-const excelFiles = readdirSync(excelDir).filter(f => /\.(xlsx?|xls)$/i.test(f)).sort()
+const excelFiles = readdirOrEmpty(excelDir).filter(f => /\.(xlsx?|xls)$/i.test(f)).sort()
 const excelResults = { pass: [], warn: [], fail: [], error: [] }
 
 if (!COMPACT) console.log('\n=== Excel skillYears テスト (testData/excel/) ===')
@@ -165,7 +180,7 @@ if (UPDATE_GOLDEN) {
 }
 
 // 2. Body text テスト（testData/failures/*.txt）
-const txtFiles = readdirSync(failureDir).filter(f => f.endsWith('.txt')).sort()
+const txtFiles = readdirOrEmpty(failureDir).filter(f => f.endsWith('.txt')).sort()
 const txtResults = { pass: [], warn: [], fail: [], error: [] }
 
 if (!COMPACT && txtFiles.length > 0) console.log('\n=== Body text skillYears テスト (testData/failures/*.txt) ===')
@@ -182,7 +197,7 @@ for (const file of txtFiles) {
 
 // 3. New xlsx テ���ト（testData/*.xlsx）
 const newFiles = SHOW_NEW
-  ? readdirSync(newDir).filter(f => /\.(xlsx?|xls)$/i.test(f)).sort()
+  ? readdirOrEmpty(newDir).filter(f => /\.(xlsx?|xls)$/i.test(f)).sort()
   : []
 const newResults = { pass: [], warn: [], fail: [], error: [] }
 

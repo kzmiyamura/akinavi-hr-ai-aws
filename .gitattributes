@@ -1,0 +1,5 @@
+# 自動生成ファイルは改行を LF に固定する。
+# Windows機で生成すると CRLF、Mac機で生成すると LF になり、
+# 中身が同じでも全行が差分として出る（実差分がレビューで埋もれる）。
+scripts/_extractors.gen.mjs text eol=lf
+supabase/functions/inbound-email/station_data.json text eol=lf
