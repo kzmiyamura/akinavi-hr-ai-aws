@@ -63,6 +63,8 @@ const TARGET_FUNCTIONS = [
   'scoreProseRoles',
   'sameMailConflicts',      // 同一メール内の同名を別人と判定する（駅・県・年齢・単価の食い違い）
   'mergeRawProfileOnUpdate', // 既存レコード上書き時の raw_profile 合成（AI校正の印は引き継がない）
+  'isZipAttachment',        // ZIP添付の判定（octet-stream で来るので拡張子も見る）
+  'planZipEntries',         // ZIP内エントリの採否（展開本体は expandZipAttachments 側）
 ]
 
 // ── TypeScript → JavaScript 簡易変換 ──────────────────────────────
@@ -364,6 +366,13 @@ const TARGET_CONSTS = [
   'PROJ_JUNK',
   'PROJ_KEEP_WHOLE',
   'PROJ_PREFIX_RE',
+  // ZIP添付展開（isZipAttachment / planZipEntries が参照）
+  'ZIP_MIME',
+  'ZIP_EXTRACTABLE_RE',
+  'ZIP_MAX_ENTRIES',
+  'ZIP_MAX_TOTAL_BYTES',
+  'ZIP_MAX_ENTRY_BYTES',
+  'ZIP_EXT_MIME',
 ]
 
 /** `const NAME = ...` の1行宣言を取り出す */

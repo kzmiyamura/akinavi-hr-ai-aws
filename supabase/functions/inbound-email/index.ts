@@ -79,6 +79,123 @@ const EXCEL_MIME = [
   'application/vnd.ms-excel.sheet.binary.macroEnabled.12',                 // .xlsb（バイナリ）
 ]
 
+/** ZIP と判定する MIME。Outlook/Graph は application/octet-stream で来ることが多いので拡張子も見る */
+const ZIP_MIME = ['application/zip', 'application/x-zip-compressed', 'application/x-zip', 'multipart/x-zip']
+/** ZIP から取り出す意味があるのは既存パーサ（Excel/Word/PDF）が読める形式だけ */
+const ZIP_EXTRACTABLE_RE = /\.(xls[xmb]?|ods|csv|doc[xm]?|pdf)$/i
+/** zip爆弾・巨大添付の防御。Edge の実行時間とメモリを守る */
+const ZIP_MAX_ENTRIES = 20
+const ZIP_MAX_TOTAL_BYTES = 40 * 1024 * 1024
+const ZIP_MAX_ENTRY_BYTES = 15 * 1024 * 1024
+/** 拡張子 → mimeType。ZIP 内のエントリは mimeType を持たないので拡張子から復元する */
+const ZIP_EXT_MIME: Record<string, string> = { xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.12', xlsb: 'application/vnd.ms-excel.sheet.binary.macroEnabled.12', xls: 'application/vnd.ms-excel', ods: 'application/vnd.oasis.opendocument.spreadsheet', csv: 'text/csv', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docm: 'application/vnd.ms-word.document.macroEnabled.12', doc: 'application/msword', pdf: 'application/pdf' }
+
+function isZipAttachment(att: Attachment): boolean {
+  return ZIP_MIME.includes(att.mimeType) || /\.zip$/i.test(att.name ?? '')
+}
+
+/** unzip 結果1エントリのうち、採否判断に必要な情報だけ */
+interface ZipEntryStat { path: string; size: number }
+/** 採用したエントリ（path は unzip 結果の引き当てキー） */
+interface ZipPick { path: string; name: string; mimeType: string }
+
+/**
+ * ZIP内エントリの採否を決める（純関数）。展開結果のパスとサイズだけで判断するので
+ * unzip 本体を動かさずにテストできる。実際の展開は expandZipAttachments が行う。
+ *
+ * - ディレクトリエントリと Mac/Windows が勝手に入れるゴミ（__MACOSX/.DS_Store/Thumbs.db）は捨てる
+ * - Excel/Word/PDF 以外は採らない。ネスト ZIP もここで弾かれる（再帰の入口を作らない）
+ * - 件数・単体サイズ・合計サイズの上限で zip 爆弾を防ぐ
+ */
+function planZipEntries(zipLabel: string, entries: ZipEntryStat[]): { picks: ZipPick[]; skipped: string[] } {
+  const picks: ZipPick[] = []
+  const skipped: string[] = []
+  let total = 0
+
+  for (const { path, size } of entries) {
+    const base = path.split('/').pop() ?? ''
+    if (!base || path.endsWith('/')) continue
+    if (path.startsWith('__MACOSX/') || base.startsWith('.') || base === 'Thumbs.db') continue
+
+    if (!ZIP_EXTRACTABLE_RE.test(base)) {
+      skipped.push(`${zipLabel}/${base}: 未対応形式`)
+      continue
+    }
+    if (picks.length >= ZIP_MAX_ENTRIES) { skipped.push(`${zipLabel}: エントリ数上限(${ZIP_MAX_ENTRIES})超過`); break }
+    if (size > ZIP_MAX_ENTRY_BYTES) { skipped.push(`${zipLabel}/${base}: 単体サイズ上限超過`); continue }
+    total += size
+    if (total > ZIP_MAX_TOTAL_BYTES) { skipped.push(`${zipLabel}: 合計サイズ上限超過`); break }
+
+    const ext = (base.match(ZIP_EXTRACTABLE_RE)?.[1] ?? '').toLowerCase()
+    // ZIP 由来と分かる名前にする（resume_url やラベルにもこの名前が出る）
+    picks.push({ path, name: `${zipLabel}:${base}`, mimeType: ZIP_EXT_MIME[ext] ?? 'application/octet-stream' })
+  }
+  if (picks.length === 0 && skipped.length > 0) skipped.push(`${zipLabel}: 展開できる Excel/Word/PDF が無かった`)
+  return { picks, skipped }
+}
+
+function zipBytesToBase64(u8: Uint8Array): string {
+  let s = ''
+  const CHUNK = 0x8000  // 一括 apply は引数個数上限で落ちるため分割する
+  for (let i = 0; i < u8.length; i += CHUNK) s += String.fromCharCode(...u8.subarray(i, i + CHUNK))
+  return btoa(s)
+}
+
+function zipBase64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64)
+  const u8 = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i)
+  return u8
+}
+
+/**
+ * ZIP添付を展開し、中の Excel/Word/PDF を通常の添付と同じ形に変換して返す。
+ *
+ * 営業メールはスキルシートを ZIP でまとめて送ってくることが多いが、従来は ZIP を
+ * 未対応形式として丸ごと捨てていた（2026-08-10〜17 の保持期間内だけで74人分・
+ * 未対応添付の91%が ZIP）。中身は既存の Excel/Word/PDF パーサでそのまま読めるため、
+ * ここで「普通の添付が複数付いていた」状態に均してから既存の分類ループに渡す。
+ *
+ * - ZIP 自体は戻り値に含めない（展開済みなので二重計上しない）
+ * - ネスト ZIP は展開しない（再帰の入口を作らない）
+ * - 失敗しても本処理は止めず、理由を skipped に残す
+ * - fflate はファイル名を UTF-8 前提で復号するため Windows 製（CP932）の日本語名は
+ *   化けるが、拡張子は ASCII なので分類には影響しない
+ */
+async function expandZipAttachments(
+  attachments: Attachment[],
+): Promise<{ attachments: Attachment[]; notes: string[]; skipped: string[] }> {
+  const out: Attachment[] = []
+  const notes: string[] = []
+  const skipped: string[] = []
+  if (!attachments.some(isZipAttachment)) return { attachments, notes, skipped }
+
+  const { unzipSync } = await import('npm:fflate@0.8.2') as { unzipSync: (data: Uint8Array) => Record<string, Uint8Array> }
+
+  for (const att of attachments) {
+    if (!isZipAttachment(att)) { out.push(att); continue }
+
+    const zipLabel = att.name ?? 'archive.zip'
+    let files: Record<string, Uint8Array>
+    try {
+      files = unzipSync(zipBase64ToBytes(att.data))
+    } catch (e) {
+      skipped.push(`${zipLabel}: 展開失敗 (${String(e).slice(0, 80)})`)
+      console.warn(`[zip] 展開失敗: ${zipLabel}`, String(e).slice(0, 200))
+      continue
+    }
+
+    const plan = planZipEntries(zipLabel, Object.entries(files).map(([path, bytes]) => ({ path, size: bytes.length })))
+    for (const p of plan.picks) {
+      out.push({ data: zipBytesToBase64(files[p.path]), mimeType: p.mimeType, name: p.name })
+    }
+    skipped.push(...plan.skipped)
+    notes.push(`${zipLabel}: ${plan.picks.length}件展開`)
+    console.log(`[zip] ${zipLabel}: ${plan.picks.length}件展開 / 除外${plan.skipped.length}件`)
+  }
+  return { attachments: out, notes, skipped }
+}
+
 function getEnv(key: string): string {
   const val = Deno.env.get(key)
   if (!val) throw new Error(`環境変数 ${key} が設定されていません`)
@@ -9473,15 +9590,24 @@ Deno.serve(async (req: Request) => {
     const elapsed = () => `${Date.now() - t0}ms`
 
     tracePhase = 'step1_body_normalized'
-    const supportedAttachments = attachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
+
+    // ZIP を展開して「普通の添付が複数付いていた」状態に均す。
+    // attachments（受信時点の生の配列）は rawAttachmentCount の根拠なので触らない。
+    // 以降の添付処理は展開後の workAttachments を使う。
+    const zipExpansion = await expandZipAttachments(attachments)
+    const workAttachments = zipExpansion.attachments
+
+    const supportedAttachments = workAttachments.filter(a => SUPPORTED_MIME.includes(a.mimeType))
 
     // ── 添付インベントリ（受信時点の事実を必ず1行残す） ──
     // 「添付が無かった」のか「記録されなかった」のかを後から区別できるようにする。
     // 0件でも必ず記録する。ここを省くと pipeline_trace が undefined になり、
     // 添付ゼロのメールと台帳が動かなかったメールが DB 上で見分けられない（2026-08-16）。
+    // 件数は生の添付数のまま（ZIP は1件）。展開結果は別項として続ける。
     ledger.log(null, 'A-ATT-INVENTORY',
       `添付${attachments.length}件(対応${supportedAttachments.length}件) ` +
-      attachments.map(a => `${a.name ?? '(名前なし)'}[${a.mimeType}${SUPPORTED_MIME.includes(a.mimeType) ? '' : '/非対応'}]`).join(', '))
+      attachments.map(a => `${a.name ?? '(名前なし)'}[${a.mimeType}${SUPPORTED_MIME.includes(a.mimeType) ? '' : '/非対応'}]`).join(', ') +
+      (zipExpansion.notes.length > 0 ? ` / ZIP展開: ${zipExpansion.notes.join(', ')}` : ''))
 
     // Word/Excelのテキスト抽出（MIMEタイプ + 拡張子の両方で判定）
     const officeTextContents: { label: string; content: string; skillYears?: Record<string, number>; attachment?: Attachment; jsonRows?: Array<Record<string, string>>; skillSummary?: string; grid?: string[][]; links?: { cell: string; url: string }[]; totalProjectMonths?: number }[] = []
@@ -9507,8 +9633,10 @@ Deno.serve(async (req: Request) => {
     // 従来はこのケースがログにすら残らず、「メールに実際は複数添付があったのに1件しか
     // 処理されなかった」という事故（曖昧な複数人材への誤共有の疑いと誤認しやすい）を
     // 事後的に切り分けられなかったため追加した。
-    const unrecognizedAttachments: string[] = []
-    for (const att of attachments) {
+    // ZIP 内で展開できなかったエントリ（未対応形式・サイズ超過・展開失敗）もここに合流させ、
+    // 「ZIP は来たが中身を使えなかった」を後から追えるようにする
+    const unrecognizedAttachments: string[] = [...zipExpansion.skipped]
+    for (const att of workAttachments) {
       const attNameLower = (att.name ?? '').toLowerCase()
       const isWordByMime = WORD_MIME.includes(att.mimeType)
       const isExcelByMime = EXCEL_MIME.includes(att.mimeType)
@@ -10655,7 +10783,8 @@ Deno.serve(async (req: Request) => {
         // ゲートで除外されたエントリ由来の skillYears を使わない（他人データ汚染の防止）
         excelSkillYears = {}
       }
-      resumeUrl = await resolveResumeUrl(gateAssigned, attachments, bodyResumeLink, singleMeta.name, ledger)
+      // 展開後を渡す。生の ZIP は Office/PDF 判定に掛からず resume_url が付かないため
+      resumeUrl = await resolveResumeUrl(gateAssigned, workAttachments, bodyResumeLink, singleMeta.name, ledger)
 
       const durationMs = 0
       const parseFallback: 'none' | 'body_only_after_attachment_timeout' = 'none'
