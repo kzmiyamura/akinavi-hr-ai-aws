@@ -26,11 +26,13 @@ import { join } from 'node:path'
 
 const ENV_PATH = join(homedir(), '.akinavi_shadow.env')
 
-function loadEnv(path) {
+function loadEnv(path, { optional = false } = {}) {
   let text
   try {
     text = readFileSync(path, 'utf8')
   } catch (e) {
+    // --anon は .env.local だけで成立するので、shadow env が無いマシンでも動かす
+    if (optional) return {}
     console.error(`env ファイルを読めません: ${path}\n${e.message}`)
     process.exit(1)
   }
@@ -65,14 +67,10 @@ if (/^\s*(insert|update|delete|upsert)\b/i.test(query) || query.includes('..rpc/
   process.exit(1)
 }
 
-const env = loadEnv(ENV_PATH)
-const url = env.SUPABASE_URL
+// --anon のときは shadow env（service key 置き場）が無くても .env.local だけで成立させる
+const env = loadEnv(ENV_PATH, { optional: useAnon })
+let url = env.SUPABASE_URL
 let key = env.SUPABASE_SERVICE_KEY
-
-if (!url || !key) {
-  console.error(`SUPABASE_URL / SUPABASE_SERVICE_KEY が ${ENV_PATH} にありません`)
-  process.exit(1)
-}
 
 if (useAnon) {
   // 画面（ブラウザ）と同じロールで再現するため anon キーを使う。
@@ -84,6 +82,14 @@ if (useAnon) {
     process.exit(1)
   }
   key = local.VITE_SUPABASE_ANON_KEY
+  url = url || local.VITE_SUPABASE_URL
+  if (!url) {
+    console.error(`SUPABASE_URL が ${ENV_PATH} にも .env.local（VITE_SUPABASE_URL）にもありません`)
+    process.exit(1)
+  }
+} else if (!url || !key) {
+  console.error(`SUPABASE_URL / SUPABASE_SERVICE_KEY が ${ENV_PATH} にありません`)
+  process.exit(1)
 }
 
 const endpoint = `${url.replace(/\/$/, '')}/rest/v1/${query.replace(/^\//, '')}`
@@ -110,26 +116,30 @@ if (countOnly) {
   process.exitCode = res.ok ? 0 : 1
 }
 
-if (!res.ok) {
-  console.error(`HTTP ${res.status} ${res.statusText}`)
-  console.error(await res.text())
-  process.exit(1)
-}
+// --count は HEAD なので本文が無い。ここから先の本文処理をすると
+// res.json() が「Unexpected end of JSON input」で落ちるため丸ごと飛ばす
+if (!countOnly) {
+  if (!res.ok) {
+    console.error(`HTTP ${res.status} ${res.statusText}`)
+    console.error(await res.text())
+    process.exit(1)
+  }
 
-const data = await res.json()
+  const data = await res.json()
 
-if (raw) {
-  console.log(JSON.stringify(data, null, 2))
-  process.exit(0)
-}
+  if (raw) {
+    console.log(JSON.stringify(data, null, 2))
+    process.exit(0)
+  }
 
-// 既定表示: 配列なら 1 件ずつ、長い文字列と配列は要約する
-const rows = Array.isArray(data) ? data : [data]
-console.log(`${rows.length} 件`)
-for (const [i, row] of rows.entries()) {
-  console.log(`--- [${i}] ---`)
-  for (const [k, v] of Object.entries(row ?? {})) {
-    console.log(`${k}: ${summarize(v)}`)
+  // 既定表示: 配列なら 1 件ずつ、長い文字列と配列は要約する
+  const rows = Array.isArray(data) ? data : [data]
+  console.log(`${rows.length} 件`)
+  for (const [i, row] of rows.entries()) {
+    console.log(`--- [${i}] ---`)
+    for (const [k, v] of Object.entries(row ?? {})) {
+      console.log(`${k}: ${summarize(v)}`)
+    }
   }
 }
 
