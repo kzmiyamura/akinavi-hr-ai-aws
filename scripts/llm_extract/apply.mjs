@@ -10,6 +10,27 @@ import { readFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { normTech } from './lib.mjs'
+import { isOwnCompany } from './own_company.mjs'
+
+/**
+ * AI が返した所属会社の後始末。
+ * regex 側の sanitizeFromCompany（inbound-email）と同じ考え方で、
+ * 社名そのものでない付随表現を落とす。落としきれない形は null にして
+ * 「間違った社名を書く」より「書かない」を選ぶ（2026-08-17 ユーザー指摘）。
+ */
+export function sanitizeAiCompany(value) {
+  let s = String(value ?? '').trim()
+  if (!s) return null
+  // 「株式会社CyTechから社名変更になります」のような注記は社名ではない
+  s = s.replace(/[（(]?\s*(?:旧|旧社名|株式会社)?[^（()]*?から社名変更(?:になります|しました)?[^）)]*[）)]?\s*/g, '').trim()
+  // 末尾の敬称（「株式会社エクスプラザ様」「〜御中」「〜ご担当者様」）
+  s = s.replace(/(?:様|御中|ご担当(?:者様)?)\s*$/, '').trim()
+  // 行頭の記号・箇条書き
+  s = s.replace(/^[・･\-‐−ー–—:：、。\s　]+/, '').trim()
+  if (!s) return null
+  if (isOwnCompany(s)) return null
+  return s
+}
 
 /** 駅名→都道府県（inbound-email と同じスナップショットを共有する） */
 const STATION_MAP = JSON.parse(readFileSync(
@@ -270,7 +291,11 @@ export function buildPatch(cand, { bodyFields, attachment }) {
   if (bodyFields) {
     if (isUsableName(bodyFields.name)) set('name', bodyFields.name)
     set('desired_rate', bodyFields.rate)
-    set('from_company', bodyFields.company)
+    // 当社名（宛先）は所属会社にしない。プロンプトでも禁じているが、
+    // 本文冒頭が「株式会社ボイス / ご担当者様」で始まるメールで AI が拾ってしまう回がある
+    // （2026-08-17 実害: R.I の所属会社が regex の誤値から「株式会社ボイス」へ"修正"された）。
+    // 指示だけに頼らず書き込み側でも落とす。
+    set('from_company', isOwnCompany(bodyFields.company) ? null : sanitizeAiCompany(bodyFields.company))
     set('age', typeof bodyFields.age === 'number' ? bodyFields.age : null, { raw: true })
     set('gender', bodyFields.gender, { raw: true, eq: (a, b) => genderMeaning(a) === genderMeaning(b) })
     set('nearestStation', bodyFields.station, { raw: true })

@@ -2711,8 +2711,7 @@ function extractSkillYearsFromCells(cells, deadline = 0){
   const sameRowLabels = sorted.filter(c => c.row === firstNo.row && c !== firstNo)
   const isHeaderRow = sameRowLabels.some(c => /^(期間|内容|案件名|業務内容|システム名|業種)$/.test(c.value.trim()))
 
-  // プロジェクト境界の行範囲を決定
-  const blocks = []
+  // プロジェクト境界の行範囲を決定  const blocks = []
 
   // D.U 型: ヘッダー行(rs=1) の下に No.=1,2,3... が来るのではなく、
   //          ヘッダー行が繰り返される（各プロジェクトが独立したヘッダー+データ構造）
@@ -3668,6 +3667,34 @@ function scoreProseRoles(prose, fullText) {
   return { roles, roleScores }
 }
 
+// ── stripAgentSolicitation ──
+function stripAgentSolicitation(text){
+  const lines = String(text ?? '').split(/\r?\n/)
+  // 宣伝の始まり: 「以下要員以外にも」「上記以外にも」「他にも多数」など
+  // 「要員/人材/エンジニア」という語を伴う売り込みだけを対象にする。
+  // 「業務システム以外にも経験があります」のような本人の記述を巻き込まないため、
+  // 単なる「以外にも」では発動させない（合成ケースで固定）
+  const START_RE = /(?:要員|人材|エンジニア|技術者)\s*以外にも|他にも多数|多数(?:の)?(?:エンジニア|技術者|要員|人材)\s*が?(?:おり|ござい)/
+  // 宣伝の終わり: 依頼文で締めることが多い
+  const END_RE = /(?:おりますので|幸いです|お願い(?:致します|いたします|します)|ご紹介可能|募集中)/
+  const out = []
+  let dropping = false
+  for (const line of lines) {
+    if (!dropping && START_RE.test(line)) {
+      dropping = true
+      continue
+    }
+    if (dropping) {
+      // 空行・区切り線・締めの文まで捨てる（最大でもその範囲で必ず抜ける）
+      if (line.trim() === '' || /^[※*＊\-－—ー=＝_]{3,}$/.test(line.trim())) { dropping = false; continue }
+      if (END_RE.test(line)) { dropping = false; continue }
+      continue
+    }
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
 // ── sameMailConflicts ──
 function sameMailConflicts(a, b){
   const norm = (v) => (v === '' || v === undefined ? null : v)
@@ -3778,6 +3805,7 @@ export {
   worksheetToGrid,
   worksheetToCells,
   scoreProseRoles,
+  stripAgentSolicitation,
   sameMailConflicts,
   mergeRawProfileOnUpdate,
   isZipAttachment,
