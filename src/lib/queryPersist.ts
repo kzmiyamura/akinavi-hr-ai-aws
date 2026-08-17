@@ -41,17 +41,41 @@ export const PERSIST_DENY_PREFIXES = [
   'importActive',
   'notify_status',
   'ghIssues',
+  // Map を返すクエリ。値の形でも弾いているが、意図を明示するため名前でも落とす
+  // （2026-08-17 の本番障害の当事者。CandidatePage / MatchingPage が .get() を呼ぶ）
+  'agentDomainMap',
 ] as const
 
+/** JSON にすると別物になってしまう値か。
+ *
+ *  Map / Set は JSON.stringify で `{}` になり、復元後に `.get is not a function` で
+ *  画面が落ちる。2026-08-17 に本番の人材タブがこれで壊れた
+ *  （`agentDomainMap` は Map。CandidatePage.tsx:322 が `.get()` を呼ぶ）。
+ *  キー名の列挙では取りこぼすので、値の形で機械的に弾く。
+ */
+function isJsonUnsafe(value: unknown, depth = 0): boolean {
+  if (value == null || depth > 3) return false
+  if (value instanceof Map || value instanceof Set || value instanceof Date) return true
+  if (Array.isArray(value)) return value.slice(0, 20).some((v) => isJsonUnsafe(v, depth + 1))
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>)
+      .slice(0, 50)
+      .some((v) => isJsonUnsafe(v, depth + 1))
+  }
+  return false
+}
+
 /** このクエリを localStorage に載せるか。
- *  成功したものだけを対象にし、拒否リストの接頭辞に当たるものは落とす。
+ *  成功したものだけを対象にし、拒否リストの接頭辞と
+ *  JSON 化で壊れる値（Map/Set 等）は落とす。
  *  （エラー・取得中を載せると、復元後にエラー画面が焼き付く）
  */
 export function shouldPersistQuery(query: Pick<Query, 'state' | 'queryKey'>): boolean {
   if (query.state.status !== 'success') return false
   const head = query.queryKey?.[0]
   if (typeof head !== 'string') return false
-  return !PERSIST_DENY_PREFIXES.some((deny) => head === deny)
+  if (PERSIST_DENY_PREFIXES.some((deny) => head === deny)) return false
+  return !isJsonUnsafe(query.state.data)
 }
 
 /** ビルドごとに変わる文字列。デプロイすると復元されなくなる（形の変わったデータを描画しないため）。

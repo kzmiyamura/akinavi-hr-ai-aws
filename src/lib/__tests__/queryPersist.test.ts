@@ -7,8 +7,8 @@ import {
 
 /** shouldPersistQuery が見るのは state.status と queryKey[0] だけなので、
  *  テストでは Query 全体ではなくその2つだけを持つ最小の形を渡す */
-function q(key: unknown[], status: 'success' | 'error' | 'pending' = 'success') {
-  return { queryKey: key, state: { status } } as unknown as Parameters<typeof shouldPersistQuery>[0]
+function q(key: unknown[], status: 'success' | 'error' | 'pending' = 'success', data: unknown = { ok: 1 }) {
+  return { queryKey: key, state: { status, data } } as unknown as Parameters<typeof shouldPersistQuery>[0]
 }
 
 describe('shouldPersistQuery', () => {
@@ -41,6 +41,27 @@ describe('shouldPersistQuery', () => {
   it('文字列でないキー先頭は保存しない（想定外の形を localStorage に入れない）', () => {
     expect(shouldPersistQuery(q([{ scope: 'candidates' }]))).toBe(false)
     expect(shouldPersistQuery(q([]))).toBe(false)
+  })
+
+  // 2026-08-17 の本番障害: Map を JSON 化して保存 → 復元後は {} になり
+  // CandidatePage.tsx:322 の agentDomainMap.get() で「i.get is not a function」。
+  // 人材タブが真っ白になった。キー名の列挙だけでは取りこぼすので値の形でも弾く。
+  it('Map を返すクエリは保存しない（復元すると .get() が消えるため）', () => {
+    expect(shouldPersistQuery(q(['agentDomainMap'], 'success', new Map([['a.co.jp', {}]])))).toBe(false)
+    // 名前が違っても Map なら弾く
+    expect(shouldPersistQuery(q(['someOtherMap'], 'success', new Map()))).toBe(false)
+  })
+
+  it('Set・Date を含むデータも保存しない', () => {
+    expect(shouldPersistQuery(q(['x'], 'success', { s: new Set([1]) }))).toBe(false)
+    expect(shouldPersistQuery(q(['x'], 'success', { d: new Date(0) }))).toBe(false)
+    // 配列の中に潜んでいても見つける
+    expect(shouldPersistQuery(q(['x'], 'success', [{ m: new Map() }]))).toBe(false)
+  })
+
+  it('ふつうのJSONは保存する', () => {
+    expect(shouldPersistQuery(q(['candidates-paged', 'prod'], 'success',
+      { pages: [{ candidates: [{ id: '1', name: 'A' }], totalCount: 1 }] }))).toBe(true)
   })
 
   it('有効期限は60分（2026-08-17 ユーザー判断）', () => {
