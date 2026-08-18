@@ -3834,6 +3834,53 @@ function mergeRawProfileOnUpdate(
   return merged
 }
 
+// ── extractNameFallback ──
+function extractNameFallback(text){
+  // ⓪ カンマ区切りイニシャル「【氏　名】：H,I」。①のキャプチャは , を終端として扱うため
+  //    ここで先に拾わないと「H」だけになり、2文字未満として捨てられる（2026-08-18）。
+  //    ラベル直後に限定しているので「言語：C,C++」等を名前と誤認する危険は無い。
+  const commaInitial = text.match(
+    /(?:氏[　 ]*名|名[　 ]*前|イニシャル)[　 ]*[】］)）]?[　 ]*[：:][　 ]*([A-Z])[,，]([A-Z])(?![A-Za-z0-9+])/
+  )
+  if (commaInitial) return `${commaInitial[1]}.${commaInitial[2]}`
+
+  // ① ラベル（氏名/名前等）の直後: 「氏名：田中」「【名前】K.M」「名前 佐藤」形式
+  //    【氏　名】のように全角スペースが挟まる表記も拾う
+  const labelMatch = text.match(
+    /(?:【[　 ]*(?:氏[　 ]*名|名[　 ]*前)[　 ]*】[　 ]*[：:]?[　 ]*|(?:氏名|名前|候補者名?|お名前|フルネーム|ご氏名)[　 ]?[：:][　 ]?)([^\n\r】、。,　 ]{1,20})/
+  )
+  if (labelMatch) {
+    const v = labelMatch[1].trim()
+    if (v && v.length >= 2) return v
+  }
+
+  // ② イニシャル: 大文字2文字の間にスペース・・.のいずれか（例: T・Y / T Y / K.M）
+  // 直後が英数字でなければマッチ（】 _ スペース 末尾 等）
+  // 地名・国名略称（例: 「アメリカC.A.」＝カリフォルニア州）を候補者名として誤認識しないよう除外
+  const KNOWN_PLACE_ABBR = new Set(['CA', 'NY', 'UK', 'US', 'DC', 'LA', 'UAE', 'EU'])
+  const initialRe = /\b([A-Z][　 ・.][A-Z])(?![a-zA-Z0-9])/g
+  let initialMatch
+  while ((initialMatch = initialRe.exec(text)) !== null) {
+    const normalized = initialMatch[1].replace(/[　 ・.]/g, '')
+    if (KNOWN_PLACE_ABBR.has(normalized)) continue
+    return initialMatch[1]
+  }
+
+  return null
+}
+
+// ── isInsideParens ──
+function isInsideParens(text, matchIndex){
+  const lineStart = text.lastIndexOf('\n', matchIndex - 1) + 1
+  let depth = 0
+  for (let i = lineStart; i < matchIndex; i++) {
+    const ch = text[i]
+    if (ch === '(' || ch === '（') depth++
+    else if (ch === ')' || ch === '）') depth = Math.max(0, depth - 1)
+  }
+  return depth > 0
+}
+
 // ── extractPrefectureFromStationText ──
 function extractPrefectureFromStationText(station){
   if (!station) return null
@@ -3942,6 +3989,8 @@ export {
   stripAgentSolicitation,
   sameMailConflicts,
   mergeRawProfileOnUpdate,
+  extractNameFallback,
+  isInsideParens,
   extractPrefectureFromStationText,
   inferPrefectureFromStation,
   isZipAttachment,

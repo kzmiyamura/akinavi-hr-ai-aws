@@ -552,6 +552,26 @@ const ANY_CORP_SRC = [...new Set([...CORP_PREFIX_FORMS, ...CORP_ABBR_FORMS, ...C
 // 長い表記を先に（Corporation を Corp より先に等、途中で切れないよう並べる）
 const CORP_SUFFIX_EN_SRC = '(?:Corporation|Incorporated|Company|Holdings|Co\\.?\\s*,?\\s*Ltd\\.?|Co\\.?\\s*,?\\s*Inc\\.?|Pte\\.?\\s*Ltd\\.?|L\\.?L\\.?C\\.?|GmbH|Ltd\\.?|Inc\\.?|Corp\\.?|K\\.?K\\.?|G\\.?K\\.?|LLP|PLC|Co\\.?)'
 
+/**
+ * マッチ位置が括弧の内側かを判定する（同一行内で開き括弧の対応を数える）。
+ *
+ * 署名の社名には注記が括弧で続くことがある:
+ *   「株式会社ai・more(株式会社CyTechから社名変更になります。)」
+ * 最後のマッチを採る仕様のため、括弧内の旧社名を所属会社として拾ってしまう実害があった
+ * （2026-08-18。「株式会社CyTechから社名変更になります」が会社名として登録された）。
+ * 「（株）◯◯」のような法人格の略記は括弧が直ちに閉じるため、対応を数えれば誤検知しない。
+ */
+export function isInsideParens(text: string, matchIndex: number): boolean {
+  const lineStart = text.lastIndexOf('\n', matchIndex - 1) + 1
+  let depth = 0
+  for (let i = lineStart; i < matchIndex; i++) {
+    const ch = text[i]
+    if (ch === '(' || ch === '（') depth++
+    else if (ch === ')' || ch === '）') depth = Math.max(0, depth - 1)
+  }
+  return depth > 0
+}
+
 function sanitizeFromCompany(value: string | null | undefined): string | null {
   if (!value) return null
   let trimmed = value.trim()
@@ -1873,9 +1893,18 @@ function extractCandidateCode(subject: string): string | null {
  * 直後に値がなければ即 null（不明）。
  */
 function extractNameFallback(text: string): string | null {
+  // ⓪ カンマ区切りイニシャル「【氏　名】：H,I」。①のキャプチャは , を終端として扱うため
+  //    ここで先に拾わないと「H」だけになり、2文字未満として捨てられる（2026-08-18）。
+  //    ラベル直後に限定しているので「言語：C,C++」等を名前と誤認する危険は無い。
+  const commaInitial = text.match(
+    /(?:氏[　 ]*名|名[　 ]*前|イニシャル)[　 ]*[】］)）]?[　 ]*[：:][　 ]*([A-Z])[,，]([A-Z])(?![A-Za-z0-9+])/
+  )
+  if (commaInitial) return `${commaInitial[1]}.${commaInitial[2]}`
+
   // ① ラベル（氏名/名前等）の直後: 「氏名：田中」「【名前】K.M」「名前 佐藤」形式
+  //    【氏　名】のように全角スペースが挟まる表記も拾う
   const labelMatch = text.match(
-    /(?:【名前】|【氏名】|(?:氏名|名前|候補者名?|お名前|フルネーム|ご氏名)[　 ]?[：:][　 ]?)([^\n\r】、。,　 ]{1,20})/
+    /(?:【[　 ]*(?:氏[　 ]*名|名[　 ]*前)[　 ]*】[　 ]*[：:]?[　 ]*|(?:氏名|名前|候補者名?|お名前|フルネーム|ご氏名)[　 ]?[：:][　 ]?)([^\n\r】、。,　 ]{1,20})/
   )
   if (labelMatch) {
     const v = labelMatch[1].trim()
@@ -2114,8 +2143,10 @@ function extractCandidateFieldsRegex(
   // カンマ区切りイニシャル補完: extractFieldTwoPhase は , を終端文字として扱うため
   // 「名前：M,T（23）」→ rawName=null になる。元テキストで「X,Y」を探してドット形式に補完。
   if (!rawName) {
+    // 「【氏　名】：H,I」のようにラベルが【】で囲まれる形が多いため閉じ括弧を許す。
+    // ラベル直後に限定しているので「言語：C,C++」等を名前と誤認する危険は無い
     const commaInitialM = (bodyText + '\n' + attachText).match(
-      /(?:氏名等|氏名|名前|候補者名?|お名前|フルネーム|ご氏名|氏[　 ]*名)[　 ]*[：:][　 ]*([A-Z]),([A-Z])/
+      /(?:氏名等|氏名|名前|候補者名?|お名前|フルネーム|ご氏名|氏[　 ]*名|名[　 ]*前)[　 ]*[】］)）]?[　 ]*[：:][　 ]*([A-Z])[,，]([A-Z])(?![A-Za-z0-9+])/
     )
     if (commaInitialM) rawName = `${commaInitialM[1]}.${commaInitialM[2]}`
   }
@@ -2790,6 +2821,7 @@ function extractCandidateFieldsRegex(
     // （実害: 「ＷｅａＬｉｖｅ株式会社　徳田　です」→「株式会社徳田」と人名を誤抽出）
     const prevCh = m.index > 0 ? sigArea[m.index - 1] : ''
     if (prevCh && /[A-Za-zＡ-Ｚａ-ｚ0-9０-９ァ-ヶーｦ-ﾟ一-龯々]/.test(prevCh)) continue
+    if (isInsideParens(sigArea, m.index)) continue
     if (!isSalutation(sigArea, m.index, m[0].length) && !isNgContext(sigArea, m.index, m[0].length)) bestPre = m
   }
   if (bestPre) fromCompany = sanitizeFromCompany(`${bestPre[0].match(CORP_PRE_HEAD)?.[0] ?? ''}${bestPre[1]}`)
@@ -2802,6 +2834,7 @@ function extractCandidateFieldsRegex(
     const POST_RE = new RegExp(`((?:[A-Za-z0-9&.\\-]{1,20}[ \\t]){0,3}[^（(（\\s　\\n、。！【】「」]{2,20})[　 ]?(?:${CORP_SUFFIX_SRC})`, 'g')
     let bestPost: RegExpExecArray | null = null
     while ((m = POST_RE.exec(sigArea)) !== null) {
+      if (isInsideParens(sigArea, m.index)) continue
       if (!isSalutation(sigArea, m.index, m[0].length) && !isNgContext(sigArea, m.index, m[0].length)) bestPost = m
     }
     if (bestPost) fromCompany = sanitizeFromCompany(`${bestPost[1]}${bestPost[0].match(new RegExp(`(?:${CORP_SUFFIX_SRC})$`))?.[0] ?? ''}`)
@@ -2812,6 +2845,7 @@ function extractCandidateFieldsRegex(
     const POST_EN_RE = new RegExp(`([A-Za-z][A-Za-z0-9&.\\- ]{1,40}?)[ \\t]*,?[ \\t]*${CORP_SUFFIX_EN_SRC}(?![A-Za-z])`, 'g')
     let bestEn: RegExpExecArray | null = null
     while ((m = POST_EN_RE.exec(sigArea)) !== null) {
+      if (isInsideParens(sigArea, m.index)) continue
       if (!isSalutation(sigArea, m.index, m[0].length) && !isNgContext(sigArea, m.index, m[0].length)) bestEn = m
     }
     if (bestEn) fromCompany = sanitizeFromCompany(bestEn[0].trim())
