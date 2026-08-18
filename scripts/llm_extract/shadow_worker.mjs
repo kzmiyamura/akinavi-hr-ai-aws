@@ -19,6 +19,7 @@ import { buildProjectPatch, buildInterpretationPatch, DEFAULT_TITLE } from './pr
 import { downloadBoxFile } from './box_fetch.mjs'
 import {
   trimBodyForLlm, projectLooksComplete, parseSkillFilterValue, buildSkillFilterClause, pacedAllowance,
+  looksLikeCandidateSubject,
   shouldSkipBodyLlm,
 } from './shadow_worker_lib.mjs'
 
@@ -214,8 +215,15 @@ async function quarantineCandidate(c, reason, detail) {
   })
 }
 
-/** 溜まった隔離をまとめて1本のIssueで通知する（サイクル末に呼ぶ） */
-async function flushQuarantineNotice() {
+/** 溜まった隔離をログに出す（サイクル末に呼ぶ）。
+ *
+ *  ⚠ 2026-08-19 に GitHub Issue の作成をやめた（ユーザー判断）。
+ *  理由: Issue は「人が対応する作業」を置く場所だが、この通知は対応を求めていない。
+ *  実際 #170〜#180 の11件は誰も触らないまま溜まり、しかも中身は
+ *  **誤検知10件**（AI が人材メールを other と誤判定）だったのに気づけなかった。
+ *  隔離データは DB に残るので、確認は `node scripts/audit_quarantined.mjs` と
+ *  `/quality-check` に一本化する。 */
+function flushQuarantineNotice() {
   if (!pendingQuarantines.length) return
   if (Date.now() - lastQuarantineNotifyAt < QUARANTINE_NOTIFY_INTERVAL_MS) return
   const items = pendingQuarantines.splice(0)
@@ -227,23 +235,10 @@ async function flushQuarantineNotice() {
     if (!byMail.has(k)) byMail.set(k, [])
     byMail.get(k).push(q)
   }
-  const body = [...byMail.entries()]
-    .map(([k, list]) => `■ ${k}（${list.length}件）\n　 ${list.map((q) => q.name).join(', ')}\n　 判定: ${list[0].detail}`)
-    .join('\n\n')
-  try {
-    await fetch(`${SUPABASE_URL}/functions/v1/create-github-issue`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: KEY, Authorization: `Bearer ${KEY}` },
-      body: JSON.stringify({
-        memo: `非人材検知まとめ: ${items.length}件を一覧から隔離しました（元メール${byMail.size}通）\n\n${body}\n\n` +
-          `全件確認: node scripts/audit_quarantined.mjs\n` +
-          `一括削除: node scripts/audit_quarantined.mjs 7 --delete\n` +
-          `誤検知の復活: node scripts/restore_candidate.mjs <id>`,
-        nickname: 'shadow-worker',
-      }),
-    })
-    log(`隔離まとめ通知: ${items.length}件（元メール${byMail.size}通）`)
-  } catch (e) { log('隔離まとめ通知に失敗:', String(e).slice(0, 100)) }
+  log(`隔離まとめ: ${items.length}件（元メール${byMail.size}通）— 確認は node scripts/audit_quarantined.mjs`)
+  for (const [k, list] of byMail) {
+    log(`  ■ ${k}（${list.length}件）: ${list.map((q) => q.name).join(', ')} / ${list[0].detail}`)
+  }
 }
 
 /** 幽霊レコード検知（ルールベースの名簿誤検出で生まれた実在しない人材）。
@@ -286,10 +281,22 @@ async function processCandidate(c, preBody = null) {
         body_fields: bf.candidates, cost_usd: bf.costUsd, ms: Date.now() - t0,
       })
       state.dayCost += bf.costUsd || 0
-      // 非人材検知: LLMが「人材メールではない」と判定し、かつ使える氏名が1人も無い場合のみ隔離
-      // （二重条件で誤隔離を防ぐ。実害例: 案件メールが「不明」人材として登録された 2026-08-10）
-      const noUsablePerson = !(bf.candidates ?? []).some(x => isUsableName(x?.name))
-      if (APPLY && bf.mailType && bf.mailType !== 'candidate' && noUsablePerson) {
+      // 非人材検知: LLMが「人材メールではない」と判定し、かつ人材として扱える材料が
+      // 何も無い場合だけ隔離する（実害例: 案件メールが「不明」人材として登録された 2026-08-10）。
+      //
+      // ⚠ 2026-08-19 修正: 以前の第2条件は「AI が返した人物配列に使える氏名が無いこと」
+      //    だったが、**AI が「人材メールではない」と判断すれば人物も返さない**ため、
+      //    第2条件は第1条件の副産物で実質チェックが1つしか無かった。
+      //    実害: Haiku が「☆彡【直人材】Java/…」「営業人材一覧」を other と誤判定した
+      //    14件のうち10件は本物の人材で、regex は氏名（NT・SR 等）を取れていたのに
+      //    一覧から消えていた。第2条件を **regex が登録済みの氏名 c.name** で独立判定する。
+      const regexFoundPerson = isUsableName(c.name)
+      const aiFoundPerson = (bf.candidates ?? []).some(x => isUsableName(x?.name))
+      const noUsablePerson = !regexFoundPerson && !aiFoundPerson
+      // 件名が人材紹介だと明言しているものは、AI の判定より件名を信じる
+      // （「☆彡【直人材】…」「【弊社社員】…」「営業人材一覧」が other にされた実例）
+      const subjectSaysCandidate = looksLikeCandidateSubject(c.raw_profile?.subject)
+      if (APPLY && bf.mailType && bf.mailType !== 'candidate' && noUsablePerson && !subjectSaysCandidate) {
         await quarantineCandidate(c, `mailType=${bf.mailType}`, `案件メール等の誤登録（AI判定: ${bf.mailType}）`)
         return
       }
@@ -463,7 +470,7 @@ async function cycle() {
     state.dayCount++
     saveState()
   }
-  await flushQuarantineNotice()
+  flushQuarantineNotice()
   log(`サイクル完了 day=${state.dayCount}件 cost=$${state.dayCost.toFixed(2)}`)
 }
 
