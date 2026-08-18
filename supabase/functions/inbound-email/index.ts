@@ -1290,7 +1290,7 @@ const STATION_TO_PREFECTURE: Record<string, string> = {
   '関内': '神奈川県', '桜木町': '神奈川県', '上大岡': '神奈川県', '戸塚': '神奈川県',
   '藤沢': '神奈川県', '六会日大前': '神奈川県', '茅ヶ崎': '神奈川県', '平塚': '神奈川県', '小田原': '神奈川県',
   '鎌倉': '神奈川県', '逗子': '神奈川県', '横須賀': '神奈川県', '本厚木': '神奈川県',
-  '海老名': '神奈川県', '相模大野': '神奈川県', '町田': '神奈川県', // 町田駅は東京都だが署名誤検出回避目的
+  '海老名': '神奈川県', '相模大野': '神奈川県', /* '町田' は削除（2026-08-18）: 町田駅は東京都町田市。神奈川県に町田駅は無い */ // 町田駅は東京都だが署名誤検出回避目的
   '鶴見': '神奈川県', '大船': '神奈川県', '東神奈川': '神奈川県',
   '元住吉': '神奈川県', '日吉': '神奈川県', '綱島': '神奈川県', '青葉台': '神奈川県',
   'たまプラーザ': '神奈川県', '溝の口': '神奈川県', '武蔵中原': '神奈川県', '登戸': '神奈川県',
@@ -1305,7 +1305,8 @@ const STATION_TO_PREFECTURE: Record<string, string> = {
   '調布': '東京都', '西調布': '東京都', '新宿西口': '東京都', '四ツ谷': '東京都',
   '飯田橋': '東京都', '水道橋': '東京都', '御茶ノ水': '東京都', '代々木': '東京都',
   '原宿': '東京都', '表参道': '東京都', '六本木': '東京都', '虎ノ門': '東京都',
-  '霞ヶ関': '東京都', '日比谷': '東京都', '銀座': '東京都', '新橋': '東京都',
+  /* '霞ヶ関' は削除（2026-08-18）: ヶ表記は東武東上線・埼玉県が正。東京メトロ側はケ表記 */
+  '日比谷': '東京都', '銀座': '東京都', '新橋': '東京都',
   '豊洲': '東京都', '門前仲町': '東京都', '錦糸町': '東京都', '亀戸': '東京都',
   '北千住': '東京都', '綾瀬': '東京都', '葛西': '東京都', '葛西臨海公園': '東京都',
   // ※ 蒲田駅（東京都大田区）→ 上記に追加済み
@@ -1387,11 +1388,34 @@ async function loadOwnEmailDomain(supabaseUrl: string, serviceKey: string): Prom
 }
 
 /**
+ * 駅の記載に都道府県が明記されていればそれを返す（純関数）。
+ *
+ * 「東武東上線 霞ヶ関駅(埼玉県)」のように書き手が県を明示しているのに、駅名からの
+ * 推定がそれを上書きして誤った県を入れる実害があった（2026-08-18）。
+ * 明示は推定に優先する。「埼玉」のような「県」抜きの表記にも当てる。
+ */
+export function extractPrefectureFromStationText(station: string | null | undefined): string | null {
+  if (!station) return null
+  const t = String(station)
+  const hit = PREFECTURES.find((p) => t.includes(p))
+  if (hit) return hit
+  // 「※埼玉」「(神奈川)」など接尾辞なしの表記。北海道・東京都は上で拾えるので対象外
+  const bare = PREFECTURES.find((p) => {
+    const stem = p.replace(/[都道府県]$/, '')
+    return stem.length >= 2 && t.includes(stem)
+  })
+  return bare ?? null
+}
+
+/**
  * 駅名（"八街駅" "八街" 等）からハードコードマップで都道府県を推定する。
  * 不一致時は null を返す（同期）。
  */
 export function inferPrefectureFromStation(station: string | null | undefined): string | null {
   if (!station) return null
+  // 書き手が県を明記していればそれが正。推定で上書きしない
+  const explicit = extractPrefectureFromStationText(station)
+  if (explicit) return explicit
   for (const cand of stationNameCandidates(station)) {
     const hit = STATION_TO_PREFECTURE[cand]
     if (hit) return hit
@@ -1414,9 +1438,14 @@ function stationNameCandidates(station: string): string[] {
     .replace(/徒歩\s*\d+\s*分|バス\s*\d+\s*分/g, '')
     .trim()
   const out: string[] = []
+  // 「ヶ」と「ケ」は別駅のことがある（霞ヶ関=東武東上線/埼玉、霞ケ関=東京メトロ/東京）。
+  // 正規化だけすると埼玉の駅が東京の駅に化けるため、原表記を先に・正規化形を後に出す。
+  // 正規化形は保土ヶ谷→保土ケ谷のような表記ゆれ吸収のフォールバックとして残す。
   const push = (s: string) => {
-    const k = s.replace(/駅$/, '').replace(/\s+/g, '').replace(/ヶ/g, 'ケ').trim()
-    if (k && !out.includes(k)) out.push(k)
+    const raw = s.replace(/駅$/, '').replace(/\s+/g, '').trim()
+    for (const k of [raw, raw.replace(/ヶ/g, 'ケ')]) {
+      if (k && !out.includes(k)) out.push(k)
+    }
   }
   push(base)
   // 「名鉄 犬山駅」→ 語ごとに試す。路線名（〜線/〜鉄道等）は駅名ではないので除く
@@ -1456,8 +1485,12 @@ const STATION_MASTER_MAP = STATION_MASTER_DATA as Record<string, StationMasterEn
  */
 async function lookupStationPrefectureFromDb(station: string | null | undefined): Promise<string | null> {
   if (!station) return null
-  // ヶ（小文字）→ ケ（通常）に統一（保土ヶ谷→保土ケ谷 等、DB は通常ケで登録）
-  const cleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim().replace(/ヶ/g, 'ケ')
+  // 書き手が県を明記していればそれが正（駅名推定より優先）
+  const explicitPref = extractPrefectureFromStationText(station)
+  if (explicitPref) return explicitPref
+  // ヶ/ケ は別駅のことがあるため原表記を優先し、正規化形はフォールバックに回す
+  const rawCleaned = station.replace(/駅$/, '').replace(/\s+/g, '').trim()
+  const cleaned = rawCleaned.replace(/ヶ/g, 'ケ')
   if (!cleaned) return null
 
   const lastLineIdx = cleaned.lastIndexOf('線')
@@ -1466,6 +1499,8 @@ async function lookupStationPrefectureFromDb(station: string | null | undefined)
   const lineNameCandidate = hasLineSplit ? cleaned.slice(0, lastLineIdx + 1) : null
   // 路線名直結（小田急小田原線本厚木）に加え、空白区切り・注記付き（名鉄 犬山駅 ※愛知）にも対応する
   const stationCandidates = [
+    // 原表記（ヶのまま）を先に見る。正規化形を先に見ると霞ヶ関(埼玉)が霞ケ関(東京)に化ける
+    ...(hasLineSplit ? [rawCleaned, rawCleaned.slice(lastLineIdx + 1)] : [rawCleaned]),
     ...(hasLineSplit ? [cleaned, cleaned.slice(lastLineIdx + 1)] : [cleaned]),
     ...stationNameCandidates(station),
   ].filter((v, i, a) => v && a.indexOf(v) === i)
