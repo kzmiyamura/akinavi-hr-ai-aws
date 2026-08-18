@@ -195,6 +195,53 @@ FROM (SELECT * FROM candidates_lite WHERE data_env = 'prod' LIMIT 200) t;
 **削減の残タスクは HANDOFF.md 「Egress 削減の残タスク」を参照**（最優先は
 ランキングの遅延取得：案件1クリック 1.63MB → 約230KB）。
 
+### 具体的な鉄則（どのPCで作業するときも守る・2026-08-19 追記）
+
+このファイルはリポジトリに入っているので pull すればどのマシンでも効く。
+逆に、各マシンのメモリ（`~/.claude/.../memory/`）は**他のPCには届かない**ので、
+恒久的に守らせたい判断基準はここに書く。
+
+- **`raw_profile` を丸ごと select しない。** 1件あたり約35KB（`attachmentText` が約13KB）。
+  300件引けばそれだけで10MB。必要な項目だけ JSON パスで取る:
+  `select=id,sy:raw_profile->skillYears,checked:raw_profile->>_llm_checked_at`
+- **件数を数えるためにレコードを取らない。** `select=count` か HEAD + `Prefer: count=exact`
+- **PostgREST は 1000 行で黙って切る**（`db-max-rows`）。Range ヘッダは RPC に効かない。
+  1000 を超えうる取得は SQL 側に `p_offset` を持たせてページングする
+- **RPC の検証ループが盲点。** `fetch_candidates_for_project` は1回で約1MB（500件×約2KB）。
+  8案件を1周で8MB。**性能・安定性の確認は1案件・少件数で足りる**
+- **同じ結果を取り直さない。** 1度取ったらスクラッチパッドに保存して使い回す
+- **本番相手に dev サーバーを起動して画面を何度もリロードしない**（2026-08-17 に実施して
+  指摘された）。画面込みの確認が要るなら demo（`data_env='demo'`）か
+  ローカルスタックで行う
+
+### 検証データは demo に自作する（2026-08-14 ユーザー指示「どうせ作るの君でしょ」）
+
+**prod を引く前に「そのケースを自分で作れないか」を考える。** demo は人材53件なので
+画面確認1回の egress が prod の数十分の一で済む。
+
+1. ロジック単体 → ローカル（vitest / Excel Golden / 純関数テスト）
+2. **経路として動くか（DB書き込み・画面表示・ワーカー込み）→ demo**
+3. prod → 実データの分布そのものを見たいときだけ
+
+```
+node scripts/seed_demo_candidate.mjs --body <本文ファイル> [--attach <経歴書>]
+node scripts/llm_extract/correct_candidate.mjs <id> [--run]   # 1人だけ即AI校正
+```
+
+ワーカーも `SHADOW_DATA_ENV=demo` で demo だけを処理できる（既定は prod）。
+**大量データテストはやらない**（頼まれるまで手を出さない）。
+
+### 測る前に推測を書かない（2026-08-13 の教訓）
+
+原因の当てずっぽうは時間も egress も溶かす。設定値・実行時間は**先に1本のクエリで確認する**。
+外した仮説を言い直すより、次の一手を測定にする。
+
+- DB のキー名を推測して select し、**null が返ったのを「値が無い」の根拠にしない**。
+  存在しないキーは必ず null を返す。まず1件だけ引いてキー名を確認する
+- メール単位の値を人材行数ぶん並べて「N件で確認」と書かない（実質 n=1）
+- **日次の使用量は日が変わるまで確定しない。** 途中の値を見て「減った」と報告しない
+  （2026-08-17 に 33MB と報告したが、その日の最終値は 230MB だった）
+
 ## Supabase の調査クエリ
 
 **`source ~/.akinavi_shadow.env && node -e "..."` は使わないこと。**
