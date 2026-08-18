@@ -64,6 +64,8 @@ const TARGET_FUNCTIONS = [
   'stripAgentSolicitation', // 営業の「他にも多数おります」定型文を役割抽出から外す
   'sameMailConflicts',      // 同一メール内の同名を別人と判定する（駅・県・年齢・単価の食い違い）
   'mergeRawProfileOnUpdate', // 既存レコード上書き時の raw_profile 合成（AI校正の印は引き継がない）
+  'extractNameFallback',              // 氏名のフォールバック抽出（カンマ区切りイニシャル含む）
+  'isInsideParens',                   // 署名の括弧内注記を会社名として拾わないためのガード
   'extractPrefectureFromStationText', // 駅表記に併記された都道府県（推定より優先）
   'inferPrefectureFromStation',       // ハードコードマップによる駅→県の推定
   'isZipAttachment',        // ZIP添付の判定（octet-stream で来るので拡張子も見る）
