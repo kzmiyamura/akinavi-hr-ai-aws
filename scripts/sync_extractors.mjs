@@ -64,6 +64,8 @@ const TARGET_FUNCTIONS = [
   'stripAgentSolicitation', // 営業の「他にも多数おります」定型文を役割抽出から外す
   'sameMailConflicts',      // 同一メール内の同名を別人と判定する（駅・県・年齢・単価の食い違い）
   'mergeRawProfileOnUpdate', // 既存レコード上書き時の raw_profile 合成（AI校正の印は引き継がない）
+  'extractPrefectureFromStationText', // 駅表記に併記された都道府県（推定より優先）
+  'inferPrefectureFromStation',       // ハードコードマップによる駅→県の推定
   'isZipAttachment',        // ZIP添付の判定（octet-stream で来るので拡張子も見る）
   'planZipEntries',         // ZIP内エントリの採否（展開本体は expandZipAttachments 側）
 ]
@@ -144,6 +146,9 @@ function unmaskRegexLiterals(code, literals) {
 }
 
 function stripTs(code) {
+  // 0-a. 先頭の export を落とす。gen 側は末尾のエクスポート一覧でまとめて出すため、
+  //      index.ts 側が `export function` だと二重エクスポートで落ちる
+  code = code.replace(/^\s*export\s+function\b/gm, 'function')
   // 0. 正規表現リテラルを退避（変換による破壊防止。最後に復元する）
   const masked = maskRegexLiterals(code)
   code = masked.code
@@ -276,7 +281,8 @@ function stripTs(code) {
   code = code.replace(/(\b\w+)\s*:\s*string\[\](?=\s*[,)=])/g, '$1')
   code = code.replace(/(\b\w+)\s*:\s*number\[\](?=\s*[,)=])/g, '$1')
   // ユニオン型 string | null 等
-  code = code.replace(/(\b\w+)\s*:\s*(?:string|number|boolean)\s*\|\s*(?:string|number|boolean|null|undefined)(?=\s*[,)=])/g, '$1')
+  //    3項以上のユニオンにも対応する（station: string | null | undefined 等）
+  code = code.replace(/(\b\w+)\s*:\s*(?:string|number|boolean|null|undefined)(?:\s*\|\s*(?:string|number|boolean|null|undefined))+(?=\s*[,)=])/g, '$1')
   // 5b. カスタム型（大文字始まりクラス名）パラメータ: SpanCell[] / XlsxCell | undefined 等
   code = code.replace(/(\b\w+)\s*:\s*[A-Z]\w*(?:\[\])*(?:\s*\|\s*(?:[A-Z]\w*(?:\[\])*|null|undefined))*(?=\s*[,)=])/g, '$1')
   // 5c. タプル型パラメータ: iv: [number, number][] （projMergeMonths 等の区間配列）
@@ -374,13 +380,38 @@ const TARGET_CONSTS = [
   'ZIP_MAX_TOTAL_BYTES',
   'ZIP_MAX_ENTRY_BYTES',
   'ZIP_EXT_MIME',
+  'PREFECTURES',       // extractPrefectureFromStationText が参照（複数行定義）
+  'STATION_TO_PREFECTURE', // inferPrefectureFromStation が参照（複数行定義）
 ]
 
-/** `const NAME = ...` の1行宣言を取り出す */
+/**
+ * `const NAME = ...` の宣言を取り出す。
+ * 1行で閉じない配列・オブジェクト（PREFECTURES 等）は括弧対応を数えて末尾まで拾う。
+ */
 function extractConst(src, name) {
   const re = new RegExp(`^const ${name.replace(/[$]/g, '\\$&')}\\b.*$`, 'm')
   const m = src.match(re)
-  return m ? m[0] : null
+  if (!m) return null
+  const line = m[0]
+  const depth = (t) => {
+    let d = 0
+    for (const ch of t) {
+      if (ch === '[' || ch === '{' || ch === '(') d++
+      else if (ch === ']' || ch === '}' || ch === ')') d--
+    }
+    return d
+  }
+  if (depth(line) <= 0) return line
+  // 複数行: 括弧が閉じるまで後続行を連結する
+  const rest = src.slice(m.index + line.length)
+  let acc = line
+  let d = depth(line)
+  for (const nextLine of rest.split('\n')) {
+    acc += '\n' + nextLine
+    d += depth(nextLine)
+    if (d <= 0) break
+  }
+  return acc
 }
 
 // ── メイン ────────────────────────────────────────────────────────
