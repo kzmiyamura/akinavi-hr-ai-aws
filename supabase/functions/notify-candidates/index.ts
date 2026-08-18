@@ -2,9 +2,17 @@
 // 通知ルール（notification_rules）に合致する新着人材が現れたらメール通知する。
 // pg_cron 5分間隔（add_notify_cron.sql）。AI不使用・ルールベースのみ。
 //
-// メール送信: Microsoft Graph sendMail（human/prodアカウント・poll-emailと同じトークンを使用）
+// メール送信: Microsoft Graph sendMail。
+//   トークンは通知専用キー graph_rt_notify を使う（poll-email とは分離）。
 //   ※ Mail.Send スコープが必要。設定画面からのMicrosoft再連携（再同意）後に有効になる。
 //   未同意の間は送信せず app_config.notify_last_error に理由を記録する。
+//
+//   【なぜ分離したか】2026-08-18
+//   以前は poll-email と同じ graph_rt_human_prod を共有し、通知側もそこへ書き戻していた。
+//   そのため 8/17 に通知(Mail.Send)の再同意を個人アカウントで行った際、受信用トークンが
+//   個人アカウントのもので上書きされ、poll-email が丸1日「別のメールボックスを正常に
+//   巡回して未読0件」を返し続けた（エラーは一切出ないため検知できなかった）。
+//   通知の再連携が受信を壊さないよう、キーを分ける。
 //
 // 環境変数: GRAPH_CLIENT_ID / GRAPH_CLIENT_SECRET / GRAPH_REFRESH_TOKEN_HUMAN(初期値)
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -13,7 +21,10 @@ import { matchesRule, type CandidateLite, type NotifyRule } from './match.ts'
 const CLIENT_ID = Deno.env.get('GRAPH_CLIENT_ID') ?? ''
 const CLIENT_SECRET = Deno.env.get('GRAPH_CLIENT_SECRET') ?? ''
 const SEND_SCOPE = 'offline_access Mail.Read Mail.ReadWrite Mail.Send'
-const TOKEN_CONFIG_KEY = 'graph_rt_human_prod'
+/** 通知送信専用のリフレッシュトークン。poll-email とは共有しない（書き戻し先もここだけ） */
+const TOKEN_CONFIG_KEY = 'graph_rt_notify'
+/** 初回の種取り専用。poll-email の受信用キー。読むだけで、絶対に書き戻さない */
+const TOKEN_SEED_KEY = 'graph_rt_human_prod'
 const TOKEN_SECRET_FALLBACK = 'GRAPH_REFRESH_TOKEN_HUMAN'
 /** 初回・長期停止後の暴発防止: この時間より昔の人材は通知対象にしない */
 const MAX_LOOKBACK_MS = 24 * 60 * 60 * 1000
@@ -39,11 +50,20 @@ async function setConfig(sb: Sb, key: string, value: string): Promise<void> {
   await sb.from('app_config').upsert({ key, value }, { onConflict: 'key' })
 }
 
-/** poll-email と同じリフレッシュトークン運用（app_config優先・Secretは初期値） */
+/**
+ * 通知送信用アクセストークンを取る。
+ *
+ * 参照順: graph_rt_notify → graph_rt_human_prod（初回の種取り） → Secret。
+ * 種取りは「コピーして使う」だけで、poll-email 側のキーは読むのみ・書き換えない。
+ * 初回実行で自分用の新しいリフレッシュトークンを graph_rt_notify に持つので、
+ * 以後は完全に独立する（旧トークンには猶予があるため無停止で移行できる）。
+ */
 async function getAccessTokenForSend(sb: Sb): Promise<{ accessToken: string } | { error: string }> {
   const stored = await getConfig(sb, TOKEN_CONFIG_KEY)
-  const refreshToken = stored || (Deno.env.get(TOKEN_SECRET_FALLBACK) ?? '')
+  const seeded = stored || await getConfig(sb, TOKEN_SEED_KEY)
+  const refreshToken = seeded || (Deno.env.get(TOKEN_SECRET_FALLBACK) ?? '')
   if (!refreshToken) return { error: 'リフレッシュトークン未設定' }
+  if (!stored) console.log('[notify] graph_rt_notify が未設定のため受信用キーから種取りする（今回限り）')
   const res = await fetch('https://login.microsoftonline.com/consumers/oauth2/v2.0/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -57,11 +77,19 @@ async function getAccessTokenForSend(sb: Sb): Promise<{ accessToken: string } | 
   })
   if (!res.ok) {
     const body = await res.text()
+    // 保存済みトークンが失効した場合、放置すると stored が非空のまま再種取りされず
+    // 通知が永久に止まる。空にして次回に受信用キーから取り直させる（自己修復）。
+    // 失敗したリフレッシュはトークンを消費しないので、種側に副作用は無い。
+    if (stored) {
+      await setConfig(sb, TOKEN_CONFIG_KEY, '')
+      console.warn('[notify] 保存済みトークンが失効。graph_rt_notify を空にして次回再取得する')
+    }
     // Mail.Send 未同意（invalid_grant / consent_required）はここで判明する
     return { error: `トークン取得失敗(${res.status}): ${body.slice(0, 300)}` }
   }
   const j = await res.json()
-  // ローテーション保存（poll-email と共有のキー。旧トークンにも猶予があるため並走しても実害は出にくい）
+  // ローテーション保存。書き戻し先は通知専用キーのみ。
+  // ここで受信用キー(graph_rt_human_prod)へ書くと、通知の再連携が受信を壊す事故が再発する。
   if (j.refresh_token) await setConfig(sb, TOKEN_CONFIG_KEY, j.refresh_token)
   return { accessToken: j.access_token }
 }
