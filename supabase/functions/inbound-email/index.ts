@@ -1173,27 +1173,64 @@ function isInboundMakeSoftFail(): boolean {
 /** skill_master DB エントリ */
 interface SkillMasterEntry { id: string; name: string; category: string; aliases: string[] }
 
+// ビルド時に同梱した skill_master のスナップショット（scripts/export_skill_master.mjs が生成）。
+//
+// ⚠ 2026-08-19: 以前はメール処理のたびに DB から全件（952行・1回131KB）読んでいた。
+// モジュールスコープの5分キャッシュはあったが、Edge Function のインスタンスが
+// 頻繁に作り直されるため効かず、ログ実測で **1時間124回＝1日約382MB**。
+// PostgREST egress（190〜220MB/日）の大半がこれだった。station_data.json と同じ方式に変更。
+import skillMasterSnapshot from './skill_master_data.json' with { type: 'json' }
+
 /** Edge Function 起動中は5分間キャッシュ */
 let _skillDbCache: SkillMasterEntry[] | null = null
 let _skillDbCacheExpiry = 0
+
+/** 同梱スナップショットを SkillMasterEntry[] に整える */
+function snapshotEntries(): SkillMasterEntry[] {
+  const raw = (skillMasterSnapshot as { entries?: Record<string, unknown>[] }).entries ?? []
+  return raw.map((s) => ({
+    id: s.id as string,
+    name: s.name as string,
+    category: s.category as string,
+    aliases: Array.isArray(s.aliases) ? (s.aliases as string[]) : [],
+  }))
+}
 
 async function getSkillMasterFromDb(
   supabase: ReturnType<typeof import('https://esm.sh/@supabase/supabase-js@2').createClient>,
 ): Promise<SkillMasterEntry[]> {
   if (_skillDbCache && Date.now() < _skillDbCacheExpiry) return _skillDbCache
+
+  const bundled = snapshotEntries()
+  const bundledCount = (skillMasterSnapshot as { count?: number }).count ?? bundled.length
+
   try {
-    const { data } = await supabase.from('skill_master').select('id, name, category, aliases')
-    _skillDbCache = (data ?? []).map((s: Record<string, unknown>) => ({
-      id: s.id as string,
-      name: s.name as string,
-      category: s.category as string,
-      aliases: Array.isArray(s.aliases) ? (s.aliases as string[]) : [],
-    }))
+    // 件数だけを HEAD で確認する（本文ゼロ・数十バイト）。
+    // スキルが増減していたらそのときだけ全件を取り直すので、
+    // 追加は再デプロイを待たずに反映される。
+    // **別名だけの編集は件数が変わらないため反映されない** → export_skill_master.mjs を再実行する
+    const { count } = await supabase
+      .from('skill_master')
+      .select('id', { count: 'exact', head: true })
+
+    if (count != null && count !== bundledCount) {
+      const { data } = await supabase.from('skill_master').select('id, name, category, aliases')
+      _skillDbCache = (data ?? []).map((s: Record<string, unknown>) => ({
+        id: s.id as string,
+        name: s.name as string,
+        category: s.category as string,
+        aliases: Array.isArray(s.aliases) ? (s.aliases as string[]) : [],
+      }))
+      console.log(`[skill_master] 同梱${bundledCount}件 → DB${count}件のため取り直しました`)
+    } else {
+      _skillDbCache = bundled
+    }
     _skillDbCacheExpiry = Date.now() + 5 * 60 * 1000
   } catch (e) {
-    console.warn('[skill_master] DB取得失敗、空配列で続行:', String(e))
-    _skillDbCache = []
-    _skillDbCacheExpiry = Date.now() + 60 * 1000 // 1分後に再試行
+    // 件数確認にも失敗したら同梱データで続行する（空配列にするとスキルが全滅する）
+    console.warn('[skill_master] 件数確認に失敗、同梱データで続行:', String(e))
+    _skillDbCache = bundled
+    _skillDbCacheExpiry = Date.now() + 60 * 1000
   }
   return _skillDbCache!
 }
