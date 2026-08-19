@@ -896,13 +896,16 @@ async function dumpAttachmentsForQuery(
           '?$top=200',
           '&$filter=isRead eq false',
           '&$select=id,subject,from,hasAttachments,receivedDateTime',
-          '&$orderby=receivedDateTime asc',
+          // 調査対象は直近のメール。古い順だとページ上限(15p×200=3000件)に達して
+          // 最近のメールに到達しない（2026-08-19: 削除済み3000件を走査して0件ヒット）
+          '&$orderby=receivedDateTime desc',
         ].join('')
         : [
           `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages`,
           '?$top=200',
           '&$select=id,subject,from,hasAttachments,receivedDateTime',
-          '&$orderby=receivedDateTime asc',
+          // 新しい順。削除済みアイテムは万単位で溜まるため古い順では到達できない
+          '&$orderby=receivedDateTime desc',
         ].join('')
       const msgs: GraphMessage[] = []
       for (let page = 0; page < 15 && url; page++) {
