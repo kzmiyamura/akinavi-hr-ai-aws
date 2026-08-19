@@ -114,6 +114,44 @@ Deno.serve(async (req) => {
     summary[`${bucket}/${folder}`] = { deleted, errors, freedBytes }
   }
 
+  // ── raw/<messageId>/ 配下（受信添付の実体・2026-08-19 追加） ──
+  // 割り当て成否と無関係に poll-email が保存する調査用の実体。resumes/ と違い
+  // 1階層深いので、サブフォルダを列挙してから中のファイルを見る。
+  // ここを掃除しないと無制限に増える（PIIを抱え続けることにもなる）。
+  {
+    const bucket = 'attachments'
+    let deleted = 0
+    let errors = 0
+    let freedBytes = 0
+    const { data: folders, error: folderError } = await supabase.storage
+      .from(bucket).list('raw', { limit: 1000, sortBy: { column: 'created_at', order: 'asc' } })
+    if (folderError) {
+      console.error('[cleanup-storage] list error attachments/raw:', folderError.message)
+      errors++
+    }
+    for (const f of folders ?? []) {
+      const { data: files, error: listError } = await supabase.storage
+        .from(bucket).list(`raw/${f.name}`, { limit: 100 })
+      if (listError) { errors++; continue }
+      const oldFiles = (files ?? []).filter((x) => {
+        const created = x.created_at ?? (x.metadata as Record<string, string> | null)?.lastModified
+        return !created || created < cutoffISO
+      })
+      if (oldFiles.length === 0) continue
+      const paths = oldFiles.map((x) => `raw/${f.name}/${x.name}`)
+      const { error: removeError } = await supabase.storage.from(bucket).remove(paths)
+      if (removeError) {
+        console.error(`[cleanup-storage] remove error raw/${f.name}:`, removeError.message)
+        errors += paths.length
+        continue
+      }
+      deleted += paths.length
+      freedBytes += oldFiles.reduce((sum, x) => sum + ((x.metadata as Record<string, number> | null)?.size ?? 0), 0)
+    }
+    summary['attachments/raw'] = { deleted, errors, freedBytes }
+    console.log(`[cleanup-storage] attachments/raw deleted=${deleted} errors=${errors}`)
+  }
+
   const totalDeleted = Object.values(summary).reduce((s, v) => s + v.deleted, 0)
   const totalFreed = Object.values(summary).reduce((s, v) => s + v.freedBytes, 0)
   console.log(`[cleanup-storage] done. deleted=${totalDeleted} freed=${(totalFreed / 1024 / 1024).toFixed(1)}MB retentionDays=${retentionDays}`)

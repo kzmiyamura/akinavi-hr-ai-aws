@@ -583,6 +583,54 @@ interface GraphAttachment {
   contentBytes: string
 }
 
+
+/** 受信添付の実体保存の上限。これを超えるものはパスだけ記録して中身は保存しない */
+const RAW_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
+
+/**
+ * 受信した添付の実体を、人への割り当て成否と無関係に Storage へ保存する（2026-08-19）。
+ *
+ * これまで添付のバイト列は「人に紐づけられた場合（resume_url）」しか残らず、
+ * 複数人材メールで割り当てに失敗すると中身がどこにも残らなかった。
+ * 台帳(ai_logs type='poll-attach')にはファイル名とサイズしか無いため、
+ * 「何が添付されていたか」は分かっても「なぜそう解析されたか」を再現できない。
+ * 実例: 2026-08-17 の26人のメールは添付1件に対し保存0件で、後から検証不能になった。
+ *
+ * 受信時点で必ず1本保存しておけば、割り当てに失敗しても後から中身を確認・再解析できる。
+ * 保存の失敗は取り込み本体を止めない（握りつぶしてログのみ）。
+ */
+async function saveRawAttachments(
+  supabase: ReturnType<typeof createClient>,
+  messageId: string,
+  attachments: { name?: string; contentType?: string; contentBytes?: string }[],
+): Promise<string[]> {
+  const saved: string[] = []
+  // Storage キーは ASCII のみ安全。元のファイル名は台帳側に残っているのでここでは連番にする
+  const safeMsg = messageId.replace(/[^a-zA-Z0-9]/g, '').slice(-16)
+  for (const [i, a] of attachments.entries()) {
+    try {
+      if (!a.contentBytes) continue
+      const bytes = Uint8Array.from(atob(a.contentBytes), (c) => c.charCodeAt(0))
+      if (bytes.length > RAW_ATTACHMENT_MAX_BYTES) {
+        console.warn(`[poll] 添付が大きすぎるため実体保存を省略: ${a.name} ${bytes.length}bytes`)
+        continue
+      }
+      const nm = a.name ?? ''
+      const ext = nm.includes('.') ? nm.split('.').pop()!.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) : 'bin'
+      const path = `raw/${safeMsg}/att${i}.${ext}`
+      const { error } = await supabase.storage.from('attachments')
+        .upload(path, bytes, { contentType: a.contentType ?? 'application/octet-stream', upsert: true })
+      if (error) { console.warn(`[poll] 添付の実体保存に失敗: ${path}: ${error.message}`); continue }
+      saved.push(path)
+    } catch (e) {
+      console.warn('[poll] 添付の実体保存で例外:', String(e).slice(0, 200))
+    }
+  }
+  if (saved.length > 0) console.log(`[poll] 添付の実体を保存: ${saved.join(', ')}`)
+  return saved
+}
+
+
 async function fetchAttachments(
   accessToken: string,
   messageId: string,
@@ -1148,6 +1196,11 @@ async function pollAccount(
 
         console.log(`[poll] 添付: hasAttachments=${email.hasAttachments} 取得件数=${attachments.length}`, attachments.map(a => ({ name: a.name, type: a.contentType, bytesLen: a.contentBytes?.length ?? 0 })))
 
+        // 割り当て成否と無関係に実体を保存する（後から必ず再解析できるようにする）
+        const savedRawPaths = attachments.length > 0
+          ? await saveRawAttachments(supabase, email.id, attachments)
+          : []
+
         // ── 添付台帳を DB に恒久記録（Graphが返した完全な内訳・型込み） ──
         // fetchAttachments が落とす referenceAttachment（クラウド添付）も含めて記録し、
         // 「何があってもログで確認できる」ようにする。bytes は取得しないので egress は無視できる。
@@ -1170,6 +1223,8 @@ async function pollAccount(
               ai_result: {
                 messageId: email.id,
                 totalReturnedByGraph: manifest.length,
+                // 実体の保存先。ここから中身を取り直して再解析できる（2026-08-19）
+                savedRawPaths,
                 fileAttachment: fileCount,
                 referenceAttachment: refCount,
                 itemAttachment: itemCount,
