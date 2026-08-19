@@ -882,31 +882,29 @@ async function dumpAttachmentsForQuery(
     await saveRefreshToken(supabase, config.configKey, newRefreshToken)
 
     const q = query.toLowerCase()
-    const folders = ['inbox', 'deleteditems']
+    // ⚠ 2026-08-19: recoverableitemsdeletions が入っていなかった。
+    // 「削除済みアイテムを空にした後も14〜30日残る領域」を探すのがこのモードの目的なのに、
+    // 実際には inbox と deleteditems しか見ておらず、ログにも2つしか出ていなかった。
+    const folders = ['inbox', 'deleteditems', 'recoverableitemsdeletions']
     for (const folder of folders) {
       // $filter=hasAttachments も $search もこのメールボックスで不安定（400/0件）だったため、
       // フィルタ無しで新しい順に列挙し、hasAttachments と query 一致はコード側で判定する（recover と同方式）。
       // 複数ページ辿って query 一致を探す（最大5ページ=1000件）。
-      // 古いバックログ（未読）を探すため受信箱は「古い順」で辿る。ヒットしたら以降のページは打ち切る。
-      // 受信箱は「未読のみ」で辿る（バッチ=incrementalと同じ集合。既読の古いメールに埋もれるのを防ぐ）。
-      // 削除済みは全件。
-      let url: string | null = folder === 'inbox'
-        ? [
-          `https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages`,
-          '?$top=200',
-          '&$filter=isRead eq false',
-          '&$select=id,subject,from,hasAttachments,receivedDateTime',
-          // 調査対象は直近のメール。古い順だとページ上限(15p×200=3000件)に達して
-          // 最近のメールに到達しない（2026-08-19: 削除済み3000件を走査して0件ヒット）
-          '&$orderby=receivedDateTime desc',
-        ].join('')
-        : [
-          `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages`,
-          '?$top=200',
-          '&$select=id,subject,from,hasAttachments,receivedDateTime',
-          // 新しい順。削除済みアイテムは万単位で溜まるため古い順では到達できない
-          '&$orderby=receivedDateTime desc',
-        ].join('')
+      // 全フォルダとも新しい順・既読/未読を問わず列挙する。
+      //
+      // ⚠ 2026-08-19: 受信箱だけ `isRead eq false` で絞っていたため、
+      // **処理済み（既読）のメールは永久に見つからなかった**。
+      // このモードの用途は「取り込み済みだが添付の実体が残っていないメールを救出する」
+      // ことなので、対象は必ず既読。条件そのものが目的と矛盾していた
+      // （実測: inbox hits=0 = 未読が0件、という意味でしかなかった）。
+      let url: string | null = [
+        `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages`,
+        '?$top=200',
+        '&$select=id,subject,from,hasAttachments,receivedDateTime',
+        // 調査対象は直近のメール。古い順だとページ上限(15p×200=3000件)に達して
+        // 最近のメールに到達しない（2026-08-19: 削除済み3000件を走査して0件ヒット）
+        '&$orderby=receivedDateTime desc',
+      ].join('')
       const msgs: GraphMessage[] = []
       for (let page = 0; page < 15 && url; page++) {
         const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })

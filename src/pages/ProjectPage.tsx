@@ -1116,9 +1116,13 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                   >
                     ← 一覧に戻る
                   </button>
-                  <div className="flex items-start justify-between gap-3">
+                  {/* スマホでは案件名とボタン群を縦に積む。
+                      ボタン3つが shrink-0 で約280px を確保するため、横並びのままだと
+                      幅390pxの端末で見出しに90px程度しか残らず1文字ずつ折り返していた
+                      （2026-08-20 ユーザー報告）。人材・マッチング画面は元から flex-wrap 付き。 */}
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3">
                     <h3 className="text-base font-semibold text-gray-800 min-w-0 break-words">{selectedProject.title}</h3>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-2 shrink-0 flex-wrap">
                       {!!((selectedProject.raw_data as Record<string, unknown>)?.text) && (
                         <button
                           type="button"
