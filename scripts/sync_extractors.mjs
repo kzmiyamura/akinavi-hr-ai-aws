@@ -61,6 +61,7 @@ const TARGET_FUNCTIONS = [
   'worksheetToGrid',
   'worksheetToCells',
   'scoreProseRoles',
+  'inferRoleFamilyHint',    // 役割が取れない人の系統ヒント（表示・集計のみ）
   'stripAgentSolicitation', // 営業の「他にも多数おります」定型文を役割抽出から外す
   'sameMailConflicts',      // 同一メール内の同名を別人と判定する（駅・県・年齢・単価の食い違い）
   'mergeRawProfileOnUpdate', // 既存レコード上書き時の raw_profile 合成（AI校正の印は引き継がない）

@@ -2957,6 +2957,57 @@ function extractCandidateFieldsRegex(
  *   +2 ラベル行の次行（経歴表の「ポジション」\n「運用プランナー」型）
  *   +1×出現回数（最大3・弱いタイブレーカー）
  */
+/**
+ * 役割が1つも取れなかった人材について「どちらの系統寄りか」だけを粗く推定する（2026-08-20）。
+ *
+ * ⚠ これは**役割の推定ではない**。件名や本文に役割語が無い人材（例: 件名が
+ * 「【BP社員/PHP/9月〜】【e-studio】RT31川口」でスキルしか書かれていない）に対し、
+ * 「技術の実務者らしい」ことだけを記録する。具体的な役割（PG か TL か SE か）は決めない。
+ *
+ * なぜ具体名を付けないか: マッチングの役割加点は 同一+15 / 同系統+6 / 不明0 / 系統違い-9 で、
+ * **外した役割は減点として効く**。不明のままなら0点で済む。
+ * 「PHP要員だから PG だろう」は推測で、同じ PHP でも PM も運用保守もいる。
+ * 推測で減点を招くより、系統だけを控えめに残す。
+ *
+ * 現時点では**表示・集計のみ**で採点には繋いでいない（効果を測ってから判断する）。
+ *
+ * @param roles            scoreProseRoles が返した役割（空のときだけ推定する）
+ * @param skillsByCategory skill_master 照合済みスキルのカテゴリ別一覧
+ * @param text             件名＋本文＋添付テキスト
+ */
+// 戻り値の型注釈は付けない（sync_extractors.mjs の TS→JS 変換がオブジェクト型リテラルを
+// 落とせず、生成物が構文エラーになるため。型は推論に任せる）
+function inferRoleFamilyHint(
+  roles: string[],
+  skillsByCategory: Record<string, string[]>,
+  text: string,
+) {
+  // 定数は関数内に置く（sync_extractors.mjs は指定した関数だけを生成物へ写すため、
+  // モジュールスコープの定数は生成物から欠落して ReferenceError になる）
+  /** 技術の実務者であることを示すスキルカテゴリ（skill_master の category） */
+  const TECHNICAL_SKILL_CATEGORIES = [
+    'languages', 'frameworks', 'libraries', 'databases', 'dwh', 'clouds', 'infrastructures', 'os',
+  ]
+  /** 管理・調整が主だと読める語。1つでもあれば実装系と断定しない */
+  const MANAGEMENT_HINT_RE =
+    /進捗管理|課題管理|品質管理|要員管理|工数管理|ベンダーコントロール|マネジメント|折衝|取りまとめ|統括|PMO|プロジェクト[　 ]?マネージャー|管理業務/
+
+  if (roles.length > 0) return null                      // 役割が取れていれば触らない
+  if (MANAGEMENT_HINT_RE.test(text ?? '')) return null   // 管理寄りの語があれば断定しない
+
+  const techNames = new Set<string>()
+  for (const cat of TECHNICAL_SKILL_CATEGORIES) {
+    for (const n of skillsByCategory?.[cat] ?? []) techNames.add(n)
+  }
+  // 3種類以上の技術を持つことを条件にする（1〜2個は案件説明の巻き添えでも起こる）
+  if (techNames.size < 3) return null
+
+  return {
+    family: 'implementation',
+    reason: `役割語なし・技術スキル${techNames.size}件（${[...techNames].slice(0, 5).join('・')}）`,
+  }
+}
+
 function scoreProseRoles(prose: string, fullText: string): { roles: string[]; roleScores: Record<string, number> } {
   const ROLE_DEFS: Array<{ re: RegExp; label: string }> = [
     { re: /(?<![A-Z])PMO(?![A-Z])|プロジェクト[　 ]?マネジメント[　 ]?オフィス/, label: 'PMO' },
@@ -10573,6 +10624,16 @@ Deno.serve(async (req: Request) => {
                 roles: blockProseFields.roles,
                 // 役割スコア（先頭=主の根拠。UI・デバッグ用）
                 _roleScores: Object.keys(blockProseFields.roleScores).length > 0 ? blockProseFields.roleScores : undefined,
+                // 役割が取れなかった人の系統ヒント（表示・集計のみ。採点には未接続）
+                roleFamilyHint: inferRoleFamilyHint(
+                  blockProseFields.roles,
+                  blockDbMatchedSkills.reduce((acc, s) => {
+                    if (!acc[s.category]) acc[s.category] = []
+                    acc[s.category].push(s.name)
+                    return acc
+                  }, {} as Record<string, string[]>),
+                  `${blockRegexBodyText}\n${blockAttachText}`,
+                ),
                 industries: blockProseFields.industries,
                 nearestStation: blockRegexFields.nearestStation,
                 prefecture: blockRegexFields.prefecture,
@@ -11184,6 +11245,16 @@ Deno.serve(async (req: Request) => {
           roles: resolvedRoles,
           // 役割スコア（先頭=主の根拠。UI・デバッグ用）
           _roleScores: Object.keys(proseFields.roleScores).length > 0 ? proseFields.roleScores : undefined,
+          // 役割が取れなかった人の系統ヒント（表示・集計のみ。採点には未接続）
+          roleFamilyHint: inferRoleFamilyHint(
+            resolvedRoles,
+            dbMatchedSkills.reduce((acc, s) => {
+              if (!acc[s.category]) acc[s.category] = []
+              acc[s.category].push(s.name)
+              return acc
+            }, {} as Record<string, string[]>),
+            `${regexBodyText}\n${attachText}`,
+          ),
           industries: resolvedIndustries,
           nearestStation: resolvedStation,
           prefecture: resolvedPrefecture,
