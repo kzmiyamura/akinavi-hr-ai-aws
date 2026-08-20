@@ -2817,8 +2817,7 @@ function extractSkillYearsFromCells(cells, deadline = 0){
   const sameRowLabels = sorted.filter(c => c.row === firstNo.row && c !== firstNo)
   const isHeaderRow = sameRowLabels.some(c => /^(期間|内容|案件名|業務内容|システム名|業種)$/.test(c.value.trim()))
 
-  // プロジェクト境界の行範囲を決定
-  const blocks = []
+  // プロジェクト境界の行範囲を決定  const blocks = []
 
   // D.U 型: ヘッダー行(rs=1) の下に No.=1,2,3... が来るのではなく、
   //          ヘッダー行が繰り返される（各プロジェクトが独立したヘッダー+データ構造）
@@ -3774,6 +3773,38 @@ function scoreProseRoles(prose, fullText) {
   return { roles, roleScores }
 }
 
+// ── inferRoleFamilyHint ──
+function inferRoleFamilyHint(
+  roles,
+  skillsByCategory,
+  text,
+) {
+  // 定数は関数内に置く（sync_extractors.mjs は指定した関数だけを生成物へ写すため、
+  // モジュールスコープの定数は生成物から欠落して ReferenceError になる）
+  /** 技術の実務者であることを示すスキルカテゴリ（skill_master の category） */
+  const TECHNICAL_SKILL_CATEGORIES = [
+    'languages', 'frameworks', 'libraries', 'databases', 'dwh', 'clouds', 'infrastructures', 'os',
+  ]
+  /** 管理・調整が主だと読める語。1つでもあれば実装系と断定しない */
+  const MANAGEMENT_HINT_RE =
+    /進捗管理|課題管理|品質管理|要員管理|工数管理|ベンダーコントロール|マネジメント|折衝|取りまとめ|統括|PMO|プロジェクト[　 ]?マネージャー|管理業務/
+
+  if (roles.length > 0) return null                      // 役割が取れていれば触らない
+  if (MANAGEMENT_HINT_RE.test(text ?? '')) return null   // 管理寄りの語があれば断定しない
+
+  const techNames = new Set()
+  for (const cat of TECHNICAL_SKILL_CATEGORIES) {
+    for (const n of skillsByCategory?.[cat] ?? []) techNames.add(n)
+  }
+  // 3種類以上の技術を持つことを条件にする（1〜2個は案件説明の巻き添えでも起こる）
+  if (techNames.size < 3) return null
+
+  return {
+    family: 'implementation',
+    reason: `役割語なし・技術スキル${techNames.size}件（${[...techNames].slice(0, 5).join('・')}）`,
+  }
+}
+
 // ── stripAgentSolicitation ──
 function stripAgentSolicitation(text){
   const lines = String(text ?? '').split(/\r?\n/)
@@ -3986,6 +4017,7 @@ export {
   worksheetToGrid,
   worksheetToCells,
   scoreProseRoles,
+  inferRoleFamilyHint,
   stripAgentSolicitation,
   sameMailConflicts,
   mergeRawProfileOnUpdate,
