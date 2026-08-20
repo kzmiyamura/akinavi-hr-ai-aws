@@ -1362,7 +1362,11 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         />
       )}
 
-      {/* 絞り込みポップアップ */}
+      {/* 絞り込みポップアップ
+          入力欄は text-base（16px）にしている。iOS Safari は 16px 未満の入力に
+          フォーカスすると**ページごと自動ズーム**し、モーダルが画面からはみ出して
+          「枠が大きくなった」ように見える（2026-08-20 ユーザー報告）。
+          PC では sm:text-sm に戻すので見た目は変わらない。 */}
       {showFilterPopup && (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
@@ -1384,7 +1388,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   value={filterDraft.name}
                   onChange={e => setFilterDraft(prev => ({ ...prev, name: e.target.value }))}
                   placeholder="例: 田中"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   autoFocus
                 />
               </div>
@@ -1457,7 +1461,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     }
                   }}
                   placeholder="例: Java　または　Java 10年"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
@@ -1467,7 +1471,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                 <select
                   value={filterDraft.prefecture}
                   onChange={e => setFilterDraft(prev => ({ ...prev, prefecture: e.target.value }))}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                 >
                   <option value="">すべて</option>
                   {PREFECTURES.map(p => <option key={p} value={p}>{p}</option>)}
@@ -1485,7 +1489,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     value={filterDraft.expMin}
                     onChange={e => setFilterDraft(prev => ({ ...prev, expMin: e.target.value }))}
                     placeholder="0"
-                    className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                   <span className="text-sm text-gray-600">年以上</span>
                 </div>
