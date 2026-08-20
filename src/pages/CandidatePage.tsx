@@ -5,7 +5,7 @@ import { toViewerUrl } from '../lib/viewerUrl'
 import { matchesSkillFilter } from '../lib/skillWordMatch'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
 import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
-import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills } from '../lib/db/candidates'
+import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills, fetchCandidateById } from '../lib/db/candidates'
 import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
@@ -1232,7 +1232,21 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     onError: (e) => { setMessage({ type: 'error', text: String(e) }) },
   })
 
-  const selectedCandidateBase = candidates.find((c: Candidate) => c.id === selectedId) ?? null
+  const selectedFromList = candidates.find((c: Candidate) => c.id === selectedId) ?? null
+
+  // 一覧に居ない人材を選んだときは単体で取りに行く（2026-08-20 の不具合修正）。
+  //
+  // ⚠ 「同一人材の可能性」から別会社のレコードを開くと、その人は
+  // 優先スキルの絞り込みや未読み込みページの都合で**一覧に居ないことが多い**。
+  // 以前は一覧から探すだけだったため詳細が null になり、
+  // スマホでは一覧が隠れる（`!selectedId ? 'hidden md:block'`）ので**画面が真っ白**になった。
+  const { data: fetchedCandidate } = useQuery({
+    queryKey: ['candidate-by-id', selectedId, dataEnv],
+    queryFn: () => fetchCandidateById(selectedId!, dataEnv),
+    enabled: !!selectedId && !selectedFromList,
+    staleTime: 5 * 60_000,
+  })
+  const selectedCandidateBase = selectedFromList ?? fetchedCandidate ?? null
 
   // 詳細表示用: 選択時に fetch_candidate_raw_profile RPC で full raw_profile を取得
   // （一覧クエリは raw_profile を除外しているため）
@@ -2149,6 +2163,19 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       </details>
                     )
                   })()}
+                </div>
+              ) : selectedId ? (
+                // 選択済みなのに中身が無い状態。取得中か、削除済みなど。
+                // スマホは一覧が隠れるので、必ず戻る導線を出す（2026-08-20 に真っ白になった）
+                <div className="flex flex-col items-center justify-center gap-3 h-40 md:h-full text-sm text-gray-500 p-8 text-center">
+                  <span>{isLoadingFullProfile ? '読み込み中...' : 'この人材の情報を取得できませんでした'}</span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(null)}
+                    className="text-blue-600 hover:text-blue-800 underline"
+                  >
+                    ← 一覧に戻る
+                  </button>
                 </div>
               ) : (
                 <div className="flex items-center justify-center h-32 md:h-full text-sm text-gray-400 p-8 text-center">
