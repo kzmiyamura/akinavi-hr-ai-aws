@@ -467,9 +467,13 @@ function EcosystemCoverageNote({ specialist, cov }: {
 const RANK_HEAD = 5
 /** 案件を選んだ直後に引く件数。営業が見るのは上位数名で、残りはアコーディオンの中。
  *  200件を先読みすると submissions + 人材 + 重複チェックで 1.4MB 無駄になる（2026-08-14 実測）。
- *  RANK_HEAD より十分多く取るのは、verdict 並び替えで順位が入れ替わっても
- *  表示分が埋まるようにするため（所見は上位5名にしか付かないので20件あれば足りる） */
-const RANK_FETCH_INITIAL = 20
+ *
+ *  1人あたり約8KB（submissions 0.8KB + 人材 3.8KB + 重複チェック 3.4KB）。
+ *  2026-08-20 に 20 → 10 へ（案件1クリック 160KB → 80KB）。
+ *  RANK_HEAD(5) ちょうどにしないのは、取得後に verdict（推せる/条件付き/見送り）で
+ *  並び替えるため。5件しか持たないと「上位5名に見送りが混ざっても、
+ *  6位以降の良い人と入れ替えられない」状態になる。表示5名＋入れ替え用の予備5名にする。 */
+const RANK_FETCH_INITIAL = 10
 /** アコーディオン内「もっと見る」1回で追加する件数。
  *  1回押すたびに submissions + 人材 + 重複チェックが増えるので小刻みにする */
 const RANK_FETCH_STEP = 5
@@ -2394,6 +2398,10 @@ const { data: projects = [] } = useQuery({
                                 onOpenCandidateDetail={onOpenCandidateDetail}
                                 scoreColor={scoreColor}
                                 onDecide={(sub) => decideMutation.mutate(sub)}
+                                // 6位以降にも同一人物候補を出す（2026-08-20）。
+                                // 上位5枚にしか渡しておらず、アコーディオンを開いても気づけなかった。
+                                // duplicatesMap は取得済みなので通信は増えない
+                                duplicates={duplicatesMap[s.candidate.id]}
                                 requiredSkills={selectedProject.required_skills as string[]}
                                 niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
                                 aiNiceSkills={aiRelatedSkillMap(selectedProject.raw_data)}
