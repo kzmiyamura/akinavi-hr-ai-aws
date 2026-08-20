@@ -25,6 +25,8 @@
 // =============================================================================
 
 import { readFileSync } from 'fs'
+// 最寄駅の分解は index.ts から自動生成された実物を使う（手書きレプリカの二重管理を避ける）
+import { parseNearestStation } from './_extractors.gen.mjs'
 
 // ─── inbound-email/index.ts から複製した関数群 ────────────────────────────
 // 変更時は index.ts と両方を更新すること
@@ -449,32 +451,12 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
     if (m) nearestStation = m[1].trim()
   }
   if (nearestStation) {
-    // 路線名カッコを除去: 「綾瀬駅（東京メトロ千代田線 / JR常磐線）」→「綾瀬駅」
-    nearestStation = nearestStation.replace(/（[^）]*）.*$/, '').trim()
-    // 路線名と駅名がスラッシュ・中点で並ぶ表記から駅名だけを取り出す（順序はメールにより逆転する）
-    // 「JR京浜東北線／蕨駅」→「蕨駅」/「東久留米・西武池袋線」→「東久留米」
-    if (/[/／・]/.test(nearestStation)) {
-      const segs = nearestStation.split(/[/／・]/).map(s => s.trim()).filter(Boolean)
-      if (segs.length >= 2) {
-        const isLineName = (s) => /(?:線|ライン)$/.test(s) || /^(?:JR|ＪＲ)/.test(s)
-        const rev = [...segs].reverse()
-        nearestStation = rev.find(s => s.endsWith('駅'))
-          ?? rev.find(s => !isLineName(s))
-          ?? segs[segs.length - 1]
-      }
-    }
-    const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
-    if (colonMatch) nearestStation = colonMatch[1].trim()
-    if (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation) || nearestStation.includes('イニシャル') || nearestStation.includes('最寄駅')
-      || /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|スキル|経験|希望|現住所|住所|氏名|年齢|性別|国籍|連絡先)$/.test(nearestStation)) nearestStation = null
-    if (nearestStation) {
-      const stationOnly = nearestStation.match(/([^\s　]{2,12}駅)$/)
-      if (stationOnly && stationOnly[1] !== nearestStation) {
-        nearestStation = stationOnly[1]
-      } else if (!nearestStation.endsWith('駅')) {
-        const stationStart = nearestStation.match(/^([^\s　]{1,12}駅)/)
-        if (stationStart) nearestStation = stationStart[1]
-      }
+    // index.ts と同じ: 順序を仮定せず語の形で路線名/駅名に分解する
+    nearestStation = parseNearestStation(nearestStation).station
+    if (nearestStation && (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation)
+      || nearestStation.includes('イニシャル') || nearestStation.includes('最寄駅')
+      || /^(自己PR|PR|アピールポイント|強み|備考|補足|資格|スキル|経験|希望|現住所|住所|氏名|年齢|性別|国籍|連絡先)$/.test(nearestStation))) {
+      nearestStation = null
     }
   }
   let prefecture = extractFieldTwoPhase(

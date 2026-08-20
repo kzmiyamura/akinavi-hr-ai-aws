@@ -1481,6 +1481,69 @@ export function inferPrefectureFromStation(station: string | null | undefined): 
 }
 
 /**
+ * 最寄駅の記載を「路線名」と「駅名」に分解する。
+ *
+ * メールの書き方は順序も区切りも一定しない:
+ *   「西武池袋線・東長崎駅」「東久留米・西武池袋線」「JR総武線「市川」」
+ *   「桜台(西武池袋線)」「横浜市営地下鉄ブルーライン　駅 三ツ沢下町」「JR京浜東北線／蕨駅」
+ * 順序を仮定した個別 regex を足していくと必ず逆順の書式で破綻する
+ * （2026-08-20: 「東久留米・西武池袋線」で路線名だけが最寄駅として残った）。
+ *
+ * そこで並び順は一切見ず、語そのものの形で素直に分類する:
+ *   「〜線」「〜ライン」= 路線名 / 「〜駅」= 駅名 / どちらでもない語 = 駅名候補
+ *
+ * 路線名は捨てずに返す。同名駅（桜台=東京/福岡、府中=東京/広島/徳島）の
+ * 都道府県を station_master で判別するのに要るため。
+ */
+export function parseNearestStation(raw: string | null | undefined): { station: string | null; line: string | null } {
+  if (!raw) return { station: null, line: null }
+  // 注記・付帯情報を落としてから、あらゆる区切り文字を空白に寄せて語に割る
+  const cleaned = String(raw)
+    .replace(/[※＊].*$/s, ' ')
+    .replace(/徒歩[　 ]*[0-9０-９]+[　 ]*分|バス[　 ]*[0-9０-９]+[　 ]*分/g, ' ')
+    .replace(/(?:都内|都内へ)?(?:常駐|出勤|リモート|通勤|勤務)可能?/g, ' ')
+    .replace(/[（()）「」『』【】［\[\]］、,／/・|｜：:～]/g, ' ')
+    .trim()
+  const tokens = cleaned.split(/[\s　]+/).filter(Boolean)
+
+  // 路線名（「〜線」「〜ライン」）と、駅名になり得ない事業者名・ラベル語
+  const isLine = (t: string) => /(?:線|ライン)$/.test(t)
+  const OPERATOR_OR_LABEL_RE = /^(?:JR[東西]?日?本?|ＪＲ|東京メトロ|都営地下鉄|都営|市営地下鉄|地下鉄|新交通|新都市交通|モノレール|ゆりかもめ|名鉄|近鉄|京王|京急|京成|東急|小田急|西武|東武|相鉄|南海|阪急|阪神|京阪|各線|駅|沿線|通勤駅|最寄|最寄り|最寄駅|最寄り駅|イニシャル|代表者)$/
+
+  // 「小田急小田原線本厚木駅」「西武池袋線桜台」のように区切りなしで直結した表記を割る。
+  // 「新線新宿」「西線９条旭山公園通」を壊さないよう、路線名側が4文字以上のときだけ割る
+  // （「日本ライン今渡」は4文字以上に該当するため個別に除外する）。
+  const splitConcat = (t: string): { line: string | null; station: string } => {
+    if (/^日本ライン/.test(t)) return { line: null, station: t }
+    const m = t.match(/^(.{4,}?(?:線|ライン))(.{2,})$/)
+    return m ? { line: m[1], station: m[2] } : { line: null, station: t }
+  }
+
+  let line: string | null = null
+  const stationCands: string[] = []
+  for (const tok of tokens) {
+    // ラベル語の判定を先に置く（「沿線」「各線」は「線」で終わるが路線名ではない）
+    if (OPERATOR_OR_LABEL_RE.test(tok)) continue
+    if (isLine(tok)) { line ??= tok; continue }
+    const sp = splitConcat(tok)
+    if (sp.line) line ??= sp.line
+    stationCands.push(sp.station)
+  }
+
+  // 「〜駅」と明示された語を最優先。無ければ最初の駅名候補
+  let station = stationCands.find(t => /駅$/.test(t) && t !== '駅') ?? stationCands[0] ?? null
+
+  // 「線」を持たない公営地下鉄・新交通等の事業者名プレフィックスを剥がす
+  // 例:「横浜市営地下鉄岸根公園」→「岸根公園」「埼玉新都市交通伊奈中央」→「伊奈中央」
+  // ただし「地下鉄成増」「地下鉄赤塚」等、事業者名で始まる正式駅名は剥がすと別駅になるため除外する
+  if (station && !/^(地下鉄成増|地下鉄赤塚|モノレール[^\s　]|ゆりかもめ[^\s　])/.test(station)) {
+    const stripped = station.replace(/^.*?(市営地下鉄|地下鉄|新都市交通|モノレール|ゆりかもめ)/, '')
+    if (stripped) station = stripped
+  }
+  return { station: station || null, line }
+}
+
+/**
  * 最寄駅の記載から「駅名そのもの」の候補を列挙する。
  *
  * 実際の記載は路線名・注記・徒歩分数が混ざる:
@@ -2151,6 +2214,8 @@ function extractCandidateFieldsRegex(
   gender: string | null
   nationality: string | null
   nearestStation: string | null
+  /** 最寄駅と併記された路線名。同名駅の都道府県判別に使う（保存はしない） */
+  nearestStationLine: string | null
   prefecture: string | null
   experienceYears: number | null
   // 「経験年数：」「実務経験：」等の専用ラベルからの明示的な自己申告値かどうか。
@@ -2587,51 +2652,14 @@ function extractCandidateFieldsRegex(
     const m = allText.match(/([^\s,、。（）()「」【】\t_]{1,10}駅)(?:[\s　_\-）」】()徒歩.)]|$)/)
     if (m) nearestStation = m[1].trim()
   }
-  // 後処理: ラベル自体が値になっているケースを除外
-  // 例: 「最寄駅」「イニシャル+最寄駅」「最寄：北13条東駅」→ 実駅名のみに修正
+  // 後処理: 路線名と駅名に分解し（順序は問わない）、ラベル自体が値になっているケースを除外
+  let nearestStationLine: string | null = null
   if (nearestStation) {
-    // 路線名カッコを除去（全角/半角どちらも対応）。
-    // カッコ内が路線名（「線」で終わる）なら、捨てずに先頭へ移す:
-    // DB照合時に路線名から同名駅（例:桜台=東京/福岡）を判別できるようにするため。
-    // 例: 「桜台(西武池袋線)」→「西武池袋線桜台」/「綾瀬駅（東京メトロ千代田線 / JR常磐線）」→「JR常磐線綾瀬駅」
-    const parenLineMatch = nearestStation.match(/^([^\s（(]+)[（(]([^）)]*線)(?:[／/][^）)]*)?[）)].*$/)
-    if (parenLineMatch) {
-      nearestStation = parenLineMatch[2] + parenLineMatch[1]
-    } else {
-      nearestStation = nearestStation.replace(/[（(][^）)]*[）)].*$/, '').trim()
-    }
-    // 「線『駅名』」形式（例:「JR総武線「市川」」「山手線「浜松町」」）: カギ括弧内を駅名候補として取り出す
-    const kagiMatch = nearestStation.match(/線[「『]([^」』]{1,10})[」』]/)
-    if (kagiMatch) nearestStation = kagiMatch[1]
-    // 「<路線名> 駅 <駅名>」形式（「駅」の語が路線名と駅名の間に挟まる逆順テンプレート）:
-    // 例: 「横浜市営地下鉄ブルーライン　駅 三ツ沢下町」→「三ツ沢下町」
-    const ekiMiddleMatch = nearestStation.match(/^.*?(?:線|ライン)[　 ]+駅[　 ]*([^\s　]{1,12})$/)
-    if (ekiMiddleMatch) nearestStation = ekiMiddleMatch[1]
-    // 路線名と駅名がスラッシュ・中点で並ぶ表記から駅名だけを取り出す。
-    // 「JR京浜東北線／蕨駅」「西武池袋線・東長崎駅」→「蕨駅」「東長崎駅」
-    // 並び順はメールによって逆になる（線→駅 / 駅→線）ため、末尾を機械的に採ると
-    // 「東久留米・西武池袋線」で路線名だけが残る（2026-08-20 実害）。
-    // 「駅」付きの語 → 路線名でない語 → 末尾、の優先順で選ぶ。
-    if (/[/／・]/.test(nearestStation)) {
-      const segs = nearestStation.split(/[/／・]/).map(s => s.trim()).filter(Boolean)
-      if (segs.length >= 2) {
-        const isLineName = (s: string) => /(?:線|ライン)$/.test(s) || /^(?:JR|ＪＲ)/.test(s)
-        const rev = [...segs].reverse()
-        nearestStation = rev.find(s => s.endsWith('駅'))
-          ?? rev.find(s => !isLineName(s))
-          ?? segs[segs.length - 1]
-      }
-    }
-    // 「最寄：北13条東駅」のようにコロン区切りで前半がラベルの場合、後半だけ取る
-    const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
-    if (colonMatch) nearestStation = colonMatch[1].trim()
-    // 「線」を持たない公営地下鉄・新交通等の事業者名プレフィックスを剥がす
-    // 例:「横浜市営地下鉄岸根公園」→「岸根公園」「埼玉新都市交通伊奈中央」→「伊奈中央」
-    // ただし「地下鉄成増」「地下鉄赤塚」「モノレール浜松町」等、事業者名で始まる正式駅名は
-    // 剥がすと別駅名になるため除外する（先頭一致の実駅名を保護）。
-    if (!/^(地下鉄成増|地下鉄赤塚|モノレール[^\s　]|ゆりかもめ[^\s　])/.test(nearestStation)) {
-      nearestStation = nearestStation.replace(/^.*?(市営地下鉄|地下鉄|新都市交通|モノレール|ゆりかもめ)/, '')
-    }
+    const parsed = parseNearestStation(nearestStation)
+    nearestStation = parsed.station
+    nearestStationLine = parsed.line
+  }
+  if (nearestStation) {
     // ラベルそのものや template text・セクション見出しは除外
     if (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation)
       || nearestStation.includes('イニシャル')
@@ -2640,23 +2668,7 @@ function extractCandidateFieldsRegex(
       // 明らかな非駅名ノイズ（誤抽出）を拒否。文中のどこにあっても対象（先頭一致に限定しない）
       || /(■|IT経験|経験年数|フルリモート|引っ越し|引越し|転居|首都圏|シリコンバレー)/.test(nearestStation)) {
       nearestStation = null
-    }
-    // 「西武池袋線　飯能駅」→「飯能駅」（路線名+スペース+駅名 → 駅名だけ取る）
-    // 「汐入駅常駐可」→「汐入駅」（駅名以降の余分な語句を除去）
-    if (nearestStation) {
-      const stationOnly = nearestStation.match(/([^\s　]{2,12}駅)$/)
-      if (stationOnly && stationOnly[1] !== nearestStation) {
-        nearestStation = stationOnly[1]
-      } else if (!nearestStation.endsWith('駅')) {
-        // 末尾が駅でない場合: 先頭の駅名部分だけ取る
-        const stationStart = nearestStation.match(/^([^\s　]{1,12}駅)/)
-        if (stationStart) nearestStation = stationStart[1]
-      }
-    }
-    // 末尾の付帯情報を除去（駅サフィックスの有無に関わらず。「都内」等の勤務地修飾も含めて剥がす）
-    // 例:「二子玉川※常駐可能」→「二子玉川」「幸手※都内出勤可」→「幸手」
-    if (nearestStation) {
-      nearestStation = nearestStation.replace(/[※]?(都内|都内へ)?(常駐可能?|出勤可能?|リモート可能?|通勤可能?)$/, '').trim() || null
+      nearestStationLine = null
     }
   }
 
@@ -2949,7 +2961,7 @@ function extractCandidateFieldsRegex(
 
   // 国籍は抽出経路が多く営業文の断片を拾いやすいため、返す直前に1か所で検閲する
   if (nationality && !isValidNationality(nationality)) nationality = null
-  return { name, age, gender, nationality, nearestStation, prefecture, experienceYears, experienceYearsIsDedicated, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
+  return { name, age, gender, nationality, nearestStation, nearestStationLine, prefecture, experienceYears, experienceYearsIsDedicated, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
 }
 
 /**
@@ -10475,7 +10487,9 @@ Deno.serve(async (req: Request) => {
             const blockRegexFields = extractCandidateFieldsRegex(blockRegexBodyText, blockAttachText)
             // 最寄駅 DB 照合で都道府県を確定（テキスト誤抽出も上書き）(#90)
             if (blockRegexFields.nearestStation) {
-              const stationPref = await lookupStationPrefectureFromDb(blockRegexFields.nearestStation)
+              // 路線名を前置して照合する（桜台=東京/福岡 のような同名駅の判別に要る）
+              const stationPref = await lookupStationPrefectureFromDb(
+                (blockRegexFields.nearestStationLine ?? '') + blockRegexFields.nearestStation)
               if (stationPref && stationPref !== blockRegexFields.prefecture) {
                 blockRegexFields.prefecture = stationPref
               }
@@ -11088,12 +11102,16 @@ Deno.serve(async (req: Request) => {
 
       // AI空項目にregexフォールバックを適用
       const resolvedStation = analyzed.nearestStation || regexFields.nearestStation
+      // 都道府県照合用のキー。路線名を前置すると同名駅（桜台=東京/福岡）を判別できる
+      const stationLookupKey = resolvedStation
+        ? (resolvedStation === regexFields.nearestStation ? (regexFields.nearestStationLine ?? '') : '') + resolvedStation
+        : null
       // ハードコードマップにない駅は DB を 1 件だけ問い合わせる
       let resolvedPrefecture = analyzed.prefecture || regexFields.prefecture
-        || (resolvedStation ? await lookupStationPrefectureFromDb(resolvedStation) : null)
+        || (stationLookupKey ? await lookupStationPrefectureFromDb(stationLookupKey) : null)
       // 最寄駅 DB 照合で都道府県を上書き（テキスト誤抽出対策。例: 署名欄の大阪 → 富士見台駅 → 東京都）(#90)
       if (resolvedStation) {
-        const stationDbPref = await lookupStationPrefectureFromDb(resolvedStation)
+        const stationDbPref = await lookupStationPrefectureFromDb(stationLookupKey!)
         if (stationDbPref && stationDbPref !== resolvedPrefecture) {
           console.log(`[STATION_PREF_OVERRIDE] ${resolvedStation}: ${resolvedPrefecture} → ${stationDbPref}`)
           resolvedPrefecture = stationDbPref

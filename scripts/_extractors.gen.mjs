@@ -2466,6 +2466,55 @@ function stationNameCandidates(station){
   return out
 }
 
+// ── parseNearestStation ──
+function parseNearestStation(raw) {
+  if (!raw) return { station: null, line: null }
+  // 注記・付帯情報を落としてから、あらゆる区切り文字を空白に寄せて語に割る
+  const cleaned = String(raw)
+    .replace(/[※＊].*$/s, ' ')
+    .replace(/徒歩[　 ]*[0-9０-９]+[　 ]*分|バス[　 ]*[0-9０-９]+[　 ]*分/g, ' ')
+    .replace(/(?:都内|都内へ)?(?:常駐|出勤|リモート|通勤|勤務)可能?/g, ' ')
+    .replace(/[（()）「」『』【】［\[\]］、,／/・|｜：:～]/g, ' ')
+    .trim()
+  const tokens = cleaned.split(/[\s　]+/).filter(Boolean)
+
+  // 路線名（「〜線」「〜ライン」）と、駅名になり得ない事業者名・ラベル語
+  const isLine = (t) => /(?:線|ライン)$/.test(t)
+  const OPERATOR_OR_LABEL_RE = /^(?:JR[東西]?日?本?|ＪＲ|東京メトロ|都営地下鉄|都営|市営地下鉄|地下鉄|新交通|新都市交通|モノレール|ゆりかもめ|名鉄|近鉄|京王|京急|京成|東急|小田急|西武|東武|相鉄|南海|阪急|阪神|京阪|各線|駅|沿線|通勤駅|最寄|最寄り|最寄駅|最寄り駅|イニシャル|代表者)$/
+
+  // 「小田急小田原線本厚木駅」「西武池袋線桜台」のように区切りなしで直結した表記を割る。
+  // 「新線新宿」「西線９条旭山公園通」を壊さないよう、路線名側が4文字以上のときだけ割る
+  // （「日本ライン今渡」は4文字以上に該当するため個別に除外する）。
+  const splitConcat = (t) => {
+    if (/^日本ライン/.test(t)) return { line: null, station: t }
+    const m = t.match(/^(.{4,}?(?:線|ライン))(.{2,})$/)
+    return m ? { line: m[1], station: m[2] } : { line: null, station: t }
+  }
+
+  let line = null
+  const stationCands = []
+  for (const tok of tokens) {
+    // ラベル語の判定を先に置く（「沿線」「各線」は「線」で終わるが路線名ではない）
+    if (OPERATOR_OR_LABEL_RE.test(tok)) continue
+    if (isLine(tok)) { line ??= tok; continue }
+    const sp = splitConcat(tok)
+    if (sp.line) line ??= sp.line
+    stationCands.push(sp.station)
+  }
+
+  // 「〜駅」と明示された語を最優先。無ければ最初の駅名候補
+  let station = stationCands.find(t => /駅$/.test(t) && t !== '駅') ?? stationCands[0] ?? null
+
+  // 「線」を持たない公営地下鉄・新交通等の事業者名プレフィックスを剥がす
+  // 例:「横浜市営地下鉄岸根公園」→「岸根公園」「埼玉新都市交通伊奈中央」→「伊奈中央」
+  // ただし「地下鉄成増」「地下鉄赤塚」等、事業者名で始まる正式駅名は剥がすと別駅になるため除外する
+  if (station && !/^(地下鉄成増|地下鉄赤塚|モノレール[^\s　]|ゆりかもめ[^\s　])/.test(station)) {
+    const stripped = station.replace(/^.*?(市営地下鉄|地下鉄|新都市交通|モノレール|ゆりかもめ)/, '')
+    if (stripped) station = stripped
+  }
+  return { station: station || null, line }
+}
+
 // ── extractWorkStyleNote ──
 function extractWorkStyleNote(bodyText, attachText){
   // 勤務条件は営業がメール本文で述べるもの。経歴書には案件の業務内容として
@@ -3996,6 +4045,7 @@ export {
   extractNationalityMark,
   isValidNationality,
   stationNameCandidates,
+  parseNearestStation,
   extractWorkStyleNote,
   findWorkStyleIn,
   extractLicenseNumbers,

@@ -39,6 +39,7 @@ const TARGET_FUNCTIONS = [
   'extractNationalityMark',
   'isValidNationality',
   'stationNameCandidates',
+  'parseNearestStation',   // 最寄駅の記載 → {路線名, 駅名}（順序を仮定せず語の形で分類）
   'extractWorkStyleNote',
   'findWorkStyleIn',        // extractWorkStyleNote が呼ぶ（本文優先・添付は案件説明を弾く）
   'extractLicenseNumbers',  // 派遣・職業紹介の許可番号（旧表記 般/特・全角に対応）
