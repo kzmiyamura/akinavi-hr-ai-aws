@@ -1639,6 +1639,28 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
             </button>
           )}
           <AgentCompaniesModal />
+          {/* 優先スキル絞り込みの ON/OFF（2026-08-20 ユーザー要望）。
+              既定は「優先スキルあり」。ここで外せるが**リロードすると既定に戻る**
+              （useState で持つだけで永続化しない）。
+              以前は一覧の最下部に「他の人材も表示」しか無く、しかも一方通行で
+              優先スキルに戻せなかった。
+              設定側の優先スキルが0件のときは絞り込み自体が存在しないので出さない。 */}
+          {!isFiltered && (prioritySkills?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAllCandidates((v) => !v)}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors shrink-0 ${
+                showAllCandidates
+                  ? 'border border-gray-300 text-gray-600 hover:bg-gray-50'
+                  : 'bg-violet-600 text-white hover:bg-violet-700'
+              }`}
+              title={showAllCandidates
+                ? `優先スキル（${prioritySkills!.join('・')}）で絞り込む`
+                : '優先スキルの絞り込みを外して全人材を表示する（リロードで既定に戻ります）'}
+            >
+              {showAllCandidates ? '優先スキルで絞る' : `優先スキル: ${prioritySkills!.join('・')}`}
+            </button>
+          )}
           {/* 絞り込みボタン */}
           <button
             type="button"
@@ -1794,14 +1816,17 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                 </button>
               )}
               {/* 優先スキルで絞っている間は、残りの人材へ必ず辿り着けるようにする。
-                  絞り込み中であることと全体件数を明示して見落としを防ぐ */}
-              {!isFiltered && !showAllCandidates && activePrioritySkills?.length && (
+                  絞り込み中であることと全体件数を明示して見落としを防ぐ。
+                  外したあとも戻せるよう両方向にする（2026-08-20） */}
+              {!isFiltered && (prioritySkills?.length ?? 0) > 0 && (
                 <button
                   type="button"
-                  onClick={() => setShowAllCandidates(true)}
+                  onClick={() => setShowAllCandidates((v) => !v)}
                   className="w-full py-2.5 text-xs text-gray-600 hover:bg-gray-50 border-t border-gray-100 transition-colors"
                 >
-                  優先スキル（{activePrioritySkills.join('・')}）で絞り込み中 — 他の人材も表示
+                  {showAllCandidates
+                    ? `全人材を表示中 — 優先スキル（${prioritySkills!.join('・')}）で絞り込む`
+                    : `優先スキル（${prioritySkills!.join('・')}）で絞り込み中 — 他の人材も表示`}
                 </button>
               )}
             </div>
