@@ -71,7 +71,7 @@ export function HistoryPage({ dataEnv }: { dataEnv: DataEnv }) {
         <select
           value={selectedProjectId}
           onChange={(e) => setSelectedProjectId(e.target.value)}
-          className="w-full max-w-sm border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full max-w-sm border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           <option value="">案件を選択...</option>
           {(projects as Project[]).map((p) => (

@@ -530,7 +530,7 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
                     onChange={e => setter(e.target.value)}
                     onBlur={e => handleAddressBlur(account, label, e.target.value)}
                     placeholder={placeholder}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                 </div>
               )
@@ -812,7 +812,7 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
                   max={200}
                   value={fastMaxCandidates}
                   onChange={e => setFastMaxCandidates(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-24 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-24 rounded-lg border border-gray-300 px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <span className="text-sm text-gray-500">名（デフォルト: {MATCHING_DEFAULTS.fast_max_candidates_per_project}名）</span>
               </div>
@@ -830,7 +830,7 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
                   max={200}
                   value={fastMaxProjects}
                   onChange={e => setFastMaxProjects(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-24 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-24 rounded-lg border border-gray-300 px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <span className="text-sm text-gray-500">件（デフォルト: {MATCHING_DEFAULTS.fast_max_projects_per_candidate}件）</span>
               </div>
