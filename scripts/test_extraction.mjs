@@ -451,8 +451,18 @@ function extractCandidateFieldsRegex(bodyText, attachText) {
   if (nearestStation) {
     // 路線名カッコを除去: 「綾瀬駅（東京メトロ千代田線 / JR常磐線）」→「綾瀬駅」
     nearestStation = nearestStation.replace(/（[^）]*）.*$/, '').trim()
-    // 路線名スラッシュ・中点区切りを除去: 「JR京浜東北線／蕨駅」「西武池袋線・東長崎駅」→「蕨駅」「東長崎駅」
-    nearestStation = nearestStation.replace(/^.+[/／・]/, '').trim()
+    // 路線名と駅名がスラッシュ・中点で並ぶ表記から駅名だけを取り出す（順序はメールにより逆転する）
+    // 「JR京浜東北線／蕨駅」→「蕨駅」/「東久留米・西武池袋線」→「東久留米」
+    if (/[/／・]/.test(nearestStation)) {
+      const segs = nearestStation.split(/[/／・]/).map(s => s.trim()).filter(Boolean)
+      if (segs.length >= 2) {
+        const isLineName = (s) => /(?:線|ライン)$/.test(s) || /^(?:JR|ＪＲ)/.test(s)
+        const rev = [...segs].reverse()
+        nearestStation = rev.find(s => s.endsWith('駅'))
+          ?? rev.find(s => !isLineName(s))
+          ?? segs[segs.length - 1]
+      }
+    }
     const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
     if (colonMatch) nearestStation = colonMatch[1].trim()
     if (/^(最寄り?駅?|沿線|通勤駅|イニシャル|代表者|最寄り?$)/.test(nearestStation) || nearestStation.includes('イニシャル') || nearestStation.includes('最寄駅')
@@ -916,6 +926,10 @@ if (args.includes('--test')) {
   runCase('常駐可サフィックス除去', '氏名：T.K\n最寄駅：汐入駅常駐可\n経験年数：4年', '', { nearestStation: '汐入駅' })
   runCase('常駐可サフィックス(青梅)', '氏名：K.S\n最寄駅：青梅駅常駐可\n経験年数：6年', '', { nearestStation: '青梅駅' })
   runCase('中点区切り路線名(東長崎)', '氏名：T.Y\n最寄駅：西武池袋線・東長崎駅\n経験年数：5年', '', { nearestStation: '東長崎駅' })
+  // 駅名→路線名の逆順（サイトプラン 2026-08-20: 路線名だけ残って駅が消えていた）
+  runCase('中点区切り逆順(東久留米)', '氏名：S.Y\n最寄駅：東久留米・西武池袋線\n経験年数：13年', '', { nearestStation: '東久留米' })
+  runCase('中点区切り逆順・駅付き(所沢駅)', '氏名：A.B\n最寄駅：所沢駅・西武新宿線\n経験年数：5年', '', { nearestStation: '所沢駅' })
+  runCase('スラッシュ区切り逆順(町田)', '氏名：C.D\n最寄駅：町田/JR横浜線\n経験年数：5年', '', { nearestStation: '町田' })
   runCase('自己PRが最寄駅に混入しない', '氏名：K.A\n◆アピールポイント: これまでの経験を活かして挑戦したい\n\n最寄り :\n自己PR\n経験年数：8年', '', { nearestStation: null })
 
   // ── デグレチェック: 既存パターンが引き続き正しく動作すること ─────────────

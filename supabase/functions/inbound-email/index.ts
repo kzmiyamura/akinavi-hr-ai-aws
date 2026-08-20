@@ -2607,8 +2607,21 @@ function extractCandidateFieldsRegex(
     // 例: 「横浜市営地下鉄ブルーライン　駅 三ツ沢下町」→「三ツ沢下町」
     const ekiMiddleMatch = nearestStation.match(/^.*?(?:線|ライン)[　 ]+駅[　 ]*([^\s　]{1,12})$/)
     if (ekiMiddleMatch) nearestStation = ekiMiddleMatch[1]
-    // 路線名スラッシュ・中点区切りを除去: 「JR京浜東北線／蕨駅」「西武池袋線・東長崎駅」→「蕨駅」「東長崎駅」
-    nearestStation = nearestStation.replace(/^.+[/／・]/, '').trim()
+    // 路線名と駅名がスラッシュ・中点で並ぶ表記から駅名だけを取り出す。
+    // 「JR京浜東北線／蕨駅」「西武池袋線・東長崎駅」→「蕨駅」「東長崎駅」
+    // 並び順はメールによって逆になる（線→駅 / 駅→線）ため、末尾を機械的に採ると
+    // 「東久留米・西武池袋線」で路線名だけが残る（2026-08-20 実害）。
+    // 「駅」付きの語 → 路線名でない語 → 末尾、の優先順で選ぶ。
+    if (/[/／・]/.test(nearestStation)) {
+      const segs = nearestStation.split(/[/／・]/).map(s => s.trim()).filter(Boolean)
+      if (segs.length >= 2) {
+        const isLineName = (s: string) => /(?:線|ライン)$/.test(s) || /^(?:JR|ＪＲ)/.test(s)
+        const rev = [...segs].reverse()
+        nearestStation = rev.find(s => s.endsWith('駅'))
+          ?? rev.find(s => !isLineName(s))
+          ?? segs[segs.length - 1]
+      }
+    }
     // 「最寄：北13条東駅」のようにコロン区切りで前半がラベルの場合、後半だけ取る
     const colonMatch = nearestStation.match(/[：:](.+駅.*)$/)
     if (colonMatch) nearestStation = colonMatch[1].trim()
