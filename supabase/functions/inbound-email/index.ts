@@ -11459,21 +11459,25 @@ Deno.serve(async (req: Request) => {
           }
         }
       }
+      // 別会社から来た同一人物への参照（統合はしない・2026-08-20）
+      let sameAsOtherAgency: Record<string, unknown> | null = null
       // ステップ②: 別エージェント含む全候補でJaccard類似度チェック
+      //
+      // ⚠ 2026-08-20: 入口が `.eq('name', ...)` の**完全一致**だったため、
+      // 別会社が同じ人を違う表記で送ってくるケースを取り逃していた
+      // （実例: `H,I` と `H.I`、`FR` と `F.R`）。
+      // 実測では氏名＋年齢＋駅が一致し会社だけ違うペアが83組・スキル一致度は平均0.68。
+      // 正規化名で引く RPC（find_same_person_candidates）に差し替える。
       if (existingCandidateId === null && resolvedName && resolvedName !== '不明') {
-        const { data: similar } = await supabase
-          .from('candidates')
-          .select('id, skills, experience_years, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture')
-          .eq('data_env', inboundDataEnv)
-          .eq('name', resolvedName)
-          .eq('duplicate_flag', false)
-          .is('merged_into', null)
-          .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
-          .limit(5)
+        const { data: similar } = await supabase.rpc('find_same_person_candidates', {
+          p_name: resolvedName,
+          p_data_env: inboundDataEnv,
+        })
         if (similar && similar.length > 0) {
           for (const s of similar as any[]) {
             const myStation = resolvedStation ?? null
-            const theirStation = s.nearestStation ?? null
+            // RPC はスネークケースで返す（nearest_station / from_company）
+            const theirStation = s.nearest_station ?? null
             // 駅が両方存在して異なる場合は別人と判断
             if (myStation && theirStation && myStation !== theirStation) {
               continue
@@ -11495,8 +11499,29 @@ Deno.serve(async (req: Request) => {
             const intersection = [...mySkillSet].filter(sk => theirSkills.has(sk)).length
             const union = new Set([...mySkillSet, ...theirSkills]).size
             if (union > 0 && intersection / union >= 0.4) {
-              existingCandidateId = s.id
-              console.log(`[dedup] 同一人物と判断 → UPDATE: ${resolvedName} jaccard=${(intersection / union).toFixed(2)} id=${s.id}`)
+              const sameAgent = (s.mail_from ?? null) === from
+              if (sameAgent) {
+                // 同じ会社から同じ人が再送された → 従来どおり1レコードに統合する
+                existingCandidateId = s.id
+                console.log(`[dedup] 同一人物と判断 → UPDATE: ${resolvedName} jaccard=${(intersection / union).toFixed(2)} id=${s.id}`)
+              } else {
+                // ⚠ **別会社から来た同じ人は統合しない**（2026-08-20 ユーザー判断「別で見れる方がいい」）。
+                // 同じ人でも会社によって単価が違う（実測: 80万 と 85万）。統合＝UPDATE なので
+                // 片方が消え、営業が比較できなくなる。別レコードのまま残し、相手への参照だけ持つ。
+                //
+                // duplicate_flag は使わない。true にすると fetch_candidates_for_project が
+                // `duplicate_flag = false` で絞っているため**マッチングの候補から完全に外れる**。
+                sameAsOtherAgency = {
+                  candidateId: s.id,
+                  company: s.from_company ?? null,
+                  mailFrom: s.mail_from ?? null,
+                  desiredRate: s.desired_rate ?? null,
+                  subject: s.subject ?? null,
+                  jaccard: Number((intersection / union).toFixed(2)),
+                  at: new Date().toISOString(),
+                }
+                console.log(`[dedup] 別会社の同一人物 → 統合せず参照を記録: ${resolvedName} jaccard=${(intersection / union).toFixed(2)} 相手=${s.from_company ?? s.mail_from}`)
+              }
               break
             }
           }
@@ -11525,9 +11550,48 @@ Deno.serve(async (req: Request) => {
         savedCandidateId = existingCandidateId
       } else {
         // 新規 INSERT
-        const { data, error } = await supabase.from('candidates').insert(dbPayload).select('id').single()
+        // 別会社から来た同一人物なら、統合せず参照だけ持たせる（2026-08-20）。
+        // これで「同じ人がA社80万・B社85万」を両方見比べられる。
+        const insertPayload = sameAsOtherAgency
+          ? {
+            ...dbPayload,
+            raw_profile: {
+              ...(dbPayload.raw_profile as Record<string, unknown>),
+              sameAsOtherAgency,
+            },
+          }
+          : dbPayload
+        const { data, error } = await supabase.from('candidates').insert(insertPayload).select('id').single()
         if (error) throw new Error(`候補者保存エラー: ${error.message}`)
         savedCandidateId = data.id
+
+        // 相手側にも逆向きの参照を書く（どちらの画面から見ても気づけるようにする）。
+        // 失敗しても取り込みは止めない
+        if (sameAsOtherAgency) {
+          try {
+            const otherId = sameAsOtherAgency.candidateId as string
+            const { data: other } = await supabase
+              .from('candidates')
+              .select('raw_profile')
+              .eq('id', otherId)
+              .maybeSingle()
+            if (other?.raw_profile) {
+              const rp = { ...(other.raw_profile as Record<string, unknown>) }
+              rp.sameAsOtherAgency = {
+                candidateId: savedCandidateId,
+                company: dbPayload.from_company ?? null,
+                mailFrom: from,
+                desiredRate: resolvedDesiredRate ?? null,
+                subject,
+                jaccard: sameAsOtherAgency.jaccard,
+                at: new Date().toISOString(),
+              }
+              await supabase.from('candidates').update({ raw_profile: rp }).eq('id', otherId)
+            }
+          } catch (e) {
+            console.warn('[dedup] 相手側への参照書き込みに失敗:', String(e).slice(0, 150))
+          }
+        }
       }
 
       // candidate_skills に一括INSERT（DB照合結果のカテゴリを使用）

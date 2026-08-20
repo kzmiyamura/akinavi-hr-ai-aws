@@ -20,6 +20,7 @@ import { DemoSeedPanel } from '../components/DemoSeedPanel'
 import { DemoMatchingTestPanel } from '../components/DemoMatchingTestPanel'
 import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../lib/fileParser'
 import { findSkillMonths } from '../lib/skillYearsMatch'
+import { SameAsOtherAgencyBadge, readSameAsOtherAgency } from '../components/SameAsOtherAgencyBadge'
 
 interface SkillsByCategory {
   languages: string[]
@@ -370,13 +371,18 @@ export function CandidateProfileFields({
       <p className="text-xs text-gray-400 mt-0.5">
         {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年{age != null ? ` ／ ${age}歳` : ''}{gender ? `（${gender}）` : ''}{nationality ? ` ／ ${nationality}` : ''}
       </p>
-      {(c.from_company || employmentType || commercialFlow) && (
+      {(c.from_company || employmentType || commercialFlow || readSameAsOtherAgency(c.raw_profile)) && (
         <div className="flex flex-wrap items-center gap-1.5 mt-1">
           {c.from_company && (
             <span className="flex items-center gap-1 text-xs bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">
               🏢 {c.from_company}
             </span>
           )}
+          {/* 別会社から同じ人が来ている可能性（レコードは統合しない・2026-08-20） */}
+          {(() => {
+            const same = readSameAsOtherAgency(c.raw_profile)
+            return same ? <SameAsOtherAgencyBadge info={same} /> : null
+          })()}
           {agentInfo?.haken_number && (
             <a
               // 同一許可番号でも複数事業所（本店・支店等）があり、詳細ページURL末尾の
