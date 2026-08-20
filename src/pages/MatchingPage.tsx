@@ -1071,19 +1071,25 @@ function ProjectModeRankCard({
                 ? new Date(receivedAt).toLocaleString('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
                 : null
               return (
-                <div key={d.id} className="flex flex-col gap-0.5 text-xs bg-white rounded px-2.5 py-1.5 border border-amber-200">
+                // カード全体を押せるようにする（2026-08-20 ユーザー要望）。
+                // 以前は氏名のテキストだけがリンクで、押せる範囲が分かりにくかった
+                <div
+                  key={d.id}
+                  role={onOpenCandidateDetail ? 'button' : undefined}
+                  tabIndex={onOpenCandidateDetail ? 0 : undefined}
+                  onClick={onOpenCandidateDetail ? () => onOpenCandidateDetail(d.id) : undefined}
+                  onKeyDown={onOpenCandidateDetail
+                    ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenCandidateDetail(d.id) } }
+                    : undefined}
+                  title={onOpenCandidateDetail ? `${d.name} の詳細を開く（${d.from_company ?? '会社不明'}からの情報）` : undefined}
+                  className={`flex flex-col gap-0.5 text-xs bg-white rounded px-2.5 py-1.5 border border-amber-200 ${
+                    onOpenCandidateDetail ? 'cursor-pointer hover:bg-amber-50 hover:border-amber-400 transition-colors' : ''
+                  }`}
+                >
                   <div className="flex flex-wrap items-center gap-x-2">
-                    {onOpenCandidateDetail ? (
-                      <button
-                        type="button"
-                        onClick={() => onOpenCandidateDetail(d.id)}
-                        className="font-medium text-gray-800 hover:text-blue-700 hover:underline"
-                      >
-                        {d.name}
-                      </button>
-                    ) : (
-                      <span className="font-medium text-gray-800">{d.name}</span>
-                    )}
+                    <span className={`font-medium text-gray-800 ${onOpenCandidateDetail ? 'underline decoration-dotted underline-offset-2' : ''}`}>
+                      {d.name}
+                    </span>
                     {d.from_company && <span className="text-amber-700">{d.from_company}</span>}
                     {d.desired_rate && <span className="text-green-700 font-medium">{d.desired_rate}</span>}
                     {d.experience_years != null && <span className="text-gray-500">経験{d.experience_years}年</span>}

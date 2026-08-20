@@ -2066,7 +2066,17 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       </summary>
                       <div className="px-3 pb-3 pt-1 space-y-2">
                         {dupCandidates.map((dup) => (
-                          <div key={dup.id} className="bg-white border border-yellow-200 rounded-lg p-2">
+                          // カード全体を押せるようにする（2026-08-20 ユーザー要望）。
+                          // 右端の「この人を見る」ボタンは残す（押せることが明示的に分かるため）
+                          <div
+                            key={dup.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setSelectedId(dup.id)}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedId(dup.id) } }}
+                            title={`${dup.name} の詳細を開く（${(dup as any).from_company ?? '会社不明'}からの情報）`}
+                            className="bg-white border border-yellow-200 rounded-lg p-2 cursor-pointer hover:bg-yellow-50 hover:border-yellow-400 transition-colors"
+                          >
                             <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0 flex-1">
                                 <p className="text-xs font-semibold text-gray-800">{dup.name}</p>
