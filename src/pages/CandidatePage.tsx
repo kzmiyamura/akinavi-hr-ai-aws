@@ -1248,21 +1248,25 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     return { ...selectedCandidateBase, raw_profile: { ...(selectedCandidateBase.raw_profile as Record<string, unknown> ?? {}), ...fullRawProfile } }
   }, [selectedCandidateBase, fullRawProfile])
 
-  // 重複疑い候補者クエリ（duplicate_flag=true の場合のみ同名・直近90日・別IDを取得）
+  // 同一人物候補（別ルート・別の紹介会社を含む）。
+  //
+  // ⚠ 2026-08-20 に作り直した。以前は
+  //   ・`duplicate_flag = true` の人にしか出さない
+  //   ・氏名の**完全一致**で探す
+  // という二重の縛りがあり、**実質1件も表示されていなかった**
+  // （prod の duplicate_flag は全員 false。同じ人でも会社ごとに H,I / H.I と表記が違う）。
+  // マッチング画面と同じ find_duplicate_candidates RPC（正規化名で照合）に寄せる。
   const { data: dupCandidates } = useQuery({
     queryKey: ['dup-candidates', selectedCandidate?.id, selectedCandidate?.name, dataEnv],
-    enabled: !!(selectedCandidate?.duplicate_flag && selectedCandidate?.name),
+    enabled: !!(selectedCandidate?.name && selectedCandidate.name !== '不明'),
+    staleTime: 5 * 60_000,
     queryFn: async () => {
       const { supabase } = await import('../lib/supabase')
-      const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
-      const { data } = await supabase
-        .from('candidates')
-        .select('id, name, skills, experience_years, desired_rate, from_company, raw_profile, created_at')
-        .eq('data_env', dataEnv)
-        .eq('name', selectedCandidate!.name)
-        .neq('id', selectedCandidate!.id)
-        .gte('created_at', since)
-        .limit(5)
+      const { data } = await supabase.rpc('find_duplicate_candidates', {
+        p_name: selectedCandidate!.name,
+        p_exclude_id: selectedCandidate!.id,
+        p_data_env: dataEnv,
+      })
       return (data ?? []) as Candidate[]
     },
   })
@@ -2051,12 +2055,14 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     </p>
                   )}
                   <CandidateProfileFields c={selectedCandidate} isExpanded detailMode agentDomainMap={agentDomainMap} />
-                  {/* 重複候補者 */}
-                  {selectedCandidate.duplicate_flag && dupCandidates && dupCandidates.length > 0 && (
-                    <details className="mt-4 border border-yellow-200 rounded-lg bg-yellow-50">
+                  {/* 同一人物候補（別の紹介会社から来ている人を含む）。
+                      duplicate_flag の条件は外した（全員 false で表示されていなかった・2026-08-20）。
+                      レコードは統合しない方針なので、ここで並べて単価を比較できるようにする */}
+                  {dupCandidates && dupCandidates.length > 0 && (
+                    <details className="mt-4 border border-yellow-200 rounded-lg bg-yellow-50" open>
                       <summary className="px-3 py-2 text-xs font-medium text-yellow-700 cursor-pointer select-none hover:bg-yellow-100 rounded-lg flex items-center gap-1">
                         <span className="text-yellow-500">⚠</span>
-                        重複の疑い {dupCandidates.length}件
+                        同一人材の可能性 {dupCandidates.length}件（別ルート・別会社を含む）
                       </summary>
                       <div className="px-3 pb-3 pt-1 space-y-2">
                         {dupCandidates.map((dup) => (
