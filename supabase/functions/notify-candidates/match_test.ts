@@ -20,8 +20,24 @@ Deno.test('matchesRule', () => {
   assert('名前一致（イニシャルのピリオド・大小文字ゆれ吸収）',
     matchesRule(rule({ name_keyword: 'tk' }), cand({ name: 'T.K' })))
   assert('名前不一致', !matchesRule(rule({ name_keyword: 'S.I' }), cand({ name: 'T.K' })))
-  assert('スキル1件一致（部分一致・大小文字無視）',
+  assert('スキル1件一致（大小文字無視）',
     matchesRule(rule({ skill_keywords: ['java'] }), cand({})))
+  // 2026-08-21: 部分一致をやめた。CLAUDE.md §6「部分一致は使わない」が通知だけ未適用で、
+  // 大阪ルールの `Java` が `JavaScript` を拾っていた（62人中48人が通知対象・うち14人は誤通知）
+  assert('Java は JavaScript に一致しない',
+    !matchesRule(rule({ skill_keywords: ['Java'] }), cand({ skills: ['JavaScript'] })))
+  assert('JavaScript しか無くても他のキーワードで拾えるなら通知する',
+    matchesRule(rule({ skill_keywords: ['Java', 'C#'] }), cand({ skills: ['JavaScript', 'C#'] })))
+  assert('Go は MongoDB / Django に一致しない',
+    !matchesRule(rule({ skill_keywords: ['Go'] }), cand({ skills: ['MongoDB', 'Django'] })))
+  assert('Shell は PowerShell に一致しない',
+    !matchesRule(rule({ skill_keywords: ['Shell'] }), cand({ skills: ['PowerShell'] })))
+  assert('SQL は PL/SQL・MySQL に一致しない',
+    !matchesRule(rule({ skill_keywords: ['SQL'] }), cand({ skills: ['MySQL'] })))
+  assert('C# は C#.NET に一致する（区切り文字の手前までが語）',
+    matchesRule(rule({ skill_keywords: ['C#'] }), cand({ skills: ['C#.NET'] })))
+  assert('Java は Java8 には一致しない（別表記は skill_master 側で吸収する）',
+    !matchesRule(rule({ skill_keywords: ['Java'] }), cand({ skills: ['Java8'] })))
   assert('スキル複数はOR（1つでも持っていればマッチ・2026-08-17 に AND から変更）',
     matchesRule(rule({ skill_keywords: ['Java', 'Python'] }), cand({})))
   assert('スキルORで1つも持っていなければ不一致',
