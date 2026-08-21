@@ -167,7 +167,8 @@
 <td>デモ環境内の <code>raw_profile.text</code> を持つ人材から N 件をランダム選択して <code>inbound-email</code> 再投入。スキル辞書を更新したあとの動作確認に活用</td>
 </tr>
 </tbody></table>
-<h3>マッチング検証用：スコア別 5 人生成（<code>DemoProjectCandidateGen</code>・コミット <code>060f0d7</code>）</h3>
+<h3>マッチング検証用：スコア別 5 人生成（<code>DemoProjectCandidateGen</code>）</h3>
+<p>「案件」タブでデモ案件を選ぶと表示されます。</p>
 <p>選択中のデモ案件をベースに、<strong>スコアの異なる 5 人</strong>（90 / 70 / 50 / 30 / 10 pt 想定）を一気に生成します。</p>
 <table>
 <thead>
@@ -198,6 +199,15 @@
 </tr>
 </tbody></table>
 <p><code>calcRuleScore</code> の予想値を逆算しているので、UI のマッチング結果でも近いスコアが表示されます。マッチング・スコアの色分け（80以上 緑 / 60以上 黄）の動作確認に最適です。</p>
+<h3>検証用の人材を1件だけ作る（コマンド）</h3>
+<p>再現したいケースがあるときは、<strong>prod から本物のデータを引くのではなく demo に自分で作る</strong>のが方針です（2026-08-14）。
+Supabase の無料枠は転送量（egress）に上限があり、prod の人材は 1,500 件以上あるため、画面確認を1回するだけでもかなりの量を使います。demo は数十件なので数十分の一で済みます。</p>
+<pre><code class="language-bash">node scripts/seed_demo_candidate.mjs --body &lt;本文ファイル&gt; [--attach &lt;経歴書&gt;]
+</code></pre>
+<p>本番と同じ経路（<code>inbound-email</code>）を通るので、抽出結果の確認にそのまま使えます。</p>
+<blockquote>
+<p>常駐 AI ワーカーも <code>SHADOW_DATA_ENV=demo</code> で demo だけを処理できます。</p>
+</blockquote>
 <hr>
 <h2>メール自動取り込みと prod / demo</h2>
 <p>Outlook からの自動取り込み（<code>poll-email</code> → <code>inbound-email</code>）は、<strong>メールアカウントごとに保存先が決まっています。</strong></p>

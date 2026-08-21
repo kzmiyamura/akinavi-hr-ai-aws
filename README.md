@@ -17,6 +17,10 @@
 | **改善案・バグメモ → GitHub Issue** | 設定タブで自然文を貼り付けると、`create-github-issue` Edge Function 経由で GitHub Issue として自動登録。一覧表示・クローズ（PATCH）も同 UI から可能 |
 | **スコアウェイトのカスタムチューニング** | `match-batch` / `fetch_candidates_for_project` の 5 観点（スキル / 経験 / 単価 / 勤務地 / リモート）のウェイトを実行時に変更可能（既定: 40/15/15/20/10 = 100pt）|
 | **スキル別経験年数の活用** | Excel スキルシートから `skillYears` を抽出し、必須スキルの実年数をスコアリングに反映（総経験年数より優先） |
+| **人材ウォッチ通知** | 「通知」タブで条件（名前 / スキル / 最寄駅）を登録すると、合致する人材の登録時にメールで通知（`notify-candidates` cron・5分）。種類違いは AND、スキル欄の中だけ OR。**スキルは語として照合**（`Java` は `JavaScript` に一致しない）|
+| **AI による項目補正（社内PC）** | Claude Code を使う常駐ワーカーが、新規人材の氏名・年数・スキル年数を読み直し、新規案件の抜けを埋め、提案ごとの所見を書く。**マッチングの点数計算とは別系統** |
+| **同一人材の検出** | 別の紹介会社から来た同じ人を検出して人材詳細に並べる（**統合はしない**。会社ごとに提示単価が違うため比較できるようにする） |
+| **表示優先スキル** | 一覧をどのスキルの人から読むかを設定できる。既定は全体設定、絞り込みから**端末ごとに上書き**でき、ブラウザに記憶される |
 | デモ環境 | 本番データとは独立したデモ用データ環境（`?demo=KEY` でトグル + 設定タブの「デモモード」スイッチ）。本番→デモコピー・スコア別 5 人生成。デモ案件のリモートポリシーを考慮したスコア設計 |
 
 ---
@@ -47,7 +51,7 @@ flowchart TD
     G -.->|メール種別分類<br/>Gemini バッチ| CLS[Gemini Flash Lite]
     G -->|内部 POST| H
     H -->|Drive/Sheets URL検出→fetch| I[Google Drive<br/>共有リンク]
-    H -->|station_master DB から<br/>全国 1,797 駅を読込・キャッシュ| SM[(station_master<br/>name → prefecture)]
+    H -->|デプロイ物に同梱した<br/>station_data.json を参照<br/>8,443駅名・実行時DB往復ゼロ| SM[station_data.json<br/>駅名+路線 → 都道府県]
     H -->|skill_master DB照合<br/>+ regex + 文章スキャン<br/>+ HTML エンティティデコード| H
 
     CR[pg_cron<br/>毎朝 JST 9:00] -->|HTTP POST| AM[Edge Function<br/>auto-match]
@@ -79,7 +83,8 @@ flowchart TD
 | AI（サーバー・マッチング単発） | `match-score`: 上記と同じフォールバック順。`duplicateSuspected` フラグ込みの単発スコア。理由は **150 字以内** |
 | AI（サーバー・自動マッチング） | `auto-match`（毎朝 JST 9:00 cron）: `match-batch` を内部呼び出し → 同じフォールバック順を継承 |
 | AI（サーバー・メール種別分類） | `poll-email` の同一受信箱判別: Gemini `gemini-2.5-flash-lite` バッチ（任意・既定は無効） |
-| メール解析 | **AI 不使用**。regex（`extractCandidateFieldsRegex` + `flexLabel`） + 文章スキャン（`extractFromProse`） + `skill_master` DB 照合（約 1,660 件 + HTML エンティティデコード） + `station_master` DB 照合（**全国 1,797 駅**・関数インスタンス内キャッシュ）。HTML テーブル形式メール・複数人材分割・送信者署名除去・営業/広告メールフィルタにも対応 |
+| メール解析 | **AI 不使用**。regex（`extractCandidateFieldsRegex` + `flexLabel`） + 文章スキャン（`extractFromProse`） + `skill_master` 照合 + `station_master` 照合（**8,443 駅名**。デプロイ物に同梱した `station_data.json` を読むので実行時の DB 往復はゼロ）。HTML テーブル形式メール・複数人材分割・送信者署名除去・営業/広告メールフィルタにも対応 |
+| AI（社内PC・人材/案件の読み取り） | **Claude Code**（`claude -p`）。社内PCで常駐する `scripts/llm_extract/shadow_worker.mjs` が5分ごとに、新規人材の項目補正・新規案件の項目補完・マッチング提案の所見生成・Box 経歴書の取込を行う。**マッチングの点数計算とは別物**（点数は下記のルール + Cerebras/Groq/Gemini）。セットアップは `docs/HandsOn_Setup.md` 第1章・第9章 |
 | ファイル解析 | `xlsx`（Excel）・`mammoth`（Word）。**PDF と画像はテキスト解析対象外**。Excel から `skillYears`（スキル別経験月数）を抽出してマッチングに活用 |
 | 人材マップ | `d3-geo`（Mercator 投影） + `topojson-client` + `public/japan.topojson`（416KB・47 都道府県）。`prefecture_counts` / `candidates_by_prefecture` RPC で SQL 集計（スキルフィルタも RPC 側）。都道府県クリックでズームアニメーション |
 | メール自動受信 | Microsoft Graph API + Supabase pg_cron（**完全無料・Make.com 不要**） |
@@ -176,7 +181,7 @@ Supabase Dashboard → SQL Editor で以下を**順番に**実行:
      14. `20260526_fetch_candidates_with_weights.sql`（**ウェイト調整可能化** スキル/経験/単価/勤務地/リモート の 5 引数）
      15. `20260526_fix_timeout.sql`（CROSS JOIN LATERAL でルールスコアを 1 回だけ計算しタイムアウト解消）
      16. `20260526_region_location_scoring.sql`（**勤務地に同一地方加点** `get_region(prefecture_core)` 関数。同一都道府県 20pt / 同一地方 10pt / 不明 5pt / 不一致 0pt）
-     17. `20260527_add_station_master.sql`（**全国 1,797 駅の `station_master` テーブル** + INSERT データ。`inbound-email` が起動時にロード）
+     17. `20260527_add_station_master.sql` ほか station_master 系（駅名・路線名 → 都道府県。現在 12,666 行 / 8,443 駅名。更新したら `node scripts/export_station_master.mjs` で `station_data.json` を書き出して再デプロイする）
      18. `20260527_fix_kyoto_bug.sql`（「東京都 大森」に「京都」が部分一致するバグを修正 → 完全一致判定へ）
      19. `add_archive_candidates_cron.sql`（**人材マップ用** 7 日アーカイブ pg_cron。`YOUR_PROJECT_REF` / `YOUR_SERVICE_ROLE_KEY` 置換が必要。旧 `delete-old-candidates` を unschedule）
      20. **要追加 SQL（migration 漏れ対応）**: `ALTER TABLE candidates_archive_light ADD COLUMN IF NOT EXISTS name text, ADD COLUMN IF NOT EXISTS subject text;`（`archive-candidates` Edge Function と `candidates_by_prefecture` RPC が両カラムを参照するため）
@@ -262,8 +267,8 @@ Edge Function 群の挙動はソースを書き換えずに app_config キーで
 
 | キー | 既定 | 内容 |
 |---|---|---|
-| `inbound_project_enabled` | `false` | **案件メールの解析と DB 保存を有効化**。`'true'` を設定すると `inbound-email` が type=project を処理（既定は人材メールのみ取り込み） |
-| `auto_match_enabled` | `true` | `auto-match` cron を有効化。`'false'` で毎朝のバッチ実行をスキップ |
+| `inbound_project_enabled` | `false` | **案件メールの解析と DB 保存を有効化**。`'true'` を設定すると `inbound-email` が type=project を処理。**未設定＝無効なので、案件用アドレスに転送しても登録されない**（既定は人材メールのみ取り込み） |
+| `auto_match_enabled` | `true` | `auto-match` cron を有効化。`'false'` で毎朝のバッチ実行をスキップ。**ここが `false` の間は毎朝の自動マッチングは走らない**（画面からの手動マッチングは動く） |
 | `email_poll_mode` | `incremental` | `incremental`（未読のみ）か `full`（指定日以降全件） |
 | `email_full_import_since` | （未設定） | `email_poll_mode=full` 時に取得を開始する ISO 日時 |
 | `email_classify_enabled` | `false` | 同一受信箱に人材/案件が混在するとき、Gemini で `candidate`/`project`/`other` をバッチ分類 |
@@ -272,6 +277,7 @@ Edge Function 群の挙動はソースを書き換えずに app_config キーで
 | `matching_fast_max_projects` | `10` | 高速モード時の人材あたり案件上限（1〜200 で UI から変更可） |
 | `candidate_retention_days` | `7` | 人材データ保持日数（`archive-candidates` cron が参照） |
 | `app_memo` | （未設定） | 営業引き継ぎ用フリーテキストメモ |
+| `llm_filter_skills` | （未設定） | 常駐 AI ワーカーの解析対象を絞る優先スキル。人材一覧の「優先スキル」表示にも共有される（端末ごとの上書きは localStorage） |
 | `graph_rt_human_prod` ほか | — | Microsoft OAuth 連携で保存されるリフレッシュトークン（4 アカウント分） |
 
 `inbound-email` の即時マッチング切替は環境変数（Supabase Secrets）で行う:
@@ -356,7 +362,7 @@ inbound-email Edge Function（※ AI は呼ばない）
   ├─ 複数人材検出: 区切り線（*****／─── 等）/◇形式で 1 メール = 複数候補者対応
   ├─ 案件メール / 営業/広告メール（配信解除リンク・研修販売等）を 200 OK でスキップ
   ├─ skill_master DB 照合（本文と添付で別ロジック、添付は上位 20 件・D/E評価除外）
-  ├─ station_master DB を起動時にロード（全国 1,797 駅・関数インスタンス内キャッシュ）
+  ├─ station_data.json（8,443駅名・ビルド時同梱）で駅名 → 都道府県を解決（実行時のDB往復なし）
   ├─ extractCandidateFieldsRegex: 氏名・最寄駅・都道府県・経験年数・希望単価（範囲・ラベルなし・月額対応）・参画時期・希望案件・国籍・自己PR
   ├─ extractFromProse: 役割・業界・リモート可否（フェーズ表ヘッダーは除外）
   ├─ 年齢・性別の抽出パターン 4 種（「男性：51 歳」混入パターンも対応）
@@ -428,8 +434,13 @@ regex + skill_master DB 照合 → candidates / projects に upsert
 | `candidates_archive_light` | 7 日以上経過した人材のサマリー（prefecture / skills / name / subject）。人材マップの「全期間」モード集計用。Phase 4.12 新規 |
 | `ai_logs` | AI 解析実行ログ（モデル名・所要時間・結果・エラー。`model='no-ai'` でメール解析記録） |
 | `error_logs` | フロントエンド側クライアントエラー（page/message/stack/context/data_env/nickname） |
-| `skill_master` | スキル辞書（約 1,660 件 + AI 自動登録分。DWH/IBM/工程系を Phase 4.10 で強化）。`aliases` で表記ゆれ吸収、`match_count` で実績管理 |
-| `station_master` | **全国 1,797 駅と都道府県のマッピングテーブル**（Phase 4.14 新規）。`inbound-email` が起動時にロードして勤務地推定に使用。RLS 読み取り全許可 |
+| `skill_master` | スキル辞書（**951 件**）。`aliases` で表記ゆれ吸収、`match_count` で実績管理。更新すると `skill_norm_map` がトリガで貼り直される。**AI では登録しない**（シード SQL + 月次レビューのみ） |
+| `station_master` | 駅名・路線名 → 都道府県のマッピング（ekidata.jp 実データ・**12,666 行 / 8,443 駅名**）。同名駅は路線で判別する。`inbound-email` は**実行時に DB を引かない**（`scripts/export_station_master.mjs` で `station_data.json` に書き出してデプロイ物に同梱）。DB を更新したら再エクスポート + 再デプロイが必要 |
+| `skill_norm_map` | **マテリアライズドビュー**。skill_master の正式名 + 別名 → 正式名の正規化辞書。マッチングのスキル一致判定用 |
+| `skill_implications` | 「child を持つ人は parent 要件も満たす」向きのある包含関係（MySQL → SQL 等）。別名では表現できない関係を扱う |
+| `notification_rules` | 人材ウォッチ通知ルール（通知タブで CRUD）。条件は 名前 / スキル / 駅 |
+| `notification_log` | 通知送信済み記録（ルール × 人材で一意・二重通知防止） |
+| `role_master` | 役割の系統マスタ（マッチングの役割加点で使用） |
 | `relevance_keywords` | 関連度判定用キーワード（`exclude` / `candidate` / `project` の 3 種別。現状は未使用・Phase 4.9 で `classifyInboundRelevance` 削除済み） |
 | `app_config` | アプリ設定 / Graph API リフレッシュトークンのローテーション保存 |
 
