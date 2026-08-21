@@ -134,6 +134,47 @@ const reEscCorp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const CORP_PREFIX_SRC = [...CORP_PREFIX_FORMS, ...CORP_ABBR_FORMS].map(reEscCorp).join('|')
 const CORP_SUFFIX_SRC = [...CORP_SUFFIX_JP_FORMS, ...CORP_ABBR_FORMS].map(reEscCorp).join('|')
 const ANY_CORP_SRC = [...new Set([...CORP_PREFIX_FORMS, ...CORP_ABBR_FORMS, ...CORP_SUFFIX_JP_FORMS])].map(reEscCorp).join('|')
+const PROSE_INDUSTRIES= [
+
+  { re: /金融機関|銀行|証券会社|証券系|保険会社|生命?保険|損害?保険|信用金庫|信託銀行|FinTech|フィンテック|金融業界|金融系|勘定系/, label: '金融' },
+  { re: /医療機関|ヘルスケア|病院|クリニック|製薬|医薬品|MedTech|医療業界|電子カルテ/, label: '医療・ヘルスケア' },
+  // 「メーカー」単独は「メーカー系SIer」「機器メーカーのサポート窓口」等で誤爆するため、
+  // 業種を伴う複合語だけにする
+  { re: /製造業|(?:電機|電気|自動車|精密|化学|食品|部品|重工|機器|半導体|産業機械)メーカー|メーカー系|大手メーカー|プラント|工場(?!勤務|常駐|地域|長)|IoT分野|FAシステム|自動車業界|電気業界|製造業界|生産管理システム/, label: '製造' },
+  { re: /(?:^|[^A-Z])EC(?![A-Z])|イーコマース|eコマース|電子商取引|物流(?!倉庫担当)|運送業|商社/, label: 'EC・物流' },
+  { re: /小売(?:業)?|流通(?:業)?|リテール|百貨店|スーパー|コンビニ/, label: '小売・流通' },
+  // 「通信」単独はネットワーク技術者の文書に必ず出る（データ通信・通信設定・通信プロトコル）。
+  // 「キャリア」単独も「キャリアパス」「キャリアシート」で誤爆していた
+  { re: /通信業界|通信業|通信会社|通信キャリア|通信事業者?|通信機器メーカー|テレコム|移動体通信|携帯キャリア|キャリア(?:各社|系)/, label: '通信' },
+  { re: /ゲーム業界|エンタメ|エンターテインメント|メディア業界|動画配信|配信プラットフォーム/, label: 'ゲーム・エンタメ' },
+  // 「建設」「住宅」単独は「住宅ローン」（金融）「建設中」等で誤爆する
+  { re: /不動産|建設業界|建設業|建設会社|建設系|ゼネコン|住宅メーカー|住宅設備|注文住宅|プロパティ|デベロッパー/, label: '不動産・建設' },
+  // 「公共」単独は「公共施設」「公共交通」等で誤爆する
+  { re: /官公庁|自治体|公共(?:系|分野|事業|機関|団体|案件|向け)|行政|省庁|外務省|区役所|市役所|県庁|地方公共団体/, label: '公共・官公庁' },
+  // 「大学」「高校」「専門学校」は**学歴欄に必ず載る**。業界としては使えない
+  { re: /教育機関|学校法人|学習塾|EdTech|eLearning|教育業界|学校教育|大学(?:向け|法人|事務|生協|システム)|文教(?:系|分野|向け)?/, label: '教育' },
+  { re: /SES(?![A-Z])|受託開発|SIer|SI(?!P|[A-Z])|システムインテグレーション/, label: 'SES・SI' },
+  { re: /スタートアップ|ベンチャー(?:企業)?/, label: 'スタートアップ' },
+  // 「HR」「採用業務」単独は誤爆が92%だった
+  { re: /人材業界|人材業|人材サービス|人材ビジネス|HRTech|HR系|採用プラットフォーム|採用マーケット/, label: '人材・HR' },
+  // 「マーケ」「広告」単独は誤爆が43%だった
+  { re: /マーケティング(?:業界|職|支援|部|会社)|広告代理店|広告業界|デジタルマーケ|アドテク/, label: 'マーケティング' },
+]
+const PROSE_WORKSTYLE= [
+
+  { re: /フルリモート|完全リモート|100%リモート/,      label: 'フルリモート' },
+  { re: /週[234]日.*リモート|リモート.*週[234]日/,     label: 'リモート可' },
+  { re: /リモート[　 ]?[可能OK]/,                      label: 'リモート可' },
+  { re: /常駐[　 ]?(?:不可|なし)|在宅[　 ]?希望/,     label: 'リモート希望' },
+  { re: /常駐[　 ]?(?:可|OK|あり)|フル常駐/,          label: '常駐可' },
+]
+const STRICT_PHASE_HEADER_KEYWORDS = [
+
+  '調査分析', '要件定義', '基本設計', '詳細設計',
+  '単体試験', '結合試験', '総合試験', '運用試験', '受入試験',
+  '単体テスト', '結合テスト', '総合テスト', '受入テスト',
+] 
+const INDUSTRY_MAX = 4
 const CORP_SUFFIX_EN_SRC = '(?:Corporation|Incorporated|Company|Holdings|Co\\.?\\s*,?\\s*Ltd\\.?|Co\\.?\\s*,?\\s*Inc\\.?|Pte\\.?\\s*Ltd\\.?|L\\.?L\\.?C\\.?|GmbH|Ltd\\.?|Inc\\.?|Corp\\.?|K\\.?K\\.?|G\\.?K\\.?|LLP|PLC|Co\\.?)'
 
 // ── parseDurationToMonths ──
@@ -3848,8 +3889,12 @@ function scoreProseRoles(prose, fullText) {
     { re: /(?<![A-Z])PM(?!O)(?![A-Z])|プロジェクト[　 ]?マネージャー/, label: 'プロジェクトマネージャー' },
     { re: /(?<![A-Z])PL(?![A-Z])|プロジェクト[　 ]?リーダー/,       label: 'プロジェクトリーダー' },
     { re: /(?<![A-Z])TL(?![A-Z])|テックリード|テック[　 ]?リード/,   label: 'テックリード' },
-    { re: /(?<![バックエンドフロントクラウドデータML])SE(?![A-Z])|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
-    { re: /PG|プログラマー?/,                            label: 'プログラマー' },
+    // ⚠ 英字の前後ガードが要る。`SE(?![A-Z])` だけだと DATABASE / BASE / LICENSE /
+    //   RESPONSE / USE の末尾 SE に当たって「システムエンジニア」が付いていた（2026-08-21）。
+    //   カナのガード（バックエンドSE 等を別役割に譲る）は従来どおり残す。
+    { re: /(?<![A-Za-zバックエンドフロントクラウドデータML])SE(?![A-Za-z])|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
+    // 同上。`PG` 単独だと JPG / PNG / MPG / SPG に当たっていた
+    { re: /(?<![A-Za-z])PG(?![A-Za-z])|プログラマー?/,    label: 'プログラマー' },
     { re: /インフラ[　 ]?エンジニア/,                    label: 'インフラエンジニア' },
     { re: /フロントエンド[　 ]?エンジニア|フロント[　 ]?エンジニア/, label: 'フロントエンドエンジニア' },
     { re: /バックエンド[　 ]?エンジニア|バック[　 ]?エンジニア/,    label: 'バックエンドエンジニア' },
@@ -3899,6 +3944,73 @@ function scoreProseRoles(prose, fullText) {
   // スコア降順（同点は辞書定義順を維持 = sort の安定性に依拠）
   roles.sort((a, b) => roleScores[b] - roleScores[a])
   return { roles, roleScores }
+}
+
+// ── extractFromProse ──
+function extractFromProse(bodyText, attachText) {
+  // URL を除去（"https://example.com/cc.php" 等が PHP/HTTPS に誤マッチするのを防ぐ）
+  // あわせて営業の「他にも多数おります」定型文を落とす（本人の役割ではないため）
+  const cleanedBody = stripUrlsForSkillMatching(stripAgentSolicitation(bodyText))
+  const cleanedAttach = stripUrlsForSkillMatching(attachText)
+  const allText = cleanedBody + '\n' + cleanedAttach
+
+  // 文章判定: 20文字超 or 読点・句点を含む行のみ抽出してスキャン
+  // ただしスキルシートのフェーズ表ヘッダー行（"調査分析 要件定義 基本設計 ..." 等）は
+  // 役割の false positive を引き起こすため除外する。
+  // また Excel JSON 化で生成される「担当工程：xxx」等の工程キー行も除外する
+  // （工程フェーズの値 "運用保守" 等が役割として誤抽出されるのを防ぐ）。
+  const PROCESS_KEY_RE = /^(担当工程|担当フェーズ|参画工程|フェーズ|工程|作業工程|担当フェーズ|プロセス|process)[：:]/i
+  const proseLines = allText.split(/\r?\n/).filter(
+    l => (l.length > 20 || /[、。]/.test(l)) && !isPhaseTableHeader(l) && !PROCESS_KEY_RE.test(l),
+  )
+  const prose = proseLines.join('\n')
+
+  // 役割: スコアリングして主（先頭）・副（以降）の順に並べる
+  const { roles, roleScores } = scoreProseRoles(prose, allText)
+
+  // 業界判定もフェーズ表ヘッダー行を除外したテキストを対象にする
+  // （以前は短い単語も拾うため全文対象だったが、誤検出が多いためフィルタ済みテキストに変更）
+  const industryScanText = allText.split(/\r?\n/).filter(l => !isPhaseTableHeader(l)).join('\n')
+  // 出現回数でスコア付けして多い順に並べ、上位 INDUSTRY_MAX 件だけ残す。
+  // 「1回でも出たら全部付ける」だと文書の語彙を測っているだけになる（上のコメント参照）。
+  const industryScores= {}
+  for (const { re, label } of PROSE_INDUSTRIES) {
+    const g = new RegExp(re.source, 'g')
+    let count = 0
+    // 20回で打ち切り（順位付けに十分・巨大な経歴書で走査が伸びるのを防ぐ）
+    while (count < 20 && g.exec(industryScanText) !== null) count++
+    if (count > 0) industryScores[label] = count
+  }
+  // 同点は PROSE_INDUSTRIES の定義順を維持（Array.sort の安定性に依拠）
+  const industries = Object.keys(industryScores)
+    .sort((a, b) => industryScores[b] - industryScores[a])
+    .slice(0, INDUSTRY_MAX)
+
+  let workStyle = null
+  for (const { re, label } of PROSE_WORKSTYLE) {
+    if (re.test(allText)) { workStyle = label; break }
+  }
+
+  return { roles, industries, workStyle, roleScores, industryScores }
+}
+
+// ── isPhaseTableHeader ──
+function isPhaseTableHeader(line){
+  if (!line) return false
+  let count = 0
+  for (const kw of STRICT_PHASE_HEADER_KEYWORDS) {
+    if (line.includes(kw)) {
+      count++
+      if (count >= 4) return true
+    }
+  }
+  return false
+}
+
+// ── stripUrlsForSkillMatching ──
+function stripUrlsForSkillMatching(text){
+  if (!text) return text
+  return text.replace(/https?:\/\/[^\s\u3000<>"'\(\)\[\]｝】、，。]+/gi, ' ')
 }
 
 // ── inferRoleFamilyHint ──
@@ -4157,6 +4269,9 @@ export {
   worksheetToGrid,
   worksheetToCells,
   scoreProseRoles,
+  extractFromProse,
+  isPhaseTableHeader,
+  stripUrlsForSkillMatching,
   inferRoleFamilyHint,
   stripAgentSolicitation,
   sameMailConflicts,
@@ -4167,4 +4282,34 @@ export {
   inferPrefectureFromStation,
   isZipAttachment,
   planZipEntries,
+  PROJ_MON,
+  _skillRegexCache,
+  PROJ_TECHCOL,
+  PROJ_PERIODCOL,
+  KAKKO_TECH,
+  KAKKO_SKIP,
+  PROJ_JUNK,
+  PROJ_KEEP_WHOLE,
+  PROJ_PREFIX_RE,
+  ZIP_MIME,
+  ZIP_EXTRACTABLE_RE,
+  ZIP_MAX_ENTRIES,
+  ZIP_MAX_TOTAL_BYTES,
+  ZIP_MAX_ENTRY_BYTES,
+  ZIP_EXT_MIME,
+  PREFECTURES,
+  STATION_TO_PREFECTURE,
+  OWN_COMPANY_NAMES,
+  CORP_PREFIX_FORMS,
+  CORP_SUFFIX_JP_FORMS,
+  CORP_ABBR_FORMS,
+  reEscCorp,
+  CORP_PREFIX_SRC,
+  CORP_SUFFIX_SRC,
+  ANY_CORP_SRC,
+  PROSE_INDUSTRIES,
+  PROSE_WORKSTYLE,
+  STRICT_PHASE_HEADER_KEYWORDS,
+  INDUSTRY_MAX,
+  CORP_SUFFIX_EN_SRC,
 }

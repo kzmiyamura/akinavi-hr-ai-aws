@@ -169,7 +169,15 @@ git add -A && git commit -m "fix: ..." && git push
   （`akinavi.prioritySkills.v1`）に保存する。ロジックは `src/lib/prioritySkillPref.ts`。
   認証が無くユーザーを識別できないため端末単位。AI校正バッジ（`aiCorrectionStage`）は
   ワーカーの実際の対象を表すので**端末設定ではなく app_config の値**を使う
-- **重複管理**: email一致で自動UPDATE。名前一致 + スキルJaccard ≥ 0.4 で `duplicate_flag=true`
+- **重複管理**: email一致で自動UPDATE。名前一致 + スキルJaccard ≥ 0.4 で `duplicate_flag=true`。
+  同名照会は**最寄駅一致を先に引く**（イニシャル氏名は同名が多く、prod実測で同名10件超の氏名が52種・
+  最大35件。無作為な上限で本人を取り逃すと毎日二重登録される・2026-08-21）
+- **役割・業界の抽出**: `extractFromProse`（`supabase/functions/inbound-email/index.ts`）。
+  経歴書は「業界を書いた文書」ではないので、**裸の一般語（大学・通信・公共・広告・HR・メーカー）は使わない**。
+  業界は出現回数でスコア付けし上位 `INDUSTRY_MAX`(=4) 件だけ残す。役割は**上限なし**
+  （マッチングが 同一+15/同系統+6/系統違い-9 で採点するため、削ると減点に化ける）。
+  英字略称（SE/PG/PM/PL/TL）は必ず `(?<![A-Za-z])…(?![A-Za-z])` で囲む
+  （DATABASE→SE・JPG→PG の誤検出実績あり）。品質テスト: `node scripts/test_prose_roles_industries.mjs`
 
 ## ⚠ Egress を使わずに検証する（2026-08-14 ユーザー指示）
 

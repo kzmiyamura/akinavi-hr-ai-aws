@@ -63,6 +63,9 @@ const TARGET_FUNCTIONS = [
   'worksheetToGrid',
   'worksheetToCells',
   'scoreProseRoles',
+  'extractFromProse',      // 役割・業界・勤務形態の文章スキャン（業界はスコア順・上位N件）
+  'isPhaseTableHeader',    // ↑が参照するフェーズ表ヘッダー判定
+  'stripUrlsForSkillMatching',
   'inferRoleFamilyHint',    // 役割が取れない人の系統ヒント（表示・集計のみ）
   'stripAgentSolicitation', // 営業の「他にも多数おります」定型文を役割抽出から外す
   'sameMailConflicts',      // 同一メール内の同名を別人と判定する（駅・県・年齢・単価の食い違い）
@@ -396,6 +399,11 @@ const TARGET_CONSTS = [
   'CORP_PREFIX_SRC',
   'CORP_SUFFIX_SRC',
   'ANY_CORP_SRC',
+  // extractFromProse が参照する判定表
+  'PROSE_INDUSTRIES',
+  'PROSE_WORKSTYLE',
+  'STRICT_PHASE_HEADER_KEYWORDS',
+  'INDUSTRY_MAX',
   'CORP_SUFFIX_EN_SRC',
 ]
 
@@ -464,6 +472,9 @@ const output = [
   ``,
   `export {`,
   ...extracted.map(({ name }) => `  ${name},`),
+  // 定数もテストから参照できるように出す（上限値等をテスト側で二重定義しないため）
+  ...TARGET_CONSTS.filter((n) => consts.some((c) => new RegExp(`^const ${n.replace(/[$]/g, '\\$&')}\\b`).test(c)))
+    .map((n) => `  ${n},`),
   `}`,
 ].join('\n')
 

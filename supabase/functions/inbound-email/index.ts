@@ -3057,8 +3057,12 @@ function scoreProseRoles(prose: string, fullText: string): { roles: string[]; ro
     { re: /(?<![A-Z])PM(?!O)(?![A-Z])|プロジェクト[　 ]?マネージャー/, label: 'プロジェクトマネージャー' },
     { re: /(?<![A-Z])PL(?![A-Z])|プロジェクト[　 ]?リーダー/,       label: 'プロジェクトリーダー' },
     { re: /(?<![A-Z])TL(?![A-Z])|テックリード|テック[　 ]?リード/,   label: 'テックリード' },
-    { re: /(?<![バックエンドフロントクラウドデータML])SE(?![A-Z])|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
-    { re: /PG|プログラマー?/,                            label: 'プログラマー' },
+    // ⚠ 英字の前後ガードが要る。`SE(?![A-Z])` だけだと DATABASE / BASE / LICENSE /
+    //   RESPONSE / USE の末尾 SE に当たって「システムエンジニア」が付いていた（2026-08-21）。
+    //   カナのガード（バックエンドSE 等を別役割に譲る）は従来どおり残す。
+    { re: /(?<![A-Za-zバックエンドフロントクラウドデータML])SE(?![A-Za-z])|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
+    // 同上。`PG` 単独だと JPG / PNG / MPG / SPG に当たっていた
+    { re: /(?<![A-Za-z])PG(?![A-Za-z])|プログラマー?/,    label: 'プログラマー' },
     { re: /インフラ[　 ]?エンジニア/,                    label: 'インフラエンジニア' },
     { re: /フロントエンド[　 ]?エンジニア|フロント[　 ]?エンジニア/, label: 'フロントエンドエンジニア' },
     { re: /バックエンド[　 ]?エンジニア|バック[　 ]?エンジニア/,    label: 'バックエンドエンジニア' },
@@ -3116,21 +3120,51 @@ function scoreProseRoles(prose: string, fullText: string): { roles: string[]; ro
 //   - "教育" 単独 → 「新人教育」「ITパスポート研修」のような社内研修にも誤マッチするため
 //                   「教育機関」「学校法人」「EdTech」等の業界明示語のみマッチ
 //   - "学習" 単独 → 「機械学習」「自己学習」等にも誤マッチするため削除
+/**
+ * 業界の判定パターン。
+ *
+ * 【設計原則（2026-08-21 の総点検で明文化）】
+ * 経歴書は「その人が何の業界に居たか」を書いた文書ではない。学歴・技術用語・一般語が
+ * 大量に混ざるので、**業界名として書かれた語だけ**を拾う。裸の一般語（「大学」「通信」
+ * 「公共」「広告」「HR」等）を入れると、業界情報ではなく文書の語彙を測ってしまう。
+ *
+ * 総点検の実測（prod 2,077人・修正前）:
+ *   教育       824人付与 → うち684人(83%)は**学歴欄の「大学」だけ**が根拠
+ *   通信       840人付与 → うち548人(65%)は裸の「通信」だけ（通信設定・データ通信等）
+ *   人材・HR    85人付与 → うち 78人(92%)は裸の「HR」「採用業務」だけ
+ *   不動産・建設 395人付与 → うち176人(45%)は「建設」「住宅」だけ（住宅ローン等）
+ *   マーケ     283人付与 → うち123人(43%)は裸の「マーケ」「広告」だけ
+ *   製造       572人付与 → うち227人(40%)は裸の「メーカー」だけ
+ *   結果、1人あたり平均3.07業界・**4業界以上が813人(39%)**・最大12業界（全14中）。
+ *   これでは絞り込みにも表示にも使えないため、弱い語を業界名つきの表現に置き換えた。
+ *
+ * 業界は検索スコープ（search_candidates の ILIKE）だけで使われ、
+ * マッチングのスコア計算には入っていない（2026-08-21 確認）。
+ */
 const PROSE_INDUSTRIES: Array<{ re: RegExp; label: string }> = [
-  { re: /金融機関|銀行|証券|保険会社|生命?保険|損害?保険|信用金庫|信託銀行|FinTech|フィンテック|金融業界|金融系/, label: '金融' },
-  { re: /医療機関|ヘルスケア|病院|クリニック|製薬|医薬品|MedTech|医療業界/, label: '医療・ヘルスケア' },
-  { re: /製造業|メーカー(?!ロゴ)|プラント|工場(?!勤務|常駐|地域|長)|IoT分野|FAシステム|自動車業界|電気業界|電機メーカー|製造業界/, label: '製造' },
+  { re: /金融機関|銀行|証券会社|証券系|保険会社|生命?保険|損害?保険|信用金庫|信託銀行|FinTech|フィンテック|金融業界|金融系|勘定系/, label: '金融' },
+  { re: /医療機関|ヘルスケア|病院|クリニック|製薬|医薬品|MedTech|医療業界|電子カルテ/, label: '医療・ヘルスケア' },
+  // 「メーカー」単独は「メーカー系SIer」「機器メーカーのサポート窓口」等で誤爆するため、
+  // 業種を伴う複合語だけにする
+  { re: /製造業|(?:電機|電気|自動車|精密|化学|食品|部品|重工|機器|半導体|産業機械)メーカー|メーカー系|大手メーカー|プラント|工場(?!勤務|常駐|地域|長)|IoT分野|FAシステム|自動車業界|電気業界|製造業界|生産管理システム/, label: '製造' },
   { re: /(?:^|[^A-Z])EC(?![A-Z])|イーコマース|eコマース|電子商取引|物流(?!倉庫担当)|運送業|商社/, label: 'EC・物流' },
   { re: /小売(?:業)?|流通(?:業)?|リテール|百貨店|スーパー|コンビニ/, label: '小売・流通' },
-  { re: /通信(?:業|会社|キャリア|機器)?|テレコム|キャリア(?![,\sア-ン])/, label: '通信' },
+  // 「通信」単独はネットワーク技術者の文書に必ず出る（データ通信・通信設定・通信プロトコル）。
+  // 「キャリア」単独も「キャリアパス」「キャリアシート」で誤爆していた
+  { re: /通信業界|通信業|通信会社|通信キャリア|通信事業者?|通信機器メーカー|テレコム|移動体通信|携帯キャリア|キャリア(?:各社|系)/, label: '通信' },
   { re: /ゲーム業界|エンタメ|エンターテインメント|メディア業界|動画配信|配信プラットフォーム/, label: 'ゲーム・エンタメ' },
-  { re: /不動産|建設|住宅|プロパティ|デベロッパー/, label: '不動産・建設' },
-  { re: /官公庁|自治体|公共(?!IT)|行政|省庁|外務省|区役所|市役所|県庁|地方公共団体/, label: '公共・官公庁' },
-  { re: /教育機関|学校法人|塾|EdTech|eLearning|教育業界|学校教育|大学|高校|専門学校/, label: '教育' },
-  { re: /SES(?![A-Z])|受託(?:開発)?|SI(?!P|[A-Z])|システムインテグレーション/, label: 'SES・SI' },
+  // 「建設」「住宅」単独は「住宅ローン」（金融）「建設中」等で誤爆する
+  { re: /不動産|建設業界|建設業|建設会社|建設系|ゼネコン|住宅メーカー|住宅設備|注文住宅|プロパティ|デベロッパー/, label: '不動産・建設' },
+  // 「公共」単独は「公共施設」「公共交通」等で誤爆する
+  { re: /官公庁|自治体|公共(?:系|分野|事業|機関|団体|案件|向け)|行政|省庁|外務省|区役所|市役所|県庁|地方公共団体/, label: '公共・官公庁' },
+  // 「大学」「高校」「専門学校」は**学歴欄に必ず載る**。業界としては使えない
+  { re: /教育機関|学校法人|学習塾|EdTech|eLearning|教育業界|学校教育|大学(?:向け|法人|事務|生協|システム)|文教(?:系|分野|向け)?/, label: '教育' },
+  { re: /SES(?![A-Z])|受託開発|SIer|SI(?!P|[A-Z])|システムインテグレーション/, label: 'SES・SI' },
   { re: /スタートアップ|ベンチャー(?:企業)?/, label: 'スタートアップ' },
-  { re: /人材(?:業界|業)|HR(?![A-Z]|テスト)|HRTech|採用(?:業務|プラットフォーム|マーケット)/, label: '人材・HR' },
-  { re: /マーケ(?:ティング)?(?:業界|職)?|広告(?:代理店|業界)?|デジタルマーケ/, label: 'マーケティング' },
+  // 「HR」「採用業務」単独は誤爆が92%だった
+  { re: /人材業界|人材業|人材サービス|人材ビジネス|HRTech|HR系|採用プラットフォーム|採用マーケット/, label: '人材・HR' },
+  // 「マーケ」「広告」単独は誤爆が43%だった
+  { re: /マーケティング(?:業界|職|支援|部|会社)|広告代理店|広告業界|デジタルマーケ|アドテク/, label: 'マーケティング' },
 ]
 
 /**
@@ -3298,11 +3332,17 @@ function stripAgentSolicitation(text: string): string {
   return out.join('\n')
 }
 
+/** 1人に付ける業界の上限。長い経歴書は本当に多業界に触れるため、全部並べると
+ *  絞り込みにも表示にも使えない（2026-08-21 実測: 4業界以上が39%・最大12業界／全14中）。
+ *  出現回数の多い順に主な業界だけ残す。 */
+const INDUSTRY_MAX = 4
+
 function extractFromProse(bodyText: string, attachText: string): {
   roles: string[]
   industries: string[]
   workStyle: string | null
   roleScores: Record<string, number>
+  industryScores: Record<string, number>
 } {
   // URL を除去（"https://example.com/cc.php" 等が PHP/HTTPS に誤マッチするのを防ぐ）
   // あわせて営業の「他にも多数おります」定型文を落とす（本人の役割ではないため）
@@ -3327,17 +3367,27 @@ function extractFromProse(bodyText: string, attachText: string): {
   // 業界判定もフェーズ表ヘッダー行を除外したテキストを対象にする
   // （以前は短い単語も拾うため全文対象だったが、誤検出が多いためフィルタ済みテキストに変更）
   const industryScanText = allText.split(/\r?\n/).filter(l => !isPhaseTableHeader(l)).join('\n')
-  const industries: string[] = []
+  // 出現回数でスコア付けして多い順に並べ、上位 INDUSTRY_MAX 件だけ残す。
+  // 「1回でも出たら全部付ける」だと文書の語彙を測っているだけになる（上のコメント参照）。
+  const industryScores: Record<string, number> = {}
   for (const { re, label } of PROSE_INDUSTRIES) {
-    if (re.test(industryScanText) && !industries.includes(label)) industries.push(label)
+    const g = new RegExp(re.source, 'g')
+    let count = 0
+    // 20回で打ち切り（順位付けに十分・巨大な経歴書で走査が伸びるのを防ぐ）
+    while (count < 20 && g.exec(industryScanText) !== null) count++
+    if (count > 0) industryScores[label] = count
   }
+  // 同点は PROSE_INDUSTRIES の定義順を維持（Array.sort の安定性に依拠）
+  const industries = Object.keys(industryScores)
+    .sort((a, b) => industryScores[b] - industryScores[a])
+    .slice(0, INDUSTRY_MAX)
 
   let workStyle: string | null = null
   for (const { re, label } of PROSE_WORKSTYLE) {
     if (re.test(allText)) { workStyle = label; break }
   }
 
-  return { roles, industries, workStyle, roleScores }
+  return { roles, industries, workStyle, roleScores, industryScores }
 }
 
 
@@ -10721,6 +10771,7 @@ Deno.serve(async (req: Request) => {
                 roles: blockProseFields.roles,
                 // 役割スコア（先頭=主の根拠。UI・デバッグ用）
                 _roleScores: Object.keys(blockProseFields.roleScores).length > 0 ? blockProseFields.roleScores : undefined,
+                _industryScores: Object.keys(blockProseFields.industryScores).length > 0 ? blockProseFields.industryScores : undefined,
                 // 役割が取れなかった人の系統ヒント（表示・集計のみ。採点には未接続）
                 roleFamilyHint: inferRoleFamilyHint(
                   blockProseFields.roles,
@@ -11340,6 +11391,7 @@ Deno.serve(async (req: Request) => {
           roles: resolvedRoles,
           // 役割スコア（先頭=主の根拠。UI・デバッグ用）
           _roleScores: Object.keys(proseFields.roleScores).length > 0 ? proseFields.roleScores : undefined,
+          _industryScores: Object.keys(proseFields.industryScores).length > 0 ? proseFields.industryScores : undefined,
           // 役割が取れなかった人の系統ヒント（表示・集計のみ。採点には未接続）
           roleFamilyHint: inferRoleFamilyHint(
             resolvedRoles,
