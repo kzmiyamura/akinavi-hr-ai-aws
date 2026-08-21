@@ -16,6 +16,8 @@ import type { LlmApplied } from '../components/AiAppliedNote'
 import { AgentCompaniesModal } from '../components/AgentCompaniesModal'
 import type { AgentCompany } from '../lib/db/agentCompanies'
 import type { DataEnv } from '../lib/dataEnv'
+import { readPrioritySkillPref, writePrioritySkillPref, resolvePrioritySkills, normalizePrioritySkills } from '../lib/prioritySkillPref'
+import type { PrioritySkillPref } from '../lib/prioritySkillPref'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
 import { DemoMatchingTestPanel } from '../components/DemoMatchingTestPanel'
 import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../lib/fileParser'
@@ -183,9 +185,12 @@ interface FilterDraft {
   skillYearFilters: SkillYearFilter[]
   prefecture: string
   expMin: string
+  /** 表示優先スキル（この端末だけの上書き）。null = 設定画面の既定に従う */
+  prioritySkills: string[] | null
+  prioritySkillInput: string
 }
 
-const EMPTY_DRAFT: FilterDraft = { name: '', skillInput: '', skills: [], skillYearFilters: [], prefecture: '', expMin: '' }
+const EMPTY_DRAFT: FilterDraft = { name: '', skillInput: '', skills: [], skillYearFilters: [], prefecture: '', expMin: '', prioritySkills: null, prioritySkillInput: '' }
 
 /** "Java 10年" / "Java10年以上" → {skill:"Java", minYears:10} に変換。マッチしなければ null */
 function parseSkillYear(input: string): SkillYearFilter | null {
@@ -1102,11 +1107,32 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     queryFn: fetchPrioritySkills,
     staleTime: 5 * 60_000,
   })
+  // 表示優先スキルの端末別設定（2026-08-21）。既定は上の設定画面の値だが、
+  // 営業ごとに見たいスキルが違うので絞り込みポップアップから上書きでき、
+  // その選択は localStorage に残る（認証が無くサーバーに持てないため端末単位）
+  const [priorityPref, setPriorityPref] = useState<PrioritySkillPref>(() => readPrioritySkillPref())
+  const updatePriorityPref = (next: PrioritySkillPref) => {
+    setPriorityPref(next)
+    writePrioritySkillPref(next)
+  }
+  /** 端末の上書きを反映した「実際に効いている優先スキル」（トグルOFFでも中身は保つ） */
+  const effectivePrioritySkills = priorityPref.skills ?? prioritySkills ?? null
+
   // 「他の人材も表示」を押すまでは優先スキル該当者だけを読む。
   // 全1,881件を19ページ抱えると invalidate のたびに全ページ再取得で 2.5MB 飛ぶため、
   // 既定の読み込み量そのものを小さくする（2026-08-10 PostgREST egress が全体の91.6%だった）
-  const [showAllCandidates, setShowAllCandidates] = useState(false)
-  const activePrioritySkills = showAllCandidates ? null : (prioritySkills ?? null)
+  // autoShowAll は「0件だったので自動で外した」状態。ユーザーの意思ではないので保存しない
+  const [autoShowAll, setAutoShowAll] = useState(false)
+  const showAllCandidates = !priorityPref.enabled || autoShowAll
+  const activePrioritySkills = autoShowAll ? null : resolvePrioritySkills(priorityPref, prioritySkills)
+  const togglePriorityFilter = () => {
+    if (showAllCandidates) {
+      setAutoShowAll(false)
+      updatePriorityPref({ ...priorityPref, enabled: true })
+    } else {
+      updatePriorityPref({ ...priorityPref, enabled: false })
+    }
+  }
 
   // 通常ブラウズ（検索なし）
   const browseInfiniteQuery = useInfiniteQuery({
@@ -1133,7 +1159,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const priorityCount = browseInfiniteQuery.data?.pages[0]?.totalCount ?? null
   useEffect(() => {
     if (!showAllCandidates && activePrioritySkills?.length && priorityCount === 0) {
-      setShowAllCandidates(true)
+      setAutoShowAll(true)
     }
   }, [showAllCandidates, activePrioritySkills, priorityCount])
 
@@ -1494,11 +1520,94 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   <span className="text-sm text-gray-600">年以上</span>
                 </div>
               </div>
+
+              {/* 表示優先スキル（この端末だけの設定・2026-08-21 ユーザー要望）。
+                  上の検索条件と違い、一覧を「まず誰を読み込むか」に効く常設の設定なので
+                  区切って置く。未設定なら設定画面（AI校正の優先スキル）の値をそのまま使う。 */}
+              <div className="pt-4 border-t border-gray-200">
+                <div className="flex items-baseline justify-between gap-2 mb-1">
+                  <label className="block text-xs font-medium text-gray-600">表示優先スキル（この端末だけ）</label>
+                  {filterDraft.prioritySkills !== null && (
+                    <button
+                      type="button"
+                      onClick={() => setFilterDraft(prev => ({ ...prev, prioritySkills: null, prioritySkillInput: '' }))}
+                      className="text-xs text-blue-600 hover:text-blue-800"
+                    >
+                      設定画面の既定に戻す
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mb-1.5">
+                  {filterDraft.prioritySkills === null
+                    ? `設定画面の既定に従っています（現在: ${prioritySkills?.length ? prioritySkills.join('・') : '絞り込みなし'}）`
+                    : filterDraft.prioritySkills.length === 0
+                      ? 'この端末では優先スキルで絞り込みません（全人材を読み込みます）'
+                      : 'この端末だけの設定です。ブラウザに保存され、次に開いたときも使われます'}
+                </p>
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {(filterDraft.prioritySkills ?? []).map(sk => (
+                    <span key={sk} className="flex items-center gap-1 bg-violet-50 text-violet-700 text-xs rounded-full px-2.5 py-1">
+                      {sk}
+                      <button
+                        type="button"
+                        onClick={() => setFilterDraft(prev => ({
+                          ...prev,
+                          prioritySkills: (prev.prioritySkills ?? []).filter(x => x !== sk),
+                        }))}
+                        className="hover:text-red-500"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  value={filterDraft.prioritySkillInput}
+                  onChange={e => {
+                    const val = e.target.value
+                    if (!val.endsWith(',')) {
+                      setFilterDraft(prev => ({ ...prev, prioritySkillInput: val }))
+                      return
+                    }
+                    setFilterDraft(prev => ({
+                      ...prev,
+                      prioritySkills: normalizePrioritySkills([...(prev.prioritySkills ?? []), val.slice(0, -1)]),
+                      prioritySkillInput: '',
+                    }))
+                  }}
+                  onKeyDown={e => {
+                    if (e.key !== 'Enter') return
+                    e.preventDefault()
+                    setFilterDraft(prev => ({
+                      ...prev,
+                      prioritySkills: normalizePrioritySkills([...(prev.prioritySkills ?? []), prev.prioritySkillInput]),
+                      prioritySkillInput: '',
+                    }))
+                  }}
+                  placeholder="例: Java（Enter または , で追加）"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                />
+                {filterDraft.prioritySkills === null && (
+                  <button
+                    type="button"
+                    onClick={() => setFilterDraft(prev => ({ ...prev, prioritySkills: [] }))}
+                    className="mt-2 text-xs text-gray-500 hover:text-gray-700 underline"
+                  >
+                    この端末では優先スキルを使わない
+                  </button>
+                )}
+              </div>
             </div>
             <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200">
               <button
                 type="button"
-                onClick={() => { setFilterDraft(EMPTY_DRAFT); setAppliedFilter({}); setShowFilterPopup(false) }}
+                onClick={() => {
+                  // 消すのは検索条件だけ。表示優先スキルは常設の端末設定なので残す
+                  setFilterDraft({ ...EMPTY_DRAFT, prioritySkills: priorityPref.skills })
+                  setAppliedFilter({})
+                  setShowFilterPopup(false)
+                }}
                 className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
               >
                 クリア
@@ -1532,7 +1641,21 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     if (skillYearFilters.length > 0) filter.skillYearFilters = skillYearFilters
                     if (filterDraft.prefecture) filter.prefecture = filterDraft.prefecture
                     if (filterDraft.expMin.trim() !== '') filter.expMin = parseInt(filterDraft.expMin, 10)
-                    setFilterDraft(prev => ({ ...prev, skills, skillYearFilters, skillInput: '' }))
+                    // 表示優先スキルも入力途中の語を取り込んで確定し、端末に保存する
+                    // 入力欄に打ちっぱなし（Enter未押下）の語も拾う。
+                    // 既定のまま何も打っていないときだけ null（＝設定画面に従う）を保つ
+                    const priorityTyped = filterDraft.prioritySkillInput.trim()
+                    const nextPriority = filterDraft.prioritySkills === null && !priorityTyped
+                      ? null
+                      : normalizePrioritySkills([...(filterDraft.prioritySkills ?? []), priorityTyped])
+                    // スキルを指定したのに絞り込みOFFのままでは効かないので、指定時はONに戻す。
+                    // 「0件だったので自動で外した」状態も、条件が変わったのでここで解除する
+                    setAutoShowAll(false)
+                    updatePriorityPref({
+                      enabled: nextPriority?.length ? true : priorityPref.enabled,
+                      skills: nextPriority,
+                    })
+                    setFilterDraft(prev => ({ ...prev, skills, skillYearFilters, skillInput: '', prioritySkills: nextPriority, prioritySkillInput: '' }))
                     setAppliedFilter(filter)
                     setShowFilterPopup(false)
                   }}
@@ -1668,31 +1791,34 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
           )}
           <AgentCompaniesModal />
           {/* 優先スキル絞り込みの ON/OFF（2026-08-20 ユーザー要望）。
-              既定は「優先スキルあり」。ここで外せるが**リロードすると既定に戻る**
-              （useState で持つだけで永続化しない）。
+              ON/OFF もスキルの中身も端末に保存するのでリロードしても戻らない（2026-08-21）。
               以前は一覧の最下部に「他の人材も表示」しか無く、しかも一方通行で
               優先スキルに戻せなかった。
-              設定側の優先スキルが0件のときは絞り込み自体が存在しないので出さない。 */}
-          {!isFiltered && (prioritySkills?.length ?? 0) > 0 && (
+              優先スキルが0件（設定画面・端末とも未設定）のときは絞り込み自体が存在しないので出さない。 */}
+          {!isFiltered && (effectivePrioritySkills?.length ?? 0) > 0 && (
             <button
               type="button"
-              onClick={() => setShowAllCandidates((v) => !v)}
+              onClick={togglePriorityFilter}
               className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors shrink-0 ${
                 showAllCandidates
                   ? 'border border-gray-300 text-gray-600 hover:bg-gray-50'
                   : 'bg-violet-600 text-white hover:bg-violet-700'
               }`}
               title={showAllCandidates
-                ? `優先スキル（${prioritySkills!.join('・')}）で絞り込む`
-                : '優先スキルの絞り込みを外して全人材を表示する（リロードで既定に戻ります）'}
+                ? `優先スキル（${effectivePrioritySkills!.join('・')}）で絞り込む`
+                : `優先スキルの絞り込みを外して全人材を表示する${priorityPref.skills ? '（この端末だけの設定を使用中）' : ''}`}
             >
-              {showAllCandidates ? '優先スキルで絞る' : `優先スキル: ${prioritySkills!.join('・')}`}
+              {showAllCandidates ? '優先スキルで絞る' : `優先スキル: ${effectivePrioritySkills!.join('・')}`}
             </button>
           )}
           {/* 絞り込みボタン */}
           <button
             type="button"
-            onClick={() => setShowFilterPopup(true)}
+            onClick={() => {
+              // 表示優先スキルは常設の端末設定。開くたびに保存済みの値へ揃える
+              setFilterDraft(prev => ({ ...prev, prioritySkills: priorityPref.skills, prioritySkillInput: '' }))
+              setShowFilterPopup(true)
+            }}
             className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors shrink-0 ${
               isFiltered
                 ? 'bg-blue-600 text-white hover:bg-blue-700'
@@ -1846,15 +1972,15 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
               {/* 優先スキルで絞っている間は、残りの人材へ必ず辿り着けるようにする。
                   絞り込み中であることと全体件数を明示して見落としを防ぐ。
                   外したあとも戻せるよう両方向にする（2026-08-20） */}
-              {!isFiltered && (prioritySkills?.length ?? 0) > 0 && (
+              {!isFiltered && (effectivePrioritySkills?.length ?? 0) > 0 && (
                 <button
                   type="button"
-                  onClick={() => setShowAllCandidates((v) => !v)}
+                  onClick={togglePriorityFilter}
                   className="w-full py-2.5 text-xs text-gray-600 hover:bg-gray-50 border-t border-gray-100 transition-colors"
                 >
                   {showAllCandidates
-                    ? `全人材を表示中 — 優先スキル（${prioritySkills!.join('・')}）で絞り込む`
-                    : `優先スキル（${prioritySkills!.join('・')}）で絞り込み中 — 他の人材も表示`}
+                    ? `全人材を表示中 — 優先スキル（${effectivePrioritySkills!.join('・')}）で絞り込む`
+                    : `優先スキル（${effectivePrioritySkills!.join('・')}）で絞り込み中 — 他の人材も表示`}
                 </button>
               )}
             </div>

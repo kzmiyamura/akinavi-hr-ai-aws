@@ -164,6 +164,11 @@ git add -A && git commit -m "fix: ..." && git push
 - **画面構成**: ナビは5タブ（マッチング/人材/案件/通知/設定）。`src/components/Layout.tsx` の `NAV_ITEMS` を正とする
 - **通知機能**: `notification_rules`（条件: 名前/スキル/駅のAND）に合致する人材が登録・更新されたら `notify-candidates` Edge Function（pg_cron 5分）が Graph sendMail でメール通知。二重通知は `notification_log` で防止。送信には Mail.Send スコープ（Microsoft再連携）が必要
 - **認証なし**: ニックネームを `localStorage` に保存
+- **表示優先スキル**: 既定は `app_config.llm_filter_skills`（設定画面「AI校正の優先スキル」＝常駐AIの解析対象と共有）。
+  人材画面の絞り込みポップアップから**端末ごとに上書き**でき、ON/OFF と中身を `localStorage`
+  （`akinavi.prioritySkills.v1`）に保存する。ロジックは `src/lib/prioritySkillPref.ts`。
+  認証が無くユーザーを識別できないため端末単位。AI校正バッジ（`aiCorrectionStage`）は
+  ワーカーの実際の対象を表すので**端末設定ではなく app_config の値**を使う
 - **重複管理**: email一致で自動UPDATE。名前一致 + スキルJaccard ≥ 0.4 で `duplicate_flag=true`
 
 ## ⚠ Egress を使わずに検証する（2026-08-14 ユーザー指示）
