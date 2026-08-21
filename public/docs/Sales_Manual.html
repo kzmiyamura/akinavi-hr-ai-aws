@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>操作マニュアル（営業向け） — AkiNavi HR-AI</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  body { font-family: "Hiragino Sans", "Yu Gothic", "Meiryo", system-ui, sans-serif;
+         font-size: 10.5pt; line-height: 1.75; color: #1f2937; max-width: 900px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20pt; border-bottom: 3px solid #2563eb; padding-bottom: 8px; margin-top: 0; }
+  h2 { font-size: 15pt; border-bottom: 1px solid #d1d5db; padding-bottom: 5px; margin-top: 28px;
+       page-break-after: avoid; }
+  h3 { font-size: 12.5pt; color: #1d4ed8; margin-top: 20px; page-break-after: avoid; }
+  code { font-family: "SF Mono", Consolas, monospace; font-size: 9.5pt;
+         background: #f3f4f6; padding: 1px 4px; border-radius: 3px; }
+  pre { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 3px solid #2563eb;
+        padding: 10px 12px; border-radius: 4px; overflow-x: auto; page-break-inside: avoid; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; page-break-inside: avoid; }
+  th, td { border: 1px solid #d1d5db; padding: 5px 9px; text-align: left; vertical-align: top; }
+  th { background: #f1f5f9; font-weight: 600; }
+  blockquote { border-left: 3px solid #fbbf24; background: #fffbeb; margin: 12px 0;
+               padding: 8px 14px; color: #78350f; }
+  blockquote p { margin: 4px 0; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
+  li { margin: 3px 0; }
+  a { color: #2563eb; }
+  .built { color: #9ca3af; font-size: 9pt; margin-bottom: 20px; }
+</style></head>
+<body><p class="built">AkiNavi HR-AI ／ 操作マニュアル（営業向け） ／ 2026-08-21 時点（docs/Sales_Manual.md から自動生成）</p>
+<h1>AkiNavi HR-AI 操作マニュアル</h1>
+<h3>営業担当者向け｜はじめて使う方へ</h3>
+<hr>
+<h2>まず最初に読んでください</h2>
+<p>このシステムは、<strong>「案件」と「人材」の相性をAIが自動で判断してくれるツール</strong>です。</p>
+<p>やることは、たった3ステップです。</p>
+<pre><code>1. 人材の情報をメールで転送する → 5分以内に自動登録
+2. 案件の情報をメールで転送する → 5分以内に自動登録
+3. 「マッチング結果」タブを見る → AIがおすすめ順に一覧表示
+</code></pre>
+<p><strong>メール転送が基本の登録方法です。</strong> 手元のメール（職務経歴書・案件概要など）をそのまま転送するだけで、AIが自動で内容を読み取って登録します。</p>
+<hr>
+<h2>はじめての起動（初回のみ）</h2>
+<h3>手順</h3>
+<p><strong>1. ブラウザでシステムのURLを開く</strong></p>
+<p>担当者から共有されたURLをブラウザ（Chrome推奨）で開いてください。</p>
+<hr>
+<p><strong>2. 名前の入力画面が出たら、自分の名前を入力する</strong></p>
+<blockquote>
+<p>例：田中、山田 など。誰が登録したかの記録に使われます。</p>
+</blockquote>
+<hr>
+<p><strong>3.「使いはじめる」ボタンを押す</strong></p>
+<p>これで準備完了です。次回から同じブラウザを使えば、名前の入力は不要です。</p>
+<blockquote>
+<p><strong>注意</strong>：別のパソコンや別のブラウザで開いた場合は、再度名前の入力が必要です。</p>
+</blockquote>
+<hr>
+<h2>画面の見方</h2>
+<p>画面の上部に<strong>4つのタブ</strong>があります。タブを押すことで画面が切り替わります。</p>
+<table>
+<thead>
+<tr>
+<th>タブ名</th>
+<th>何ができるか</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>マッチング</td>
+<td>AIが判断した「案件×人材」の相性スコアと理由を一覧で確認できる</td>
+</tr>
+<tr>
+<td>人材</td>
+<td>人材を登録する・一覧を見る・削除する。<strong>「人材マップ」ボタンから日本地図表示へ遷移できる</strong></td>
+</tr>
+<tr>
+<td>案件</td>
+<td>案件を登録する・一覧を見る</td>
+</tr>
+<tr>
+<td>設定</td>
+<td>メール連携・マッチング動作・改善案メモ・デモモード・全件削除（管理者向け）</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>以前は「人材マップ」と「設定」が独立した別タブでしたが、シンプル化のため統合しました（人材マップは「人材」タブ内のボタンから開きます）。</p>
+</blockquote>
+<hr>
+<h2>【基本】メールを転送して自動登録する</h2>
+<p>専用のメールアドレスに転送・送信するだけで、AIが自動で内容を解析・登録します。</p>
+<table>
+<thead>
+<tr>
+<th>登録したい種類</th>
+<th>転送先メールアドレス</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>人材として登録したい</td>
+<td><code>akinavi.hr.ai.voice.human@outlook.jp</code></td>
+</tr>
+<tr>
+<td>案件として登録したい</td>
+<td><code>akinavi.hr.ai.voice.project@outlook.jp</code></td>
+</tr>
+</tbody></table>
+<h3>操作手順</h3>
+<p><strong>1. 登録したい情報が書かれたメールを開く</strong></p>
+<p>職務経歴書・スキルシート・案件概要・要件定義書など、何でも構いません。</p>
+<hr>
+<p><strong>2. そのメールを上記の転送先に転送する</strong></p>
+<p>件名や本文はそのままで大丈夫です。特別な書式は不要です。</p>
+<hr>
+<p><strong>3. 数分後にシステムを開いて一覧を確認する</strong></p>
+<p>登録されるまで最大5分かかります。しばらく待ってから「人材登録」または「案件登録」タブの一覧を確認してください。</p>
+<hr>
+<h3>知っておくと便利なこと</h3>
+<ul>
+<li>メール本文にGoogleスプレッドシートやGoogleドキュメントのリンクが含まれている場合、「リンクを知っている全員が閲覧可」の設定になっていれば、そこからも情報を自動で読み取ります</li>
+<li>同じメールアドレスの人・案件を再転送すると、情報が最新に上書きされます（重複登録にはなりません）</li>
+<li>この機能が使えるかどうかは社内の設定によります。不明な場合は担当者に確認してください</li>
+</ul>
+<hr>
+<h2>マッチング結果を見る</h2>
+<p>人材と案件を登録したら、AIがどの組み合わせが良いかを自動で判断します。</p>
+<h3>手順</h3>
+<p><strong>1.「マッチング」タブを押す</strong>（通常、最初からこの画面が表示されます）</p>
+<hr>
+<p><strong>2. 表示方法を選ぶ</strong></p>
+<p>画面上部の切り替えで2種類の見方ができます。</p>
+<table>
+<thead>
+<tr>
+<th>表示</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>案件から見る</td>
+<td>案件ごとに「おすすめ人材（スコアが高い順）」が並ぶ</td>
+</tr>
+<tr>
+<td>人材から見る</td>
+<td>人材ごとに「おすすめ案件（スコアが高い順）」が並ぶ</td>
+</tr>
+</tbody></table>
+<hr>
+<p><strong>3. スコアを確認する</strong></p>
+<table>
+<thead>
+<tr>
+<th>スコア</th>
+<th>意味</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>80〜100</td>
+<td>非常に相性が良い</td>
+</tr>
+<tr>
+<td>60〜79</td>
+<td>まずまず相性が良い</td>
+</tr>
+<tr>
+<td>60未満</td>
+<td>あまり向いていない可能性がある</td>
+</tr>
+</tbody></table>
+<hr>
+<p><strong>4. AIの判断理由を確認する</strong></p>
+<p>スコアの下に「マッチング理由（AI）」が表示されます。スキルや経歴がどのように合致しているか、具体的に説明されています。</p>
+<hr>
+<p><strong>5. 結果が古い場合は「再実行」を押す</strong></p>
+<p>新しく人材・案件を登録した後は、その行の「<strong>再実行</strong>」ボタンを押すと最新の結果に更新されます。</p>
+<hr>
+<h2>参画を確定する</h2>
+<p>「この人にお願いしよう」と決まったら、マッチング結果のカードから記録できます。</p>
+<h3>手順</h3>
+<p><strong>1. マッチング結果のランキングカードにある「この人に決定」を押す</strong></p>
+<hr>
+<p><strong>2. カードに「参画確定」と表示されたら完了</strong></p>
+<blockquote>
+<p>同じ人材の他案件への提案は、自動で「不採用」に更新されます。</p>
+</blockquote>
+<blockquote>
+<p><strong>重要</strong>：AIのスコアや理由はあくまで参考です。最終的な判断は必ず担当者が行ってください。</p>
+</blockquote>
+<hr>
+<h2>【補足】手動で直接登録する</h2>
+<p>メール転送が使えない場合や、テキストを直接貼り付けたい場合はこちらを使ってください。</p>
+<h3>人材を手動登録する</h3>
+<p><strong>1.「人材」タブを押す</strong></p>
+<hr>
+<p><strong>2. 情報を入力する（2つの方法のうちどちらかを選ぶ）</strong></p>
+<p><strong>方法A：テキストを貼り付ける</strong></p>
+<p>メールの本文、職務経歴書のテキスト、スキルシートなどをコピーして、画面上の入力欄（大きい白いボックス）に貼り付けます。</p>
+<hr>
+<p><strong>方法B：ファイルをアップロードする</strong></p>
+<ol>
+<li>テキストエリアの下にある「<strong>Excel・Word を添付</strong>」ボタンを押す</li>
+<li>対応ファイルを選択する</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>ファイル種別</th>
+<th>処理方式</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Excel（.xlsx / .xls）</td>
+<td>全シートのセル内容をテキスト抽出して転記</td>
+</tr>
+<tr>
+<td>Word（.docx）</td>
+<td>本文テキストを抽出して転記</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>PDF と画像は現状ファイルアップロードに対応していません</strong>。テキストを手動でコピーして方法A（テキスト貼り付け）を使ってください。</p>
+</blockquote>
+<blockquote>
+<p>複数ファイルを同時に選択することもできます。テキスト貼り付けとファイル添付を組み合わせることも可能です。</p>
+</blockquote>
+<hr>
+<p><strong>3.「登録」ボタンを押す</strong></p>
+<p>メール受信時と同じ仕組みで内容を読み取り、名前・スキル・経歴などを整理して保存します（AI は使わず、辞書照合とパターンマッチで処理）。</p>
+<hr>
+<p><strong>4.「登録完了：○○さん」と表示されたら完了</strong></p>
+<p>一覧にカードが追加されます。</p>
+<hr>
+<h3>案件を手動登録する</h3>
+<p><strong>1.「案件」タブを押す</strong></p>
+<hr>
+<p><strong>2. 情報を入力する</strong></p>
+<p>テキストの貼り付け、Excel/Wordアップロードで入力できます（人材登録と同じ操作）。PDF と画像はアップロードに対応していません。</p>
+<p><strong>【場所】【単価】【時期】【備考】</strong> のような囲み記号付きラベルや、全角スペースを含むラベル（例: <code>単　価</code>）にも対応しています。</p>
+<hr>
+<p><strong>3.「登録」ボタンを押す</strong></p>
+<hr>
+<p><strong>4.「登録完了：○○」と表示されたら完了</strong></p>
+<hr>
+<h2>登録内容を修正する</h2>
+<p>AIの解析結果が間違っていたり、情報が変わった場合は、手動で編集できます。</p>
+<p><strong>人材の場合</strong>
+1.「人材」タブ → 一覧から該当のカードを押す
+2. 詳細画面右上の「編集」を押す
+3. 修正して保存する</p>
+<p><strong>案件の場合</strong>
+1.「案件」タブ → 一覧から該当のカードを押す
+2. 詳細画面右上の「編集」を押す
+3. 修正して保存する</p>
+<hr>
+<h2>便利な機能（人材・案件の一覧画面）</h2>
+<h3>データ再読み込みボタン</h3>
+<p>一覧画面の右上に <strong>🔄 アイコン</strong> があります。新しく登録した人材・案件が一覧に出ていないときに押すと、最新の状態に表示し直します。</p>
+<h3>検索スコープ切替（人材のみ）</h3>
+<p>人材一覧の検索ボックス横に <strong>タグ / 本文 / 全て</strong> の 3 つのボタンがあります。</p>
+<table>
+<thead>
+<tr>
+<th>ボタン</th>
+<th>何を検索するか</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>タグ</strong></td>
+<td>名前・スキル・希望単価・所属会社・居住地・最寄駅・現勤務地・要約・エージェントコメント・職種・業界（既定）</td>
+</tr>
+<tr>
+<td><strong>本文</strong></td>
+<td>元メール本文・添付テキストの中身のみ</td>
+</tr>
+<tr>
+<td><strong>全て</strong></td>
+<td>上記すべて</td>
+</tr>
+</tbody></table>
+<p>「Pythonの経験者をエンジニアコメント込みで探したい」「メール本文に〇〇という単語があった人を探したい」など、用途で切り替えてください。</p>
+<h3>再解析ボタン（人材詳細）</h3>
+<p>詳細画面の上部に <strong>「再解析」ボタン</strong> があります。元のメール本文を使って、もう一度自動解析をやり直します。<code>skill_master</code>（スキル辞書）に新しいスキルを追加した後などに活用してください。<strong>新しい候補者として再登録される</strong>ため、元のレコードはそのまま残ります。</p>
+<h3>返信ボタン</h3>
+<p>人材詳細の右上に <strong>「返信」ボタン</strong> があります。押すと、お使いのメールアプリで返信メールが下書きされ、元の差出人・件名・受信日時・本文先頭 800 字が自動で引用されます。</p>
+<h3>エージェントコメントの表示</h3>
+<p>人材詳細に <strong>黄色枠</strong> で「エージェント所感」「推薦コメント」「人物像」等のコメントが表示されます。元メールに該当する記述があれば自動的に抽出されています。</p>
+<h3>年齢・性別の表示</h3>
+<p>人材カードに <strong>「経験 X 年 ／ X歳（男性/女性）」</strong> が表示されます。メール本文に年齢・性別の記載があった場合のみ表示されます。</p>
+<h3>マッチング詳細パネル</h3>
+<p>マッチング結果のカードを開くと、右ペインに <strong>案件サマリー</strong>（必須スキル上位 10 件・予算・勤務地・リモート・開始日・案件概要）が表示されます。「この人材は本当にこの案件向きか」を素早く確認できます。</p>
+<h3>スコア色分け</h3>
+<p>マッチングスコアは色分けされます:</p>
+<table>
+<thead>
+<tr>
+<th>スコア</th>
+<th>色</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>80 以上</td>
+<td>緑</td>
+</tr>
+<tr>
+<td>60 以上</td>
+<td>黄</td>
+</tr>
+<tr>
+<td>60 未満</td>
+<td>灰</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>人材マップで地域分布を確認する</h2>
+<p>「人材」タブの上部にある <strong>「人材マップ」ボタン</strong>（地図アイコン）を押すと、登録済み人材を <strong>日本地図上で都道府県別に色分け</strong> して表示します。「東京に集中しているのか、地方の人材は何人いるか」が一目でわかります。</p>
+<h3>画面の見方</h3>
+<ul>
+<li><strong>地図</strong>: 都道府県を人数に応じて 薄青 → 濃青 で塗り分け（人数 0 は灰色）。マウスを乗せると都道府県名と人数が表示されます</li>
+<li><strong>ランキング</strong>（右側）: 人数の多い都道府県 Top10 を棒グラフで表示</li>
+<li><strong>集計サマリー</strong>（上部）: 「全人材：N 人　X 都道府県に分布」を表示</li>
+</ul>
+<h3>主な操作</h3>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>できること</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>期間切替</strong></td>
+<td>「直近 7 日」（既定）と「全期間」を切り替え。「全期間」を選ぶと過去にアーカイブされた人材も合算</td>
+</tr>
+<tr>
+<td><strong>スキル絞り込み</strong></td>
+<td>上部の入力欄に技術名を入力（例: <code>Java</code> / <code>AWS</code>）。候補リストから選択するか Enter で適用。「クリア」で解除</td>
+</tr>
+<tr>
+<td><strong>都道府県クリック</strong></td>
+<td>クリックした都道府県に地図がズームインし、画面下部に <strong>受信メール一覧（最大 10 件・新しい順）</strong> が展開されます。件名・氏名・受信日時を確認できます</td>
+</tr>
+<tr>
+<td><strong>詳細パネルを閉じる</strong></td>
+<td>詳細パネル右上の <code>×</code> ボタンをクリック（地図も元の縮尺に戻ります）</td>
+</tr>
+</tbody></table>
+<h3>よく使うシーン</h3>
+<ul>
+<li>「<strong>東北地方の人材を急ぎで探したい</strong>」→ 人材マップで東北 6 県を確認 → 該当県をクリックして候補者一覧を確認</li>
+<li>「<strong>Salesforce ができる人はどこに多い？</strong>」→ スキル絞り込みに <code>Salesforce</code> → 県ごとの分布を確認</li>
+<li>「<strong>過去 1 ヶ月の登録履歴を地域別に見たい</strong>」→ 「全期間」モードに切替</li>
+</ul>
+<h3>注意</h3>
+<ul>
+<li>「リモート可」「全国対応」などは都道府県情報として認識されないため地図には反映されません</li>
+<li>都道府県情報が <strong>「不明」</strong> の人材は地図には現れません（一覧画面では確認できます）</li>
+<li>アーカイブ済み（7 日以上経過）の人材は詳細パネル上で「アーカイブ」バッジが付きます</li>
+</ul>
+<hr>
+<h2>設定タブでできること</h2>
+<p>「設定」タブには、システム全体の動作を変える項目がまとまっています。</p>
+<h3>メールアドレス設定</h3>
+<p>人材用・案件用の専用 Outlook アドレスを表示します（参照のみ）。</p>
+<h3>Microsoft アカウント連携</h3>
+<p>Outlook を新しくつなぎ直したいときの <strong>「連携する」「連携解除」</strong> ボタンが並びます。担当エンジニア指示時のみ操作してください。</p>
+<h3>マッチング動作</h3>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>マッチング実行モード</strong></td>
+<td><code>高速モード</code>（既定）と <code>全件モード</code> を切替。<strong>高速</strong>: 上限件数だけ AI が採点して数秒で結果。<strong>全件</strong>: 全候補と照合するが時間がかかる</td>
+</tr>
+<tr>
+<td><strong>案件ごとの候補者上限</strong></td>
+<td>高速モード時、1 案件あたり何名まで AI 採点するかを設定（既定 20 名・1〜200 で変更可）</td>
+</tr>
+<tr>
+<td><strong>人材ごとの案件上限</strong></td>
+<td>高速モード時、1 人材あたり何件の案件まで AI 採点するかを設定（既定 10 件・1〜200 で変更可）</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>普段は「高速モード」のままで OK です。網羅的に確認したい時だけ「全件モード」に切り替えてください。</p>
+</blockquote>
+<h3>改善案・バグメモ（GitHub Issue 連携）</h3>
+<p>システムを使っていて「ここを改善してほしい」「これはバグでは？」と感じたら、テキストエリアにメモを書いて <strong>「Issue 登録」ボタン</strong>を押すだけで、開発チームに自動で報告できます。</p>
+<h4>操作</h4>
+<ol>
+<li>設定タブを開く</li>
+<li>「改善案・バグメモ」セクションのテキストエリアに自然文を貼り付け</li>
+<li>「Issue 登録」ボタンを押す</li>
+<li>しばらくすると下の一覧に「open」（赤丸）として表示されます</li>
+<li>対応済みの Issue はリンク先で確認・コメント可能</li>
+</ol>
+<h4>一覧の見方</h4>
+<table>
+<thead>
+<tr>
+<th>アイコン</th>
+<th>意味</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>赤丸 ●</td>
+<td>open（未対応）</td>
+</tr>
+<tr>
+<td>緑丸 ●</td>
+<td>closed（対応済み）</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>各 Issue 行をクリックすると GitHub のページが開きます。「クローズ」ボタンで自分で解決済みにできます。</p>
+</blockquote>
+<h3>デモモード</h3>
+<p>ヘッダーに「データ（prod / demo）」セレクタを表示するスイッチです。</p>
+<ul>
+<li><strong>OFF</strong>（既定）: 本番データのみ表示</li>
+<li><strong>ON</strong>: 本番／デモを切替可能（営業デモやサンプルデータ生成用）</li>
+</ul>
+<blockquote>
+<p>切替操作は担当者の指示があるときのみ行ってください。</p>
+</blockquote>
+<h3>データ全件削除（赤いボタン）</h3>
+<p><code>prod / demo</code> 別に <strong>人材・案件・提案履歴を完全削除</strong> できます。</p>
+<blockquote>
+<p><strong>不可逆操作です。</strong> 確認ダイアログで「削除する」を押すと元に戻せません。社内手順に従って実施してください。</p>
+</blockquote>
+<hr>
+<h2>よくある質問</h2>
+<p><strong>Q. 名前（ニックネーム）を変えたい</strong></p>
+<p>A. 画面右上の「名前変更」を押してください。次にページを開き直すと、もう一度入力できます。</p>
+<hr>
+<p><strong>Q. 間違えて登録した人材を削除したい</strong></p>
+<p>A.「人材」タブの一覧で、カード右下のゴミ箱ボタンを押してください。
+<strong>削除すると元に戻せないため、慎重に操作してください。</strong></p>
+<hr>
+<p><strong>Q. AIの解析内容が明らかに間違っている</strong></p>
+<p>A. 詳細画面の「編集」から手直しができます。AIの結果は参考情報のため、重要な内容は必ず目で確認・修正してください。</p>
+<hr>
+<p><strong>Q.「AI解析中...」のまま画面が止まった</strong></p>
+<p>A. ブラウザのページを再読み込み（F5 または Ctrl+R）して、もう一度お試しください。それでも改善しない場合は担当エンジニアへご連絡ください。</p>
+<hr>
+<p><strong>Q. 登録したはずのデータが見当たらない</strong></p>
+<p>A. 画面右上に「データ：prod / demo」の切り替えが表示されている場合、現在見ているデータ環境が違う可能性があります。「prod」を選択してご確認ください。一覧右上の <strong>🔄 再読み込みボタン</strong> を押すと最新の登録が表示されることもあります。切り替えが表示されていない場合は担当者にご連絡ください。</p>
+<hr>
+<p><strong>Q. マッチングを実行したが「即戦力」など実際のスコアと合わないコメントが出る</strong></p>
+<p>A. システムは <strong>「ルールベース事前フィルタ → 上位 10 名だけ AI が再採点」</strong> という 2 段階方式で動いており、AI が一時的に応答しなかった場合はルールスコアのみで結果を返します。一覧の右上に表示される「使用モデル」が <code>rule</code> になっている場合は AI 採点が失敗しています。時間を置いて再実行してください。</p>
+<hr>
+<p><strong>Q. 重複候補に出ている人を本当に「別人」として扱いたい</strong></p>
+<p>A. 重複マークが付いていてもマッチング対象から自動で除外されます（重複扱い）。「別人」と判断できる場合は、人材詳細の「重複解除」操作を担当者にお願いしてください（駅違いの候補者は自動的に別人とみなされます）。</p>
+<hr>
+<blockquote>
+<p>ご不明な点は社内の担当エンジニアまでお気軽にご連絡ください。</p>
+</blockquote>
+</body></html>

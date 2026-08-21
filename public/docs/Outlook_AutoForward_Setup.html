@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outlook自動転送設定 — AkiNavi HR-AI</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  body { font-family: "Hiragino Sans", "Yu Gothic", "Meiryo", system-ui, sans-serif;
+         font-size: 10.5pt; line-height: 1.75; color: #1f2937; max-width: 900px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20pt; border-bottom: 3px solid #2563eb; padding-bottom: 8px; margin-top: 0; }
+  h2 { font-size: 15pt; border-bottom: 1px solid #d1d5db; padding-bottom: 5px; margin-top: 28px;
+       page-break-after: avoid; }
+  h3 { font-size: 12.5pt; color: #1d4ed8; margin-top: 20px; page-break-after: avoid; }
+  code { font-family: "SF Mono", Consolas, monospace; font-size: 9.5pt;
+         background: #f3f4f6; padding: 1px 4px; border-radius: 3px; }
+  pre { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 3px solid #2563eb;
+        padding: 10px 12px; border-radius: 4px; overflow-x: auto; page-break-inside: avoid; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; page-break-inside: avoid; }
+  th, td { border: 1px solid #d1d5db; padding: 5px 9px; text-align: left; vertical-align: top; }
+  th { background: #f1f5f9; font-weight: 600; }
+  blockquote { border-left: 3px solid #fbbf24; background: #fffbeb; margin: 12px 0;
+               padding: 8px 14px; color: #78350f; }
+  blockquote p { margin: 4px 0; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
+  li { margin: 3px 0; }
+  a { color: #2563eb; }
+  .built { color: #9ca3af; font-size: 9pt; margin-bottom: 20px; }
+</style></head>
+<body><p class="built">AkiNavi HR-AI ／ Outlook自動転送設定 ／ 2026-08-21 時点（docs/Outlook_AutoForward_Setup.md から自動生成）</p>
+<h1>Outlook 自動転送設定マニュアル</h1>
+<h3>AkiNavi HR-AI への自動登録を Outlook から行う方法</h3>
+<hr>
+<h2>この資料でできるようになること</h2>
+<p>Outlook 上でメールを「人材」または「案件」フォルダに移動するだけで、<br><strong>自動的に AkiNavi HR-AI へ転送・登録される</strong>仕組みを作ります。</p>
+<pre><code>メールを受信
+  ↓
+「人材」フォルダへ移動（1クリック）
+  ↓
+自動で akinavi.hr.ai.voice.human@outlook.jp に転送
+  ↓
+AkiNavi HR-AI に自動登録（5分以内）
+</code></pre>
+<hr>
+<h2>設定方法は2種類あります</h2>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>向いている使い方</th>
+<th>難易度</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>A. クイック操作（推奨）</strong></td>
+<td>1クリックで「移動＋転送」を同時にしたい</td>
+<td>★☆☆ 簡単</td>
+</tr>
+<tr>
+<td><strong>B. 仕分けルール</strong></td>
+<td>条件（送信者・件名など）が決まっていて完全自動化したい</td>
+<td>★★☆ 普通</td>
+</tr>
+</tbody></table>
+<p><strong>迷ったら方法Aから始めてください。</strong></p>
+<hr>
+<h2>方法A：クイック操作（推奨）</h2>
+<p>「クイック操作」とは、複数の操作を1つのボタンにまとめる Outlook の機能です。<br>「このメールを人材フォルダに移動して、かつ転送もする」を1クリックで実現できます。</p>
+<hr>
+<h3>事前準備：フォルダを作る</h3>
+<p>まず Outlook の左側のフォルダ一覧に、振り分け先のフォルダを作ります。</p>
+<ol>
+<li>Outlook の左側のフォルダ一覧で、<strong>「受信トレイ」を右クリック</strong>
+2.「<strong>新しいフォルダーの作成</strong>」を選ぶ</li>
+<li>フォルダ名を「<strong>人材</strong>」と入力して Enter</li>
+<li>同じ手順でもう一つ「<strong>案件</strong>」フォルダを作る</li>
+</ol>
+<hr>
+<h3>人材用クイック操作の作成</h3>
+<p><strong>1. Outlook の「ホーム」タブを開く</strong></p>
+<p>画面上部のリボン（メニューバー）の「ホーム」をクリックします。</p>
+<hr>
+<p><strong>2.「クイック操作」の右下にある小さな矢印（∨）をクリック</strong></p>
+<p>「クイック操作」という欄が見つからない場合は、画面を横に広げると表示されます。</p>
+<hr>
+<p><strong>3.「新しいクイック操作」→「カスタム...」を選ぶ</strong></p>
+<hr>
+<p><strong>4. 名前を入力する</strong></p>
+<blockquote>
+<p>例：<code>人材登録</code></p>
+</blockquote>
+<hr>
+<p><strong>5. 最初のアクションを設定する：フォルダへ移動</strong></p>
+<p>1.「アクションの選択」のドロップダウンをクリック
+2.「<strong>フォルダーに移動する</strong>」を選ぶ
+3. 先ほど作った「<strong>人材</strong>」フォルダを選ぶ</p>
+<hr>
+<p><strong>6. 2つ目のアクションを追加する：転送</strong></p>
+<p>1.「<strong>アクションの追加</strong>」をクリック
+2.「<strong>転送先</strong>」を選ぶ
+3. 転送先に以下を入力する：</p>
+<pre><code>akinavi.hr.ai.voice.human@outlook.jp
+</code></pre>
+<hr>
+<p><strong>7.「完了」ボタンを押す</strong></p>
+<p>これで「人材登録」クイック操作が完成です。</p>
+<hr>
+<h3>案件用クイック操作の作成</h3>
+<p>同じ手順で「案件登録」も作ります。</p>
+<table>
+<thead>
+<tr>
+<th>設定項目</th>
+<th>入力内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>名前</td>
+<td><code>案件登録</code></td>
+</tr>
+<tr>
+<td>アクション①</td>
+<td>フォルダーに移動 → 「案件」</td>
+</tr>
+<tr>
+<td>アクション②</td>
+<td>転送先 → <code>akinavi.hr.ai.voice.project@outlook.jp</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h3>使い方</h3>
+<p><strong>1. 登録したいメールを1通選ぶ（クリックして青くする）</strong></p>
+<hr>
+<p><strong>2. 「ホーム」タブのクイック操作一覧から「人材登録」または「案件登録」を押す</strong></p>
+<p>これだけです。自動でフォルダへ移動＋転送が完了します。</p>
+<hr>
+<p><strong>3. 5分後に AkiNavi HR-AI を開いて登録されているか確認する</strong></p>
+<hr>
+<hr>
+<h2>方法B：仕分けルール（条件が決まっている場合）</h2>
+<p>特定の送信者からのメールや、件名に特定の言葉が入っているメールを<br><strong>完全自動で転送したい</strong>場合はこちらを使います。</p>
+<blockquote>
+<p>例：「○○人材エージェント」からのメールは常に人材として自動転送したい</p>
+</blockquote>
+<hr>
+<h3>人材用ルールの作成</h3>
+<p><strong>1. 「ホーム」タブ →「ルール」→「仕分けルールと通知の管理」をクリック</strong></p>
+<hr>
+<p><strong>2.「新しいルール」をクリック</strong></p>
+<hr>
+<p><strong>3.「受信メッセージにルールを適用する」を選び、「次へ」</strong></p>
+<hr>
+<p><strong>4. 条件を選ぶ</strong></p>
+<p>転送したいメールの条件にチェックを入れます。</p>
+<table>
+<thead>
+<tr>
+<th>よく使う条件</th>
+<th>使い方</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>「差出人が次の場合」</td>
+<td>特定の送信者からのメールだけ転送したい</td>
+</tr>
+<tr>
+<td>「件名に次の文字が含まれる場合」</td>
+<td>件名に「スキルシート」「候補者」などが入っていたら転送したい</td>
+</tr>
+</tbody></table>
+<p>チェックを入れたら、青い下線部分をクリックして具体的な値を設定します。</p>
+<p>「次へ」をクリック。</p>
+<hr>
+<p><strong>5. 処理を選ぶ（2つにチェックを入れる）</strong></p>
+<p>① 「<strong>フォルダーに移動する</strong>」にチェック → 「人材」フォルダを選ぶ</p>
+<p>② 「<strong>次のアドレスに転送する</strong>」にチェック → 以下を入力：</p>
+<pre><code>akinavi.hr.ai.voice.human@outlook.jp
+</code></pre>
+<p>「次へ」をクリック。</p>
+<hr>
+<p><strong>6. 例外条件は特になければそのまま「次へ」</strong></p>
+<hr>
+<p><strong>7. ルールに名前をつけて「完了」</strong></p>
+<blockquote>
+<p>例：<code>AkiNavi 人材自動転送</code></p>
+</blockquote>
+<hr>
+<h3>案件用ルールの作成</h3>
+<p>同じ手順で案件用ルールも作ります。</p>
+<table>
+<thead>
+<tr>
+<th>設定項目</th>
+<th>入力内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>ルール名</td>
+<td><code>AkiNavi 案件自動転送</code></td>
+</tr>
+<tr>
+<td>条件</td>
+<td>案件メールに合った条件を選ぶ</td>
+</tr>
+<tr>
+<td>アクション①</td>
+<td>フォルダーに移動 → 「案件」</td>
+</tr>
+<tr>
+<td>アクション②</td>
+<td>転送先 → <code>akinavi.hr.ai.voice.project@outlook.jp</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>よくある質問</h2>
+<p><strong>Q. クイック操作のボタンが見当たらない</strong></p>
+<p>A. Outlook の画面幅が狭いと表示されないことがあります。ウィンドウを横に広げるか、リボンの「ホーム」タブを確認してください。</p>
+<hr>
+<p><strong>Q. 転送したのに AkiNavi HR-AI に登録されない</strong></p>
+<p>A. 以下を確認してください。</p>
+<ol>
+<li>転送先のメールアドレスが正確か（コピー＆ペーストで入力することを推奨）</li>
+<li>転送後5分以上待ったか</li>
+<li>AkiNavi HR-AI の「人材登録」または「案件登録」タブの一覧を**再読み込み（F5）**したか</li>
+</ol>
+<p>それでも登録されない場合は、担当エンジニアに連絡してください。</p>
+<hr>
+<p><strong>Q. 1通のメールを人材と案件の両方に転送してしまった</strong></p>
+<p>A. 問題ありません。人材用アドレスに転送したメールは人材として、案件用アドレスに転送したメールは案件として、それぞれ別に登録されます。</p>
+<hr>
+<p><strong>Q. 転送先のアドレスをメモしておきたい</strong></p>
+<p>A. 以下の2つです。</p>
+<table>
+<thead>
+<tr>
+<th>種類</th>
+<th>転送先</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>人材登録</td>
+<td><code>akinavi.hr.ai.voice.human@outlook.jp</code></td>
+</tr>
+<tr>
+<td>案件登録</td>
+<td><code>akinavi.hr.ai.voice.project@outlook.jp</code></td>
+</tr>
+</tbody></table>
+<hr>
+<blockquote>
+<p>ご不明な点は社内の担当エンジニアまでお気軽にご連絡ください。</p>
+</blockquote>
+</body></html>

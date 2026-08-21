@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/build_docs_pdf.mjs --html && tsc -b && vite build",
+    "docs": "node scripts/build_docs_pdf.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest",
@@ -41,6 +42,7 @@
     "d3-geo": "^3.1.1",
     "lucide-react": "^1.14.0",
     "mammoth": "^1.12.0",
+    "marked": "^18.0.10",
     "pdfjs-dist": "^5.6.205",
     "postcss": "^8.5.12",
     "react": "^19.2.5",

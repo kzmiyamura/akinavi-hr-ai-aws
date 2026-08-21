@@ -5,9 +5,9 @@
 // 同じ入力（経歴書xlsx・メール本文）を LLMルーター(Haiku→検証→Sonnet)で解析して
 // llm_shadow テーブルに並記録する。本番フィールドには一切書き込まない。
 //
-// 起動:
-//   source ~/.akinavi_shadow.env   # SUPABASE_URL / SUPABASE_SERVICE_KEY
-//   nohup node scripts/llm_extract/shadow_worker.mjs >> ~/akinavi_shadow.log 2>&1 & disown
+// 起動（環境変数は ~/.akinavi_shadow.env から自動で読む。SUPABASE_URL / SUPABASE_SERVICE_KEY）:
+//   Windows: pm2 start scripts/llm_extract/shadow_worker.mjs --name akinavi-shadow
+//   Mac/Linux: nohup node scripts/llm_extract/shadow_worker.mjs >> ~/akinavi_shadow.log 2>&1 & disown
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -23,9 +23,25 @@ import {
   shouldSkipBodyLlm,
 } from './shadow_worker_lib.mjs'
 
+// 環境変数が無ければ ~/.akinavi_shadow.env から読む。
+// 他の llm_extract スクリプト（correct_candidate.mjs 等）は元からこの読み方で、
+// ワーカーだけが `source` 前提だった。Windows の PowerShell には source が無く、
+// pm2 で常駐させるときに環境変数を渡す手段が別途必要になっていたため揃える。
+// 既に process.env にある値は上書きしない（pm2 --update-env での上書き運用を壊さない）。
+for (const line of (() => {
+  try { return fs.readFileSync(path.join(os.homedir(), '.akinavi_shadow.env'), 'utf8').split('\n') } catch { return [] }
+})()) {
+  const m = line.match(/(?:export\s+)?(\w+)=(.*)/)
+  if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '')
+}
+
 const SUPABASE_URL = process.env.SUPABASE_URL
 const KEY = process.env.SUPABASE_SERVICE_KEY
-if (!SUPABASE_URL || !KEY) { console.error('SUPABASE_URL / SUPABASE_SERVICE_KEY を設定してください'); process.exit(1) }
+if (!SUPABASE_URL || !KEY) {
+  console.error('SUPABASE_URL / SUPABASE_SERVICE_KEY を設定してください')
+  console.error('（環境変数、または ~/.akinavi_shadow.env に2行書く。docs/HandsOn_Setup.md 第9章）')
+  process.exit(1)
+}
 
 const STATE_FILE = path.join(os.homedir(), '.akinavi_shadow_state.json')
 const CYCLE_MS = 5 * 60 * 1000

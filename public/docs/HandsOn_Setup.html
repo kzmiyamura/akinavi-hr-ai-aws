@@ -1,0 +1,1371 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>環境構築ガイド — AkiNavi HR-AI</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  body { font-family: "Hiragino Sans", "Yu Gothic", "Meiryo", system-ui, sans-serif;
+         font-size: 10.5pt; line-height: 1.75; color: #1f2937; max-width: 900px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20pt; border-bottom: 3px solid #2563eb; padding-bottom: 8px; margin-top: 0; }
+  h2 { font-size: 15pt; border-bottom: 1px solid #d1d5db; padding-bottom: 5px; margin-top: 28px;
+       page-break-after: avoid; }
+  h3 { font-size: 12.5pt; color: #1d4ed8; margin-top: 20px; page-break-after: avoid; }
+  code { font-family: "SF Mono", Consolas, monospace; font-size: 9.5pt;
+         background: #f3f4f6; padding: 1px 4px; border-radius: 3px; }
+  pre { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 3px solid #2563eb;
+        padding: 10px 12px; border-radius: 4px; overflow-x: auto; page-break-inside: avoid; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; page-break-inside: avoid; }
+  th, td { border: 1px solid #d1d5db; padding: 5px 9px; text-align: left; vertical-align: top; }
+  th { background: #f1f5f9; font-weight: 600; }
+  blockquote { border-left: 3px solid #fbbf24; background: #fffbeb; margin: 12px 0;
+               padding: 8px 14px; color: #78350f; }
+  blockquote p { margin: 4px 0; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
+  li { margin: 3px 0; }
+  a { color: #2563eb; }
+  .built { color: #9ca3af; font-size: 9pt; margin-bottom: 20px; }
+</style></head>
+<body><p class="built">AkiNavi HR-AI ／ 環境構築ガイド ／ 2026-08-21 時点（docs/HandsOn_Setup.md から自動生成）</p>
+<h1>AkiNavi HR-AI 環境構築ガイド</h1>
+<p>このガイドに沿って作業すると、<strong>メール自動取り込みと AI 処理を含むシステム全体</strong>を新しい環境でゼロから動かせます。</p>
+<ul>
+<li><strong>想定PC</strong>: Windows 10 / 11</li>
+<li><strong>作業時間の目安</strong>: 4〜7時間（初回）</li>
+<li><strong>前提知識</strong>: 不要。ターミナルの開き方から説明します</li>
+</ul>
+<hr>
+<h2>全体の流れ</h2>
+<pre><code>第1章: Claude Code を用意する（会社アカウント）   ← まずここ
+  ↓
+第2章: Outlookアカウントを4つ作る
+  ↓
+第3章: 開発ツールの準備・ソースコードの取得
+  ↓
+第4章: データベースの作成（Supabase）
+  ↓
+第5章: AIのAPIキーを取る（Cerebras / Groq / Gemini）
+  ↓
+第6章: サーバー機能のデプロイ（Edge Functions）
+  ↓
+第7章: メール自動取り込みの設定（Azure + Microsoft Graph API）
+  ↓
+第8章: 本番サイトの公開（Vercel）
+  ↓
+第9章: AIワーカーを常駐させる（会社のClaudeに切り替える）
+</code></pre>
+<blockquote>
+<p>第2〜8章は Vercel と Supabase のダッシュボード上の作業が中心です。
+第1章と第9章だけは<strong>このシステムを動かすPC</strong>での作業になります。</p>
+</blockquote>
+<hr>
+<h2>このシステムで「AI」と呼んでいるもの</h2>
+<p>AI が2種類あり、<strong>別のもの</strong>です。混同すると設定を間違えるので最初に整理します。</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>何をするか</th>
+<th>どこで動くか</th>
+<th>何を使うか</th>
+<th>章</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>① マッチングの点数付け</strong></td>
+<td>案件と人材の相性を0〜100点で採点する</td>
+<td>Supabase のサーバー</td>
+<td>Cerebras → Groq → Gemini（3段）</td>
+<td>第5章</td>
+</tr>
+<tr>
+<td><strong>② 人材・案件の読み取りと所見</strong></td>
+<td>経歴書を読んで項目を直す／案件文を補う／「この人はここが効く」という所見を書く</td>
+<td><strong>社内PC（このガイドのPC）</strong></td>
+<td><strong>Claude Code</strong></td>
+<td>第1章・第9章</td>
+</tr>
+</tbody></table>
+<p>②が今回「私の Claude から会社の Claude に入れ替える」対象です。
+具体的には、社内PCで動く常駐プログラム（シャドーワーカー）が Claude Code を呼び出して、</p>
+<ul>
+<li><strong>人材</strong>: メール本文と経歴書を読み直して、氏名・年齢・経験年数・スキル年数などを補正する</li>
+<li><strong>案件</strong>: 案件メールから抜けた項目を埋める</li>
+<li><strong>マッチング</strong>: 提案ごとに「この案件はこういう人でないと通らない」「この方はこの経験が効く」という所見を書く</li>
+<li><strong>Box取込</strong>: Box に置かれた経歴書を取ってきて解析する</li>
+</ul>
+<p>を実行しています。<strong>このPCで Claude Code がログインしているアカウントの枠が消費されます。</strong> だから会社アカウントに切り替える必要があります。</p>
+<hr>
+<h2>第1章　Claude Code を用意する</h2>
+<h3>1-0. Claude と Claude Code の違い</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>何か</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Claude</strong></td>
+<td>Anthropic 社の AI。ブラウザ（claude.ai）やスマホアプリで会話できる</td>
+</tr>
+<tr>
+<td><strong>Claude Code</strong></td>
+<td>同じ Claude を<strong>PCのコマンドから呼び出せるようにしたソフト</strong>。ファイルを読んだり、プログラムから自動で呼び出したりできる</td>
+</tr>
+</tbody></table>
+<p>このシステムが使うのは <strong>Claude Code</strong> のほうです。
+料金は Claude の契約（Pro / Max などのサブスクリプション）に含まれます。<strong>会社で契約したアカウントでログインすれば、その会社の枠が使われます。</strong></p>
+<blockquote>
+<p><strong>今なぜ切り替えるのか</strong>
+現在は個人の Claude アカウントでログインした状態で動いています。人材・案件・マッチングの AI 処理が動くたびに個人の利用枠が減っていくため、会社アカウントに切り替えます。</p>
+</blockquote>
+<h3>1-1. ターミナル（コマンドを打つ画面）を開く</h3>
+<p>「ターミナル」は、マウスではなく<strong>文字でPCに命令する画面</strong>です。Windows では <strong>PowerShell</strong> を使います。</p>
+<p><strong>開き方（どちらでもOK）</strong></p>
+<ul>
+<li><strong>方法A</strong>: キーボードの <code>Windows</code> キーを押す → <code>powershell</code> と入力 → 「<strong>Windows PowerShell</strong>」をクリック</li>
+<li><strong>方法B</strong>: キーボードの <code>Windows</code> キーと <code>X</code> キーを同時に押す → メニューから「<strong>ターミナル</strong>」または「<strong>Windows PowerShell</strong>」をクリック</li>
+</ul>
+<p>黒い（または紺色の）画面が開き、次のような行が出ていれば成功です。</p>
+<pre><code>PS C:\Users\あなたの名前&gt;
+</code></pre>
+<p>この <code>&gt;</code> の右側に文字を打って <code>Enter</code> キーを押すと、命令が実行されます。</p>
+<blockquote>
+<p><strong>この先の説明の読み方</strong>
+グレーの枠に囲まれた行は、<strong>そのままコピーしてターミナルに貼り付けて <code>Enter</code></strong> を押してください。
+貼り付けは <code>Ctrl</code> + <code>V</code>、またはマウスの<strong>右クリック</strong>でできます。
+打ち間違いを防ぐため、手で打たずコピーすることを強くおすすめします。</p>
+</blockquote>
+<p><strong>困ったときのために覚えておくこと</strong></p>
+<table>
+<thead>
+<tr>
+<th>やりたいこと</th>
+<th>操作</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>実行中の処理を止める</td>
+<td><code>Ctrl</code> + <code>C</code></td>
+</tr>
+<tr>
+<td>画面をきれいにする</td>
+<td><code>cls</code> と入力して <code>Enter</code></td>
+</tr>
+<tr>
+<td>直前に打った命令を出す</td>
+<td><code>↑</code> キー</td>
+</tr>
+<tr>
+<td>ターミナルを閉じる</td>
+<td><code>exit</code> と入力して <code>Enter</code>、または右上の ×</td>
+</tr>
+</tbody></table>
+<h3>1-2. Node.js をインストールする</h3>
+<p>Claude Code は <strong>Node.js</strong> というソフトの上で動きます。先にこれを入れます。</p>
+<p>ターミナルに次を貼り付けて <code>Enter</code>:</p>
+<pre><code class="language-powershell">winget install OpenJS.NodeJS.LTS
+</code></pre>
+<p>インストールが終わったら、<strong>ターミナルを一度閉じて開き直してください</strong>（新しくインストールしたソフトは、開き直さないと認識されません）。</p>
+<p>開き直したら、入ったかを確認します:</p>
+<pre><code class="language-powershell">node --version
+</code></pre>
+<p><code>v20.19.0</code> のように <strong>v から始まる数字</strong>が表示されれば成功です。</p>
+<blockquote>
+<p><code>winget</code> が「認識されていません」と出る場合は Windows が古い可能性があります。
+その場合は <code>https://nodejs.org</code> を開き、<strong>LTS</strong> と書かれた方のボタンからインストーラーをダウンロードして、画面の指示どおり「次へ」を押し続けてください。</p>
+</blockquote>
+<h3>1-3. Claude Code をインストールする</h3>
+<pre><code class="language-powershell">npm install -g @anthropic-ai/claude-code
+</code></pre>
+<p>1〜3分かかります。途中で警告（黄色い文字）が出ても、最後にエラーで止まらなければ問題ありません。</p>
+<p>終わったら<strong>またターミナルを閉じて開き直し</strong>、確認します:</p>
+<pre><code class="language-powershell">claude --version
+</code></pre>
+<p><code>2.1.238 (Claude Code)</code> のような表示が出れば成功です。</p>
+<h3>1-4. 会社の Claude アカウントでログインする</h3>
+<p><strong>まず、今どのアカウントでログインしているか確認します。</strong></p>
+<pre><code class="language-powershell">claude auth status
+</code></pre>
+<p>個人アカウントのメールアドレスが表示されるはずです。<strong>これを会社アカウントに入れ替えます。</strong></p>
+<hr>
+<p><strong>1. 今のアカウントからログアウトする</strong></p>
+<pre><code class="language-powershell">claude auth logout
+</code></pre>
+<hr>
+<p><strong>2. 会社アカウントでログインする</strong></p>
+<pre><code class="language-powershell">claude auth login
+</code></pre>
+<p>ブラウザが自動で開きます。<strong>会社で作ってもらった Claude アカウント</strong>でログインし、画面の指示に従って許可してください。</p>
+<blockquote>
+<p>ブラウザが自動で開かない場合は、ターミナルに表示された <code>https://...</code> で始まるURLをコピーして、自分でブラウザのアドレス欄に貼り付けてください。
+<strong>すでに個人アカウントでブラウザにログインしている場合</strong>は、そのまま進むと個人アカウントで繋がってしまいます。
+ブラウザで先に個人アカウントからサインアウトするか、<strong>シークレットウィンドウ</strong>（<code>Ctrl</code> + <code>Shift</code> + <code>N</code>）でURLを開いてください。</p>
+</blockquote>
+<hr>
+<p><strong>3. 会社アカウントに変わったことを確認する</strong></p>
+<pre><code class="language-powershell">claude auth status
+</code></pre>
+<p><strong>会社のメールアドレス</strong>が表示されていればOKです。個人のアドレスのままなら、もう一度 1 からやり直してください。</p>
+<h3>1-5. ちゃんと動くか試す</h3>
+<pre><code class="language-powershell">claude -p &quot;こんにちは。1+1は？&quot;
+</code></pre>
+<p><code>2</code> といった返事が返ってくれば、AI が正しく呼び出せています。</p>
+<blockquote>
+<p><code>-p</code> は「画面で会話せずに、答えだけ返す」という意味のオプションです。
+このシステムのワーカーも、この <code>claude -p</code> の形で AI を呼び出しています。</p>
+</blockquote>
+<p>うまくいかないときは、次で状態を調べられます:</p>
+<pre><code class="language-powershell">claude doctor
+</code></pre>
+<h3>1-6. よくあるつまずき</h3>
+<table>
+<thead>
+<tr>
+<th>症状</th>
+<th>原因と対処</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>claude</code> は認識されていません</td>
+<td>ターミナルを閉じて開き直す。それでも駄目なら 1-3 をもう一度実行</td>
+</tr>
+<tr>
+<td><code>npm</code> は認識されていません</td>
+<td>Node.js が入っていない。1-2 をやり直し、必ずターミナルを開き直す</td>
+</tr>
+<tr>
+<td>ログインしても個人アカウントのまま</td>
+<td>ブラウザ側が個人アカウントでログイン済み。シークレットウィンドウでやり直す</td>
+</tr>
+<tr>
+<td><code>Usage limit reached</code> と出る</td>
+<td>その時間帯の利用枠を使い切っている。時間をおくか、会社の契約プランを確認する</td>
+</tr>
+<tr>
+<td>途中で止まって戻ってこない</td>
+<td><code>Ctrl</code> + <code>C</code> で中断してやり直す</td>
+</tr>
+</tbody></table>
+<h3>完了チェック</h3>
+<ul>
+<li><input disabled="" type="checkbox"> PowerShell を開けるようになった</li>
+<li><input disabled="" type="checkbox"> <code>node --version</code> でバージョンが表示される</li>
+<li><input disabled="" type="checkbox"> <code>claude --version</code> でバージョンが表示される</li>
+<li><input disabled="" type="checkbox"> <code>claude auth status</code> で<strong>会社の</strong>メールアドレスが表示される</li>
+<li><input disabled="" type="checkbox"> <code>claude -p &quot;こんにちは&quot;</code> で返事が返ってくる</li>
+</ul>
+<hr>
+<h2>第2章　Outlookメールアドレスを4つ作る</h2>
+<h3>なぜ4つ必要か</h3>
+<p>このシステムは、専用のメールアドレスに転送・送信されたメールを自動で解析してデータベースに保存します。<br>用途ごとに別のメールアドレスを使うため、合計4つ必要です。</p>
+<table>
+<thead>
+<tr>
+<th>用途</th>
+<th>例</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>人材情報の受信（本番用）</td>
+<td><code>yourname.hr.human@outlook.jp</code></td>
+</tr>
+<tr>
+<td>案件情報の受信（本番用）</td>
+<td><code>yourname.hr.project@outlook.jp</code></td>
+</tr>
+<tr>
+<td>人材情報の受信（デモ用）</td>
+<td><code>yourname.hr.human.dev@outlook.jp</code></td>
+</tr>
+<tr>
+<td>案件情報の受信（デモ用）</td>
+<td><code>yourname.hr.project.dev@outlook.jp</code></td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong><code>yourname</code> の部分は自分で決めた名前や識別子に置き換えてください。</strong><br>例：会社名・サービス名・自分のイニシャルなど。他の人がすでに使っているアドレスは取得できないため、ユニークになるよう工夫してください。<br>例：<code>akinavi.hr.human@outlook.jp</code>、<code>tanaka2024.hr.human@outlook.jp</code> など</p>
+</blockquote>
+<blockquote>
+<p><strong>すべて同じ Microsoft アカウントではなく、それぞれ別のアカウントとして作成してください。</strong> 1アカウント = 1メールアドレスです。</p>
+</blockquote>
+<h3>なぜ Outlook（Microsoft）でないといけないのか</h3>
+<p>このシステムのメール自動取り込みは、<strong>Microsoft Graph API</strong> という仕組みを使ってメールを取得しています。<br>Microsoft Graph API は <strong>Microsoft のメールサービス（Outlook / Hotmail / Live）専用</strong> のAPIです。</p>
+<table>
+<thead>
+<tr>
+<th>メールサービス</th>
+<th>使えるか</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Outlook / Hotmail / Live（<code>@outlook.jp</code> / <code>@outlook.com</code> など）</td>
+<td><strong>使える</strong></td>
+<td>Microsoft Graph API に対応している</td>
+</tr>
+<tr>
+<td>Gmail（<code>@gmail.com</code>）</td>
+<td><strong>使えない</strong></td>
+<td>Google のサービスのため Graph API が使えない</td>
+</tr>
+<tr>
+<td>Yahoo!メール</td>
+<td><strong>使えない</strong></td>
+<td>同上</td>
+</tr>
+<tr>
+<td>会社の独自ドメインメール</td>
+<td>条件次第</td>
+<td>Microsoft 365（旧Office 365）のメールであれば対応可能だが設定が複雑になる</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>Gmail などを使いたい場合は、このシステムの <code>poll-email</code> Edge Function を Gmail の API（Google Workspace API）向けに作り直す必要があります。現状は対応していません。</p>
+</blockquote>
+<h3>作成手順（1アカウントあたり）</h3>
+<p><strong>1. Microsoftアカウント作成ページを開く</strong></p>
+<p>ブラウザで <code>https://outlook.com</code> を開き、「無料アカウントを作成」をクリック。</p>
+<hr>
+<p><strong>2. メールアドレスを決める</strong></p>
+<p>「新しいメールアドレスを取得」を選び、希望のメールアドレスを入力して「次へ」。</p>
+<hr>
+<p><strong>3. パスワード・名前・生年月日などを設定して完了</strong></p>
+<hr>
+<p><strong>4. 同じ手順を繰り返す</strong></p>
+<p>上記を 4回繰り返し、4つのアカウントを作成する。</p>
+<blockquote>
+<p><strong>重要</strong>: 4つのメールアドレスと、それぞれのパスワードをメモしておいてください。後の章で使います。</p>
+</blockquote>
+<h3>完了チェック</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Outlookアカウントを4つ作成した</li>
+<li><input disabled="" type="checkbox"> 4つのメールアドレスとパスワードをメモした</li>
+</ul>
+<hr>
+<h2>第3章　必要なツールの準備・ソースコードへのアクセス</h2>
+<h3>3-1. 必要なツールをインストールする</h3>
+<p>第1章で Node.js は入っているので、残り2つを入れます。ターミナル（PowerShell）を開いて実行してください。</p>
+<hr>
+<p><strong>Git</strong>（ソースコードをダウンロードするツール）</p>
+<pre><code class="language-powershell">winget install Git.Git
+</code></pre>
+<p>インストール後は<strong>ターミナルを閉じて開き直してから</strong>確認します。</p>
+<pre><code class="language-powershell">git --version
+</code></pre>
+<p><code>git version 2.51.0</code> のように表示されればOKです。</p>
+<hr>
+<p><strong>Supabase CLI</strong>（サーバー機能をデプロイするツール）</p>
+<p>Supabase CLI は Scoop というインストーラー経由で入れます。まず Scoop を入れます。</p>
+<pre><code class="language-powershell">Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
+</code></pre>
+<blockquote>
+<p>1行目は「インターネットから取得したスクリプトの実行を許可する」設定です。<code>Y</code> を聞かれたら <code>Y</code> を入力して <code>Enter</code>。</p>
+</blockquote>
+<p>続いて Supabase CLI 本体:</p>
+<pre><code class="language-powershell">scoop bucket add supabase https://github.com/supabase/scoop-bucket.git
+scoop install supabase
+</code></pre>
+<p>確認:</p>
+<pre><code class="language-powershell">supabase --version
+</code></pre>
+<p>バージョンが表示されればOKです。</p>
+<blockquote>
+<p><strong>Mac で作業する場合</strong>は <code>brew install supabase/tap/supabase</code> で入ります。
+Git は Mac に最初から入っていることが多く、<code>git --version</code> で確認できます。</p>
+</blockquote>
+<h3>3-2. GitHubアカウントを作成する</h3>
+<p>「GitHub」とは、プログラムのソースコードを保管・管理するためのサービスです。ソースコードをダウンロードするために必要です。</p>
+<p><strong>1. <code>https://github.com</code> を開いて「Sign up」からアカウントを作成する</strong></p>
+<p>すでにアカウントがある場合はこの手順はスキップしてください。</p>
+<hr>
+<p><strong>2. 作成したGitHubアカウントのユーザー名をメモする</strong></p>
+<p>後の手順で担当者に伝える必要があります。</p>
+<h3>3-3. ソースコードへのアクセス権を担当者に依頼する</h3>
+<blockquote>
+<p><strong>重要</strong>: このシステムのソースコード（<code>akinavi-hr-ai</code>）は<strong>非公開（Private）リポジトリ</strong>です。<br>担当者に許可してもらわないと、ソースコードをダウンロードすることができません。</p>
+</blockquote>
+<p><strong>担当者に以下を伝えてください:</strong></p>
+<pre><code>GitHubのユーザー名: （3-2でメモしたユーザー名）
+理由: akinavi-hr-ai のソースコードへのアクセス権（Collaborator）を付与してほしい
+</code></pre>
+<p>担当者が GitHub のリポジトリ設定からあなたを招待します。<br>招待メールが届いたら「Accept invitation」をクリックして承諾してください。</p>
+<blockquote>
+<p>アクセス権が付与されるまでこの先の手順は進められません。担当者の対応を待ってください。</p>
+</blockquote>
+<h3>3-4. ソースコードをダウンロードする</h3>
+<p>アクセス権が付与されたら、ソースコードをダウンロードします。</p>
+<p>まず、置き場所にするフォルダへ移動します（ここではデスクトップ）。</p>
+<pre><code class="language-powershell">cd $HOME\Desktop
+</code></pre>
+<p>ダウンロードします。</p>
+<pre><code class="language-powershell">git clone https://github.com/kzmiyamura/akinavi-hr-ai-aws.git
+cd akinavi-hr-ai-aws
+</code></pre>
+<p>初回はブラウザか入力欄で GitHub のログインを求められます。第3章 3-2 で作ったアカウントでログインしてください。</p>
+<blockquote>
+<p><strong>これ以降のコマンドは、すべてこのフォルダの中で実行します。</strong>
+ターミナルを開き直したら、先に <code>cd $HOME\Desktop\akinavi-hr-ai-aws</code> を実行して戻ってきてください。
+今どこにいるかは <code>pwd</code> で確認できます。</p>
+</blockquote>
+<h3>完了チェック</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Git をインストールした</li>
+<li><input disabled="" type="checkbox"> Supabase CLI をインストールした</li>
+<li><input disabled="" type="checkbox"> GitHubアカウントを作成し、ユーザー名をメモした</li>
+<li><input disabled="" type="checkbox"> 担当者にアクセス権を依頼し、招待を承諾した</li>
+<li><input disabled="" type="checkbox"> <code>git clone</code> でソースコードをダウンロードした</li>
+</ul>
+<hr>
+<h2>第4章　データベースの作成（Supabase）</h2>
+<p>「データベース」とは、人材情報・案件情報などのデータを保存する場所です。このシステムでは <strong>Supabase</strong>（無料で使えるデータベースサービス）を使います。</p>
+<h3>4-1. Supabaseにサインアップ・プロジェクトを作成する</h3>
+<p><strong>1. <code>https://supabase.com</code> を開いてアカウントを作成する</strong></p>
+<p>「Start your project」をクリック → GitHubアカウントでサインアップすると簡単です。</p>
+<hr>
+<p><strong>2. 新しいプロジェクトを作成する</strong></p>
+<p>ダッシュボードの「New project」をクリックし、以下を入力して「Create new project」。</p>
+<ul>
+<li><strong>Name</strong>: 任意（例: <code>akinavi-hr-ai</code>）</li>
+<li><strong>Database Password</strong>: 自分でパスワードを設定（<strong>メモしておく</strong>）</li>
+<li><strong>Region</strong>: <code>Northeast Asia (Tokyo)</code> を選択</li>
+</ul>
+<p>プロジェクトの作成が完了するまで1〜2分待ちます。</p>
+<hr>
+<p><strong>3. 接続情報をメモする</strong></p>
+<p>プロジェクトが作成されたら、左メニューの「Settings」→「API」を開く。</p>
+<p>以下の3つをメモしてください（第8章のVercel設定で使います）:</p>
+<table>
+<thead>
+<tr>
+<th>メモするもの</th>
+<th>場所</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Project URL</strong></td>
+<td>「Project URL」の欄</td>
+<td>アプリからDBへの接続先</td>
+</tr>
+<tr>
+<td><strong>anon（公開）キー</strong></td>
+<td>「Project API keys」の「anon」の欄</td>
+<td>アプリがDBに接続するための鍵</td>
+</tr>
+<tr>
+<td><strong>service_role キー</strong></td>
+<td>「Project API keys」の「service_role」の欄</td>
+<td>サーバー機能がDBを操作するための鍵（<strong>絶対に他人に見せない</strong>）</td>
+</tr>
+</tbody></table>
+<h3>4-2. データベースのテーブルを作成する</h3>
+<p>「テーブル」とは、データベースの中の表（Excel のシートのようなもの）です。SQLという命令文を実行して作成します。</p>
+<p><strong>1. Supabase ダッシュボードの「SQL Editor」を開く</strong></p>
+<p>左メニューの「SQL Editor」をクリック。</p>
+<hr>
+<p><strong>2. <code>supabase/schema.sql</code> の中身を貼り付けて実行する</strong></p>
+<p>ダウンロードしたソースコードの <code>supabase/schema.sql</code> をテキストエディタで開き、<strong>全文をコピー</strong>して SQL Editor に貼り付け、「Run」をクリック。</p>
+<p>エラーが出なければOKです。</p>
+<hr>
+<p><strong>3. 追加のSQLファイルを順番に実行する</strong></p>
+<p><code>supabase/migrations/</code> に <strong>111 個</strong>の SQL ファイルがあります（2026-08-21 時点）。
+これを<strong>ファイル名の昇順で全部</strong>実行します。1つずつ手で貼るのは現実的でないので、コマンドでまとめて流します。</p>
+<p>まず Supabase CLI をこのプロジェクトに繋ぎます（第6章 6-1・6-2 を先にやっても構いません）。</p>
+<pre><code class="language-powershell">supabase login
+supabase link --project-ref （Reference ID）
+</code></pre>
+<p>つないだら、まとめて実行します。</p>
+<pre><code class="language-powershell">Get-ChildItem supabase\migrations\*.sql | Sort-Object Name | ForEach-Object {
+  Write-Host &quot;--- $($_.Name)&quot;
+  supabase db query --linked -f $_.FullName
+}
+</code></pre>
+<blockquote>
+<p><strong>Mac / Linux の場合</strong></p>
+<pre><code class="language-bash">for f in $(ls supabase/migrations/*.sql | sort); do echo &quot;--- $f&quot;; supabase db query --linked -f &quot;$f&quot;; done
+</code></pre>
+</blockquote>
+<blockquote>
+<p><strong><code>supabase db push</code> は使いません。</strong> このプロジェクトのマイグレーションは
+Supabase の管理テーブルと同期していないため、<code>db query</code> で1本ずつ流すのが正です。</p>
+</blockquote>
+<hr>
+<p><strong>4. 途中でエラーが出たときの見方</strong></p>
+<p>全部が一発で通るとは限りません。次の2つは<strong>無視して先に進んで構いません</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>メッセージ</th>
+<th>意味</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>already exists</code></td>
+<td>すでに作られている。二重実行なので問題なし</td>
+</tr>
+<tr>
+<td><code>does not exist</code>（DROP 系）</td>
+<td>まだ無いものを消そうとしただけ。問題なし</td>
+</tr>
+</tbody></table>
+<p>それ以外のエラーは、<strong>そのファイル名を控えて</strong>最後にもう一度流してください。
+後のファイルが作ったものに依存している場合、2周目で通ります。</p>
+<pre><code class="language-powershell">supabase db query --linked -f supabase\migrations\（エラーになったファイル名）
+</code></pre>
+<hr>
+<p><strong>5. <code>*_cron.sql</code> だけは書き換えが必要</strong></p>
+<p>ファイル名に <code>_cron</code> が付くものは、中に <code>YOUR_PROJECT_REF</code> / <code>YOUR_SERVICE_ROLE_KEY</code> という<strong>穴埋め箇所</strong>があります。
+メモ帳などで開いて、第4章 4-1 でメモした値に置き換えてから実行してください。</p>
+<table>
+<thead>
+<tr>
+<th>ファイル</th>
+<th>何のスケジュールか</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>add_email_polling_cron.sql</code></td>
+<td>5分ごとのメール取得（第7章で設定します）</td>
+</tr>
+<tr>
+<td><code>add_auto_match_cron.sql</code></td>
+<td>毎朝 JST 9:00 の自動マッチング</td>
+</tr>
+<tr>
+<td><code>add_skill_cleanup_cron.sql</code></td>
+<td>毎日 JST 3:00 のスキルマスタ整理</td>
+</tr>
+<tr>
+<td><code>add_archive_candidates_cron.sql</code></td>
+<td>毎日 JST 0:00 の人材アーカイブ（人材マップ用）</td>
+</tr>
+<tr>
+<td><code>add_enrich_cron.sql</code></td>
+<td>Box 連携の再解析（Box を使う場合のみ）</td>
+</tr>
+</tbody></table>
+<hr>
+<p><strong>6. 実行できたか確認する</strong></p>
+<p>Supabase ダッシュボードの「SQL Editor」で次を実行してください。</p>
+<pre><code class="language-sql">SELECT count(*) AS テーブル数 FROM information_schema.tables WHERE table_schema = &#39;public&#39;;
+SELECT count(*) AS スキルマスタ件数 FROM skill_master;
+SELECT count(*) AS 駅マスタ件数 FROM station_master;
+</code></pre>
+<ul>
+<li>テーブル数が <strong>15 以上</strong></li>
+<li>スキルマスタが <strong>900 件以上</strong></li>
+<li>駅マスタが <strong>12,000 行以上</strong></li>
+</ul>
+<p>になっていれば、マイグレーションは通っています。</p>
+<blockquote>
+<p>駅マスタが 0 件のままだと、最寄駅から都道府県を推定できず勤務地のマッチングが効きません。
+<code>station_master</code> 系のマイグレーションが流れているか確認してください。</p>
+</blockquote>
+<h3>完了チェック</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Supabaseのプロジェクトを作成した</li>
+<li><input disabled="" type="checkbox"> Project URL・anon キー・service_role キーをメモした</li>
+<li><input disabled="" type="checkbox"> <code>schema.sql</code> を実行した</li>
+<li><input disabled="" type="checkbox"> <code>supabase/migrations/</code> 配下を<strong>全て</strong>ファイル名順に実行した</li>
+<li><input disabled="" type="checkbox"> <code>*_cron.sql</code> 系は <code>YOUR_PROJECT_REF</code> / <code>YOUR_SERVICE_ROLE_KEY</code> を置換した上で実行した</li>
+<li><input disabled="" type="checkbox"> テーブル数・skill_master・station_master の件数を確認した</li>
+</ul>
+<hr>
+<h2>第5章　AIの設定（APIキーの取得）</h2>
+<blockquote>
+<p><strong>重要</strong>: 2026-05-19 のコミット <code>139a4f2</code> でメール解析（<code>inbound-email</code>）から AI 利用が完全に除去され、コミット <code>a4dc3b4</code> でデッドコードも削除されました。
+2026-05-22 のコミット <code>b35df40</code> で新しい <strong><code>match-batch</code></strong> Edge Function が導入され、マッチング処理は「ルールベース事前フィルタ + バッチ AI 採点」方式になりました。
+現在 AI を使うのは <strong>マッチング処理（<code>match-batch</code> / <code>match-score</code> / <code>auto-match</code>）</strong> と <strong><code>poll-email</code> メール種別分類（任意・既定 OFF）</strong> だけです。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>AI</th>
+<th>主な用途</th>
+<th>必須度</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Cerebras</td>
+<td><code>match-batch</code> / <code>match-score</code> の <strong>1 段目</strong>（軽量・実質無制限）</td>
+<td>推奨（高速化に寄与）</td>
+</tr>
+<tr>
+<td>Groq</td>
+<td><code>match-batch</code> / <code>match-score</code> の <strong>2 段目</strong>（高精度モデル <code>llama-3.3-70b-versatile</code>）</td>
+<td>◎ 必須</td>
+</tr>
+<tr>
+<td>Gemini</td>
+<td><code>match-batch</code> / <code>match-score</code> の <strong>最終フォールバック</strong>・<code>poll-email</code> 種別分類</td>
+<td>◎ 必須</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>取得したAPIキーは第6章と第8章でまとめて登録します。ここではメモするだけでOKです。</strong>
+3 段すべて失敗してもルールスコアで全代替されるため、システム自体は止まりませんが、AI 採点なしでは品質が落ちるので必ず Groq と Gemini は登録してください。</p>
+</blockquote>
+<h3>5-1. Gemini APIキーを取得する（必須）</h3>
+<p><strong>1. <code>https://aistudio.google.com</code> をブラウザで開く</strong></p>
+<p>Googleアカウントでログインします。</p>
+<hr>
+<p><strong>2. 「Get API key」をクリック</strong></p>
+<hr>
+<p><strong>3. 「Create API key」をクリックしてAPIキーを発行する</strong></p>
+<p>表示されたキー（<code>AIza...</code> のような文字列）をメモしてください。</p>
+<blockquote>
+<p>Gemini はプリペイド制（従量課金）です。無料枠はありません。クレジット切れの場合は <code>auto-match</code> のスコア計算が失敗します。</p>
+</blockquote>
+<h3>5-2. Groq APIキーを取得する（必須）</h3>
+<p>Groq は <code>match-score</code>（手動マッチング）の 2 段目モデル（<code>llama-3.3-70b-versatile</code>）として使います。無料枠は 500K tokens/日（JST 9:00 リセット）で、マッチング用なら約 300 ペア/日に相当します。</p>
+<p><strong>1. <code>https://console.groq.com</code> をブラウザで開く</strong></p>
+<p>アカウントを作成（または Google アカウントでログイン）します。</p>
+<hr>
+<p><strong>2. 「API Keys」→「Create API Key」でキーを発行する</strong></p>
+<p>表示されたキー（<code>gsk_...</code> のような文字列）をメモしてください。</p>
+<h3>5-3. Cerebras APIキーを取得する（推奨）</h3>
+<p>Cerebras は <code>match-score</code> の 1 段目（軽量モデル <code>llama3.1-8b</code>）として使います。無料枠が非常に大きいため実質無制限で、ここで成功すれば Groq を消費しません。</p>
+<p><strong>1. <code>https://cloud.cerebras.ai</code> をブラウザで開く</strong></p>
+<p>アカウントを作成（または Google アカウントでログイン）します。</p>
+<hr>
+<p><strong>2. 「API Keys」→「Generate API Key」でキーを発行する</strong></p>
+<p>表示されたキーをメモしてください。</p>
+<h3>完了チェック</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Google AI Studio で Gemini APIキーを取得し、メモした（必須）</li>
+<li><input disabled="" type="checkbox"> Groq で APIキーを取得し、メモした（必須）</li>
+<li><input disabled="" type="checkbox"> Cerebras で APIキーを取得し、メモした（推奨）</li>
+</ul>
+<hr>
+<h2>第6章　サーバー機能のデプロイ（Edge Functions）</h2>
+<p>「Edge Functions」とは、Supabase のサーバー上で動くプログラムです。<br>このシステムでは以下の Edge Functions をデプロイします。</p>
+<table>
+<thead>
+<tr>
+<th>Edge Function</th>
+<th>役割</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>inbound-email</code></td>
+<td>メール解析（AI 不使用・regex + DB 照合のみ。<code>station_master</code> / <code>skill_master</code> はデプロイ物に同梱）</td>
+</tr>
+<tr>
+<td><code>poll-email</code></td>
+<td>Outlook のメール取得（5 分ごと cron）</td>
+</tr>
+<tr>
+<td><code>auto-match</code></td>
+<td>毎朝 JST 9:00 の自動マッチング（<code>match-batch</code> を内部呼び出し）</td>
+</tr>
+<tr>
+<td><code>match-batch</code></td>
+<td>バッチ AI 採点（ルールスコア上位のみ 1 コールで採点）</td>
+</tr>
+<tr>
+<td><code>match-score</code></td>
+<td>画面から呼ばれる単発スコア計算</td>
+</tr>
+<tr>
+<td><code>archive-candidates</code></td>
+<td>7 日経過人材のアーカイブ（毎日 JST 0:00 cron・人材マップ用）</td>
+</tr>
+<tr>
+<td><code>notify-candidates</code></td>
+<td>人材ウォッチ通知メール送信（5 分ごと cron）</td>
+</tr>
+<tr>
+<td><code>microsoft-oauth</code></td>
+<td>Microsoft アカウント連携（OAuth コールバック）</td>
+</tr>
+<tr>
+<td><code>enrich-candidate</code></td>
+<td>Box 連携・再解析（Box 運用時のみ）</td>
+</tr>
+<tr>
+<td><code>skill-master-cleanup</code></td>
+<td>skill_master の毎日クリーンアップ</td>
+</tr>
+<tr>
+<td><code>cleanup-storage</code></td>
+<td>添付ファイル Storage の掃除</td>
+</tr>
+<tr>
+<td><code>create-github-issue</code></td>
+<td>設定画面の「改善案・バグメモ」→ GitHub Issue</td>
+</tr>
+<tr>
+<td><code>verify-agent-license</code></td>
+<td>派遣・職業紹介の許可番号チェック</td>
+</tr>
+<tr>
+<td><code>hf-proxy</code></td>
+<td>外部モデル呼び出しの中継</td>
+</tr>
+</tbody></table>
+<h3>6-1. Supabase CLIでログインする</h3>
+<pre><code class="language-bash">npx supabase login
+</code></pre>
+<p>ブラウザが自動で開くのでログインしてください。</p>
+<h3>6-2. このプロジェクトに接続する</h3>
+<p>「Reference ID」（プロジェクトID）を Supabase ダッシュボードの「Settings」→「General」→「Reference ID」で確認してメモしてください。</p>
+<pre><code class="language-bash">cd akinavi-hr-ai
+npx supabase link --project-ref （Reference IDを貼り付け）
+</code></pre>
+<h3>6-3. Edge Functions をデプロイする</h3>
+<p><code>supabase/functions/</code> にあるものを全部デプロイします。</p>
+<pre><code class="language-powershell">Get-ChildItem supabase\functions -Directory | ForEach-Object {
+  Write-Host &quot;--- $($_.Name)&quot;
+  supabase functions deploy $_.Name
+}
+</code></pre>
+<blockquote>
+<p><strong>Mac / Linux の場合</strong></p>
+<pre><code class="language-bash">for d in supabase/functions/*/; do n=$(basename &quot;$d&quot;); echo &quot;--- $n&quot;; supabase functions deploy &quot;$n&quot;; done
+</code></pre>
+</blockquote>
+<p>1つだけデプロイし直したいときは関数名を指定します。</p>
+<pre><code class="language-powershell">supabase functions deploy inbound-email
+</code></pre>
+<blockquote>
+<p><strong><code>inbound-email</code> を直したときは、必ず型検査つきのスクリプトを使ってください。</strong></p>
+<pre><code class="language-powershell">bash scripts/check-and-deploy-edge.sh inbound-email
+</code></pre>
+<p>未定義変数（TS2304）を検知して、エラーがあればデプロイを中止します。</p>
+</blockquote>
+<p>それぞれ「Deployed」と表示されればOKです。</p>
+<blockquote>
+<p><strong>デプロイ前に型検査したい場合</strong>は <code>npm run check:edge &lt;function&gt;</code> を使うと <code>deno check</code> で TS2304（未定義変数）を検知し、エラーがあればデプロイを中止できます。<code>npm run deploy:edge &lt;function&gt;</code> で「型検査 + デプロイ」をまとめて実行できます。引数を省略すると <code>inbound-email</code> を対象とします。</p>
+</blockquote>
+<h3>6-4. Secrets（機密情報）を登録する</h3>
+<p>「Secrets」とは、サーバー上のプログラムが使うAPIキーやパスワードを安全に保管する場所です。<br>Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add new secret」から登録します。</p>
+<p><strong>今すぐ登録するもの</strong></p>
+<table>
+<thead>
+<tr>
+<th>Secret名</th>
+<th>値</th>
+<th>必須</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GEMINI_API_KEY</code></td>
+<td>第5章でメモしたGemini APIキー（<code>auto-match</code> 等で使用）</td>
+<td>◎</td>
+</tr>
+<tr>
+<td><code>GROQ_API_KEY</code></td>
+<td>第5章でメモしたGroq APIキー（<code>match-score</code> で使用）</td>
+<td>◎</td>
+</tr>
+<tr>
+<td><code>CEREBRAS_API_KEY</code></td>
+<td>第5章でメモしたCerebras APIキー（<code>match-score</code> 1 段目）</td>
+<td>推奨</td>
+</tr>
+<tr>
+<td><code>INBOUND_CALL_KEY</code></td>
+<td>第4章でメモした service_role キー</td>
+<td>◎</td>
+</tr>
+<tr>
+<td><code>GITHUB_TOKEN</code></td>
+<td>GitHub Personal Access Token（<code>repo</code> スコープ）。<code>create-github-issue</code> Edge Function 用</td>
+<td>Issue 連携を使う場合</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><code>SUPABASE_URL</code> と <code>SUPABASE_SERVICE_ROLE_KEY</code> は Supabase が自動で設定するため、手動登録は不要です。もしエラーが出る場合は手動で追加してください。<br><code>inbound-email</code> は AI を使わなくなったため、上記の API キーがなくてもメール解析自体は動きます。ただしマッチング処理が動かないと意味がないので必ず設定してください。</p>
+</blockquote>
+<p><strong>第7章で追加登録するもの（今はスキップ）</strong></p>
+<table>
+<thead>
+<tr>
+<th>Secret名</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GRAPH_CLIENT_ID</code></td>
+<td>第7章で取得</td>
+</tr>
+<tr>
+<td><code>GRAPH_CLIENT_SECRET</code></td>
+<td>第7章で取得</td>
+</tr>
+<tr>
+<td><code>GRAPH_REFRESH_TOKEN_HUMAN</code></td>
+<td>第7章で取得</td>
+</tr>
+<tr>
+<td><code>GRAPH_REFRESH_TOKEN_PROJECT</code></td>
+<td>第7章で取得</td>
+</tr>
+<tr>
+<td><code>GRAPH_REFRESH_TOKEN_HUMAN_DEV</code></td>
+<td>第7章で取得</td>
+</tr>
+<tr>
+<td><code>GRAPH_REFRESH_TOKEN_PROJECT_DEV</code></td>
+<td>第7章で取得</td>
+</tr>
+</tbody></table>
+<p><strong>Box 連携を使う場合のみ</strong></p>
+<table>
+<thead>
+<tr>
+<th>Secret名</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GOOGLE_SERVICE_ACCOUNT_JSON</code></td>
+<td>Box → Drive 移送用キュー（スプレッドシート）アクセス</td>
+</tr>
+<tr>
+<td><code>BOX_SPREADSHEET_ID</code></td>
+<td>キュー用スプレッドシート ID</td>
+</tr>
+</tbody></table>
+<p><strong>GitHub Token の取得手順</strong>（Issue 連携を使う場合のみ）</p>
+<ol>
+<li><code>https://github.com/settings/tokens</code> を開き「Generate new token (classic)」を選択</li>
+<li>「Note」に任意の説明（例: <code>akinavi-issue-edge-function</code>）、「Expiration」を設定</li>
+<li>「Select scopes」で <code>repo</code>（フルアクセス）にチェック</li>
+<li>「Generate token」をクリックして表示された文字列（<code>ghp_...</code>）を Supabase Secrets <code>GITHUB_TOKEN</code> に登録</li>
+<li><strong><code>supabase/functions/create-github-issue/index.ts</code> の <code>REPO</code> 定数</strong>（既定: <code>kzmiyamura/akinavi-hr-ai-aws</code>）を、自分のリポジトリに合わせて変更する場合はコード修正 + 再デプロイ</li>
+</ol>
+<h3>完了チェック</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <code>supabase login</code> が完了した</li>
+<li><input disabled="" type="checkbox"> <code>supabase link</code> でプロジェクトに接続した</li>
+<li><input disabled="" type="checkbox"> 全Edge Functions（14個）をデプロイした</li>
+<li><input disabled="" type="checkbox"> <code>GEMINI_API_KEY</code>・<code>GROQ_API_KEY</code>・<code>CEREBRAS_API_KEY</code>・<code>INBOUND_CALL_KEY</code> を Secrets に登録した</li>
+<li><input disabled="" type="checkbox"> （任意）Issue 連携を使う場合は <code>GITHUB_TOKEN</code> も登録した</li>
+</ul>
+<hr>
+<h2>第7章　メール自動取り込みの設定</h2>
+<p>この章では、第2章で作成した4つのOutlookアカウントと、このシステムを連携させます。<br>「5分ごとに未読メールを自動で取得・解析・保存する」という仕組みを作ります。</p>
+<p>設定には3つのステップがあります。</p>
+<pre><code>① Azureにアプリを登録する（接続許可の設定）
+② 各Outlookアカウントのリフレッシュトークンを取得する
+③ Supabaseにスケジューラを登録する
+</code></pre>
+<h3>7-1. Azureにアプリを登録する</h3>
+<p>「Azure」は Microsoft のクラウドサービスです。ここでアプリを登録することで、このシステムがOutlookにアクセスする許可を得ます。<strong>Microsoftアカウントがあれば無料で使えます。</strong></p>
+<p><strong>1. <code>https://portal.azure.com</code> をブラウザで開く</strong></p>
+<p>Microsoftアカウント（Outlookアカウントのどれかでも可）でログインします。</p>
+<hr>
+<p><strong>2. 「Microsoft Entra ID」を検索して開く</strong></p>
+<p>上部の検索バーに「Microsoft Entra ID」と入力して選択します。</p>
+<hr>
+<p><strong>3. 「アプリの登録」→「新規登録」をクリック</strong></p>
+<hr>
+<p><strong>4. 以下を入力して「登録」をクリック</strong></p>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>入力内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>名前</td>
+<td>任意（例: <code>akinavi-mail-reader</code>）</td>
+</tr>
+<tr>
+<td>サポートされるアカウントの種類</td>
+<td>「<strong>個人用 Microsoft アカウントのみ</strong>」を選択</td>
+</tr>
+<tr>
+<td>リダイレクト URI</td>
+<td>「Web」を選び、<code>http://localhost</code> と入力</td>
+</tr>
+</tbody></table>
+<hr>
+<p><strong>5. クライアントIDをメモする</strong></p>
+<p>登録完了画面に表示される「<strong>アプリケーション（クライアント）ID</strong>」をメモします。</p>
+<hr>
+<p><strong>6. クライアントシークレットを作成する</strong></p>
+<p>左メニュー「証明書とシークレット」→「新しいクライアントシークレット」→ 説明を入力して「追加」。</p>
+<p>表示された「<strong>値</strong>」をメモします。<br><strong>この画面を閉じると二度と確認できないので必ずメモしてください。</strong></p>
+<hr>
+<p><strong>7. APIの権限を追加する</strong></p>
+<p>左メニュー「APIのアクセス許可」→「アクセス許可の追加」→「Microsoft Graph」→「委任されたアクセス許可」で以下を検索して追加:</p>
+<ul>
+<li><code>Mail.Read</code></li>
+<li><code>Mail.ReadWrite</code></li>
+</ul>
+<p>追加後、「（テナント名）に管理者の同意を与えます」のボタンが表示される場合はクリックしてください。</p>
+<hr>
+<p>この時点でメモしたもの:</p>
+<ul>
+<li>クライアントID → Supabase Secrets の <code>GRAPH_CLIENT_ID</code> に登録</li>
+<li>クライアントシークレットの値 → Supabase Secrets の <code>GRAPH_CLIENT_SECRET</code> に登録</li>
+</ul>
+<p>今すぐ Supabase ダッシュボード → 「Edge Functions」→「Secrets」に登録してください。</p>
+<h3>7-2. 各Outlookアカウントのリフレッシュトークンを取得する</h3>
+<p>「リフレッシュトークン」とは、このシステムがOutlookにアクセスし続けるための認証情報です。<br>4つのアカウント分を取得します。</p>
+<p><strong>1. 以下のURLをブラウザで開く</strong></p>
+<p><code>（クライアントID）</code> の部分を 7-1 でメモしたクライアントIDに置き換えてください。</p>
+<pre><code>https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=（クライアントID）&amp;response_type=code&amp;redirect_uri=http://localhost&amp;scope=offline_access%20Mail.Read%20Mail.ReadWrite
+</code></pre>
+<hr>
+<p><strong>2. 1つ目のOutlookアカウント（人材用・本番）でログインする</strong></p>
+<p>ログインするとブラウザが <code>http://localhost/?code=（長い文字列）</code> というURLに遷移します。<br>（ページは表示されませんが問題ありません）</p>
+<p>アドレスバーの <code>code=</code> 以降の文字列を全部コピーしてメモします。</p>
+<hr>
+<p><strong>3. コードをリフレッシュトークンに変換する</strong></p>
+<p>ターミナルで以下を実行します（<code>（...）</code> 部分を実際の値に置き換え）:</p>
+<pre><code class="language-bash">curl -X POST https://login.microsoftonline.com/consumers/oauth2/v2.0/token \
+  -d &quot;client_id=（クライアントID）&quot; \
+  -d &quot;client_secret=（クライアントシークレット）&quot; \
+  -d &quot;redirect_uri=http://localhost&quot; \
+  -d &quot;grant_type=authorization_code&quot; \
+  -d &quot;code=（コピーしたcode）&quot; \
+  -d &quot;scope=offline_access Mail.Read Mail.ReadWrite&quot;
+</code></pre>
+<p>返ってきたJSON の <code>&quot;refresh_token&quot;</code> の値をメモします。これが <strong>リフレッシュトークン</strong>です。</p>
+<hr>
+<p><strong>4. 残り3アカウント分も繰り返す</strong></p>
+<p>同じ手順を残り3つのアカウントで繰り返します。ブラウザで別のアカウントにログインするときは、<strong>一度ログアウトしてから</strong>次のアカウントでログインしてください。</p>
+<table>
+<thead>
+<tr>
+<th>アカウント</th>
+<th>Secretキー名</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>人材用・本番</td>
+<td><code>GRAPH_REFRESH_TOKEN_HUMAN</code></td>
+</tr>
+<tr>
+<td>案件用・本番</td>
+<td><code>GRAPH_REFRESH_TOKEN_PROJECT</code></td>
+</tr>
+<tr>
+<td>人材用・デモ</td>
+<td><code>GRAPH_REFRESH_TOKEN_HUMAN_DEV</code></td>
+</tr>
+<tr>
+<td>案件用・デモ</td>
+<td><code>GRAPH_REFRESH_TOKEN_PROJECT_DEV</code></td>
+</tr>
+</tbody></table>
+<hr>
+<p><strong>5. Supabase Secrets に登録する</strong></p>
+<p>Supabase ダッシュボード → 「Edge Functions」→「Secrets」で、以下を登録します:</p>
+<table>
+<thead>
+<tr>
+<th>Secret名</th>
+<th>値</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GRAPH_REFRESH_TOKEN_HUMAN</code></td>
+<td>人材用・本番のリフレッシュトークン</td>
+</tr>
+<tr>
+<td><code>GRAPH_REFRESH_TOKEN_PROJECT</code></td>
+<td>案件用・本番のリフレッシュトークン</td>
+</tr>
+<tr>
+<td><code>GRAPH_REFRESH_TOKEN_HUMAN_DEV</code></td>
+<td>人材用・デモのリフレッシュトークン</td>
+</tr>
+<tr>
+<td><code>GRAPH_REFRESH_TOKEN_PROJECT_DEV</code></td>
+<td>案件用・デモのリフレッシュトークン</td>
+</tr>
+</tbody></table>
+<h3>7-3. 拡張機能を有効にする</h3>
+<p>Supabase のスケジューラ機能（pg_cron）と HTTP通信機能（pg_net）を有効にします。</p>
+<p>Supabase ダッシュボード → 「Database」→「Extensions」を開き、以下を検索してONにします:</p>
+<ul>
+<li><code>pg_cron</code></li>
+<li><code>pg_net</code></li>
+</ul>
+<h3>7-4. 5分ごとのスケジュールを登録する</h3>
+<p><code>supabase/migrations/add_email_polling_cron.sql</code> をテキストエディタで開き、以下の2箇所を書き換えます:</p>
+<table>
+<thead>
+<tr>
+<th>書き換え前</th>
+<th>書き換え後</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>YOUR_PROJECT_REF</code></td>
+<td>Supabase の Reference ID（第6章でメモしたもの）</td>
+</tr>
+<tr>
+<td><code>YOUR_SERVICE_ROLE_KEY</code></td>
+<td>Supabase の service_role キー（第4章でメモしたもの）</td>
+</tr>
+</tbody></table>
+<p>書き換えたら、Supabase の SQL Editor に全文貼り付けて「Run」をクリック。</p>
+<p>最後の SELECT 結果に <code>poll-email-every-5-minutes</code> というジョブが表示されればOKです。</p>
+<h3>完了チェック</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Azureにアプリを登録し、クライアントID・シークレットをメモした</li>
+<li><input disabled="" type="checkbox"> Mail.Read / Mail.ReadWrite の権限を追加した</li>
+<li><input disabled="" type="checkbox"> <code>GRAPH_CLIENT_ID</code> / <code>GRAPH_CLIENT_SECRET</code> を Secrets に登録した</li>
+<li><input disabled="" type="checkbox"> 4つのアカウントのリフレッシュトークンを取得した</li>
+<li><input disabled="" type="checkbox"> 4つのリフレッシュトークンを Secrets に登録した</li>
+<li><input disabled="" type="checkbox"> pg_cron・pg_net を有効にした</li>
+<li><input disabled="" type="checkbox"> <code>add_email_polling_cron.sql</code> を書き換えて実行した</li>
+</ul>
+<hr>
+<h2>第8章　本番サイトの公開（Vercel）</h2>
+<p>「Vercel」とは、作ったWebサイトをインターネット上に公開するためのサービスです。無料で使えます。<br><strong>ここで環境変数（設定値）をまとめて登録してデプロイすると、本番サイトが完成します。</strong></p>
+<h3>8-1. Vercelにサインアップ・プロジェクトをインポートする</h3>
+<p><strong>1. <code>https://vercel.com</code> を開き、GitHubアカウントでサインアップ</strong></p>
+<hr>
+<p><strong>2. 「Add New Project」→「Import Git Repository」でこのリポジトリ（<code>akinavi-hr-ai</code>）を選択</strong></p>
+<hr>
+<p><strong>3. 「Environment Variables」に以下をすべて入力する</strong></p>
+<p>「Deploy」ボタンを押す<strong>前に</strong>、以下の環境変数を全部登録してください。</p>
+<table>
+<thead>
+<tr>
+<th>変数名</th>
+<th>値</th>
+<th>メモした場所</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>VITE_SUPABASE_URL</code></td>
+<td>Supabase の Project URL</td>
+<td>第4章</td>
+</tr>
+<tr>
+<td><code>VITE_SUPABASE_ANON_KEY</code></td>
+<td>Supabase の anon キー</td>
+<td>第4章</td>
+</tr>
+<tr>
+<td><code>VITE_GEMINI_API_KEY</code></td>
+<td>Gemini の APIキー</td>
+<td>第5章</td>
+</tr>
+<tr>
+<td><code>VITE_AI_PROVIDER</code></td>
+<td><code>gemini</code>（そのまま入力）</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>VITE_DEMO_KEY</code></td>
+<td>任意の文字列（例: <code>demo2024</code>）</td>
+<td>—</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><code>VITE_DEMO_KEY</code> はデモ環境の解除キーです。自分で決めた文字列を設定してください。<br>詳細は <code>docs/DataEnv_Demo_Prod.md</code> を参照。</p>
+</blockquote>
+<hr>
+<p><strong>4. 「Deploy」をクリックする</strong></p>
+<p>デプロイが完了すると <code>https://（プロジェクト名）.vercel.app</code> のような URLが発行されます。<br>このURLが本番サイトのアドレスになります。</p>
+<p>以降は <code>main</code> ブランチに変更を push するたびに<strong>自動で再デプロイ</strong>されます。</p>
+<h3>8-2. 環境変数を後から変更する場合</h3>
+<p>Vercel ダッシュボード → プロジェクトを選択 → 「Settings」→「Environment Variables」から変更できます。<br>変更後は「Deployments」→「Redeploy」で再デプロイが必要です。</p>
+<h3>完了チェック</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Vercel にプロジェクトをインポートした</li>
+<li><input disabled="" type="checkbox"> 5つの環境変数をすべて設定した</li>
+<li><input disabled="" type="checkbox"> デプロイが成功してURLが発行された</li>
+<li><input disabled="" type="checkbox"> 発行されたURLでサイトが表示された</li>
+</ul>
+<hr>
+<h2>第9章　AIワーカーを常駐させる（会社のClaudeに切り替える）</h2>
+<p>第8章までで、サイトとメール取り込みは動きます。
+この章では、<strong>人材・案件・マッチングの AI 処理</strong>を担当する常駐プログラム（シャドーワーカー）を、このPCで動かします。</p>
+<h3>9-0. このプログラムが何をしているか</h3>
+<p><code>scripts/llm_extract/shadow_worker.mjs</code> が5分ごとに次の4つを回します。すべて<strong>第1章でログインした Claude アカウント</strong>の枠を使います。</p>
+<table>
+<thead>
+<tr>
+<th>サイクル</th>
+<th>何をするか</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>人材</td>
+<td>新しく登録された人材のメール本文・経歴書を Claude が読み直し、氏名・年齢・経験年数・スキル年数などを補正する</td>
+</tr>
+<tr>
+<td>案件</td>
+<td>新しい案件の抜けている項目を埋める</td>
+</tr>
+<tr>
+<td>マッチング所見</td>
+<td>提案ごとに「この案件はこういう人でないと通らない」「この方はこの経験が効く」という所見を書く</td>
+</tr>
+<tr>
+<td>Box取込</td>
+<td>Box に置かれた経歴書を取得して解析する</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>マッチングの点数そのものは Claude ではありません。</strong> 点数は Supabase 側の
+ルール計算 + Cerebras / Groq / Gemini（第5章）です。ここで作るのは<strong>点数の理由と所見</strong>です。</p>
+</blockquote>
+<h3>9-1. 接続情報のファイルを作る</h3>
+<p>ワーカーがデータベースに書き込むための情報を、ホームフォルダにファイルとして置きます。</p>
+<pre><code class="language-powershell">notepad $HOME\.akinavi_shadow.env
+</code></pre>
+<p>「ファイルが見つかりません。新しく作成しますか？」と聞かれたら「はい」。
+メモ帳が開くので、次の2行を貼り付けて<strong>上書き保存</strong>（<code>Ctrl</code> + <code>S</code>）してください。</p>
+<pre><code>SUPABASE_URL=（第4章 4-1 でメモした Project URL）
+SUPABASE_SERVICE_KEY=（第4章 4-1 でメモした service_role キー）
+</code></pre>
+<blockquote>
+<p><code>service_role</code> キーはデータベースを何でも操作できる鍵です。<strong>このファイルは絶対に他人に渡さず、GitHub にも上げないでください。</strong>
+ファイル名の先頭がピリオド（<code>.</code>）である点に注意してください。</p>
+</blockquote>
+<h3>9-2. 手動で1回動かして確認する</h3>
+<p>いきなり常駐させず、まず手で動かして正常に回ることを見ます。</p>
+<pre><code class="language-powershell">cd $HOME\Desktop\akinavi-hr-ai-aws
+node scripts/llm_extract/shadow_worker.mjs
+</code></pre>
+<p>次のような行が出れば起動成功です。</p>
+<pre><code>シャドーワーカー起動 watermark=...
+</code></pre>
+<p>5分ほど待つと「新規なし」または「新規候補者 N件」→「サイクル完了」が出ます。
+確認できたら <code>Ctrl</code> + <code>C</code> で止めてください。</p>
+<table>
+<thead>
+<tr>
+<th>出たメッセージ</th>
+<th>対処</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>SUPABASE_URL / SUPABASE_SERVICE_KEY を設定してください</code></td>
+<td>9-1 のファイルが読めていない。ファイル名（先頭のピリオド）と保存場所を確認</td>
+</tr>
+<tr>
+<td><code>timeout</code> が続く</td>
+<td>Claude の応答が返っていない。<code>claude -p &quot;test&quot;</code> が動くか第1章 1-5 で確認</td>
+</tr>
+<tr>
+<td><code>Usage limit reached</code></td>
+<td>会社アカウントの利用枠切れ。プランを確認</td>
+</tr>
+</tbody></table>
+<h3>9-3. 常駐させる（pm2）</h3>
+<p>PCを再起動しても自動で動き続けるように、<strong>pm2</strong> という常駐管理ソフトを使います。</p>
+<pre><code class="language-powershell">npm install -g pm2
+</code></pre>
+<p>ワーカーを登録して起動します。</p>
+<pre><code class="language-powershell">cd $HOME\Desktop\akinavi-hr-ai-aws
+pm2 start scripts/llm_extract/shadow_worker.mjs --name akinavi-shadow
+pm2 save
+</code></pre>
+<p><code>pm2 save</code> は「今動いているものを次回も復元する」という記録です。<strong>忘れずに実行してください。</strong></p>
+<p><strong>状態を見る</strong></p>
+<pre><code class="language-powershell">pm2 list
+</code></pre>
+<p><code>akinavi-shadow</code> が <code>online</code> になっていればOKです。</p>
+<p><strong>ログを見る</strong></p>
+<pre><code class="language-powershell">pm2 logs akinavi-shadow
+</code></pre>
+<p>見るのをやめるときは <code>Ctrl</code> + <code>C</code>（ワーカーは止まりません）。</p>
+<p><strong>よく使う操作</strong></p>
+<table>
+<thead>
+<tr>
+<th>やりたいこと</th>
+<th>コマンド</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>止める</td>
+<td><code>pm2 stop akinavi-shadow</code></td>
+</tr>
+<tr>
+<td>再開する</td>
+<td><code>pm2 start akinavi-shadow</code></td>
+</tr>
+<tr>
+<td>入れ替えたコードを反映する</td>
+<td><code>pm2 restart akinavi-shadow</code></td>
+</tr>
+<tr>
+<td>設定（環境変数）も入れ直して再起動</td>
+<td><code>pm2 restart akinavi-shadow --update-env</code></td>
+</tr>
+<tr>
+<td>登録から消す</td>
+<td><code>pm2 delete akinavi-shadow</code></td>
+</tr>
+</tbody></table>
+<h3>9-4. 個人アカウントから会社アカウントに切り替える手順</h3>
+<p><strong>すでに個人アカウントでワーカーが動いている場合</strong>は、この順番で入れ替えてください。
+順番を間違えると、切り替え途中の処理が個人枠で走ってしまいます。</p>
+<p><strong>1. ワーカーを止める</strong></p>
+<pre><code class="language-powershell">pm2 stop akinavi-shadow
+</code></pre>
+<hr>
+<p><strong>2. Claude のアカウントを入れ替える</strong>（第1章 1-4 と同じ）</p>
+<pre><code class="language-powershell">claude auth logout
+claude auth login
+claude auth status
+</code></pre>
+<p><code>claude auth status</code> で<strong>会社のメールアドレス</strong>が出ることを必ず確認してください。</p>
+<hr>
+<p><strong>3. 会社アカウントで AI が呼べるか確かめる</strong></p>
+<pre><code class="language-powershell">claude -p &quot;こんにちは&quot;
+</code></pre>
+<hr>
+<p><strong>4. ワーカーを再開する</strong></p>
+<pre><code class="language-powershell">pm2 restart akinavi-shadow --update-env
+pm2 logs akinavi-shadow
+</code></pre>
+<p>ログに <code>サイクル完了</code> が出て、エラーが出ていなければ切り替え完了です。</p>
+<hr>
+<p><strong>5. 別のPCでも動いていないか確認する</strong></p>
+<blockquote>
+<p><strong>重要</strong>: 同じワーカーが2台で動いていると、<strong>同じ人材を二重に処理して利用枠を無駄に使います</strong>。
+以前動かしていたPC（個人PC / 旧マシン）で止め忘れていないか必ず確認してください。</p>
+<ul>
+<li>Windows: <code>pm2 stop akinavi-shadow</code></li>
+<li>Mac / Linux: <code>pkill -f shadow_worker</code></li>
+</ul>
+</blockquote>
+<h3>9-5. 動作モードの切り替え</h3>
+<p>環境変数でふるまいを変えられます。値を変えたら <code>pm2 restart akinavi-shadow --update-env</code> が必要です。</p>
+<table>
+<thead>
+<tr>
+<th>環境変数</th>
+<th>既定</th>
+<th>意味</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>SHADOW_APPLY</code></td>
+<td><code>1</code></td>
+<td><code>0</code> にすると<strong>記録だけ</strong>して本番データを書き換えない（様子見用）</td>
+</tr>
+<tr>
+<td><code>SHADOW_DATA_ENV</code></td>
+<td><code>prod</code></td>
+<td><code>demo</code> にするとデモ環境のデータだけを処理する</td>
+</tr>
+<tr>
+<td><code>SHADOW_MAX_PER_DAY</code></td>
+<td><code>100</code></td>
+<td>1日に処理する人材の上限</td>
+</tr>
+<tr>
+<td><code>SHADOW_REC_MAX_PER_DAY</code></td>
+<td><code>100</code></td>
+<td>1日に作るマッチング所見の上限</td>
+</tr>
+</tbody></table>
+<p>上限は<strong>利用枠を使い切らないための安全装置</strong>です。切り替え直後は小さめ（例: 20）にして、枠の減り方を見てから戻すのが安全です。</p>
+<h3>9-6. うまくいかないときの確認順</h3>
+<ol>
+<li><code>pm2 list</code> — <code>akinavi-shadow</code> が <code>online</code> か</li>
+<li><code>pm2 logs akinavi-shadow</code> — エラーが出ていないか</li>
+<li><code>claude auth status</code> — 会社アカウントになっているか</li>
+<li><code>claude -p &quot;test&quot;</code> — Claude 単体で応答するか</li>
+<li><code>claude doctor</code> — Claude Code 自体の状態</li>
+</ol>
+<h3>完了チェック</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <code>~/.akinavi_shadow.env</code> を作った（2行）</li>
+<li><input disabled="" type="checkbox"> 手動起動で「シャドーワーカー起動」を確認した</li>
+<li><input disabled="" type="checkbox"> pm2 で常駐させ、<code>pm2 save</code> した</li>
+<li><input disabled="" type="checkbox"> <code>claude auth status</code> が<strong>会社の</strong>アカウントになっている</li>
+<li><input disabled="" type="checkbox"> 他のPCで同じワーカーが動いていないことを確認した</li>
+</ul>
+<hr>
+<h2>最終確認チェックリスト</h2>
+<p>全章が完了したら、以下を本番URLで確認してください。</p>
+<ul>
+<li><input disabled="" type="checkbox"> <code>claude auth status</code> が<strong>会社の</strong>アカウントになっている（第1章）</li>
+<li><input disabled="" type="checkbox"> <code>pm2 list</code> で <code>akinavi-shadow</code> が <code>online</code>（第9章）</li>
+<li><input disabled="" type="checkbox"> 本番URLでブラウザにエラーなく画面が表示される</li>
+<li><input disabled="" type="checkbox"> 「人材」タブでテキストを貼り付けて「登録」が動く（Phase 4.11 で「AI で登録」は廃止・登録ボタンに統一）</li>
+<li><input disabled="" type="checkbox"> 「マッチング」タブでスコアが表示される（スコア降順）</li>
+<li><input disabled="" type="checkbox"> マッチング詳細パネルに案件サマリー・ルールスコア内訳が表示される</li>
+<li><input disabled="" type="checkbox"> 専用のOutlookアドレスにメールを送って5分以内に人材/案件が登録される</li>
+<li><input disabled="" type="checkbox"> 「人材」タブの「人材マップ」ボタンから日本地図が表示され、都道府県が色付けされる</li>
+<li><input disabled="" type="checkbox"> <strong>人材マップ</strong>で都道府県をクリックすると地図がズームインし、下部にメール一覧が出る</li>
+<li><input disabled="" type="checkbox"> <strong>人材マップ</strong>でスキル名（例: <code>Java</code>）を入力するとオートコンプリート候補が出る</li>
+<li><input disabled="" type="checkbox"> <strong>人材マップ</strong>の「全期間」モードに切り替えてもエラーが出ない（<code>candidates_archive_light</code> の <code>name</code> / <code>subject</code> カラムが必要）</li>
+<li><input disabled="" type="checkbox"> 「設定」タブの「マッチング動作」で高速 / 全件モードを切り替えられる</li>
+<li><input disabled="" type="checkbox"> 「設定」タブの「改善案・バグメモ」でテストメモを入力し Issue 登録ができる（<code>GITHUB_TOKEN</code> 設定済みの場合）</li>
+<li><input disabled="" type="checkbox"> <code>[station_unmapped]</code> ログが Supabase Functions Logs に流れていないか確認（月次レビュー）</li>
+<li><input disabled="" type="checkbox"> 「通知」タブでルールを作ると、条件に合う人材の登録時にメールが届く</li>
+<li><input disabled="" type="checkbox"> 人材を1件登録して数分後に <code>pm2 logs akinavi-shadow</code> に処理ログが出る（AI補正が効いている）</li>
+</ul>
+<hr>
+<h2>うまくいかないときは</h2>
+<h3>画面が真っ白になる・エラーが出る</h3>
+<p>ブラウザの開発者ツールを開いて（F12 キー）、「Console」タブにエラーメッセージが出ていないか確認する。</p>
+<p>よくある原因:</p>
+<ul>
+<li>Vercel の環境変数に誤りがある（スペースや余分な文字が入っていないか確認）</li>
+<li>環境変数を設定後に再デプロイしていない</li>
+</ul>
+<h3>AIが解析されない（登録できない）</h3>
+<ul>
+<li>Vercel の <code>VITE_GEMINI_API_KEY</code> が正しく設定されているか確認</li>
+<li>Supabase の「Edge Functions」→「Logs」→「inbound-email」でエラーが出ていないか確認</li>
+</ul>
+<h3>メールが自動取り込みされない</h3>
+<p>Supabase の「Edge Functions」→「Logs」→「poll-email」のログを確認する。</p>
+<p>よくある原因:</p>
+<ul>
+<li>Graph API の Secrets が1つでも登録されていない</li>
+<li>リフレッシュトークンが間違っている（取得後に有効期限が切れた場合は再取得が必要）</li>
+<li><code>pg_cron</code> または <code>pg_net</code> が有効になっていない</li>
+<li><code>add_email_polling_cron.sql</code> の <code>YOUR_PROJECT_REF</code> / <code>YOUR_SERVICE_ROLE_KEY</code> を書き換えずに実行してしまった</li>
+</ul>
+<h3>マイグレーションでエラーが出る</h3>
+<ul>
+<li><code>schema.sql</code> を先に実行したか確認</li>
+<li>同じSQLを二重実行していないか確認（多くのSQLは <code>IF NOT EXISTS</code> で二重実行に対応しているが念のため）</li>
+</ul>
+<hr>
+<h2>参考ドキュメント</h2>
+<table>
+<thead>
+<tr>
+<th>ファイル</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>README.md</code></td>
+<td>システム全体の概要・技術スタック</td>
+</tr>
+<tr>
+<td><code>docs/Sales_Manual.md</code></td>
+<td>営業担当者向けの操作マニュアル</td>
+</tr>
+<tr>
+<td><code>docs/DataEnv_Demo_Prod.md</code></td>
+<td>本番・デモ環境の切替方法</td>
+</tr>
+<tr>
+<td><code>docs/Outlook_AutoForward_Setup.md</code></td>
+<td>Outlook の自動転送設定</td>
+</tr>
+<tr>
+<td><code>CLAUDE.md</code></td>
+<td>開発時の決まりごと・運用ルール（開発者向け）</td>
+</tr>
+<tr>
+<td><code>scripts/llm_extract/README.md</code></td>
+<td>AIワーカーの設計（開発者向け）</td>
+</tr>
+</tbody></table>
+</body></html>

@@ -973,18 +973,22 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
         {/* ---- ドキュメント ---- */}
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
           <h2 className="text-base font-semibold text-gray-800 mb-1">ドキュメント</h2>
-          <p className="text-xs text-gray-400 mb-4">システムの仕様・フロー資料・セットアップ手順を閲覧できます。</p>
+          <p className="text-xs text-gray-400 mb-4">システムの仕様・セットアップ手順を閲覧できます（印刷・PDF保存はブラウザの「印刷」から）。</p>
           <div className="space-y-2">
+            {/* PDF から HTML に変更した（2026-08-21）。PDF は手作業生成だったため
+                2026-05-23 の内容のまま更新されず、環境構築ガイドが古いままだった。
+                HTML は `npm run build` のたびに Markdown から作り直される
+                （scripts/build_docs_pdf.mjs）ので、二度と実体とずれない。 */}
             {[
-              { label: '操作マニュアル（営業向け）', path: '/docs/Sales_Manual.pdf' },
-              { label: '環境構築ガイド', path: '/docs/HandsOn_Setup.pdf' },
-              { label: 'システム概要（README）', path: '/docs/README.pdf' },
-              { label: 'デモ／本番環境の説明', path: '/docs/DataEnv_Demo_Prod.pdf' },
-              { label: 'Outlook自動転送設定', path: '/docs/Outlook_AutoForward_Setup.pdf' },
-              { label: 'AI無料枠の課題と限界', path: '/docs/AI_Freetier_Challenges.pdf' },
-              { label: 'AIモデルフォールバックフロー', path: '/docs/ai_fallback_flow.pdf' },
-              { label: 'マッチング候補者選定ロジック', path: '/docs/matching_candidate_selection.pdf' },
-              { label: 'AWSアカウント作成・管理者招待手順', path: '/docs/AWS_Account_Setup_Guide.pdf' },
+              { label: '操作マニュアル（営業向け）', path: '/docs/Sales_Manual.html' },
+              { label: '環境構築ガイド', path: '/docs/HandsOn_Setup.html' },
+              { label: 'システム概要（README）', path: '/docs/README.html' },
+              { label: 'デモ／本番環境の説明', path: '/docs/DataEnv_Demo_Prod.html' },
+              { label: 'Outlook自動転送設定', path: '/docs/Outlook_AutoForward_Setup.html' },
+              // 以下はリンクから外した（2026-08-21 ユーザー判断）。PDF は public/docs に残してあるので
+              // 直接URLを開けば読める。営業が使う5点だけを並べる:
+              //   AI無料枠の課題と限界 / AIモデルフォールバックフロー /
+              //   マッチング候補者選定ロジック / AWSアカウント作成・管理者招待手順
             ].map(({ label, path }) => (
               <button
                 key={path}

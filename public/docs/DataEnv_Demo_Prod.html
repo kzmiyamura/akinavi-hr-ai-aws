@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>デモ／本番環境の説明 — AkiNavi HR-AI</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  body { font-family: "Hiragino Sans", "Yu Gothic", "Meiryo", system-ui, sans-serif;
+         font-size: 10.5pt; line-height: 1.75; color: #1f2937; max-width: 900px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20pt; border-bottom: 3px solid #2563eb; padding-bottom: 8px; margin-top: 0; }
+  h2 { font-size: 15pt; border-bottom: 1px solid #d1d5db; padding-bottom: 5px; margin-top: 28px;
+       page-break-after: avoid; }
+  h3 { font-size: 12.5pt; color: #1d4ed8; margin-top: 20px; page-break-after: avoid; }
+  code { font-family: "SF Mono", Consolas, monospace; font-size: 9.5pt;
+         background: #f3f4f6; padding: 1px 4px; border-radius: 3px; }
+  pre { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 3px solid #2563eb;
+        padding: 10px 12px; border-radius: 4px; overflow-x: auto; page-break-inside: avoid; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; page-break-inside: avoid; }
+  th, td { border: 1px solid #d1d5db; padding: 5px 9px; text-align: left; vertical-align: top; }
+  th { background: #f1f5f9; font-weight: 600; }
+  blockquote { border-left: 3px solid #fbbf24; background: #fffbeb; margin: 12px 0;
+               padding: 8px 14px; color: #78350f; }
+  blockquote p { margin: 4px 0; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
+  li { margin: 3px 0; }
+  a { color: #2563eb; }
+  .built { color: #9ca3af; font-size: 9pt; margin-bottom: 20px; }
+</style></head>
+<body><p class="built">AkiNavi HR-AI ／ デモ／本番環境の説明 ／ 2026-08-21 時点（docs/DataEnv_Demo_Prod.md から自動生成）</p>
+<h1>データ環境：本番（prod）とデモ（demo）</h1>
+<p>このアプリは <strong>DB を1つだけ使い</strong>、<code>data_env</code> 列の値で本番データとデモデータを論理的に分けています。</p>
+<hr>
+<h2>2つの環境の違い</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>prod（本番）</th>
+<th>demo（デモ）</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>用途</td>
+<td>実際の人材・案件・提案履歴</td>
+<td>営業デモ・検証用ダミーデータ</td>
+</tr>
+<tr>
+<td>デフォルト</td>
+<td><strong>常にこちら</strong></td>
+<td>デモ機能オン時に選択可</td>
+</tr>
+<tr>
+<td>データの扱い</td>
+<td>本物データのみ表示・登録</td>
+<td>デモデータのみ表示・登録</td>
+</tr>
+<tr>
+<td>切替方法</td>
+<td>デフォルト</td>
+<td><code>?demo=KEY</code> の URL を開く</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>重要</strong>：prod と demo は「論理分離」です。DB に直接 SQL を実行できる人はどちらのデータにも触れます。運用ルールで区別してください。</p>
+</blockquote>
+<hr>
+<h2>デモ機能の切替方法</h2>
+<p>切替方法は 2 つあります（どちらでも同じ結果になります）。</p>
+<h3>① URL クエリで切り替える（初回・別ブラウザ用）</h3>
+<ol>
+<li><p>以下の URL をブラウザで開く（<code>あなたの鍵</code> は <code>VITE_DEMO_KEY</code> の値）</p>
+<pre><code>https://（アプリのURL）/?demo=あなたの鍵
+</code></pre>
+</li>
+<li><p>鍵が正しければ、ヘッダに <strong>「本番相当 / デモ」の切替セレクト</strong> が現れ、<strong>デモが選択された状態</strong>になる</p>
+</li>
+<li><p>URL から <code>?demo=...</code> は自動的に消える（アドレスバーに鍵が残らない）</p>
+</li>
+<li><p>もう一度同じ <code>?demo=あなたの鍵</code> の URL を開くとトグルでオフになり、<strong>本番固定</strong>に戻る</p>
+</li>
+<li><p>鍵が間違っている場合は何も起きず、本番（prod）のみの動作</p>
+</li>
+</ol>
+<h3>② 設定タブのトグルで切り替える（解除後・運用中）</h3>
+<p><code>?demo=</code> で 1 度解除済みであれば、その後は <strong>「設定」タブ → 開発者モード（デモ UI）</strong> のトグルでオン / オフを切り替えられます（Phase 4.11 以降）。</p>
+<pre><code>設定 &gt; 開発者モード &gt; 「デモモード有効 / 無効（本番のみ）」トグル
+</code></pre>
+<p>このトグルは <code>localStorage.akinavi.demoUnlock.v1</code> を直接書き換え、URL クエリと同じ効果を持ちます。</p>
+<h3>切替状態の一覧</h3>
+<table>
+<thead>
+<tr>
+<th>操作</th>
+<th>結果</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>通常アクセス（<code>?demo=</code> なし・未解除）</td>
+<td>本番（prod）固定。切替 UI は非表示</td>
+</tr>
+<tr>
+<td><code>?demo=正しい鍵</code>（解除前）</td>
+<td>デモ機能オン。ヘッダ切替 UI が表示され、デモが選択される</td>
+</tr>
+<tr>
+<td><code>?demo=正しい鍵</code>（解除済み）</td>
+<td>デモ機能オフに戻る。本番固定</td>
+</tr>
+<tr>
+<td><code>?demo=間違った鍵</code></td>
+<td>何も変わらない</td>
+</tr>
+<tr>
+<td>設定タブのトグル ON</td>
+<td>デモ機能オン（ヘッダ切替 UI 表示）</td>
+</tr>
+<tr>
+<td>設定タブのトグル OFF</td>
+<td>デモ機能オフ（本番固定）</td>
+</tr>
+</tbody></table>
+<hr>
+<h3>状態の保存場所</h3>
+<p>切替状態はブラウザの <code>localStorage</code> に保存されます。<strong>別の PC・別ブラウザには引き継がれません。</strong></p>
+<table>
+<thead>
+<tr>
+<th>保存内容</th>
+<th>localStorage のキー</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>どちらの環境を選んでいるか</td>
+<td><code>akinavi.dataEnv.v1</code></td>
+</tr>
+<tr>
+<td>デモ UI を表示するかどうか</td>
+<td><code>akinavi.demoUnlock.v1</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>デモ用サンプルデータの一括投入</h2>
+<p>デモ機能がオンであれば（<strong>prod 選択中でも</strong>）、「人材」「案件」タブ内に <strong>デモシードパネル</strong>（<code>DemoSeedPanel</code>）が表示されます（コミット <code>95120c1</code> で <code>demo</code> 縛りを解除）。
+投入されるデータは常に <code>data_env = demo</code> のみで、<strong>本番データには一切触れません。</strong></p>
+<h3>デモ生成ボタン一覧（AI 不使用・ルールベース）</h3>
+<table>
+<thead>
+<tr>
+<th>ボタン</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1 ペア生成</td>
+<td>テンプレと経験年数からエージェントメール体裁の本文を構築し、人材 + 案件をペアで投入。<code>inbound-email</code> regex が確実に拾えるフォーマット（<code>氏名 :</code> <code>最寄駅 :</code> <code>希望単価 :</code> <code>経験年数 : 約X年</code>）を使う</td>
+</tr>
+<tr>
+<td><strong>本番→デモコピー（random）</strong></td>
+<td>本番から無作為に N 件の人材をコピーしてデモへ。<code>email</code> を <code>demo.prod+&lt;uuid&gt;@demo.invalid</code> に差し替え、<code>resume_url</code> / <code>box_url</code> を落として <code>drive_url</code> のみ保持</td>
+</tr>
+<tr>
+<td><strong>本番→デモコピー（recent）</strong></td>
+<td>本番の直近登録 N 件をコピーしてデモへ。営業デモで「最新の生データ感」を出したいときに便利</td>
+</tr>
+<tr>
+<td><strong>デモ人材メール再解析</strong></td>
+<td>デモ環境内の <code>raw_profile.text</code> を持つ人材から N 件をランダム選択して <code>inbound-email</code> 再投入。スキル辞書を更新したあとの動作確認に活用</td>
+</tr>
+</tbody></table>
+<h3>マッチング検証用：スコア別 5 人生成（<code>DemoProjectCandidateGen</code>・コミット <code>060f0d7</code>）</h3>
+<p>選択中のデモ案件をベースに、<strong>スコアの異なる 5 人</strong>（90 / 70 / 50 / 30 / 10 pt 想定）を一気に生成します。</p>
+<table>
+<thead>
+<tr>
+<th>想定スコア</th>
+<th>構成</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>90pt</td>
+<td>スキル満点 + 経験年数 7 年以上 + 単価範囲内 + 同じ都道府県</td>
+</tr>
+<tr>
+<td>70pt</td>
+<td>スキル一部欠け + 経験年数 5 年 + 単価範囲内 + 同じ都道府県</td>
+</tr>
+<tr>
+<td>50pt</td>
+<td>スキル一部欠け + 経験年数 5 年 + 単価範囲内 + <strong>勤務地違い</strong></td>
+</tr>
+<tr>
+<td>30pt</td>
+<td>スキル少しのみ + 経験年数 1 年 + 単価範囲内 + 勤務地違い</td>
+</tr>
+<tr>
+<td>10pt</td>
+<td>スキル非該当 + 経験年数 1 年 + <strong>予算超過</strong></td>
+</tr>
+</tbody></table>
+<p><code>calcRuleScore</code> の予想値を逆算しているので、UI のマッチング結果でも近いスコアが表示されます。マッチング・スコアの色分け（80以上 緑 / 60以上 黄）の動作確認に最適です。</p>
+<hr>
+<h2>メール自動取り込みと prod / demo</h2>
+<p>Outlook からの自動取り込み（<code>poll-email</code> → <code>inbound-email</code>）は、<strong>メールアカウントごとに保存先が決まっています。</strong></p>
+<table>
+<thead>
+<tr>
+<th>メールアカウント</th>
+<th>保存先</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>本番用（human / project）</td>
+<td><code>prod</code></td>
+</tr>
+<tr>
+<td>デモ・開発用（human-dev / project-dev）</td>
+<td><code>demo</code></td>
+</tr>
+</tbody></table>
+<p>どのアカウントがどちらに対応するかは、Supabase Secrets の <code>GRAPH_REFRESH_TOKEN_*</code> と <code>poll-email</code> の設定で決まります（詳細は README.md の Secrets 一覧を参照）。</p>
+<p><code>inbound-email</code> を直接呼び出す場合は、リクエストの <code>data_env</code> パラメータで指定できます。</p>
+<hr>
+<h2>よくある質問</h2>
+<p><strong>Q. <code>VITE_DEMO_KEY</code> を設定しないとどうなる？</strong></p>
+<p>A. デモ切替 UI が実質使えません。常に本番（prod）のみの動作になります。</p>
+<hr>
+<p><strong>Q. prod と demo で ID（UUID）は重複する？</strong></p>
+<p>A. 重複しません。同じ人物を prod と demo の両方に登録した場合、DB 上は別の行・別の ID として2件存在します。</p>
+<hr>
+<p><strong>Q. デモデータを本番に昇格させることはできる？</strong></p>
+<p>A. 自動的にはできません。必要な場合は DB 上で <code>data_env</code> を <code>demo</code> から <code>prod</code> に手動で UPDATE してください。</p>
+<hr>
+<p><strong>Q. セキュリティ上の注意は？</strong></p>
+<p>A. <code>VITE_DEMO_KEY</code> は「デモ UI を表示するための共有秘密」程度の位置づけです。<br>本番データを外部に絶対見せてはいけない要件がある場合は、ネットワーク制限や Supabase の別プロジェクト分離も検討してください。</p>
+<hr>
+<h2>開発者向けリファレンス</h2>
+<table>
+<thead>
+<tr>
+<th>内容</th>
+<th>場所</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>型定義・URL 鍵の処理</td>
+<td><code>src/lib/dataEnv.ts</code></td>
+</tr>
+<tr>
+<td>鍵トグル・dataEnv 状態管理</td>
+<td><code>src/App.tsx</code></td>
+</tr>
+<tr>
+<td>設定画面のデモトグル UI</td>
+<td><code>src/pages/SettingsPage.tsx</code>（<code>demoUiEnabled</code> / <code>onToggleDemoUi</code>）</td>
+</tr>
+<tr>
+<td>DB クエリのフィルタ</td>
+<td><code>src/lib/db/*.ts</code>（<code>.eq(&#39;data_env&#39;, dataEnv)</code> で統一）</td>
+</tr>
+<tr>
+<td>data_env 列・CHECK 制約</td>
+<td><code>supabase/migrations/add_data_env.sql</code></td>
+</tr>
+</tbody></table>
+</body></html>
