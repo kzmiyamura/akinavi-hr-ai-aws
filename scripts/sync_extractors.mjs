@@ -36,6 +36,7 @@ const TARGET_FUNCTIONS = [
   'isOwnersResumeFile',
   'assignAttachmentsToBlocks', // ブロック×添付の全体最適割当（管理番号マッチ含む）
   'stripInitialSuffix',
+  'sanitizeFromCompany',   // 会社名の後処理（敬称・丁寧表現・NG先の除去）
   'extractNationalityMark',
   'isValidNationality',
   'stationNameCandidates',
@@ -386,6 +387,16 @@ const TARGET_CONSTS = [
   'ZIP_EXT_MIME',
   'PREFECTURES',       // extractPrefectureFromStationText が参照（複数行定義）
   'STATION_TO_PREFECTURE', // inferPrefectureFromStation が参照（複数行定義）
+  // sanitizeFromCompany（会社名の後処理）が参照する法人格の表・自社名
+  'OWN_COMPANY_NAMES',
+  'CORP_PREFIX_FORMS',
+  'CORP_SUFFIX_JP_FORMS',
+  'CORP_ABBR_FORMS',
+  'reEscCorp',
+  'CORP_PREFIX_SRC',
+  'CORP_SUFFIX_SRC',
+  'ANY_CORP_SRC',
+  'CORP_SUFFIX_EN_SRC',
 ]
 
 /**

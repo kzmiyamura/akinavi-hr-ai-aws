@@ -602,6 +602,14 @@ function sanitizeFromCompany(value: string | null | undefined): string | null {
   //（例:「株式会社小川でございます」= 小川さんの挨拶。実会社名が無いので null。1-r.co.jp 実害）。
   // でございます/と申します/でした は個人の自己紹介専用表現でカタカナ社名等には付かないため安全。
   if (new RegExp(`^(?:${CORP_PREFIX_SRC})[一-龯々]{1,3}(?:で(?:ございます|御座います|ご座います)|と申します|でした)`).test(trimmed)) return null
+  // 社名の直後にそのまま丁寧表現が続くケース（間に漢字姓も「の」も挟まない形）。
+  // 上の2つは「漢字姓＋丁寧表現」「の＋名前＋丁寧表現」しか見ておらず、英字・カタカナ社名の
+  // 「株式会社Flexibilityです。」がそのまま社名として登録されていた（2026-08-21 実害・prod 4件）。
+  // 丁寧表現で終わる社名は実在しないため、法人格が残る限りは無条件に落として良い。
+  {
+    const politeTailM = trimmed.match(/^(.+?)(?:で(?:ございます|御座います|ご座います)|です|でした|と申します|となります|になります)[。．.、，]?$/)
+    if (politeTailM && politeTailM[1].trim().length >= 2) trimmed = politeTailM[1].trim()
+  }
   // 前株パターン: 法人格 + 会社名（英語2単語名「Knowledge Technologies」にも対応）
   // ただし「株式会社ヘルスベイシス https://...」のように直後にURLが続く場合、
   // urlの先頭語（https等）を会社名の一部として誤って取り込まないよう除外する
@@ -2009,6 +2017,16 @@ function extractNameFallback(text: string): string | null {
   if (labelMatch) {
     const v = labelMatch[1].trim()
     if (v && v.length >= 2) return v
+  }
+
+  // ①' 行頭の「イニシャル＋記号＋地名」表記（「YT☆福岡」「SY＠牛久」「YM＠鎌ヶ谷」）。
+  //     区切りの無い大文字2文字は技術語（VC/VB/SQL/PM 等）と区別できないため、
+  //     ☆＠等の記号が続く行頭表記に限って氏名として拾う。
+  //     実害: 「YT☆福岡（弊社個人事業主）」の1名メールで本人が氏名なしになり、
+  //     同送の名簿リンクから展開された別人3名だけが登録された（2026-08-21）。
+  const markedInitial = text.match(/(?:^|[\n\r])[　 ]*[■●▪▶・]?[　 ]*([A-ZＡ-Ｚ]{2,3})[☆★＠@＃#※]/)
+  if (markedInitial) {
+    return markedInitial[1].replace(/[Ａ-Ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
   }
 
   // ② イニシャル: 大文字2文字の間にスペース・・.のいずれか（例: T・Y / T Y / K.M）
@@ -8863,6 +8881,58 @@ function isOwnersResumeFile(filename: string, bodyNames: string[]): boolean {
   })
 }
 
+
+/**
+ * 同名の既存候補を引く（重複判定の入口）。
+ *
+ * イニシャル氏名は同名が非常に多い（prod実測 90日: 「K.K」35件・「TK」27件・「SY」18件）。
+ * 入口が並び順なしの `.limit(5)` だったため、18件中5件しか見ずに本人を取り逃し、
+ * 同じ人が毎日**新規レコードとして**増えていた。結果、同じ会社・同じ人のペアが
+ * 245組でき、「別の紹介会社から来た同一人材」バッジが同一社内で出ていた（2026-08-21 実害）。
+ *
+ * 最寄駅で絞った照会を先に当てて本人を確実に射抜き、その後に新しい順の一般照会を足す。
+ * 取得列は判定に使うものだけ（raw_profile 全体は1件20〜60KBなので引かない）。
+ */
+async function fetchSameNameRows(
+  db: SupabaseClientLike,
+  select: string,
+  name: string,
+  dataEnv: string,
+  station: string | null,
+  narrow?: (q: any) => any,
+): Promise<Record<string, unknown>[]> {
+  const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
+  const base = () => {
+    const q = db.from('candidates').select(select)
+      .eq('data_env', dataEnv)
+      .eq('name', name)
+      .eq('duplicate_flag', false)
+      .is('merged_into', null)
+      .gte('created_at', since)
+    return narrow ? narrow(q) : q
+  }
+  const rows: Record<string, unknown>[] = []
+  const seen = new Set<string>()
+  const push = (data: unknown) => {
+    for (const r of (data ?? []) as Record<string, unknown>[]) {
+      const id = String(r.id ?? '')
+      if (id && !seen.has(id)) { seen.add(id); rows.push(r) }
+    }
+  }
+  // ①最寄駅が一致する行（同名多数でも本人はここで取れる）
+  if (station) {
+    const { data } = await base().eq('raw_profile->>nearestStation', station).limit(5)
+    push(data)
+  }
+  // ②新しい順の一般照会（駅が未取得・表記ゆれのときの受け皿）
+  const { data: recent } = await base().order('created_at', { ascending: false }).limit(30)
+  push(recent)
+  return rows
+}
+
+/** fetchSameNameRows が使う最小限のクライアント型（createClient の戻り値をそのまま渡す） */
+type SupabaseClientLike = { from: (t: string) => any }
+
 /**
  * ゾーンC: 名簿判定・行展開のオーケストレータ。
  * 名簿は行ごとに独立エントリへ展開してから返す（「1エントリ=1人」を下流に保証する）。
@@ -10804,17 +10874,14 @@ Deno.serve(async (req: Request) => {
             // 　 ①で別人と判定した場合は飛ばす（件名一致＝同一メールなので、ここで必ず拾い直してしまう）
             if (!blockExistingId && !blockSameMailDistinct && blockResolvedName && blockResolvedName !== '不明') {
               // raw_profile 全体（1件20〜60KB）は取らず、判定に使うキーだけJSON射影で取る（egress削減）
-              const { data: sameAgent } = await supabase
-                .from('candidates').select('id, experience_years, subject:raw_profile->>subject, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture, age:raw_profile->age')
-                .eq('data_env', inboundDataEnv)
-                .eq('name', blockResolvedName)
-                .eq('duplicate_flag', false)
-                .is('merged_into', null)
-                .eq('raw_profile->>from', from)
-                .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
-                .limit(5)
-              if (sameAgent && sameAgent.length > 0) {
-                for (const s of sameAgent as any[]) {
+              const sameAgent = await fetchSameNameRows(
+                supabase,
+                'id, experience_years, subject:raw_profile->>subject, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture, age:raw_profile->age',
+                blockResolvedName, inboundDataEnv, blockRegexFields.nearestStation ?? null,
+                (q) => q.eq('raw_profile->>from', from),
+              )
+              if (sameAgent.length > 0) {
+                for (const s of sameAgent as unknown as any[]) {
                   const sameSubject = s.subject === subject
                   let attrMatches = 0
                   const myStation = blockRegexFields.nearestStation ?? null
@@ -10838,15 +10905,12 @@ Deno.serve(async (req: Request) => {
             }
             // ③ DBに同名が存在するか確認（Jaccard類似度による同一人物判定）
             if (!blockExistingId && !blockSameMailDistinct && blockResolvedName && blockResolvedName !== '不明') {
-              const { data: similar } = await supabase
-                .from('candidates').select('id, skills, experience_years, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture')
-                .eq('data_env', inboundDataEnv)
-                .eq('name', blockResolvedName)
-                .eq('duplicate_flag', false)
-                .is('merged_into', null)
-                .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
-                .limit(5)
-              if (similar && similar.length > 0) {
+              const similar = await fetchSameNameRows(
+                supabase,
+                'id, skills, experience_years, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture',
+                blockResolvedName, inboundDataEnv, blockRegexFields.nearestStation ?? null,
+              )
+              if (similar.length > 0) {
                 for (const s of similar as any[]) {
                   const myStation = blockRegexFields.nearestStation ?? null
                   const theirStation = s.nearestStation ?? null
@@ -11503,6 +11567,9 @@ Deno.serve(async (req: Request) => {
         const { data: similar } = await supabase.rpc('find_same_person_candidates', {
           p_name: resolvedName,
           p_data_env: inboundDataEnv,
+          // 最寄駅一致の行を先頭に並べてもらう。同名が40件を超えても本人を取り逃さない
+          // （prod実測 90日: 同名10件超の氏名が52種・最大35件）
+          p_station: resolvedStation ?? null,
         })
         if (similar && similar.length > 0) {
           for (const s of similar as any[]) {
@@ -11530,7 +11597,16 @@ Deno.serve(async (req: Request) => {
             const intersection = [...mySkillSet].filter(sk => theirSkills.has(sk)).length
             const union = new Set([...mySkillSet, ...theirSkills]).size
             if (union > 0 && intersection / union >= 0.4) {
+              // 「別会社かどうか」は送信アドレスだけでは決まらない。同じ会社でも営業担当が
+              // 変われば mail_from は変わる（実害: 株式会社Flexibility の担当違いで
+              // 同社の同一人物に「別の紹介会社から来た同一人材」バッジが出た・2026-08-21）。
+              // 会社名が一致するなら同一エージェント扱いにして1レコードへ統合する。
+              const norm = (v: string | null | undefined) =>
+                String(v ?? '').replace(/[\s　]/g, '').toLowerCase()
+              const myCompany = norm(sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany))
+              const theirCompany = norm(s.from_company)
               const sameAgent = (s.mail_from ?? null) === from
+                || (myCompany !== '' && myCompany === theirCompany)
               if (sameAgent) {
                 // 同じ会社から同じ人が再送された → 従来どおり1レコードに統合する
                 existingCandidateId = s.id

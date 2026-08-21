@@ -2202,11 +2202,21 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   {/* 同一人物候補（別の紹介会社から来ている人を含む）。
                       duplicate_flag の条件は外した（全員 false で表示されていなかった・2026-08-20）。
                       レコードは統合しない方針なので、ここで並べて単価を比較できるようにする */}
-                  {dupCandidates && dupCandidates.length > 0 && (
+                  {dupCandidates && dupCandidates.length > 0 && (() => {
+                    // 同じ会社から来た同じ人は「別ルート」ではなく単なる二重登録。
+                    // 実測（2026-08-21 prod）: 同一人物ペア329組のうち245組が同じ会社で、
+                    // 「別ルート・別会社」という見出しが実態と逆になっていた（ユーザー指摘）
+                    const normCo = (v: unknown) => String(v ?? '').replace(/[\s　]/g, '').toLowerCase()
+                    const myCo = normCo(selectedCandidate.from_company)
+                    const isSameCompany = (d: Candidate) =>
+                      myCo !== '' && normCo((d as unknown as Record<string, unknown>).from_company) === myCo
+                    const sameCoCount = dupCandidates.filter(isSameCompany).length
+                    return (
                     <details className="mt-4 border border-yellow-200 rounded-lg bg-yellow-50" open>
                       <summary className="px-3 py-2 text-xs font-medium text-yellow-700 cursor-pointer select-none hover:bg-yellow-100 rounded-lg flex items-center gap-1">
                         <span className="text-yellow-500">⚠</span>
-                        同一人材の可能性 {dupCandidates.length}件（別ルート・別会社を含む）
+                        同一人材の可能性 {dupCandidates.length}件
+                        {sameCoCount > 0 && `（うち同じ会社からの二重登録 ${sameCoCount}件）`}
                       </summary>
                       <div className="px-3 pb-3 pt-1 space-y-2">
                         {dupCandidates.map((dup) => (
@@ -2223,7 +2233,16 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           >
                             <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0 flex-1">
-                                <p className="text-xs font-semibold text-gray-800">{dup.name}</p>
+                                <p className="text-xs font-semibold text-gray-800 flex items-center gap-1.5">
+                                  {dup.name}
+                                  <span className={`text-[10px] font-normal rounded px-1 py-px border ${
+                                    isSameCompany(dup)
+                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                      : 'bg-white text-gray-500 border-gray-200'
+                                  }`}>
+                                    {isSameCompany(dup) ? '同じ会社の二重登録' : '別会社'}
+                                  </span>
+                                </p>
                                 {/* 会社・登録日・経験年数 */}
                                 <p className="text-[10px] text-gray-400 mt-0.5">
                                   {(dup as any).from_company && (
@@ -2268,7 +2287,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         ))}
                       </div>
                     </details>
-                  )}
+                    )
+                  })()}
                   {/* 元メール本文 */}
                   {(() => {
                     const raw = getRaw(selectedCandidate)
