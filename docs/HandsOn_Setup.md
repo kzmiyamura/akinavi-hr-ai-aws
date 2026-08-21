@@ -19,19 +19,17 @@
   ↓
 第4章: データベースの作成（Supabase）
   ↓
-第5章: AIのAPIキーを取る（Cerebras / Groq / Gemini）
+第5章: サーバー機能のデプロイ（Edge Functions）
   ↓
-第6章: サーバー機能のデプロイ（Edge Functions）
+第6章: メール自動取り込みの設定（Azure + Microsoft Graph API）
   ↓
-第7章: メール自動取り込みの設定（Azure + Microsoft Graph API）
+第7章: 本番サイトの公開（Vercel）
   ↓
-第8章: 本番サイトの公開（Vercel）
-  ↓
-第9章: AIワーカーを常駐させる（会社のClaudeに切り替える）
+第8章: AIワーカーを常駐させる（会社のClaudeに切り替える）
 ```
 
 > 第2〜8章は Vercel と Supabase のダッシュボード上の作業が中心です。
-> 第1章と第9章だけは**このシステムを動かすPC**での作業になります。
+> 第1章と第8章だけは**このシステムを動かすPC**での作業になります。
 
 ---
 
@@ -41,8 +39,8 @@ AI が2種類あり、**別のもの**です。混同すると設定を間違え
 
 | | 何をするか | どこで動くか | 何を使うか | 章 |
 |---|---|---|---|---|
-| **① マッチングの点数付け** | 案件と人材の相性を0〜100点で採点する | Supabase のサーバー | Cerebras → Groq → Gemini（3段） | 第5章 |
-| **② 人材・案件の読み取りと所見** | 経歴書を読んで項目を直す／案件文を補う／「この人はここが効く」という所見を書く | **社内PC（このガイドのPC）** | **Claude Code** | 第1章・第9章 |
+| **① マッチングの点数付け** | 案件と人材の相性を0〜100点で採点する | Supabase のサーバー | **AIではなくルール計算**（スキル / 経験 / 単価 / 勤務地 / リモート） | 設定不要 |
+| **② 人材・案件の読み取りと所見** | 経歴書を読んで項目を直す／案件文を補う／「この人はここが効く」という所見を書く | **社内PC（このガイドのPC）** | **Claude Code** | 第1章・第8章 |
 
 ②が今回「私の Claude から会社の Claude に入れ替える」対象です。
 具体的には、社内PCで動く常駐プログラム（シャドーワーカー）が Claude Code を呼び出して、
@@ -430,7 +428,7 @@ cd akinavi-hr-ai-aws
 
 プロジェクトが作成されたら、左メニューの「Settings」→「API」を開く。
 
-以下の3つをメモしてください（第8章のVercel設定で使います）:
+以下の3つをメモしてください（第7章のVercel設定で使います）:
 
 | メモするもの | 場所 | 用途 |
 |---|---|---|
@@ -461,7 +459,7 @@ cd akinavi-hr-ai-aws
 `supabase/migrations/` に **111 個**の SQL ファイルがあります（2026-08-21 時点）。
 これを**ファイル名の昇順で全部**実行します。1つずつ手で貼るのは現実的でないので、コマンドでまとめて流します。
 
-まず Supabase CLI をこのプロジェクトに繋ぎます（第6章 6-1・6-2 を先にやっても構いません）。
+まず Supabase CLI をこのプロジェクトに繋ぎます（第5章 5-1・5-2 を先にやっても構いません）。
 
 ```powershell
 supabase login
@@ -512,7 +510,7 @@ supabase db query --linked -f supabase\migrations\（エラーになったファ
 
 | ファイル | 何のスケジュールか |
 |---|---|
-| `add_email_polling_cron.sql` | 5分ごとのメール取得（第7章で設定します） |
+| `add_email_polling_cron.sql` | 5分ごとのメール取得（第6章で設定します） |
 | `add_auto_match_cron.sql` | 毎朝 JST 9:00 の自動マッチング |
 | `add_skill_cleanup_cron.sql` | 毎日 JST 3:00 のスキルマスタ整理 |
 | `add_archive_candidates_cron.sql` | 毎日 JST 0:00 の人材アーカイブ（人材マップ用） |
@@ -550,76 +548,7 @@ SELECT count(*) AS 駅マスタ件数 FROM station_master;
 
 ---
 
-## 第5章　AIの設定（APIキーの取得）
-
-> **重要**: 2026-05-19 のコミット `139a4f2` でメール解析（`inbound-email`）から AI 利用が完全に除去され、コミット `a4dc3b4` でデッドコードも削除されました。
-> 2026-05-22 のコミット `b35df40` で新しい **`match-batch`** Edge Function が導入され、マッチング処理は「ルールベース事前フィルタ + バッチ AI 採点」方式になりました。
-> 現在 AI を使うのは **マッチング処理（`match-batch` / `match-score` / `auto-match`）** と **`poll-email` メール種別分類（任意・既定 OFF）** だけです。
-
-| AI | 主な用途 | 必須度 |
-|---|---|---|
-| Cerebras | `match-batch` / `match-score` の **1 段目**（軽量・実質無制限） | 推奨（高速化に寄与） |
-| Groq | `match-batch` / `match-score` の **2 段目**（高精度モデル `llama-3.3-70b-versatile`） | ◎ 必須 |
-| Gemini | `match-batch` / `match-score` の **最終フォールバック**・`poll-email` 種別分類 | ◎ 必須 |
-
-> **取得したAPIキーは第6章と第8章でまとめて登録します。ここではメモするだけでOKです。**
-> 3 段すべて失敗してもルールスコアで全代替されるため、システム自体は止まりませんが、AI 採点なしでは品質が落ちるので必ず Groq と Gemini は登録してください。
-
-### 5-1. Gemini APIキーを取得する（必須）
-
-**1. `https://aistudio.google.com` をブラウザで開く**
-
-Googleアカウントでログインします。
-
----
-
-**2. 「Get API key」をクリック**
-
----
-
-**3. 「Create API key」をクリックしてAPIキーを発行する**
-
-表示されたキー（`AIza...` のような文字列）をメモしてください。
-
-> Gemini はプリペイド制（従量課金）です。無料枠はありません。クレジット切れの場合は `auto-match` のスコア計算が失敗します。
-
-### 5-2. Groq APIキーを取得する（必須）
-
-Groq は `match-score`（手動マッチング）の 2 段目モデル（`llama-3.3-70b-versatile`）として使います。無料枠は 500K tokens/日（JST 9:00 リセット）で、マッチング用なら約 300 ペア/日に相当します。
-
-**1. `https://console.groq.com` をブラウザで開く**
-
-アカウントを作成（または Google アカウントでログイン）します。
-
----
-
-**2. 「API Keys」→「Create API Key」でキーを発行する**
-
-表示されたキー（`gsk_...` のような文字列）をメモしてください。
-
-### 5-3. Cerebras APIキーを取得する（推奨）
-
-Cerebras は `match-score` の 1 段目（軽量モデル `llama3.1-8b`）として使います。無料枠が非常に大きいため実質無制限で、ここで成功すれば Groq を消費しません。
-
-**1. `https://cloud.cerebras.ai` をブラウザで開く**
-
-アカウントを作成（または Google アカウントでログイン）します。
-
----
-
-**2. 「API Keys」→「Generate API Key」でキーを発行する**
-
-表示されたキーをメモしてください。
-
-### 完了チェック
-
-- [ ] Google AI Studio で Gemini APIキーを取得し、メモした（必須）
-- [ ] Groq で APIキーを取得し、メモした（必須）
-- [ ] Cerebras で APIキーを取得し、メモした（推奨）
-
----
-
-## 第6章　サーバー機能のデプロイ（Edge Functions）
+## 第5章　サーバー機能のデプロイ（Edge Functions）
 
 「Edge Functions」とは、Supabase のサーバー上で動くプログラムです。  
 このシステムでは以下の Edge Functions をデプロイします。
@@ -641,7 +570,7 @@ Cerebras は `match-score` の 1 段目（軽量モデル `llama3.1-8b`）とし
 | `verify-agent-license` | 派遣・職業紹介の許可番号チェック |
 | `hf-proxy` | 外部モデル呼び出しの中継 |
 
-### 6-1. Supabase CLIでログインする
+### 5-1. Supabase CLIでログインする
 
 ```bash
 npx supabase login
@@ -649,7 +578,7 @@ npx supabase login
 
 ブラウザが自動で開くのでログインしてください。
 
-### 6-2. このプロジェクトに接続する
+### 5-2. このプロジェクトに接続する
 
 「Reference ID」（プロジェクトID）を Supabase ダッシュボードの「Settings」→「General」→「Reference ID」で確認してメモしてください。
 
@@ -658,7 +587,7 @@ cd akinavi-hr-ai
 npx supabase link --project-ref （Reference IDを貼り付け）
 ```
 
-### 6-3. Edge Functions をデプロイする
+### 5-3. Edge Functions をデプロイする
 
 `supabase/functions/` にあるものを全部デプロイします。
 
@@ -688,9 +617,7 @@ supabase functions deploy inbound-email
 
 それぞれ「Deployed」と表示されればOKです。
 
-> **デプロイ前に型検査したい場合**は `npm run check:edge <function>` を使うと `deno check` で TS2304（未定義変数）を検知し、エラーがあればデプロイを中止できます。`npm run deploy:edge <function>` で「型検査 + デプロイ」をまとめて実行できます。引数を省略すると `inbound-email` を対象とします。
-
-### 6-4. Secrets（機密情報）を登録する
+### 5-4. Secrets（機密情報）を登録する
 
 「Secrets」とは、サーバー上のプログラムが使うAPIキーやパスワードを安全に保管する場所です。  
 Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add new secret」から登録します。
@@ -699,25 +626,22 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add
 
 | Secret名 | 値 | 必須 |
 |---|---|---|
-| `GEMINI_API_KEY` | 第5章でメモしたGemini APIキー（`auto-match` 等で使用） | ◎ |
-| `GROQ_API_KEY` | 第5章でメモしたGroq APIキー（`match-score` で使用） | ◎ |
-| `CEREBRAS_API_KEY` | 第5章でメモしたCerebras APIキー（`match-score` 1 段目） | 推奨 |
 | `INBOUND_CALL_KEY` | 第4章でメモした service_role キー | ◎ |
 | `GITHUB_TOKEN` | GitHub Personal Access Token（`repo` スコープ）。`create-github-issue` Edge Function 用 | Issue 連携を使う場合 |
 
 > `SUPABASE_URL` と `SUPABASE_SERVICE_ROLE_KEY` は Supabase が自動で設定するため、手動登録は不要です。もしエラーが出る場合は手動で追加してください。  
-> `inbound-email` は AI を使わなくなったため、上記の API キーがなくてもメール解析自体は動きます。ただしマッチング処理が動かないと意味がないので必ず設定してください。
+> メール解析もマッチングの点数計算も AI を使っていないので、**外部 AI の APIキーは登録しなくて構いません**（付録A 参照）。
 
-**第7章で追加登録するもの（今はスキップ）**
+**第6章で追加登録するもの（今はスキップ）**
 
 | Secret名 | 用途 |
 |---|---|
-| `GRAPH_CLIENT_ID` | 第7章で取得 |
-| `GRAPH_CLIENT_SECRET` | 第7章で取得 |
-| `GRAPH_REFRESH_TOKEN_HUMAN` | 第7章で取得 |
-| `GRAPH_REFRESH_TOKEN_PROJECT` | 第7章で取得 |
-| `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 第7章で取得 |
-| `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 第7章で取得 |
+| `GRAPH_CLIENT_ID` | 第6章で取得 |
+| `GRAPH_CLIENT_SECRET` | 第6章で取得 |
+| `GRAPH_REFRESH_TOKEN_HUMAN` | 第6章で取得 |
+| `GRAPH_REFRESH_TOKEN_PROJECT` | 第6章で取得 |
+| `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 第6章で取得 |
+| `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 第6章で取得 |
 
 **Box 連携を使う場合のみ**
 
@@ -739,12 +663,12 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add
 - [ ] `supabase login` が完了した
 - [ ] `supabase link` でプロジェクトに接続した
 - [ ] 全Edge Functions（14個）をデプロイした
-- [ ] `GEMINI_API_KEY`・`GROQ_API_KEY`・`CEREBRAS_API_KEY`・`INBOUND_CALL_KEY` を Secrets に登録した
+- [ ] `INBOUND_CALL_KEY` を Secrets に登録した
 - [ ] （任意）Issue 連携を使う場合は `GITHUB_TOKEN` も登録した
 
 ---
 
-## 第7章　メール自動取り込みの設定
+## 第6章　メール自動取り込みの設定
 
 この章では、第2章で作成した4つのOutlookアカウントと、このシステムを連携させます。  
 「5分ごとに未読メールを自動で取得・解析・保存する」という仕組みを作ります。
@@ -757,7 +681,7 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add
 ③ Supabaseにスケジューラを登録する
 ```
 
-### 7-1. Azureにアプリを登録する
+### 6-1. Azureにアプリを登録する
 
 「Azure」は Microsoft のクラウドサービスです。ここでアプリを登録することで、このシステムがOutlookにアクセスする許可を得ます。**Microsoftアカウントがあれば無料で使えます。**
 
@@ -820,7 +744,7 @@ Microsoftアカウント（Outlookアカウントのどれかでも可）でロ�
 
 今すぐ Supabase ダッシュボード → 「Edge Functions」→「Secrets」に登録してください。
 
-### 7-2. 各Outlookアカウントのリフレッシュトークンを取得する
+### 6-2. 各Outlookアカウントのリフレッシュトークンを取得する
 
 「リフレッシュトークン」とは、このシステムがOutlookにアクセスし続けるための認証情報です。  
 4つのアカウント分を取得します。
@@ -886,7 +810,7 @@ Supabase ダッシュボード → 「Edge Functions」→「Secrets」で、以
 | `GRAPH_REFRESH_TOKEN_HUMAN_DEV` | 人材用・デモのリフレッシュトークン |
 | `GRAPH_REFRESH_TOKEN_PROJECT_DEV` | 案件用・デモのリフレッシュトークン |
 
-### 7-3. 拡張機能を有効にする
+### 6-3. 拡張機能を有効にする
 
 Supabase のスケジューラ機能（pg_cron）と HTTP通信機能（pg_net）を有効にします。
 
@@ -895,13 +819,13 @@ Supabase ダッシュボード → 「Database」→「Extensions」を開き、
 - `pg_cron`
 - `pg_net`
 
-### 7-4. 5分ごとのスケジュールを登録する
+### 6-4. 5分ごとのスケジュールを登録する
 
 `supabase/migrations/add_email_polling_cron.sql` をテキストエディタで開き、以下の2箇所を書き換えます:
 
 | 書き換え前 | 書き換え後 |
 |---|---|
-| `YOUR_PROJECT_REF` | Supabase の Reference ID（第6章でメモしたもの） |
+| `YOUR_PROJECT_REF` | Supabase の Reference ID（第5章でメモしたもの） |
 | `YOUR_SERVICE_ROLE_KEY` | Supabase の service_role キー（第4章でメモしたもの） |
 
 書き換えたら、Supabase の SQL Editor に全文貼り付けて「Run」をクリック。
@@ -920,12 +844,12 @@ Supabase ダッシュボード → 「Database」→「Extensions」を開き、
 
 ---
 
-## 第8章　本番サイトの公開（Vercel）
+## 第7章　本番サイトの公開（Vercel）
 
 「Vercel」とは、作ったWebサイトをインターネット上に公開するためのサービスです。無料で使えます。  
 **ここで環境変数（設定値）をまとめて登録してデプロイすると、本番サイトが完成します。**
 
-### 8-1. Vercelにサインアップ・プロジェクトをインポートする
+### 7-1. Vercelにサインアップ・プロジェクトをインポートする
 
 **1. `https://vercel.com` を開き、GitHubアカウントでサインアップ**
 
@@ -943,8 +867,6 @@ Supabase ダッシュボード → 「Database」→「Extensions」を開き、
 |---|---|---|
 | `VITE_SUPABASE_URL` | Supabase の Project URL | 第4章 |
 | `VITE_SUPABASE_ANON_KEY` | Supabase の anon キー | 第4章 |
-| `VITE_GEMINI_API_KEY` | Gemini の APIキー | 第5章 |
-| `VITE_AI_PROVIDER` | `gemini`（そのまま入力） | — |
 | `VITE_DEMO_KEY` | 任意の文字列（例: `demo2024`）| — |
 
 > `VITE_DEMO_KEY` はデモ環境の解除キーです。自分で決めた文字列を設定してください。  
@@ -959,7 +881,7 @@ Supabase ダッシュボード → 「Database」→「Extensions」を開き、
 
 以降は `main` ブランチに変更を push するたびに**自動で再デプロイ**されます。
 
-### 8-2. 環境変数を後から変更する場合
+### 7-2. 環境変数を後から変更する場合
 
 Vercel ダッシュボード → プロジェクトを選択 → 「Settings」→「Environment Variables」から変更できます。  
 変更後は「Deployments」→「Redeploy」で再デプロイが必要です。
@@ -973,12 +895,12 @@ Vercel ダッシュボード → プロジェクトを選択 → 「Settings」�
 
 ---
 
-## 第9章　AIワーカーを常駐させる（会社のClaudeに切り替える）
+## 第8章　AIワーカーを常駐させる（会社のClaudeに切り替える）
 
-第8章までで、サイトとメール取り込みは動きます。
+第7章までで、サイトとメール取り込みは動きます。
 この章では、**人材・案件・マッチングの AI 処理**を担当する常駐プログラム（シャドーワーカー）を、このPCで動かします。
 
-### 9-0. このプログラムが何をしているか
+### 8-0. このプログラムが何をしているか
 
 `scripts/llm_extract/shadow_worker.mjs` が5分ごとに次の4つを回します。すべて**第1章でログインした Claude アカウント**の枠を使います。
 
@@ -989,10 +911,10 @@ Vercel ダッシュボード → プロジェクトを選択 → 「Settings」�
 | マッチング所見 | 提案ごとに「この案件はこういう人でないと通らない」「この方はこの経験が効く」という所見を書く |
 | Box取込 | Box に置かれた経歴書を取得して解析する |
 
-> **マッチングの点数そのものは Claude ではありません。** 点数は Supabase 側の
-> ルール計算 + Cerebras / Groq / Gemini（第5章）です。ここで作るのは**点数の理由と所見**です。
+> **マッチングの点数そのものは Claude ではありません。** 点数は Supabase 側のルール計算
+> （スキル / 経験 / 単価 / 勤務地 / リモート）です。ここで作るのは**点数の理由と所見**です。
 
-### 9-1. 接続情報のファイルを作る
+### 8-1. 接続情報のファイルを作る
 
 ワーカーがデータベースに書き込むための情報を、ホームフォルダにファイルとして置きます。
 
@@ -1011,7 +933,7 @@ SUPABASE_SERVICE_KEY=（第4章 4-1 でメモした service_role キー）
 > `service_role` キーはデータベースを何でも操作できる鍵です。**このファイルは絶対に他人に渡さず、GitHub にも上げないでください。**
 > ファイル名の先頭がピリオド（`.`）である点に注意してください。
 
-### 9-2. 手動で1回動かして確認する
+### 8-2. 手動で1回動かして確認する
 
 いきなり常駐させず、まず手で動かして正常に回ることを見ます。
 
@@ -1035,7 +957,7 @@ node scripts/llm_extract/shadow_worker.mjs
 | `timeout` が続く | Claude の応答が返っていない。`claude -p "test"` が動くか第1章 1-5 で確認 |
 | `Usage limit reached` | 会社アカウントの利用枠切れ。プランを確認 |
 
-### 9-3. 常駐させる（pm2）
+### 8-3. 常駐させる（pm2）
 
 PCを再起動しても自動で動き続けるように、**pm2** という常駐管理ソフトを使います。
 
@@ -1079,7 +1001,7 @@ pm2 logs akinavi-shadow
 | 設定（環境変数）も入れ直して再起動 | `pm2 restart akinavi-shadow --update-env` |
 | 登録から消す | `pm2 delete akinavi-shadow` |
 
-### 9-4. 個人アカウントから会社アカウントに切り替える手順
+### 8-4. 個人アカウントから会社アカウントに切り替える手順
 
 **すでに個人アカウントでワーカーが動いている場合**は、この順番で入れ替えてください。
 順番を間違えると、切り替え途中の処理が個人枠で走ってしまいます。
@@ -1131,7 +1053,7 @@ pm2 logs akinavi-shadow
 > - Windows: `pm2 stop akinavi-shadow`
 > - Mac / Linux: `pkill -f shadow_worker`
 
-### 9-5. 動作モードの切り替え
+### 8-5. 動作モードの切り替え
 
 環境変数でふるまいを変えられます。値を変えたら `pm2 restart akinavi-shadow --update-env` が必要です。
 
@@ -1144,7 +1066,7 @@ pm2 logs akinavi-shadow
 
 上限は**利用枠を使い切らないための安全装置**です。切り替え直後は小さめ（例: 20）にして、枠の減り方を見てから戻すのが安全です。
 
-### 9-6. うまくいかないときの確認順
+### 8-6. うまくいかないときの確認順
 
 1. `pm2 list` — `akinavi-shadow` が `online` か
 2. `pm2 logs akinavi-shadow` — エラーが出ていないか
@@ -1167,7 +1089,7 @@ pm2 logs akinavi-shadow
 全章が完了したら、以下を本番URLで確認してください。
 
 - [ ] `claude auth status` が**会社の**アカウントになっている（第1章）
-- [ ] `pm2 list` で `akinavi-shadow` が `online`（第9章）
+- [ ] `pm2 list` で `akinavi-shadow` が `online`（第8章）
 - [ ] 本番URLでブラウザにエラーなく画面が表示される
 - [ ] 「人材」タブでテキストを貼り付けて「登録」が動く（Phase 4.11 で「AI で登録」は廃止・登録ボタンに統一）
 - [ ] 「マッチング」タブでスコアが表示される（スコア降順）
@@ -1195,10 +1117,19 @@ pm2 logs akinavi-shadow
 - Vercel の環境変数に誤りがある（スペースや余分な文字が入っていないか確認）
 - 環境変数を設定後に再デプロイしていない
 
-### AIが解析されない（登録できない）
+### 人材・案件が登録されない
 
-- Vercel の `VITE_GEMINI_API_KEY` が正しく設定されているか確認
 - Supabase の「Edge Functions」→「Logs」→「inbound-email」でエラーが出ていないか確認
+- メール解析は AI を使っていないので、APIキーの設定は関係ありません
+
+### AIの補正がかからない（氏名・年数などが直らない）
+
+第8章のワーカーが動いているか確認します。
+
+```powershell
+pm2 logs akinavi-shadow
+claude auth status
+```
 
 ### メールが自動取り込みされない
 
@@ -1227,3 +1158,29 @@ Supabase の「Edge Functions」→「Logs」→「poll-email」のログを確�
 | `docs/Outlook_AutoForward_Setup.md` | Outlook の自動転送設定 |
 | `CLAUDE.md` | 開発時の決まりごと・運用ルール（開発者向け） |
 | `scripts/llm_extract/README.md` | AIワーカーの設計（開発者向け） |
+
+---
+
+## 付録A（任意）　マッチングのAI採点を有効にする
+
+**通常のセットアップでは不要です。この章は飛ばして構いません。**
+
+マッチングの点数は Supabase 側の**ルール計算**（スキル / 経験 / 単価 / 勤務地 / リモート）で出しています。
+そのうえで上位の候補だけを外部 AI に再採点させる仕組みも実装されていますが、**現在は使っていません**
+（直近30日の実測: AI採点の呼び出し 0 件）。
+
+APIキーを登録しなければ AI 採点は自動的にスキップされ、**全件がルールスコアのまま**返ります。
+マッチングは問題なく動くので、キーを取らないままで構いません。
+
+あとから有効にしたくなった場合は、次の3つを取得して Supabase の Secrets に登録します。
+
+| Secret 名 | 取得元 | 役割 |
+|---|---|---|
+| `CEREBRAS_API_KEY` | `https://cloud.cerebras.ai` | 1段目（軽量） |
+| `GROQ_API_KEY` | `https://console.groq.com` | 2段目（高精度） |
+| `GEMINI_API_KEY` | `https://aistudio.google.com` | 最終フォールバック |
+
+3段すべて失敗してもルールスコアで代替されるため、システムが止まることはありません。
+
+> ここで言う AI は**マッチングの点数付け**の話です。人材・案件の読み取りと所見を書く AI
+> （Claude Code）は第1章・第8章のほうで、こちらは実際に使っています。

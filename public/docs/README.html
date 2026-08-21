@@ -39,8 +39,8 @@
 </tr>
 </thead>
 <tbody><tr>
-<td>AI マッチング</td>
-<td>案件と人材の相性スコアと理由を AI が自動生成。手動 (<code>match-score</code>) / バッチ採点 (<code>match-batch</code>) / 自動 cron (<code>auto-match</code>) の 3 経路。<strong>ルールスコアは SQL 側で完結</strong>（<code>fetch_candidates_for_project</code> RPC）し、トップ N (=10) のみ AI 採点</td>
+<td>マッチング</td>
+<td>案件と人材の相性スコアを算出。<strong>スコアは SQL 側のルール計算で完結</strong>（<code>fetch_candidates_for_project</code> RPC・スキル40/経験15/単価15/勤務地20/リモート10）。手動 (<code>match-score</code>) / バッチ (<code>match-batch</code>) / 自動 cron (<code>auto-match</code>) の 3 経路。上位のみ外部 AI で再採点する経路も実装されているが<strong>現在は使っていない</strong>（→ 下記「マッチングのスコアリング」）</td>
 </tr>
 <tr>
 <td>人材登録</td>
@@ -102,10 +102,8 @@
     B --&gt;|高速/全件マッチ| MB[Edge Function&lt;br/&gt;match-batch&lt;br/&gt;ウェイト調整 + バッチ AI 採点]
     B --&gt;|SQL側で&lt;br/&gt;ルールスコア算出 + 上位500件取得| RPC[(RPC&lt;br/&gt;fetch_candidates_for_project&lt;br/&gt;p_weight_skill/exp/rate/location/remote)]
     RPC --&gt; D
-    MS --&gt;|Cerebras → Groq 70B → Gemini&lt;br/&gt;3段失敗時はエラー| AI[AI プロバイダー]
-    MB --&gt;|Cerebras → Groq 70B → Gemini&lt;br/&gt;3段失敗時は ruleScore で全代替| AI
-    AI --&gt;|スコア・理由&lt;br/&gt;±15pt 制限| MS
-    AI --&gt;|スコア・理由&lt;br/&gt;topN=10| MB
+    MS -.-&gt;|AI再採点は現在未使用&lt;br/&gt;キー未設定なら ruleScore| AI[外部AIプロバイダ&lt;br/&gt;※未稼働]
+    MB -.-&gt;|AI再採点は現在未使用&lt;br/&gt;キー未設定なら ruleScore| AI
     MS --&gt;|upsert submissions| D
     MB --&gt;|upsert submissions&lt;br/&gt;ai_raw.ruleScore も保存| D
 
@@ -153,23 +151,15 @@
 </tr>
 <tr>
 <td>AI（ブラウザ）</td>
-<td>Gemini <code>gemini-2.5-flash-lite</code>（<code>VITE_GEMINI_MODEL</code> で変更可）。<strong>人材・案件登録 UI からは未使用</strong>（Phase 4.11 で「AI で登録」廃止）</td>
+<td><strong>未使用</strong>（Phase 4.11 で「AI で登録」廃止。<code>VITE_GEMINI_*</code> は設定不要）</td>
 </tr>
 <tr>
-<td>AI（サーバー・マッチング新方式）</td>
-<td><code>match-batch</code>: ルールベース事前フィルタ (スキル40/経験15/単価15/勤務地20/リモート10 = 100pt) → topN を 1 コール バッチ採点。Cerebras <code>llama3.1-8b</code> → Groq <code>llama-3.3-70b-versatile</code> → Gemini <code>gemini-2.5-flash</code> フォールバック。3 段失敗時はルールスコアで全代替</td>
+<td>マッチングのスコア</td>
+<td><code>match-batch</code> / <code>match-score</code> / <code>auto-match</code>。<strong>SQL 側のルール計算</strong>（スキル40/経験15/単価15/勤務地20/リモート10 = 100pt）。上位のみ外部 AI で再採点する経路も実装されているが<strong>現在は未使用</strong>（→「マッチングのスコアリング」）</td>
 </tr>
 <tr>
-<td>AI（サーバー・マッチング単発）</td>
-<td><code>match-score</code>: 上記と同じフォールバック順。<code>duplicateSuspected</code> フラグ込みの単発スコア。理由は <strong>150 字以内</strong></td>
-</tr>
-<tr>
-<td>AI（サーバー・自動マッチング）</td>
-<td><code>auto-match</code>（毎朝 JST 9:00 cron）: <code>match-batch</code> を内部呼び出し → 同じフォールバック順を継承</td>
-</tr>
-<tr>
-<td>AI（サーバー・メール種別分類）</td>
-<td><code>poll-email</code> の同一受信箱判別: Gemini <code>gemini-2.5-flash-lite</code> バッチ（任意・既定は無効）</td>
+<td>メール種別分類</td>
+<td><code>poll-email</code> の同一受信箱判別（任意・<strong>既定は無効</strong>）</td>
 </tr>
 <tr>
 <td>メール解析</td>
@@ -177,7 +167,7 @@
 </tr>
 <tr>
 <td>AI（社内PC・人材/案件の読み取り）</td>
-<td><strong>Claude Code</strong>（<code>claude -p</code>）。社内PCで常駐する <code>scripts/llm_extract/shadow_worker.mjs</code> が5分ごとに、新規人材の項目補正・新規案件の項目補完・マッチング提案の所見生成・Box 経歴書の取込を行う。<strong>マッチングの点数計算とは別物</strong>（点数は下記のルール + Cerebras/Groq/Gemini）。セットアップは <code>docs/HandsOn_Setup.md</code> 第1章・第9章</td>
+<td><strong>Claude Code</strong>（<code>claude -p</code>）。社内PCで常駐する <code>scripts/llm_extract/shadow_worker.mjs</code> が5分ごとに、新規人材の項目補正・新規案件の項目補完・マッチング提案の所見生成・Box 経歴書の取込を行う。<strong>マッチングの点数計算とは別物</strong>（点数はルール計算）。<strong>現在このシステムで実際に使っている唯一の AI</strong>。セットアップは <code>docs/HandsOn_Setup.md</code> 第1章・第8章</td>
 </tr>
 <tr>
 <td>ファイル解析</td>
@@ -213,44 +203,66 @@
 </tr>
 </tbody></table>
 <hr>
-<h2>無料枠の限界（現状）</h2>
-<p>メール解析が AI 非依存になったため、<strong>メール取り込みは無料枠の影響を受けません</strong>。AI を消費するのは「マッチング処理」と「メール種別分類（任意）」のみ。さらに <code>match-batch</code> でルールベース事前フィルタを噛ませているため、1 案件 = 1 AI コールに圧縮されます。</p>
+<h2>マッチングのスコアリング</h2>
+<p><strong>スコアは外部 AI を使わず、SQL 側のルール計算で出している。</strong></p>
 <table>
 <thead>
 <tr>
-<th>AI</th>
-<th>役割</th>
-<th>無料上限</th>
-<th>備考</th>
+<th>観点</th>
+<th>既定ウェイト</th>
 </tr>
 </thead>
 <tbody><tr>
-<td>Cerebras <code>llama3.1-8b</code></td>
-<td><code>match-batch</code> / <code>match-score</code> の 1 段目</td>
-<td>実質無制限</td>
-<td>軽量バッチ採点向け</td>
+<td>スキル一致</td>
+<td>40</td>
 </tr>
 <tr>
-<td>Groq <code>llama-3.3-70b-versatile</code></td>
-<td><code>match-batch</code> / <code>match-score</code> の 2 段目（精度重視）</td>
-<td>500K tokens/日（JST 9:00 リセット）</td>
-<td>マッチング数百〜千案件/日が目安</td>
+<td>勤務地</td>
+<td>20</td>
 </tr>
 <tr>
-<td>Gemini <code>gemini-2.5-flash</code></td>
-<td><code>match-batch</code> / <code>match-score</code> の最終フォールバック</td>
-<td>プリペイド制（要チャージ）</td>
-<td>1 バッチ ~3〜5K tokens 程度</td>
+<td>経験年数</td>
+<td>15</td>
 </tr>
 <tr>
-<td>Gemini <code>gemini-2.5-flash-lite</code></td>
-<td><code>poll-email</code> メール種別分類（任意）・ブラウザ補助</td>
-<td>プリペイド制</td>
-<td>既定 OFF</td>
+<td>単価</td>
+<td>15</td>
+</tr>
+<tr>
+<td>リモート可否</td>
+<td>10</td>
 </tr>
 </tbody></table>
+<p><code>match-batch</code> には「ルールで上位に来た候補だけ外部 AI に再採点させる」経路（Cerebras → Groq → Gemini の 3 段）が実装されているが、<strong>現在は稼働していない</strong>。
+API キーが未設定なら 3 段とも失敗し、<code>ai?.score ?? c.ruleScore</code> で全件がルールスコアのまま返る。実測（<code>ai_logs</code>・直近 30 日）:</p>
+<table>
+<thead>
+<tr>
+<th>model</th>
+<th>件数</th>
+<th>内訳</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>no-ai</code></td>
+<td>31,009</td>
+<td><code>inbound-email</code> のメール解析（元から AI 不使用）</td>
+</tr>
+<tr>
+<td><code>gemini-2.5-flash-lite</code></td>
+<td>2</td>
+<td><code>poll-email</code> のメール種別分類（既定 OFF）</td>
+</tr>
+<tr>
+<td>Cerebras / Groq / Gemini（採点）</td>
+<td><strong>0</strong></td>
+<td>使われていない</td>
+</tr>
+</tbody></table>
+<p>有効化したい場合の手順は <code>docs/HandsOn_Setup.md</code> の付録A を参照。</p>
 <blockquote>
-<p>マッチング処理が天井。3 段すべて失敗してもルールスコアで全代替されるので、システム自体は止まらない。メール処理は規模に関係なく無料で永続稼働。</p>
+<p><strong>実際に AI を使っているのは Claude Code のワーカーだけ</strong>（人材・案件の項目補正と提案の所見）。
+スコアの計算とは別系統で、社内PCで動く。</p>
 </blockquote>
 <hr>
 <h2>ローカル開発環境のセットアップ</h2>
@@ -275,10 +287,6 @@ cd akinavi-hr-ai
 <pre><code class="language-env"># Supabase（Dashboard → Settings → API から取得）
 VITE_SUPABASE_URL=https://argizomylbolpqxgmvim.supabase.co
 VITE_SUPABASE_ANON_KEY=（anon キーを貼り付け）
-
-# Gemini（Google AI Studio から取得）
-VITE_GEMINI_API_KEY=（APIキーを貼り付け）
-VITE_AI_PROVIDER=gemini
 
 # デモ環境の解除キー（任意・未設定でもOK）
 VITE_DEMO_KEY=（任意の文字列）
@@ -343,10 +351,6 @@ VITE_DEMO_KEY=（任意の文字列）
 <tr>
 <td><code>VITE_SUPABASE_ANON_KEY</code></td>
 <td>Supabase の anon キー</td>
-</tr>
-<tr>
-<td><code>VITE_GEMINI_API_KEY</code></td>
-<td>Gemini API キー</td>
 </tr>
 <tr>
 <td><code>VITE_AI_PROVIDER</code></td>
@@ -566,7 +570,7 @@ npm run deploy:edge inbound-email  # 型検査 + supabase functions deploy
 <li><code>station_master</code> テーブルへ <code>INSERT ... ON CONFLICT DO NOTHING</code> で駅を追加（旧 <code>STATION_TO_PREFECTURE</code> ハードコードは保持しつつ DB 側で拡張）</li>
 <li><code>python3 scripts/skill_master_review.py</code> → 怪しい <code>source=&#39;ai&#39;</code> スキルの削除候補 SQL を出力</li>
 <li><code>[SKIP_IRRELEVANT]</code> ログを確認（TRAINING_REPORT / PROJECT_SOLICITATION 等の誤投函パターン）</li>
-<li><strong>AI コスト監視</strong>（<code>ai_logs</code> テーブル）: モデル別・日次呼び出し数を集計し、Gemini 無料枠超過 / プリペイドクレジット枯渇 / フォールバック多発を検知</li>
+<li><strong>AI 呼び出し監視</strong>（<code>ai_logs</code> テーブル）: モデル別・日次呼び出し数を集計。外部 AI は現在使っていないので、<code>no-ai</code> 以外が増えていたら設定を確認する</li>
 <li><strong>GitHub Issue の整理</strong>: 設定タブの「改善案・バグメモ」から登録された Issue を確認し、重複や対応済みのものをクローズ</li>
 </ol>
 <hr>
@@ -649,19 +653,19 @@ inbound-email Edge Function（※ AI は呼ばない）
 <td><code>match-batch</code></td>
 <td>UI ボタン（高速/全件）または <code>auto-match</code> から内部呼び出し</td>
 <td>高速モード: <code>matching_fast_max_candidates</code>（既定 20）<br>全件モード: <code>fetch_candidates_for_project</code> 上限 500<br>auto-match: 案件 1 件あたり最大 40 名</td>
-<td>Cerebras → Groq 70B → Gemini → 3 段失敗時はルールスコアで全代替</td>
+<td>ルールスコア（AI 再採点は未使用）</td>
 </tr>
 <tr>
 <td><code>match-score</code></td>
 <td>手動（個別スコア確認・duplicate 検出）</td>
 <td>1 ペア</td>
-<td>Cerebras → Groq 70B → Gemini</td>
+<td>ルールスコア（AI 再採点は未使用）</td>
 </tr>
 <tr>
 <td><code>auto-match</code></td>
 <td>毎朝 JST 9:00 cron。<code>auto_match_enabled=&#39;false&#39;</code> でスキップ</td>
 <td>直近 25 時間以内に登録された <code>prod</code> 案件 ×最大 40 名</td>
-<td><code>match-batch</code> 経由（Cerebras → Groq 70B → Gemini）</td>
+<td><code>match-batch</code> 経由</td>
 </tr>
 </tbody></table>
 <h3>ルールベーススコア（既定ウェイト・0〜100pt）</h3>
@@ -973,7 +977,7 @@ regex + skill_master DB 照合 → candidates / projects に upsert
 │       ├── poll-email/           # Outlook ポーリング Edge Function（5 分ごと cron）
 │       ├── auto-match/           # 自動マッチング Edge Function（毎朝 JST 9:00 cron・match-batch を内部呼び出し）
 │       ├── match-batch/          # バッチ AI 採点 Edge Function（fetch_candidates_for_project RPC + topN=10 を 1 コール採点・ウェイト可変）
-│       ├── match-score/          # 単発スコア Edge Function（duplicate 検出付き・Cerebras→Groq→Gemini）
+│       ├── match-score/          # 単発スコア Edge Function（duplicate 検出付き・ルールスコア）
 │       ├── archive-candidates/   # 7 日アーカイブ Edge Function（毎日 JST 0:00 cron・人材マップ全期間集計用）
 │       ├── create-github-issue/  # GitHub Issue 登録 Edge Function（POST 作成 / GET 一覧 / PATCH クローズ）
 │       ├── microsoft-oauth/      # Microsoft OAuth 認証 Edge Function

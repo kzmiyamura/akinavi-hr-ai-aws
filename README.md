@@ -9,7 +9,7 @@
 
 | 機能 | 説明 |
 |---|---|
-| AI マッチング | 案件と人材の相性スコアと理由を AI が自動生成。手動 (`match-score`) / バッチ採点 (`match-batch`) / 自動 cron (`auto-match`) の 3 経路。**ルールスコアは SQL 側で完結**（`fetch_candidates_for_project` RPC）し、トップ N (=10) のみ AI 採点 |
+| マッチング | 案件と人材の相性スコアを算出。**スコアは SQL 側のルール計算で完結**（`fetch_candidates_for_project` RPC・スキル40/経験15/単価15/勤務地20/リモート10）。手動 (`match-score`) / バッチ (`match-batch`) / 自動 cron (`auto-match`) の 3 経路。上位のみ外部 AI で再採点する経路も実装されているが**現在は使っていない**（→ 下記「マッチングのスコアリング」） |
 | 人材登録 | テキスト貼り付け・Excel・Word をアップロードするだけで自動解析・登録（PDF / 画像は現状未対応）。HTML テーブル形式メール / `[氏名]` ラベル / `[氏名]男性：51 歳` 等の混入パターンに対応 |
 | 案件登録 | 同上。メール本文や要件定義書をそのまま貼り付け OK。【場所】【単価】【時期】【備考】等のブラケット形式・`単金(税抜)` 括弧付きラベル・■PR セクション・希望ラベルに対応 |
 | メール自動取り込み | 専用 Outlook アドレスを 5 分ごとにポーリング → 取得 → DB 保存（AI 不使用・ルールベース）。営業/広告メール（メール配信解除・研修販売等）は自動スキップ |
@@ -37,10 +37,8 @@ flowchart TD
     B -->|高速/全件マッチ| MB[Edge Function<br/>match-batch<br/>ウェイト調整 + バッチ AI 採点]
     B -->|SQL側で<br/>ルールスコア算出 + 上位500件取得| RPC[(RPC<br/>fetch_candidates_for_project<br/>p_weight_skill/exp/rate/location/remote)]
     RPC --> D
-    MS -->|Cerebras → Groq 70B → Gemini<br/>3段失敗時はエラー| AI[AI プロバイダー]
-    MB -->|Cerebras → Groq 70B → Gemini<br/>3段失敗時は ruleScore で全代替| AI
-    AI -->|スコア・理由<br/>±15pt 制限| MS
-    AI -->|スコア・理由<br/>topN=10| MB
+    MS -.->|AI再採点は現在未使用<br/>キー未設定なら ruleScore| AI[外部AIプロバイダ<br/>※未稼働]
+    MB -.->|AI再採点は現在未使用<br/>キー未設定なら ruleScore| AI
     MS -->|upsert submissions| D
     MB -->|upsert submissions<br/>ai_raw.ruleScore も保存| D
 
@@ -78,13 +76,11 @@ flowchart TD
 |---|---|
 | フロントエンド | React 19, Vite 8, TypeScript, Tailwind CSS v4, TanStack Query v5 |
 | DB / バックエンド | Supabase（PostgreSQL, Edge Functions, pg_cron, pg_net） |
-| AI（ブラウザ） | Gemini `gemini-2.5-flash-lite`（`VITE_GEMINI_MODEL` で変更可）。**人材・案件登録 UI からは未使用**（Phase 4.11 で「AI で登録」廃止） |
-| AI（サーバー・マッチング新方式） | `match-batch`: ルールベース事前フィルタ (スキル40/経験15/単価15/勤務地20/リモート10 = 100pt) → topN を 1 コール バッチ採点。Cerebras `llama3.1-8b` → Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.5-flash` フォールバック。3 段失敗時はルールスコアで全代替 |
-| AI（サーバー・マッチング単発） | `match-score`: 上記と同じフォールバック順。`duplicateSuspected` フラグ込みの単発スコア。理由は **150 字以内** |
-| AI（サーバー・自動マッチング） | `auto-match`（毎朝 JST 9:00 cron）: `match-batch` を内部呼び出し → 同じフォールバック順を継承 |
-| AI（サーバー・メール種別分類） | `poll-email` の同一受信箱判別: Gemini `gemini-2.5-flash-lite` バッチ（任意・既定は無効） |
+| AI（ブラウザ） | **未使用**（Phase 4.11 で「AI で登録」廃止。`VITE_GEMINI_*` は設定不要） |
+| マッチングのスコア | `match-batch` / `match-score` / `auto-match`。**SQL 側のルール計算**（スキル40/経験15/単価15/勤務地20/リモート10 = 100pt）。上位のみ外部 AI で再採点する経路も実装されているが**現在は未使用**（→「マッチングのスコアリング」） |
+| メール種別分類 | `poll-email` の同一受信箱判別（任意・**既定は無効**） |
 | メール解析 | **AI 不使用**。regex（`extractCandidateFieldsRegex` + `flexLabel`） + 文章スキャン（`extractFromProse`） + `skill_master` 照合 + `station_master` 照合（**8,443 駅名**。デプロイ物に同梱した `station_data.json` を読むので実行時の DB 往復はゼロ）。HTML テーブル形式メール・複数人材分割・送信者署名除去・営業/広告メールフィルタにも対応 |
-| AI（社内PC・人材/案件の読み取り） | **Claude Code**（`claude -p`）。社内PCで常駐する `scripts/llm_extract/shadow_worker.mjs` が5分ごとに、新規人材の項目補正・新規案件の項目補完・マッチング提案の所見生成・Box 経歴書の取込を行う。**マッチングの点数計算とは別物**（点数は下記のルール + Cerebras/Groq/Gemini）。セットアップは `docs/HandsOn_Setup.md` 第1章・第9章 |
+| AI（社内PC・人材/案件の読み取り） | **Claude Code**（`claude -p`）。社内PCで常駐する `scripts/llm_extract/shadow_worker.mjs` が5分ごとに、新規人材の項目補正・新規案件の項目補完・マッチング提案の所見生成・Box 経歴書の取込を行う。**マッチングの点数計算とは別物**（点数はルール計算）。**現在このシステムで実際に使っている唯一の AI**。セットアップは `docs/HandsOn_Setup.md` 第1章・第8章 |
 | ファイル解析 | `xlsx`（Excel）・`mammoth`（Word）。**PDF と画像はテキスト解析対象外**。Excel から `skillYears`（スキル別経験月数）を抽出してマッチングに活用 |
 | 人材マップ | `d3-geo`（Mercator 投影） + `topojson-client` + `public/japan.topojson`（416KB・47 都道府県）。`prefecture_counts` / `candidates_by_prefecture` RPC で SQL 集計（スキルフィルタも RPC 側）。都道府県クリックでズームアニメーション |
 | メール自動受信 | Microsoft Graph API + Supabase pg_cron（**完全無料・Make.com 不要**） |
@@ -96,18 +92,31 @@ flowchart TD
 
 ---
 
-## 無料枠の限界（現状）
+## マッチングのスコアリング
 
-メール解析が AI 非依存になったため、**メール取り込みは無料枠の影響を受けません**。AI を消費するのは「マッチング処理」と「メール種別分類（任意）」のみ。さらに `match-batch` でルールベース事前フィルタを噛ませているため、1 案件 = 1 AI コールに圧縮されます。
+**スコアは外部 AI を使わず、SQL 側のルール計算で出している。**
 
-| AI | 役割 | 無料上限 | 備考 |
-|---|---|---|---|
-| Cerebras `llama3.1-8b` | `match-batch` / `match-score` の 1 段目 | 実質無制限 | 軽量バッチ採点向け |
-| Groq `llama-3.3-70b-versatile` | `match-batch` / `match-score` の 2 段目（精度重視） | 500K tokens/日（JST 9:00 リセット） | マッチング数百〜千案件/日が目安 |
-| Gemini `gemini-2.5-flash` | `match-batch` / `match-score` の最終フォールバック | プリペイド制（要チャージ） | 1 バッチ ~3〜5K tokens 程度 |
-| Gemini `gemini-2.5-flash-lite` | `poll-email` メール種別分類（任意）・ブラウザ補助 | プリペイド制 | 既定 OFF |
+| 観点 | 既定ウェイト |
+|---|---|
+| スキル一致 | 40 |
+| 勤務地 | 20 |
+| 経験年数 | 15 |
+| 単価 | 15 |
+| リモート可否 | 10 |
 
-> マッチング処理が天井。3 段すべて失敗してもルールスコアで全代替されるので、システム自体は止まらない。メール処理は規模に関係なく無料で永続稼働。
+`match-batch` には「ルールで上位に来た候補だけ外部 AI に再採点させる」経路（Cerebras → Groq → Gemini の 3 段）が実装されているが、**現在は稼働していない**。
+API キーが未設定なら 3 段とも失敗し、`ai?.score ?? c.ruleScore` で全件がルールスコアのまま返る。実測（`ai_logs`・直近 30 日）:
+
+| model | 件数 | 内訳 |
+|---|---|---|
+| `no-ai` | 31,009 | `inbound-email` のメール解析（元から AI 不使用） |
+| `gemini-2.5-flash-lite` | 2 | `poll-email` のメール種別分類（既定 OFF） |
+| Cerebras / Groq / Gemini（採点） | **0** | 使われていない |
+
+有効化したい場合の手順は `docs/HandsOn_Setup.md` の付録A を参照。
+
+> **実際に AI を使っているのは Claude Code のワーカーだけ**（人材・案件の項目補正と提案の所見）。
+> スコアの計算とは別系統で、社内PCで動く。
 
 ---
 
@@ -146,10 +155,6 @@ cp .env.example .env.local
 # Supabase（Dashboard → Settings → API から取得）
 VITE_SUPABASE_URL=https://argizomylbolpqxgmvim.supabase.co
 VITE_SUPABASE_ANON_KEY=（anon キーを貼り付け）
-
-# Gemini（Google AI Studio から取得）
-VITE_GEMINI_API_KEY=（APIキーを貼り付け）
-VITE_AI_PROVIDER=gemini
 
 # デモ環境の解除キー（任意・未設定でもOK）
 VITE_DEMO_KEY=（任意の文字列）
@@ -209,7 +214,6 @@ Vercel Dashboard → Environment Variables に以下を設定してから `main`
 |---|---|
 | `VITE_SUPABASE_URL` | Supabase の URL |
 | `VITE_SUPABASE_ANON_KEY` | Supabase の anon キー |
-| `VITE_GEMINI_API_KEY` | Gemini API キー |
 | `VITE_AI_PROVIDER` | `gemini` |
 | `VITE_DEMO_KEY` | デモ解除キー（任意） |
 
@@ -317,7 +321,7 @@ npm run deploy:edge inbound-email  # 型検査 + supabase functions deploy
 2. `station_master` テーブルへ `INSERT ... ON CONFLICT DO NOTHING` で駅を追加（旧 `STATION_TO_PREFECTURE` ハードコードは保持しつつ DB 側で拡張）
 3. `python3 scripts/skill_master_review.py` → 怪しい `source='ai'` スキルの削除候補 SQL を出力
 4. `[SKIP_IRRELEVANT]` ログを確認（TRAINING_REPORT / PROJECT_SOLICITATION 等の誤投函パターン）
-5. **AI コスト監視**（`ai_logs` テーブル）: モデル別・日次呼び出し数を集計し、Gemini 無料枠超過 / プリペイドクレジット枯渇 / フォールバック多発を検知
+5. **AI 呼び出し監視**（`ai_logs` テーブル）: モデル別・日次呼び出し数を集計。外部 AI は現在使っていないので、`no-ai` 以外が増えていたら設定を確認する
 6. **GitHub Issue の整理**: 設定タブの「改善案・バグメモ」から登録された Issue を確認し、重複や対応済みのものをクローズ
 
 ---
@@ -375,9 +379,9 @@ inbound-email Edge Function（※ AI は呼ばない）
 
 | 方式 | トリガー | 対象人材数上限 | AI フォールバック順 |
 |---|---|---|---|
-| `match-batch` | UI ボタン（高速/全件）または `auto-match` から内部呼び出し | 高速モード: `matching_fast_max_candidates`（既定 20）<br>全件モード: `fetch_candidates_for_project` 上限 500<br>auto-match: 案件 1 件あたり最大 40 名 | Cerebras → Groq 70B → Gemini → 3 段失敗時はルールスコアで全代替 |
-| `match-score` | 手動（個別スコア確認・duplicate 検出） | 1 ペア | Cerebras → Groq 70B → Gemini |
-| `auto-match` | 毎朝 JST 9:00 cron。`auto_match_enabled='false'` でスキップ | 直近 25 時間以内に登録された `prod` 案件 ×最大 40 名 | `match-batch` 経由（Cerebras → Groq 70B → Gemini） |
+| `match-batch` | UI ボタン（高速/全件）または `auto-match` から内部呼び出し | 高速モード: `matching_fast_max_candidates`（既定 20）<br>全件モード: `fetch_candidates_for_project` 上限 500<br>auto-match: 案件 1 件あたり最大 40 名 | ルールスコア（AI 再採点は未使用） |
+| `match-score` | 手動（個別スコア確認・duplicate 検出） | 1 ペア | ルールスコア（AI 再採点は未使用） |
+| `auto-match` | 毎朝 JST 9:00 cron。`auto_match_enabled='false'` でスキップ | 直近 25 時間以内に登録された `prod` 案件 ×最大 40 名 | `match-batch` 経由 |
 
 ### ルールベーススコア（既定ウェイト・0〜100pt）
 
@@ -514,7 +518,7 @@ akinavi-hr-ai/
 │       ├── poll-email/           # Outlook ポーリング Edge Function（5 分ごと cron）
 │       ├── auto-match/           # 自動マッチング Edge Function（毎朝 JST 9:00 cron・match-batch を内部呼び出し）
 │       ├── match-batch/          # バッチ AI 採点 Edge Function（fetch_candidates_for_project RPC + topN=10 を 1 コール採点・ウェイト可変）
-│       ├── match-score/          # 単発スコア Edge Function（duplicate 検出付き・Cerebras→Groq→Gemini）
+│       ├── match-score/          # 単発スコア Edge Function（duplicate 検出付き・ルールスコア）
 │       ├── archive-candidates/   # 7 日アーカイブ Edge Function（毎日 JST 0:00 cron・人材マップ全期間集計用）
 │       ├── create-github-issue/  # GitHub Issue 登録 Edge Function（POST 作成 / GET 一覧 / PATCH クローズ）
 │       ├── microsoft-oauth/      # Microsoft OAuth 認証 Edge Function

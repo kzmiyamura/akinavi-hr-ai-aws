@@ -44,19 +44,17 @@
   ↓
 第4章: データベースの作成（Supabase）
   ↓
-第5章: AIのAPIキーを取る（Cerebras / Groq / Gemini）
+第5章: サーバー機能のデプロイ（Edge Functions）
   ↓
-第6章: サーバー機能のデプロイ（Edge Functions）
+第6章: メール自動取り込みの設定（Azure + Microsoft Graph API）
   ↓
-第7章: メール自動取り込みの設定（Azure + Microsoft Graph API）
+第7章: 本番サイトの公開（Vercel）
   ↓
-第8章: 本番サイトの公開（Vercel）
-  ↓
-第9章: AIワーカーを常駐させる（会社のClaudeに切り替える）
+第8章: AIワーカーを常駐させる（会社のClaudeに切り替える）
 </code></pre>
 <blockquote>
 <p>第2〜8章は Vercel と Supabase のダッシュボード上の作業が中心です。
-第1章と第9章だけは<strong>このシステムを動かすPC</strong>での作業になります。</p>
+第1章と第8章だけは<strong>このシステムを動かすPC</strong>での作業になります。</p>
 </blockquote>
 <hr>
 <h2>このシステムで「AI」と呼んでいるもの</h2>
@@ -75,15 +73,15 @@
 <td><strong>① マッチングの点数付け</strong></td>
 <td>案件と人材の相性を0〜100点で採点する</td>
 <td>Supabase のサーバー</td>
-<td>Cerebras → Groq → Gemini（3段）</td>
-<td>第5章</td>
+<td><strong>AIではなくルール計算</strong>（スキル / 経験 / 単価 / 勤務地 / リモート）</td>
+<td>設定不要</td>
 </tr>
 <tr>
 <td><strong>② 人材・案件の読み取りと所見</strong></td>
 <td>経歴書を読んで項目を直す／案件文を補う／「この人はここが効く」という所見を書く</td>
 <td><strong>社内PC（このガイドのPC）</strong></td>
 <td><strong>Claude Code</strong></td>
-<td>第1章・第9章</td>
+<td>第1章・第8章</td>
 </tr>
 </tbody></table>
 <p>②が今回「私の Claude から会社の Claude に入れ替える」対象です。
@@ -436,7 +434,7 @@ cd akinavi-hr-ai-aws
 <hr>
 <p><strong>3. 接続情報をメモする</strong></p>
 <p>プロジェクトが作成されたら、左メニューの「Settings」→「API」を開く。</p>
-<p>以下の3つをメモしてください（第8章のVercel設定で使います）:</p>
+<p>以下の3つをメモしてください（第7章のVercel設定で使います）:</p>
 <table>
 <thead>
 <tr>
@@ -473,7 +471,7 @@ cd akinavi-hr-ai-aws
 <p><strong>3. 追加のSQLファイルを順番に実行する</strong></p>
 <p><code>supabase/migrations/</code> に <strong>111 個</strong>の SQL ファイルがあります（2026-08-21 時点）。
 これを<strong>ファイル名の昇順で全部</strong>実行します。1つずつ手で貼るのは現実的でないので、コマンドでまとめて流します。</p>
-<p>まず Supabase CLI をこのプロジェクトに繋ぎます（第6章 6-1・6-2 を先にやっても構いません）。</p>
+<p>まず Supabase CLI をこのプロジェクトに繋ぎます（第5章 5-1・5-2 を先にやっても構いません）。</p>
 <pre><code class="language-powershell">supabase login
 supabase link --project-ref （Reference ID）
 </code></pre>
@@ -528,7 +526,7 @@ Supabase の管理テーブルと同期していないため、<code>db query</c
 </thead>
 <tbody><tr>
 <td><code>add_email_polling_cron.sql</code></td>
-<td>5分ごとのメール取得（第7章で設定します）</td>
+<td>5分ごとのメール取得（第6章で設定します）</td>
 </tr>
 <tr>
 <td><code>add_auto_match_cron.sql</code></td>
@@ -574,73 +572,7 @@ SELECT count(*) AS 駅マスタ件数 FROM station_master;
 <li><input disabled="" type="checkbox"> テーブル数・skill_master・station_master の件数を確認した</li>
 </ul>
 <hr>
-<h2>第5章　AIの設定（APIキーの取得）</h2>
-<blockquote>
-<p><strong>重要</strong>: 2026-05-19 のコミット <code>139a4f2</code> でメール解析（<code>inbound-email</code>）から AI 利用が完全に除去され、コミット <code>a4dc3b4</code> でデッドコードも削除されました。
-2026-05-22 のコミット <code>b35df40</code> で新しい <strong><code>match-batch</code></strong> Edge Function が導入され、マッチング処理は「ルールベース事前フィルタ + バッチ AI 採点」方式になりました。
-現在 AI を使うのは <strong>マッチング処理（<code>match-batch</code> / <code>match-score</code> / <code>auto-match</code>）</strong> と <strong><code>poll-email</code> メール種別分類（任意・既定 OFF）</strong> だけです。</p>
-</blockquote>
-<table>
-<thead>
-<tr>
-<th>AI</th>
-<th>主な用途</th>
-<th>必須度</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Cerebras</td>
-<td><code>match-batch</code> / <code>match-score</code> の <strong>1 段目</strong>（軽量・実質無制限）</td>
-<td>推奨（高速化に寄与）</td>
-</tr>
-<tr>
-<td>Groq</td>
-<td><code>match-batch</code> / <code>match-score</code> の <strong>2 段目</strong>（高精度モデル <code>llama-3.3-70b-versatile</code>）</td>
-<td>◎ 必須</td>
-</tr>
-<tr>
-<td>Gemini</td>
-<td><code>match-batch</code> / <code>match-score</code> の <strong>最終フォールバック</strong>・<code>poll-email</code> 種別分類</td>
-<td>◎ 必須</td>
-</tr>
-</tbody></table>
-<blockquote>
-<p><strong>取得したAPIキーは第6章と第8章でまとめて登録します。ここではメモするだけでOKです。</strong>
-3 段すべて失敗してもルールスコアで全代替されるため、システム自体は止まりませんが、AI 採点なしでは品質が落ちるので必ず Groq と Gemini は登録してください。</p>
-</blockquote>
-<h3>5-1. Gemini APIキーを取得する（必須）</h3>
-<p><strong>1. <code>https://aistudio.google.com</code> をブラウザで開く</strong></p>
-<p>Googleアカウントでログインします。</p>
-<hr>
-<p><strong>2. 「Get API key」をクリック</strong></p>
-<hr>
-<p><strong>3. 「Create API key」をクリックしてAPIキーを発行する</strong></p>
-<p>表示されたキー（<code>AIza...</code> のような文字列）をメモしてください。</p>
-<blockquote>
-<p>Gemini はプリペイド制（従量課金）です。無料枠はありません。クレジット切れの場合は <code>auto-match</code> のスコア計算が失敗します。</p>
-</blockquote>
-<h3>5-2. Groq APIキーを取得する（必須）</h3>
-<p>Groq は <code>match-score</code>（手動マッチング）の 2 段目モデル（<code>llama-3.3-70b-versatile</code>）として使います。無料枠は 500K tokens/日（JST 9:00 リセット）で、マッチング用なら約 300 ペア/日に相当します。</p>
-<p><strong>1. <code>https://console.groq.com</code> をブラウザで開く</strong></p>
-<p>アカウントを作成（または Google アカウントでログイン）します。</p>
-<hr>
-<p><strong>2. 「API Keys」→「Create API Key」でキーを発行する</strong></p>
-<p>表示されたキー（<code>gsk_...</code> のような文字列）をメモしてください。</p>
-<h3>5-3. Cerebras APIキーを取得する（推奨）</h3>
-<p>Cerebras は <code>match-score</code> の 1 段目（軽量モデル <code>llama3.1-8b</code>）として使います。無料枠が非常に大きいため実質無制限で、ここで成功すれば Groq を消費しません。</p>
-<p><strong>1. <code>https://cloud.cerebras.ai</code> をブラウザで開く</strong></p>
-<p>アカウントを作成（または Google アカウントでログイン）します。</p>
-<hr>
-<p><strong>2. 「API Keys」→「Generate API Key」でキーを発行する</strong></p>
-<p>表示されたキーをメモしてください。</p>
-<h3>完了チェック</h3>
-<ul>
-<li><input disabled="" type="checkbox"> Google AI Studio で Gemini APIキーを取得し、メモした（必須）</li>
-<li><input disabled="" type="checkbox"> Groq で APIキーを取得し、メモした（必須）</li>
-<li><input disabled="" type="checkbox"> Cerebras で APIキーを取得し、メモした（推奨）</li>
-</ul>
-<hr>
-<h2>第6章　サーバー機能のデプロイ（Edge Functions）</h2>
+<h2>第5章　サーバー機能のデプロイ（Edge Functions）</h2>
 <p>「Edge Functions」とは、Supabase のサーバー上で動くプログラムです。<br>このシステムでは以下の Edge Functions をデプロイします。</p>
 <table>
 <thead>
@@ -706,16 +638,16 @@ SELECT count(*) AS 駅マスタ件数 FROM station_master;
 <td>外部モデル呼び出しの中継</td>
 </tr>
 </tbody></table>
-<h3>6-1. Supabase CLIでログインする</h3>
+<h3>5-1. Supabase CLIでログインする</h3>
 <pre><code class="language-bash">npx supabase login
 </code></pre>
 <p>ブラウザが自動で開くのでログインしてください。</p>
-<h3>6-2. このプロジェクトに接続する</h3>
+<h3>5-2. このプロジェクトに接続する</h3>
 <p>「Reference ID」（プロジェクトID）を Supabase ダッシュボードの「Settings」→「General」→「Reference ID」で確認してメモしてください。</p>
 <pre><code class="language-bash">cd akinavi-hr-ai
 npx supabase link --project-ref （Reference IDを貼り付け）
 </code></pre>
-<h3>6-3. Edge Functions をデプロイする</h3>
+<h3>5-3. Edge Functions をデプロイする</h3>
 <p><code>supabase/functions/</code> にあるものを全部デプロイします。</p>
 <pre><code class="language-powershell">Get-ChildItem supabase\functions -Directory | ForEach-Object {
   Write-Host &quot;--- $($_.Name)&quot;
@@ -737,10 +669,7 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 <p>未定義変数（TS2304）を検知して、エラーがあればデプロイを中止します。</p>
 </blockquote>
 <p>それぞれ「Deployed」と表示されればOKです。</p>
-<blockquote>
-<p><strong>デプロイ前に型検査したい場合</strong>は <code>npm run check:edge &lt;function&gt;</code> を使うと <code>deno check</code> で TS2304（未定義変数）を検知し、エラーがあればデプロイを中止できます。<code>npm run deploy:edge &lt;function&gt;</code> で「型検査 + デプロイ」をまとめて実行できます。引数を省略すると <code>inbound-email</code> を対象とします。</p>
-</blockquote>
-<h3>6-4. Secrets（機密情報）を登録する</h3>
+<h3>5-4. Secrets（機密情報）を登録する</h3>
 <p>「Secrets」とは、サーバー上のプログラムが使うAPIキーやパスワードを安全に保管する場所です。<br>Supabase ダッシュボード → 「Edge Functions」→「Secrets」→「Add new secret」から登録します。</p>
 <p><strong>今すぐ登録するもの</strong></p>
 <table>
@@ -752,21 +681,6 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 </tr>
 </thead>
 <tbody><tr>
-<td><code>GEMINI_API_KEY</code></td>
-<td>第5章でメモしたGemini APIキー（<code>auto-match</code> 等で使用）</td>
-<td>◎</td>
-</tr>
-<tr>
-<td><code>GROQ_API_KEY</code></td>
-<td>第5章でメモしたGroq APIキー（<code>match-score</code> で使用）</td>
-<td>◎</td>
-</tr>
-<tr>
-<td><code>CEREBRAS_API_KEY</code></td>
-<td>第5章でメモしたCerebras APIキー（<code>match-score</code> 1 段目）</td>
-<td>推奨</td>
-</tr>
-<tr>
 <td><code>INBOUND_CALL_KEY</code></td>
 <td>第4章でメモした service_role キー</td>
 <td>◎</td>
@@ -778,9 +692,9 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 </tr>
 </tbody></table>
 <blockquote>
-<p><code>SUPABASE_URL</code> と <code>SUPABASE_SERVICE_ROLE_KEY</code> は Supabase が自動で設定するため、手動登録は不要です。もしエラーが出る場合は手動で追加してください。<br><code>inbound-email</code> は AI を使わなくなったため、上記の API キーがなくてもメール解析自体は動きます。ただしマッチング処理が動かないと意味がないので必ず設定してください。</p>
+<p><code>SUPABASE_URL</code> と <code>SUPABASE_SERVICE_ROLE_KEY</code> は Supabase が自動で設定するため、手動登録は不要です。もしエラーが出る場合は手動で追加してください。<br>メール解析もマッチングの点数計算も AI を使っていないので、<strong>外部 AI の APIキーは登録しなくて構いません</strong>（付録A 参照）。</p>
 </blockquote>
-<p><strong>第7章で追加登録するもの（今はスキップ）</strong></p>
+<p><strong>第6章で追加登録するもの（今はスキップ）</strong></p>
 <table>
 <thead>
 <tr>
@@ -790,27 +704,27 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 </thead>
 <tbody><tr>
 <td><code>GRAPH_CLIENT_ID</code></td>
-<td>第7章で取得</td>
+<td>第6章で取得</td>
 </tr>
 <tr>
 <td><code>GRAPH_CLIENT_SECRET</code></td>
-<td>第7章で取得</td>
+<td>第6章で取得</td>
 </tr>
 <tr>
 <td><code>GRAPH_REFRESH_TOKEN_HUMAN</code></td>
-<td>第7章で取得</td>
+<td>第6章で取得</td>
 </tr>
 <tr>
 <td><code>GRAPH_REFRESH_TOKEN_PROJECT</code></td>
-<td>第7章で取得</td>
+<td>第6章で取得</td>
 </tr>
 <tr>
 <td><code>GRAPH_REFRESH_TOKEN_HUMAN_DEV</code></td>
-<td>第7章で取得</td>
+<td>第6章で取得</td>
 </tr>
 <tr>
 <td><code>GRAPH_REFRESH_TOKEN_PROJECT_DEV</code></td>
-<td>第7章で取得</td>
+<td>第6章で取得</td>
 </tr>
 </tbody></table>
 <p><strong>Box 連携を使う場合のみ</strong></p>
@@ -843,18 +757,18 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 <li><input disabled="" type="checkbox"> <code>supabase login</code> が完了した</li>
 <li><input disabled="" type="checkbox"> <code>supabase link</code> でプロジェクトに接続した</li>
 <li><input disabled="" type="checkbox"> 全Edge Functions（14個）をデプロイした</li>
-<li><input disabled="" type="checkbox"> <code>GEMINI_API_KEY</code>・<code>GROQ_API_KEY</code>・<code>CEREBRAS_API_KEY</code>・<code>INBOUND_CALL_KEY</code> を Secrets に登録した</li>
+<li><input disabled="" type="checkbox"> <code>INBOUND_CALL_KEY</code> を Secrets に登録した</li>
 <li><input disabled="" type="checkbox"> （任意）Issue 連携を使う場合は <code>GITHUB_TOKEN</code> も登録した</li>
 </ul>
 <hr>
-<h2>第7章　メール自動取り込みの設定</h2>
+<h2>第6章　メール自動取り込みの設定</h2>
 <p>この章では、第2章で作成した4つのOutlookアカウントと、このシステムを連携させます。<br>「5分ごとに未読メールを自動で取得・解析・保存する」という仕組みを作ります。</p>
 <p>設定には3つのステップがあります。</p>
 <pre><code>① Azureにアプリを登録する（接続許可の設定）
 ② 各Outlookアカウントのリフレッシュトークンを取得する
 ③ Supabaseにスケジューラを登録する
 </code></pre>
-<h3>7-1. Azureにアプリを登録する</h3>
+<h3>6-1. Azureにアプリを登録する</h3>
 <p>「Azure」は Microsoft のクラウドサービスです。ここでアプリを登録することで、このシステムがOutlookにアクセスする許可を得ます。<strong>Microsoftアカウントがあれば無料で使えます。</strong></p>
 <p><strong>1. <code>https://portal.azure.com</code> をブラウザで開く</strong></p>
 <p>Microsoftアカウント（Outlookアカウントのどれかでも可）でログインします。</p>
@@ -907,7 +821,7 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 <li>クライアントシークレットの値 → Supabase Secrets の <code>GRAPH_CLIENT_SECRET</code> に登録</li>
 </ul>
 <p>今すぐ Supabase ダッシュボード → 「Edge Functions」→「Secrets」に登録してください。</p>
-<h3>7-2. 各Outlookアカウントのリフレッシュトークンを取得する</h3>
+<h3>6-2. 各Outlookアカウントのリフレッシュトークンを取得する</h3>
 <p>「リフレッシュトークン」とは、このシステムがOutlookにアクセスし続けるための認証情報です。<br>4つのアカウント分を取得します。</p>
 <p><strong>1. 以下のURLをブラウザで開く</strong></p>
 <p><code>（クライアントID）</code> の部分を 7-1 でメモしたクライアントIDに置き換えてください。</p>
@@ -983,14 +897,14 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 <td>案件用・デモのリフレッシュトークン</td>
 </tr>
 </tbody></table>
-<h3>7-3. 拡張機能を有効にする</h3>
+<h3>6-3. 拡張機能を有効にする</h3>
 <p>Supabase のスケジューラ機能（pg_cron）と HTTP通信機能（pg_net）を有効にします。</p>
 <p>Supabase ダッシュボード → 「Database」→「Extensions」を開き、以下を検索してONにします:</p>
 <ul>
 <li><code>pg_cron</code></li>
 <li><code>pg_net</code></li>
 </ul>
-<h3>7-4. 5分ごとのスケジュールを登録する</h3>
+<h3>6-4. 5分ごとのスケジュールを登録する</h3>
 <p><code>supabase/migrations/add_email_polling_cron.sql</code> をテキストエディタで開き、以下の2箇所を書き換えます:</p>
 <table>
 <thead>
@@ -1001,7 +915,7 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 </thead>
 <tbody><tr>
 <td><code>YOUR_PROJECT_REF</code></td>
-<td>Supabase の Reference ID（第6章でメモしたもの）</td>
+<td>Supabase の Reference ID（第5章でメモしたもの）</td>
 </tr>
 <tr>
 <td><code>YOUR_SERVICE_ROLE_KEY</code></td>
@@ -1021,9 +935,9 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 <li><input disabled="" type="checkbox"> <code>add_email_polling_cron.sql</code> を書き換えて実行した</li>
 </ul>
 <hr>
-<h2>第8章　本番サイトの公開（Vercel）</h2>
+<h2>第7章　本番サイトの公開（Vercel）</h2>
 <p>「Vercel」とは、作ったWebサイトをインターネット上に公開するためのサービスです。無料で使えます。<br><strong>ここで環境変数（設定値）をまとめて登録してデプロイすると、本番サイトが完成します。</strong></p>
-<h3>8-1. Vercelにサインアップ・プロジェクトをインポートする</h3>
+<h3>7-1. Vercelにサインアップ・プロジェクトをインポートする</h3>
 <p><strong>1. <code>https://vercel.com</code> を開き、GitHubアカウントでサインアップ</strong></p>
 <hr>
 <p><strong>2. 「Add New Project」→「Import Git Repository」でこのリポジトリ（<code>akinavi-hr-ai</code>）を選択</strong></p>
@@ -1049,16 +963,6 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 <td>第4章</td>
 </tr>
 <tr>
-<td><code>VITE_GEMINI_API_KEY</code></td>
-<td>Gemini の APIキー</td>
-<td>第5章</td>
-</tr>
-<tr>
-<td><code>VITE_AI_PROVIDER</code></td>
-<td><code>gemini</code>（そのまま入力）</td>
-<td>—</td>
-</tr>
-<tr>
 <td><code>VITE_DEMO_KEY</code></td>
 <td>任意の文字列（例: <code>demo2024</code>）</td>
 <td>—</td>
@@ -1071,7 +975,7 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 <p><strong>4. 「Deploy」をクリックする</strong></p>
 <p>デプロイが完了すると <code>https://（プロジェクト名）.vercel.app</code> のような URLが発行されます。<br>このURLが本番サイトのアドレスになります。</p>
 <p>以降は <code>main</code> ブランチに変更を push するたびに<strong>自動で再デプロイ</strong>されます。</p>
-<h3>8-2. 環境変数を後から変更する場合</h3>
+<h3>7-2. 環境変数を後から変更する場合</h3>
 <p>Vercel ダッシュボード → プロジェクトを選択 → 「Settings」→「Environment Variables」から変更できます。<br>変更後は「Deployments」→「Redeploy」で再デプロイが必要です。</p>
 <h3>完了チェック</h3>
 <ul>
@@ -1081,10 +985,10 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 <li><input disabled="" type="checkbox"> 発行されたURLでサイトが表示された</li>
 </ul>
 <hr>
-<h2>第9章　AIワーカーを常駐させる（会社のClaudeに切り替える）</h2>
-<p>第8章までで、サイトとメール取り込みは動きます。
+<h2>第8章　AIワーカーを常駐させる（会社のClaudeに切り替える）</h2>
+<p>第7章までで、サイトとメール取り込みは動きます。
 この章では、<strong>人材・案件・マッチングの AI 処理</strong>を担当する常駐プログラム（シャドーワーカー）を、このPCで動かします。</p>
-<h3>9-0. このプログラムが何をしているか</h3>
+<h3>8-0. このプログラムが何をしているか</h3>
 <p><code>scripts/llm_extract/shadow_worker.mjs</code> が5分ごとに次の4つを回します。すべて<strong>第1章でログインした Claude アカウント</strong>の枠を使います。</p>
 <table>
 <thead>
@@ -1111,10 +1015,10 @@ npx supabase link --project-ref （Reference IDを貼り付け）
 </tr>
 </tbody></table>
 <blockquote>
-<p><strong>マッチングの点数そのものは Claude ではありません。</strong> 点数は Supabase 側の
-ルール計算 + Cerebras / Groq / Gemini（第5章）です。ここで作るのは<strong>点数の理由と所見</strong>です。</p>
+<p><strong>マッチングの点数そのものは Claude ではありません。</strong> 点数は Supabase 側のルール計算
+（スキル / 経験 / 単価 / 勤務地 / リモート）です。ここで作るのは<strong>点数の理由と所見</strong>です。</p>
 </blockquote>
-<h3>9-1. 接続情報のファイルを作る</h3>
+<h3>8-1. 接続情報のファイルを作る</h3>
 <p>ワーカーがデータベースに書き込むための情報を、ホームフォルダにファイルとして置きます。</p>
 <pre><code class="language-powershell">notepad $HOME\.akinavi_shadow.env
 </code></pre>
@@ -1127,7 +1031,7 @@ SUPABASE_SERVICE_KEY=（第4章 4-1 でメモした service_role キー）
 <p><code>service_role</code> キーはデータベースを何でも操作できる鍵です。<strong>このファイルは絶対に他人に渡さず、GitHub にも上げないでください。</strong>
 ファイル名の先頭がピリオド（<code>.</code>）である点に注意してください。</p>
 </blockquote>
-<h3>9-2. 手動で1回動かして確認する</h3>
+<h3>8-2. 手動で1回動かして確認する</h3>
 <p>いきなり常駐させず、まず手で動かして正常に回ることを見ます。</p>
 <pre><code class="language-powershell">cd $HOME\Desktop\akinavi-hr-ai-aws
 node scripts/llm_extract/shadow_worker.mjs
@@ -1157,7 +1061,7 @@ node scripts/llm_extract/shadow_worker.mjs
 <td>会社アカウントの利用枠切れ。プランを確認</td>
 </tr>
 </tbody></table>
-<h3>9-3. 常駐させる（pm2）</h3>
+<h3>8-3. 常駐させる（pm2）</h3>
 <p>PCを再起動しても自動で動き続けるように、<strong>pm2</strong> という常駐管理ソフトを使います。</p>
 <pre><code class="language-powershell">npm install -g pm2
 </code></pre>
@@ -1204,7 +1108,7 @@ pm2 save
 <td><code>pm2 delete akinavi-shadow</code></td>
 </tr>
 </tbody></table>
-<h3>9-4. 個人アカウントから会社アカウントに切り替える手順</h3>
+<h3>8-4. 個人アカウントから会社アカウントに切り替える手順</h3>
 <p><strong>すでに個人アカウントでワーカーが動いている場合</strong>は、この順番で入れ替えてください。
 順番を間違えると、切り替え途中の処理が個人枠で走ってしまいます。</p>
 <p><strong>1. ワーカーを止める</strong></p>
@@ -1237,7 +1141,7 @@ pm2 logs akinavi-shadow
 <li>Mac / Linux: <code>pkill -f shadow_worker</code></li>
 </ul>
 </blockquote>
-<h3>9-5. 動作モードの切り替え</h3>
+<h3>8-5. 動作モードの切り替え</h3>
 <p>環境変数でふるまいを変えられます。値を変えたら <code>pm2 restart akinavi-shadow --update-env</code> が必要です。</p>
 <table>
 <thead>
@@ -1269,7 +1173,7 @@ pm2 logs akinavi-shadow
 </tr>
 </tbody></table>
 <p>上限は<strong>利用枠を使い切らないための安全装置</strong>です。切り替え直後は小さめ（例: 20）にして、枠の減り方を見てから戻すのが安全です。</p>
-<h3>9-6. うまくいかないときの確認順</h3>
+<h3>8-6. うまくいかないときの確認順</h3>
 <ol>
 <li><code>pm2 list</code> — <code>akinavi-shadow</code> が <code>online</code> か</li>
 <li><code>pm2 logs akinavi-shadow</code> — エラーが出ていないか</li>
@@ -1290,7 +1194,7 @@ pm2 logs akinavi-shadow
 <p>全章が完了したら、以下を本番URLで確認してください。</p>
 <ul>
 <li><input disabled="" type="checkbox"> <code>claude auth status</code> が<strong>会社の</strong>アカウントになっている（第1章）</li>
-<li><input disabled="" type="checkbox"> <code>pm2 list</code> で <code>akinavi-shadow</code> が <code>online</code>（第9章）</li>
+<li><input disabled="" type="checkbox"> <code>pm2 list</code> で <code>akinavi-shadow</code> が <code>online</code>（第8章）</li>
 <li><input disabled="" type="checkbox"> 本番URLでブラウザにエラーなく画面が表示される</li>
 <li><input disabled="" type="checkbox"> 「人材」タブでテキストを貼り付けて「登録」が動く（Phase 4.11 で「AI で登録」は廃止・登録ボタンに統一）</li>
 <li><input disabled="" type="checkbox"> 「マッチング」タブでスコアが表示される（スコア降順）</li>
@@ -1315,11 +1219,16 @@ pm2 logs akinavi-shadow
 <li>Vercel の環境変数に誤りがある（スペースや余分な文字が入っていないか確認）</li>
 <li>環境変数を設定後に再デプロイしていない</li>
 </ul>
-<h3>AIが解析されない（登録できない）</h3>
+<h3>人材・案件が登録されない</h3>
 <ul>
-<li>Vercel の <code>VITE_GEMINI_API_KEY</code> が正しく設定されているか確認</li>
 <li>Supabase の「Edge Functions」→「Logs」→「inbound-email」でエラーが出ていないか確認</li>
+<li>メール解析は AI を使っていないので、APIキーの設定は関係ありません</li>
 </ul>
+<h3>AIの補正がかからない（氏名・年数などが直らない）</h3>
+<p>第8章のワーカーが動いているか確認します。</p>
+<pre><code class="language-powershell">pm2 logs akinavi-shadow
+claude auth status
+</code></pre>
 <h3>メールが自動取り込みされない</h3>
 <p>Supabase の「Edge Functions」→「Logs」→「poll-email」のログを確認する。</p>
 <p>よくある原因:</p>
@@ -1368,4 +1277,42 @@ pm2 logs akinavi-shadow
 <td>AIワーカーの設計（開発者向け）</td>
 </tr>
 </tbody></table>
+<hr>
+<h2>付録A（任意）　マッチングのAI採点を有効にする</h2>
+<p><strong>通常のセットアップでは不要です。この章は飛ばして構いません。</strong></p>
+<p>マッチングの点数は Supabase 側の<strong>ルール計算</strong>（スキル / 経験 / 単価 / 勤務地 / リモート）で出しています。
+そのうえで上位の候補だけを外部 AI に再採点させる仕組みも実装されていますが、<strong>現在は使っていません</strong>
+（直近30日の実測: AI採点の呼び出し 0 件）。</p>
+<p>APIキーを登録しなければ AI 採点は自動的にスキップされ、<strong>全件がルールスコアのまま</strong>返ります。
+マッチングは問題なく動くので、キーを取らないままで構いません。</p>
+<p>あとから有効にしたくなった場合は、次の3つを取得して Supabase の Secrets に登録します。</p>
+<table>
+<thead>
+<tr>
+<th>Secret 名</th>
+<th>取得元</th>
+<th>役割</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>CEREBRAS_API_KEY</code></td>
+<td><code>https://cloud.cerebras.ai</code></td>
+<td>1段目（軽量）</td>
+</tr>
+<tr>
+<td><code>GROQ_API_KEY</code></td>
+<td><code>https://console.groq.com</code></td>
+<td>2段目（高精度）</td>
+</tr>
+<tr>
+<td><code>GEMINI_API_KEY</code></td>
+<td><code>https://aistudio.google.com</code></td>
+<td>最終フォールバック</td>
+</tr>
+</tbody></table>
+<p>3段すべて失敗してもルールスコアで代替されるため、システムが止まることはありません。</p>
+<blockquote>
+<p>ここで言う AI は<strong>マッチングの点数付け</strong>の話です。人材・案件の読み取りと所見を書く AI
+（Claude Code）は第1章・第8章のほうで、こちらは実際に使っています。</p>
+</blockquote>
 </body></html>
