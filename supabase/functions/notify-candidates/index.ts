@@ -28,6 +28,8 @@ const TOKEN_SEED_KEY = 'graph_rt_human_prod'
 const TOKEN_SECRET_FALLBACK = 'GRAPH_REFRESH_TOKEN_HUMAN'
 /** 初回・長期停止後の暴発防止: この時間より昔の人材は通知対象にしない */
 const MAX_LOOKBACK_MS = 24 * 60 * 60 * 1000
+/** 1周回で見る人材の上限。超えた分は捨てずに次周へ繰り越す（下の processedUpTo 参照） */
+const CANDIDATE_FETCH_LIMIT = 300
 
 const corsHeaders = { 'Access-Control-Allow-Origin': '*' }
 
@@ -146,8 +148,18 @@ Deno.serve(async (req) => {
     const sinceIso = new Date(last).toISOString()
 
     // 新着・更新された人材（email一致の再登録UPDATEも「現れた」に含める）
+    //
+    // ⚠ 取得は「更新の古い順」で、上限に達したらウォーターマークを**最後に見た行まで**しか
+    // 進めない。以前は並び順なしの `.limit(300)` で、超過分を黙って捨てたうえで
+    // ウォーターマークだけ実行時刻まで進めていたため、**あふれた人材は永久に通知されなかった**。
+    // 実害: 2026-08-21 12:04 JST に保守作業で 1,234 件を一括 UPDATE した際、その窓に入った
+    // 大阪ルール該当者2名（KI / I.T）が通知されずに落ちた。
+    // 一括更新は普通に起きる（再マッチ・バックフィル・移行）ので、落とさず次の周回へ繰り越す。
     const envs = [...new Set(rules.map((r) => r.data_env))]
     const cands: CandidateLite[] = []
+    /** この周回で実際に見終わった時刻。上限に達したらここまでしかウォーターマークを進めない */
+    let processedUpTo: string | null = null
+    let truncated = false
     for (const env of envs) {
       const { data, error } = await sb
         .from('candidates')
@@ -155,9 +167,17 @@ Deno.serve(async (req) => {
         .eq('data_env', env)
         .is('merged_into', null)
         .or(`created_at.gt.${sinceIso},updated_at.gt.${sinceIso}`)
-        .limit(300)
+        .order('updated_at', { ascending: true })
+        .limit(CANDIDATE_FETCH_LIMIT)
       if (error) throw new Error(error.message)
-      for (const row of data ?? []) {
+      const rows = data ?? []
+      if (rows.length >= CANDIDATE_FETCH_LIMIT) {
+        truncated = true
+        // 取り切れなかった。最後の行の updated_at までを「見た」とみなして次周に繰り越す
+        const lastSeen = rows[rows.length - 1]?.updated_at as string | undefined
+        if (lastSeen && (processedUpTo === null || lastSeen < processedUpTo)) processedUpTo = lastSeen
+      }
+      for (const row of rows) {
         const rp = (row.raw_profile ?? {}) as Record<string, unknown>
         cands.push({
           id: String(row.id),
@@ -168,8 +188,14 @@ Deno.serve(async (req) => {
         })
       }
     }
+    // 途中までしか見ていないならその時刻、全部見たなら実行開始時刻へ進める
+    const nextWatermark = truncated && processedUpTo ? processedUpTo : runStartedAt
+    if (truncated) {
+      console.log(`[notify] 取得上限 ${CANDIDATE_FETCH_LIMIT} に到達。${nextWatermark} まで処理して次周に繰り越す`)
+    }
+
     if (cands.length === 0) {
-      await setConfig(sb, 'notify_last_checked_at', runStartedAt)
+      await setConfig(sb, 'notify_last_checked_at', nextWatermark)
       return json(200, { ok: true, matched: 0, checked: 0 })
     }
 
@@ -188,7 +214,7 @@ Deno.serve(async (req) => {
       if (fresh.length > 0) perRule.set(rule.id, { rule, hits: fresh })
     }
     if (perRule.size === 0) {
-      await setConfig(sb, 'notify_last_checked_at', runStartedAt)
+      await setConfig(sb, 'notify_last_checked_at', nextWatermark)
       return json(200, { ok: true, matched: 0, checked: cands.length })
     }
 
@@ -234,7 +260,7 @@ Deno.serve(async (req) => {
       )
     }
 
-    await setConfig(sb, 'notify_last_checked_at', runStartedAt)
+    await setConfig(sb, 'notify_last_checked_at', nextWatermark)
     await setConfig(sb, 'notify_last_error', errors.length > 0 ? errors.join(' | ').slice(0, 500) : '')
     console.log(`[notify] checked=${cands.length} rules=${rules.length} sent=${sent} errors=${errors.length}`)
     return json(200, { ok: errors.length === 0, checked: cands.length, sent, errors })
