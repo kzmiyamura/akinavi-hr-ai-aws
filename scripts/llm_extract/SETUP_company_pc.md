@@ -255,7 +255,10 @@ Test-Path "$env:APPDATA\npm\claude.exe"
 ## STEP 5. 設定ファイル `~/.akinavi_shadow.env`（操作者の手が要る工程 その2）
 
 Supabase への接続情報。**git 管理外なので clone では入らない。**
-宮村さんから LINE WORKS で `akinavi_shadow.env` というファイルが届いているはず。
+宮村さんから LINE WORKS で届いているはず。
+
+**届くファイル名は `akinavi_shadow_env.txt`**（添付が弾かれないよう `.txt` で送っている）。
+これを `.akinavi_shadow.env` という名前に変えて所定の場所に置くのがこの STEP の作業。
 
 ```powershell
 Test-Path "$HOME\.akinavi_shadow.env"
@@ -323,8 +326,17 @@ Test-Path "$HOME\.akinavi_shadow_state.json"
 
 ### 原則: 旧PCの現物を使う
 
-宮村さんが設定ファイルと一緒に `akinavi_shadow_state.json` も送っている場合、
-それを `$HOME\.akinavi_shadow_state.json` にコピーする（STEP 5 と同じ要領・先頭にドット）。
+宮村さんから **`akinavi_shadow_state.txt`** というファイルが届いている場合、
+それを `$HOME\.akinavi_shadow_state.json` という名前でコピーする
+（STEP 5 と同じ要領・先頭にドット・拡張子は `.json` に戻す）。
+
+```powershell
+Copy-Item "<届いたファイルのパス>" "$HOME\.akinavi_shadow_state.json"
+Get-Content "$HOME\.akinavi_shadow_state.json"     # {"watermark":...} で始まる1行のJSON
+```
+
+**このファイルはカットオーバー直前に送り直される**（STEP 8）。事前に届いた分で一度置き、
+旧PC停止後に新しいものが届いたら差し替えること。
 
 **なぜ現物が正解か**: 引き継がないと、未処理分の取りこぼしか、処理済み分の再処理
 （＝AI利用枠の無駄使い）が起きる。日次カウンタも引き継がないと、移設当日に
