@@ -35,6 +35,52 @@
 
 > 「ここから先は開発者の判断が必要です。この画面をそのまま宮村さんに送ってください。」
 
+## ★ 一部の工程は既に終わっている可能性がある
+
+このPCでは**事前に途中まで作業が進んでいることがある**（Claude Code の導入、
+リポジトリの取得などは済んでいる場合がある）。また、**この手順書を途中まで実行した後、
+やり直しで最初から読み直すこともある**。
+
+そのため、**各 STEP は必ず「確認コマンド」から始めること。**
+
+| 確認の結果 | どうするか |
+|---|---|
+| 既に入っている / 実行済み | **何もせず次の STEP へ進む。** 入れ直さない・作り直さない |
+| 入っていない / 未実行 | その STEP の導入手順を実行する |
+| 入っているが壊れている・古い | その STEP に書かれた対処（更新・再起動）を行う |
+
+**入っているものを入れ直さないこと。** 時間の無駄になるだけでなく、
+設定ファイルの上書きや二重起動といった事故につながる。
+
+飛ばした工程も**報告には「既に導入済みだったのでスキップ」と必ず書く**こと。
+黙って飛ばすと、やったのかやっていないのか分からなくなる。
+
+### まず現状をまとめて確認する
+
+STEP 1 に進む前に、これを実行して**どこまで終わっているかを把握する**:
+
+```powershell
+Write-Host "--- node ---";  (node --version)  2>&1
+Write-Host "--- npm ---";   (npm --version)   2>&1
+Write-Host "--- git ---";   (git --version)   2>&1
+Write-Host "--- claude ---";(claude --version)2>&1
+Write-Host "--- pm2 ---";   (pm2 --version)   2>&1
+Write-Host "--- env file ---";   Test-Path "$HOME\.akinavi_shadow.env"
+Write-Host "--- state file ---"; Test-Path "$HOME\.akinavi_shadow_state.json"
+Write-Host "--- startup cmd ---"
+Test-Path (Join-Path ([Environment]::GetFolderPath('Startup')) 'akinavi-pm2-resurrect.cmd')
+Write-Host "--- repo ---"
+Get-ChildItem -Path $HOME -Filter "akinavi-hr-ai-aws" -Directory -Recurse -Depth 4 -ErrorAction SilentlyContinue |
+  Select-Object -ExpandProperty FullName
+Write-Host "--- pm2 processes ---"; (pm2 list) 2>&1
+```
+
+この結果を見て、**済んでいる STEP は読み飛ばして構わない**。
+ただし STEP 7 の動作確認（ログが正常に流れているか）と STEP 8 のカットオーバーは、
+既に動いているように見えても**必ず実施すること**。
+
+---
+
 ## 本番データの取り扱い（重要）
 
 動作確認のために**本番データベースから大量にデータを引かないこと**。
@@ -46,7 +92,9 @@
 # セットアップ
 
 STEP 0 から順に実行する。各 STEP は「**確認 → 無ければ導入**」の形。
-**確認コマンドを先に実行し、結果を見てから導入に進むこと**（入っているものを入れ直さない）。
+**確認コマンドを先に実行し、結果を見てから導入に進むこと。
+既に入っている／実行済みなら、何もせず次の STEP へ進む**（上の「一部の工程は既に
+終わっている可能性がある」を参照）。
 
 STEP 8 のカットオーバーは旧PCの停止が先なので、**そこで必ず止まって操作者に伝えること**。
 
@@ -311,6 +359,19 @@ pm2 --version
 ```
 
 無ければ `npm install -g pm2`。
+
+### ★ 既に登録されていないか先に確認する
+
+```powershell
+pm2 describe akinavi-shadow
+```
+
+| 結果 | どうするか |
+|---|---|
+| 見つからない | 下の「起動」を実行する |
+| 見つかって `status: online` | **`pm2 start` を実行しないこと**（二重登録になる）。`pm2 restart akinavi-shadow` で最新コードを反映し、「動作確認」へ進む |
+| 見つかるが `stopped` / `errored` | `pm2 restart akinavi-shadow` → 「動作確認」でログを読む |
+| `script path` が `$REPO` と違う | 古い登録。`pm2 delete akinavi-shadow` してから下の「起動」をやり直す |
 
 ### 起動
 
