@@ -9333,7 +9333,10 @@ async function uploadToStorage(
     const client = createClient(supabaseUrl, serviceRoleKey)
     const { error } = await client.storage
       .from('attachments')
-      .upload(path, fileBytes, { contentType: mimeType, upsert: true })
+      // cacheControl: ファイル名に内容ハッシュが入っている（= 同じパスなら同じ中身）ので
+      // 長期キャッシュしてよい。既定のままだと CDN・ブラウザとも保持せず、
+      // 経歴書を開くたびに実体（平均約315KB・最大1.8MB）が egress として出ていく。
+      .upload(path, fileBytes, { contentType: mimeType, upsert: true, cacheControl: '31536000' })
     if (error) {
       console.error(`[Storage Upload] アップロード失敗: ${error.message}`)
       return null
