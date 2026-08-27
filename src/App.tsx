@@ -255,7 +255,11 @@ function AppInner() {
       demoUiEnabled={demoUiEnabled}
       onChangeDataEnv={setDataEnv}
     >
-      {detail?.kind === 'candidate' ? (
+      {/* 詳細を開いている間も一覧側はアンマウントしない。
+          以前は詳細のときに renderMain() を丸ごと差し替えていたため、人材マップの
+          絞り込み（スキル・期間・選択中の都道府県・ズーム）が戻ると消えていた。 */}
+      <div className={detail ? 'hidden' : 'block'}>{renderMain()}</div>
+      {detail?.kind === 'candidate' && (
         <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
           <CandidateDetailPage
             candidateId={detail.id}
@@ -264,12 +268,11 @@ function AppInner() {
             onBack={() => setDetail(null)}
           />
         </Suspense>
-      ) : detail?.kind === 'project' ? (
+      )}
+      {detail?.kind === 'project' && (
         <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
           <ProjectDetailPage projectId={detail.id} nickname={nickname} dataEnv={dataEnv} onBack={() => setDetail(null)} />
         </Suspense>
-      ) : (
-        renderMain()
       )}
     </Layout>
   )
