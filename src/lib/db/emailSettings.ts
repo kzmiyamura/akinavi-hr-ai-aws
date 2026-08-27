@@ -208,6 +208,28 @@ export async function saveCandidateRetentionDays(days: number): Promise<void> {
   if (error) throw new Error(`保持日数の保存に失敗しました: ${error.message}`)
 }
 
+/** ファイル（経歴書・受信添付）の保持日数を取得（デフォルト 7 日）。
+ *  人材データ保持日数（candidate_retention_days）とは別物で、Storage の実体を消す側。
+ *  画面から触れず DB に 14 が書かれていたため、無料枠1GBに対し 1.7GB まで膨らんでいた
+ *  （2026-08-28 発覚。内訳は raw/ 1,434MB + resumes/ 301MB）。 */
+export async function getStorageRetentionDays(): Promise<number> {
+  const { data } = await supabase
+    .from('app_config')
+    .select('value')
+    .eq('key', 'storage_retention_days')
+    .maybeSingle()
+  const v = parseInt(data?.value ?? '', 10)
+  return isNaN(v) || v < 1 ? 7 : v
+}
+
+/** ファイル保持日数を保存 */
+export async function saveStorageRetentionDays(days: number): Promise<void> {
+  const { error } = await supabase
+    .from('app_config')
+    .upsert({ key: 'storage_retention_days', value: String(days) }, { onConflict: 'key' })
+  if (error) throw new Error(`ファイル保持日数の保存に失敗しました: ${error.message}`)
+}
+
 /** 自社ドメインを取得（例: i-voice.co.jp）。未設定なら空文字 */
 export async function getOwnEmailDomain(): Promise<string> {
   const { data } = await supabase

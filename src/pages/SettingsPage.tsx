@@ -14,6 +14,8 @@ import {
   saveProjectInboundEnabled,
   getCandidateRetentionDays,
   saveCandidateRetentionDays,
+  getStorageRetentionDays,
+  saveStorageRetentionDays,
   getAppMemo,
   saveAppMemo,
   getOwnEmailDomain,
@@ -96,6 +98,17 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['candidateRetentionDays'] }),
   })
 
+  // ファイル（経歴書・受信添付）の保持日数。人材データ保持日数とは別枠
+  const { data: storageDays = 7 } = useQuery({
+    queryKey: ['storageRetentionDays'],
+    queryFn: getStorageRetentionDays,
+  })
+  const [storageDaysInput, setStorageDaysInput] = useState<number>(7)
+  const storageMutation = useMutation({
+    mutationFn: (days: number) => saveStorageRetentionDays(days),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['storageRetentionDays'] }),
+  })
+
   // AI校正の優先スキル（非常用レバー。空なら絞り込みなし＝全件が対象）
   const { data: prioritySkills } = useQuery({
     queryKey: ['priority-skills'],
@@ -130,6 +143,10 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
   useEffect(() => {
     setRetentionDaysInput(retentionDays)
   }, [retentionDays])
+
+  useEffect(() => {
+    setStorageDaysInput(storageDays)
+  }, [storageDays])
 
   // アプリメモ
   const { data: savedMemo = '' } = useQuery({
@@ -732,6 +749,40 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
             </button>
             {retentionMutation.isSuccess && <span className="text-sm text-green-600">保存しました</span>}
             {retentionMutation.isError && <span className="text-sm text-red-600">保存に失敗しました</span>}
+          </div>
+        </section>
+
+        {/* ---- ファイル保持期間（Storage） ---- */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">ファイル保持期間</h2>
+          <p className="text-xs text-gray-400 mb-1">
+            経歴書ファイルと受信メール添付の実体を、指定日数を超えたら毎日 JST 1:00 に削除します。
+          </p>
+          <p className="text-xs text-gray-400 mb-4">
+            上の「人材データ保持期間」とは別枠です。削除された経歴書のリンクは自動で空になります。
+            <strong className="text-gray-500">無料枠は 1GB。長くするとすぐ超えます。</strong>
+          </p>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={1}
+              max={365}
+              value={storageDaysInput}
+              onChange={e => setStorageDaysInput(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-24 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-600">日間保持</span>
+            <button
+              type="button"
+              onClick={() => storageMutation.mutate(storageDaysInput)}
+              disabled={storageMutation.isPending || storageDaysInput === storageDays}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+            >
+              {storageMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              保存
+            </button>
+            {storageMutation.isSuccess && <span className="text-sm text-green-600">保存しました</span>}
+            {storageMutation.isError && <span className="text-sm text-red-600">保存に失敗しました</span>}
           </div>
         </section>
 
