@@ -183,7 +183,8 @@ Deno.serve(async (req) => {
   console.log(`[cleanup-storage] done. deleted=${totalDeleted} freed=${(totalFreed / 1024 / 1024).toFixed(1)}MB retentionDays=${retentionDays}`)
 
   return new Response(
-    JSON.stringify({ ok: true, summary, retentionDays, cutoff: cutoffISO }),
+    // 実際に使った保持日数と締切を応答に含める（設定が効いているかを外から確認するため）
+    JSON.stringify({ ok: true, summary, retentionDays, cutoff: cutoffISO, rawRetentionDays, rawCutoff: rawCutoffISO }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
   )
 })
