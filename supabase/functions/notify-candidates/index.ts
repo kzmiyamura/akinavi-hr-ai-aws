@@ -96,6 +96,68 @@ async function getAccessTokenForSend(sb: Sb): Promise<{ accessToken: string } | 
   return { accessToken: j.access_token }
 }
 
+/**
+ * メール取り込みの死活監視。
+ *
+ * 2026-08-28、Outlook 側が人間確認（bot判定）を出して poll-email が7時間止まった。
+ * エラーは一切出ず、人材がゼロ件になるだけなので誰も気づけない。同種の事故は
+ * 8/17 にも起きている（受信トークンが個人アカウントで上書きされ、丸1日「未読0件」を
+ * 返し続けた）。**静かに止まる**のがこの仕組みの弱点なので、無音を異常として検知する。
+ *
+ * 判定: 直近の人材登録から STALL_HOURS 以上経っていたら通報。
+ * 再送は RE_ALERT_HOURS ごと（止まっている間ずっと5分おきに送らないため）。
+ * 復旧したら次に止まったとき即座に通報できるよう記録を消す。
+ */
+const STALL_DEFAULT_HOURS = 3
+const RE_ALERT_HOURS = 6
+
+async function checkInboundStall(sb: Sb, notifyTo: string): Promise<Record<string, unknown>> {
+  const hours = Number(await getConfig(sb, 'inbound_stall_alert_hours')) || STALL_DEFAULT_HOURS
+  const to = (await getConfig(sb, 'inbound_stall_alert_email')) || notifyTo
+  if (!to) return { checked: false, reason: 'no_recipient' }
+
+  const { data: last } = await sb
+    .from('candidates')
+    .select('created_at')
+    .eq('data_env', 'prod')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (!last?.created_at) return { checked: false, reason: 'no_candidates' }
+
+  const silentMs = Date.now() - new Date(last.created_at).getTime()
+  const silentHours = silentMs / 3600_000
+  const lastAlert = await getConfig(sb, 'inbound_stall_last_alert_at')
+
+  if (silentHours < hours) {
+    // 復旧している。次の停止で即通報できるよう記録を消す
+    if (lastAlert) await setConfig(sb, 'inbound_stall_last_alert_at', '')
+    return { stalled: false, silentHours: Number(silentHours.toFixed(1)) }
+  }
+
+  // 通報済みで、まだ再送間隔に達していないなら黙る
+  if (lastAlert && Date.now() - new Date(lastAlert).getTime() < RE_ALERT_HOURS * 3600_000) {
+    return { stalled: true, silentHours: Number(silentHours.toFixed(1)), alerted: false, reason: 'throttled' }
+  }
+
+  const token = await getAccessTokenForSend(sb)
+  if ('error' in token) return { stalled: true, alerted: false, reason: `token: ${token.error}` }
+
+  const err = await sendMail(token.accessToken, to,
+    `[AkiNavi] メール取り込みが ${silentHours.toFixed(1)} 時間止まっています`,
+    `人材の新規登録が ${silentHours.toFixed(1)} 時間ありません（しきい値 ${hours} 時間）。\n\n` +
+    `最後の登録: ${last.created_at}\n\n` +
+    `よくある原因:\n` +
+    `・Outlook 側が人間確認（bot判定）を出している → ブラウザで Outlook を開いて確認する\n` +
+    `・Microsoft のトークンが失効した → 設定画面から再連携する\n` +
+    `・受信箱に未読が無いだけ（正常）\n\n` +
+    `この通知は復旧するまで ${RE_ALERT_HOURS} 時間おきに届きます。`)
+  if (err) return { stalled: true, alerted: false, reason: err }
+
+  await setConfig(sb, 'inbound_stall_last_alert_at', new Date().toISOString())
+  return { stalled: true, silentHours: Number(silentHours.toFixed(1)), alerted: true, to }
+}
+
 async function sendMail(accessToken: string, to: string, subject: string, text: string): Promise<string | null> {
   const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
     method: 'POST',
@@ -138,7 +200,18 @@ Deno.serve(async (req) => {
       throw new Error(ruleErr.message)
     }
     const rules = (ruleRows ?? []) as NotifyRule[]
-    if (rules.length === 0) return json(200, { ok: true, matched: 0, reason: 'no_rules' })
+
+    // 死活監視は人材ルールと独立に毎回まわす（ルールが0件でも取り込みの停止は知りたい）。
+    // 失敗しても通知本体を止めない。
+    let stall: Record<string, unknown>
+    try {
+      stall = await checkInboundStall(sb, rules[0]?.notify_email ?? '')
+    } catch (e) {
+      stall = { checked: false, reason: String(e).slice(0, 200) }
+    }
+    if (stall.alerted) console.log('[notify] 取り込み停止を通報:', JSON.stringify(stall))
+
+    if (rules.length === 0) return json(200, { ok: true, matched: 0, reason: 'no_rules', stall })
 
     // チェック窓: 前回実行時刻から（上限24時間。復旧直後の大量流入で過去分を丸ごと通知しない）
     const runStartedAt = new Date().toISOString()
