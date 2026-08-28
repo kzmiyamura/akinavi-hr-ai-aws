@@ -110,8 +110,22 @@ async function getAccessTokenForSend(sb: Sb): Promise<{ accessToken: string } | 
  */
 const STALL_DEFAULT_HOURS = 3
 const RE_ALERT_HOURS = 6
+/** 判定してよい時間帯（JST）。夜と休日は案件メールが来ないので無音が正常。
+ *  実測（30日）では毎晩9〜12時間止まる。夜も見張ると毎晩誤報になる。
+ *  日中に止まったのは 8/18 と 8/28 の2回だけで、どちらも本物の障害だった。 */
+const BUSINESS_START_JST = 10
+const BUSINESS_END_JST = 20
+
+function jstNow(): { hour: number; day: number } {
+  const d = new Date(Date.now() + 9 * 3600_000)
+  return { hour: d.getUTCHours(), day: d.getUTCDay() }
+}
 
 async function checkInboundStall(sb: Sb, notifyTo: string): Promise<Record<string, unknown>> {
+  const { hour, day } = jstNow()
+  if (day === 0 || day === 6) return { checked: false, reason: 'weekend' }
+  if (hour < BUSINESS_START_JST || hour >= BUSINESS_END_JST) return { checked: false, reason: 'off_hours' }
+
   const hours = Number(await getConfig(sb, 'inbound_stall_alert_hours')) || STALL_DEFAULT_HOURS
   const to = (await getConfig(sb, 'inbound_stall_alert_email')) || notifyTo
   if (!to) return { checked: false, reason: 'no_recipient' }
@@ -151,6 +165,8 @@ async function checkInboundStall(sb: Sb, notifyTo: string): Promise<Record<strin
     `・Outlook 側が人間確認（bot判定）を出している → ブラウザで Outlook を開いて確認する\n` +
     `・Microsoft のトークンが失効した → 設定画面から再連携する\n` +
     `・受信箱に未読が無いだけ（正常）\n\n` +
+    `実績として、この停止は人が手でサインインするまで復旧しません（8/18・8/28 とも）。\n` +
+    `判定は平日 JST ${BUSINESS_START_JST}:00〜${BUSINESS_END_JST}:00 のみ（夜間・休日の無音は正常なため）。\n` +
     `この通知は復旧するまで ${RE_ALERT_HOURS} 時間おきに届きます。`)
   if (err) return { stalled: true, alerted: false, reason: err }
 
