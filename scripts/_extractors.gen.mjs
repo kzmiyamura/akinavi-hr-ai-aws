@@ -18,6 +18,8 @@ const ZIP_MAX_ENTRIES = 20
 const ZIP_MAX_TOTAL_BYTES = 40 * 1024 * 1024
 const ZIP_MAX_ENTRY_BYTES = 15 * 1024 * 1024
 const ZIP_EXT_MIME= { xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.12', xlsb: 'application/vnd.ms-excel.sheet.binary.macroEnabled.12', xls: 'application/vnd.ms-excel', ods: 'application/vnd.oasis.opendocument.spreadsheet', csv: 'text/csv', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docm: 'application/vnd.ms-word.document.macroEnabled.12', doc: 'application/msword', pdf: 'application/pdf' }
+const MULTI_CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏[ 　]*名)[　 ]*[：:]|[■●▪▶]?[ 　]*(?:最寄(?:り?駅?)|希望単価|希望単金|スキル|業務経験|稼働開始|稼働時期|アピール)/
+const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏[ 　]*名[　 ]*[：:]|^[■●▪▶◇◆]?[ 　]*名[ 　]*前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
 const PREFECTURES = [
 
   '北海道','青森県','岩手県','宮城県','秋田県','山形県','福島県',
@@ -2487,6 +2489,67 @@ function assignAttachmentsToBlocks(
   return result
 }
 
+// ── splitMultiCandidateBody ──
+function splitMultiCandidateBody(body){
+  const CANDIDATE_FIELD_RE = MULTI_CANDIDATE_FIELD_RE
+  const NAME_FIELD_RE = MULTI_NAME_FIELD_RE
+  const lines = body.split(/\r?\n/)
+
+  function trySplit(delimRe){
+    const delimIndices = []
+    for (let i = 0; i < lines.length; i++) {
+      if (delimRe.test(lines[i])) delimIndices.push(i)
+    }
+    if (delimIndices.length < 2) return null
+    const delimSet = new Set(delimIndices)
+    const allParts = []
+    let current = []
+    for (let i = 0; i < lines.length; i++) {
+      if (delimSet.has(i)) { allParts.push(current.join('\n')); current = [] }
+      else current.push(lines[i])
+    }
+    if (current.length > 0) allParts.push(current.join('\n'))
+    // フッター・法的免責文・「以上になります」ブロックを候補者として処理しない
+    const FOOTER_BLOCK_RE = /^(?:以上になります|以上です|よろしくお願いいたします|本メールに記載された|【重要[：:])/
+    const blocks = []
+    // allParts[0]（先頭区切り線より前）は通常「挨拶文等の前置きのみ」だが、先頭の候補者の
+    // 直前に区切り線を置かず挨拶文にそのまま続けて書くテンプレートでは、allParts[0] 自体に
+    // 1人目の候補者情報が紛れ込む（区切り線が2人目以降にしか無いため）。NAME_FIELD_RE の
+    // マッチ位置以降を切り出せば、その候補者ブロックだけを回収できる。
+    const preamble = allParts[0] ?? ''
+    const preambleNameMatch = preamble.match(NAME_FIELD_RE)
+    if (preambleNameMatch && preambleNameMatch.index !== undefined) {
+      const leadingBlock = preamble.slice(preambleNameMatch.index).trim()
+      if (leadingBlock.length >= 50 && CANDIDATE_FIELD_RE.test(leadingBlock)) {
+        blocks.push(leadingBlock)
+      }
+    }
+    for (let i = 1; i < allParts.length; i++) {
+      const content = allParts[i].trim()
+      if (!content || content.length < 50) continue
+      if (FOOTER_BLOCK_RE.test(content.slice(0, 100))) continue
+      if (!CANDIDATE_FIELD_RE.test(content)) continue
+      const prevPart = allParts[i - 1] ?? ''
+      const prevLines = prevPart.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+      const nameLine = prevLines[prevLines.length - 1] ?? ''
+      const block = (nameLine && prevPart.trim().length < 80 && !CANDIDATE_FIELD_RE.test(prevPart.trim()))
+        ? `${nameLine}\n${content}` : content
+      blocks.push(block)
+    }
+    const blocksWithName = blocks.filter(b => NAME_FIELD_RE.test(b))
+    return blocksWithName.length >= 2 ? blocks : null
+  }
+
+  // Pass 1: = と ー のみ（- を除外して laize 形式の内部 ---- による誤分割を防ぐ）
+  // Pass 2: - を含む全パターン（ical 等の --- のみの形式に対応）
+  // Pass 1: - を除外（laize 内部の ---- による誤分割防止）。━ U+2501 / ─ U+2500 / ― U+2015 / — U+2014 / ー U+30FC を含む
+  //         全角ビュレット ●○■□◆◇ の連続も区切り線として扱う（ai-more 等が候補者間の区切りに使用。
+  //         これが無いと「●●●●…」区切りの複数人名簿が1人目だけの単一候補者に潰れる実害があった）
+  // Pass 2: - も含む（ical 等の --- のみ形式に対応）
+  return trySplit(/^[\*=＊＝━ーー─―—●○■□◆◇]{8,}\s*$/)
+      ?? trySplit(/^[\*\-=＊＝━ーー─―—●○■□◆◇]{8,}\s*$/)
+}
+
 // ── stripInitialSuffix ──
 function stripInitialSuffix(name){
   const initM = name.match(/^([A-Za-zＡ-Ｚａ-ｚ][.\s　・]*[A-Za-zＡ-Ｚａ-ｚ](?:[.\s　・]*[A-Za-zＡ-Ｚａ-ｚ])?)/)
@@ -4307,6 +4370,7 @@ export {
   personAttrScore,
   isOwnersResumeFile,
   assignAttachmentsToBlocks,
+  splitMultiCandidateBody,
   stripInitialSuffix,
   sanitizeFromCompany,
   extractNationalityMark,
@@ -4363,6 +4427,8 @@ export {
   ZIP_MAX_TOTAL_BYTES,
   ZIP_MAX_ENTRY_BYTES,
   ZIP_EXT_MIME,
+  MULTI_CANDIDATE_FIELD_RE,
+  MULTI_NAME_FIELD_RE,
   PREFECTURES,
   STATION_TO_PREFECTURE,
   OWN_COMPANY_NAMES,

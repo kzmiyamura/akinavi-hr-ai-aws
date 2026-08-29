@@ -9824,7 +9824,7 @@ function assignAttachmentsToBlocks<T extends AssignableAttachment>(
 const MULTI_CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏[ 　]*名)[　 ]*[：:]|[■●▪▶]?[ 　]*(?:最寄(?:り?駅?)|希望単価|希望単金|スキル|業務経験|稼働開始|稼働時期|アピール)/
 // 【 氏 名 】（半角スペース区切り形式）・■氏名：形式・■SI（28歳／男性）形式にも対応
 // 「■MM（石川町）男性・57歳」（括弧内は駅名、性別・年齢は括弧の外に「・」区切りで続く）にも対応
-const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏[ 　]*名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
+const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏[ 　]*名[　 ]*[：:]|^[■●▪▶◇◆]?[ 　]*名[ 　]*前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
 
 function splitMultiCandidateBody(body: string): string[] | null {
   const CANDIDATE_FIELD_RE = MULTI_CANDIDATE_FIELD_RE
@@ -10770,7 +10770,16 @@ Deno.serve(async (req: Request) => {
                 blockRegexFields.prefecture = stationPref
               }
             }
-            const blockProseFields = extractFromProse(blockRegexBodyText, blockAttachText)
+            // 役割・業界は件名を見ない（2026-08-29）。
+            // 件名は名簿の全員に共通なので、そこに出た役割が兄弟ブロック全員に付く。
+            //   実例: 件名「【Miraie塩田】弊社社員のご紹介(サーバ運用,Java,社内SE)」で
+            //         6ブロック中5つに「システムエンジニア」が漏れた（実際のSEは1人）。
+            //         件名「【弊社直人材】PMO/生保/小売/…」では21人全員にPMOが付いた。
+            // スキル年数の抽出では既に同じ理由で件名を除外している（下の skillYears 参照）。
+            // ※ ここだけ差し替える。blockRegexBodyText は氏名・年齢・駅・単価の抽出にも
+            //    使われており、そちらは件名に依存した動作が既にあるため触らない。
+            const blockProseText = decodeHtmlEntities([block, blockAttachLabel].join('\n'))
+            const blockProseFields = extractFromProse(blockProseText, blockAttachText)
 
             // 名前解決の優先順位:
             // 1. blockMetas 事前パス（添付テキストなし・ブロック本文のみ）: 兄弟ブロックの添付が混入しない

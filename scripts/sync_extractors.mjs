@@ -35,6 +35,7 @@ const TARGET_FUNCTIONS = [
   'personAttrScore',
   'isOwnersResumeFile',
   'assignAttachmentsToBlocks', // ブロック×添付の全体最適割当（管理番号マッチ含む）
+  'splitMultiCandidateBody',   // 名簿本文を人ごとのブロックに分割（分割漏れの調査に使う）
   'stripInitialSuffix',
   'sanitizeFromCompany',   // 会社名の後処理（敬称・丁寧表現・NG先の除去）
   'extractNationalityMark',
@@ -388,6 +389,8 @@ const TARGET_CONSTS = [
   'ZIP_MAX_TOTAL_BYTES',
   'ZIP_MAX_ENTRY_BYTES',
   'ZIP_EXT_MIME',
+  'MULTI_CANDIDATE_FIELD_RE', // splitMultiCandidateBody が参照する「人ごとの見出し」判定
+  'MULTI_NAME_FIELD_RE',      // 同上（氏名欄の判定）
   'PREFECTURES',       // extractPrefectureFromStationText が参照（複数行定義）
   'STATION_TO_PREFECTURE', // inferPrefectureFromStation が参照（複数行定義）
   // sanitizeFromCompany（会社名の後処理）が参照する法人格の表・自社名
