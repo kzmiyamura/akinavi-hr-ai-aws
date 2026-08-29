@@ -3011,7 +3011,8 @@ function extractSkillYearsFromCells(cells, deadline = 0){
   const sameRowLabels = sorted.filter(c => c.row === firstNo.row && c !== firstNo)
   const isHeaderRow = sameRowLabels.some(c => /^(期間|内容|案件名|業務内容|システム名|業種)$/.test(c.value.trim()))
 
-  // プロジェクト境界の行範囲を決定  const blocks = []
+  // プロジェクト境界の行範囲を決定
+  const blocks = []
 
   // D.U 型: ヘッダー行(rs=1) の下に No.=1,2,3... が来るのではなく、
   //          ヘッダー行が繰り返される（各プロジェクトが独立したヘッダー+データ構造）
@@ -3940,15 +3941,47 @@ function scoreProseRoles(prose, fullText) {
   const roles = []
   const roleScores= {}
   if (!prose.trim()) return { roles, roleScores }
+
+  // ── 否定された役割を落とす（2026-08-29 追加） ──────────────────────────────
+  // 「運用保守NG」「ヘルプデスク以外の業務を希望」「PMOの経験はありません」を
+  // そのまま役割として付けていた（実測: 直近7日で10人）。マッチングは役割を
+  // 同一+15 / 系統違い-9 で採点するため、否定された役割が付くと順位が狂う。
+  //
+  // ただし実文面を見ると、素朴な否定判定は新しい誤りを生む:
+  //   「未経験領域も自走で完遂しました」    ← 未経験 だが肯定的
+  //   「C#以外にもTypeScriptも経験がある」  ← 「以外にも」は追加であって否定ではない
+  //   「NG企業：NRI、…」                    ← 役割とは無関係
+  // そこで「役割語の直後（15文字以内）に否定が来る」形だけに限定する。
+  const NEGATION_AFTER =
+    '(?:' +
+    'NG(?!企業)' +                        // 「運用保守NG」（NG企業 は除く）
+    '|は?不可' +                          // 「PMOは不可」
+    '|は?未経験(?!領域|技術|分野|の分野)' + // 「PMOは未経験」。未経験領域/技術は肯定文なので除く
+    '|の?経験は?(?:あり|ござい)ません' +   // 「運用保守の経験はありません」
+    '|は?希望(?:しません|しない|外)' +     // 「運用保守は希望しません」
+    '|以外(?:の|を)' +                     // 「ヘルプデスク以外の業務を希望」（以外にも は除く）
+    ')'
+  /** その役割語の出現が「否定された」ものか */
+  const isNegated = (text, roleSrc)=> {
+    const neg = new RegExp(`(?:${roleSrc})[^。、，（(\\n]{0,15}?${NEGATION_AFTER}`)
+    return neg.test(text)
+  }
+  /** 否定されている出現を取り除いたテキスト（数え上げから外すため） */
+  const dropNegated = (text, roleSrc)=>
+    text.replace(new RegExp(`(?:${roleSrc})[^。、，（(\\n]{0,15}?${NEGATION_AFTER}`, 'g'), '')
   const head = fullText.slice(0, 200)
   const lines = fullText.split(/\r?\n/)
   for (const { re, label } of ROLE_DEFS) {
     if (!re.test(prose)) continue
+    // 否定されている出現を外したうえで、まだ残っているかを見る。
+    // 「運用保守NG」しか書かれていない人には運用保守を付けない。
+    const posProse = isNegated(prose, re.source) ? dropNegated(prose, re.source) : prose
+    if (!re.test(posProse)) continue
     let score = 0
     // 出現回数（最大3）
     const g = new RegExp(re.source, 'g')
     let count = 0
-    while (g.exec(prose) !== null && count < 3) count++
+    while (g.exec(posProse) !== null && count < 3) count++
     score += count
     // 冒頭（件名・営業の売り文句）
     if (re.test(head)) score += 3
