@@ -1137,10 +1137,16 @@ async function pollAccount(
     // リフレッシュトークンをローテーション保存
     await saveRefreshToken(supabase, config.configKey, newRefreshToken)
 
-    // 全件モードの場合は保存済みの nextLink を取得
+    // 全件モード・復旧モードは保存済みの nextLink から続きを取得する。
+    // 復旧モードは 2026-08-29 まで nextLink を持たず、再実行しても毎回同じ先頭50件を
+    // 読み直していた（期間指定が日付単位なので途中再開もできない）。
+    // 分類の誤りで捨てられた人材メールは3日で約2,600通あり、50件ずつでは届かないため
+    // full と同じページ送りに乗せる。
     let storedNextLink: string | null = null
-    if (mode === 'full') {
-      const nextLinkKey = `email_full_import_nextlink_${config.configKey}`
+    if (mode === 'full' || mode === 'recover') {
+      const nextLinkKey = mode === 'recover'
+        ? `email_recover_nextlink_${config.configKey}`
+        : `email_full_import_nextlink_${config.configKey}`
       const stored = await getAppConfigValue(supabase, nextLinkKey)
       if (stored === 'DONE') {
         // このアカウントは既に完了済み
@@ -1336,9 +1342,11 @@ async function pollAccount(
       }
     }
 
-    // 全件モードの nextLink 管理
-    if (mode === 'full') {
-      const nextLinkKey = `email_full_import_nextlink_${config.configKey}`
+    // 全件モード・復旧モードの nextLink 管理
+    if (mode === 'full' || mode === 'recover') {
+      const nextLinkKey = mode === 'recover'
+        ? `email_recover_nextlink_${config.configKey}`
+        : `email_full_import_nextlink_${config.configKey}`
       if (nextLink) {
         // 次のページあり → 保存して次回継続
         await setAppConfigValue(supabase, nextLinkKey, nextLink)
@@ -1501,10 +1509,24 @@ Deno.serve(async (req: Request) => {
     const totalProcessed = summary.reduce((s, r) => s + r.processed, 0)
     const totalErrors    = summary.flatMap(r => r.errors)
 
-    // 復旧モードは1回きり。実行後は必ず incremental に戻す（暴発防止）
+    // 復旧モードはページ送りが尽きるまで継続し、終わったら incremental に戻す。
+    // 復旧中は通常の受信取り込みが止まる（メールは未読のまま残るので取りこぼしはないが、
+    // 反映が遅れる）ため、暴走しないよう実行回数に上限を設ける。
     if (mode === 'recover') {
-      await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
-      console.log('[poll-email] 復旧モード完了 → incremental に戻しました')
+      const runs = Number((await getAppConfigValue(supabase, 'email_recover_runs')) ?? '0') + 1
+      const allDone = summary.every(r => r.fullImportDone)
+      const RECOVER_MAX_RUNS = 120
+      if (allDone || runs >= RECOVER_MAX_RUNS) {
+        await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
+        await setAppConfigValue(supabase, 'email_recover_runs', '0')
+        for (const config of POLL_CONFIGS) {
+          await setAppConfigValue(supabase, `email_recover_nextlink_${config.configKey}`, '')
+        }
+        console.log(`[poll-email] 復旧モード終了（${runs}回目・${allDone ? '全ページ完了' : '上限到達'}） → incremental に戻しました`)
+      } else {
+        await setAppConfigValue(supabase, 'email_recover_runs', String(runs))
+        console.log(`[poll-email] 復旧モード継続（${runs}回目・次ページあり）`)
+      }
     }
 
     // 全件モード完了チェック: 全アカウントが fullImportDone なら incremental に戻す
