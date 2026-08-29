@@ -9657,7 +9657,33 @@ function assignAttachmentsToBlocks<T extends AssignableAttachment>(
       }
       return map
     }
-    const blockNums = byNum(blocks.map((b, i) => [i, numsOf(b.text ?? '')]))
+    // 冒頭の一覧（「本日は下記の要員をご紹介いたします ①■5756 ②■24130 ③■31873」）が
+    // 1人目のブロックに含まれると、他人の番号まで1人目に出てしまい「1箇所だけ」の条件が
+    // 崩れて2人目以降が全滅する（2026-08-29 実測・キャル(株) 12人）。
+    // 各ブロックでは「その番号が最も詳しく書かれている1箇所」だけを数える:
+    //   ある番号が複数ブロックに現れる場合、その番号の前後の記述量が最も多いブロックを
+    //   本人とみなす。一覧行は短く、本人ブロックは長いので分離できる。
+    const contextLenOf = (s: string, n: string) => {
+      let best = 0
+      for (const m of s.matchAll(new RegExp(`(?<!\\d)${n}(?!\\d)`, 'g'))) {
+        // その番号を含む行の長さを、その番号の「詳しさ」とみなす
+        const start = s.lastIndexOf('\n', m.index ?? 0) + 1
+        const endRel = s.indexOf('\n', m.index ?? 0)
+        const end = endRel === -1 ? s.length : endRel
+        best = Math.max(best, end - start)
+      }
+      return best
+    }
+    const blockNumsRaw = byNum(blocks.map((b, i) => [i, numsOf(b.text ?? '')]))
+    const blockNums = new Map<string, number[]>()
+    for (const [n, idxs] of blockNumsRaw) {
+      if (idxs.length <= 1) { blockNums.set(n, idxs); continue }
+      // 同じ番号が複数ブロックにある → 最も詳しく書かれているブロックだけを残す
+      const scored = idxs.map((i) => ({ i, len: contextLenOf(blocks[i].text ?? '', n) }))
+      const max = Math.max(...scored.map((s) => s.len))
+      const winners = scored.filter((s) => s.len === max).map((s) => s.i)
+      blockNums.set(n, winners)
+    }
     const attNums = byNum(attachments.map((att, i) => {
       const filenameMatch = att.label.match(/\(([^)]+)\)/)
       return [i, numsOf(filenameMatch ? filenameMatch[1] : att.label)]
