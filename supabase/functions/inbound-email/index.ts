@@ -10579,9 +10579,20 @@ Deno.serve(async (req: Request) => {
               blockAttachText = singleSafeUnassignedEntry?.content ?? ''
               blockAttachLabel = singleSafeUnassignedEntry?.label ?? ''
             } else {
-              // ケースC
-              blockAttachText = attachText
-              blockAttachLabel = attachmentNames
+              // ケースC: このブロックの名前が取れていない。
+              //
+              // 以前はここで全添付のテキスト（attachText）を渡していたが、名簿メールでは
+              // それは「他人全員の経歴書」を1人ぶんとして渡すことに等しく、年齢・最寄駅・
+              // スキル・役割のすべてが他人の値で埋まる（2026-08-29 実測、直近4日で8件）。
+              //   実害: ai・more の9人名簿で、氏名の取れないブロックが他人の行から
+              //         「R.M」を拾い、最寄駅に YT の「銚子駅（JR東日本…）」由来の
+              //         「東日本旅客鉄道」、本文に H.H の居住地が入った偽レコードを生成。
+              //         「ﾌﾘｶﾞﾅ」という氏名（他人のExcelの見出し行）も同じ経路。
+              //
+              // 名前が取れないブロックに他人の経歴書を渡して得をすることは無いので、
+              // ケースB（添付なし）と同じ扱いにする。自分のブロック本文だけで作る。
+              blockAttachText = ''
+              blockAttachLabel = ''
             }
 
             // ── Step3: ブロック固有のスキル照合 ──────────────────────────────────
@@ -10814,12 +10825,11 @@ Deno.serve(async (req: Request) => {
                 // 添付はあるのにスキル年数が0件のケースで、パース失敗なのか本当に0件だったのかを
                 // 切り分けるための診断メモ（問題がなければ undefined）
                 excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
-                // ケースA: マッチした添付のラベルのみ / ケースB: [] / ケースC: 全添付（フォールバック）
-                attachmentNames: matchedTextContent
-                  ? [matchedTextContent.label]
-                  : blockNameForMatch
-                    ? []
-                    : [...allAttachments.map(a => a.name ?? a.mimeType), ...officeTextContents.map(t => t.label)],
+                // ケースA: マッチした添付のラベルのみ / ケースB・C: []
+                // ケースCで全添付を並べていたのをやめる（2026-08-29）。実体を渡していないのに
+                // 名前だけ全件並ぶと、画面上も「9人ぶんの経歴書を持つ1人」に見えて誤解を生む。
+                // メールに何が添付されていたかは allParsedAttachmentLabels に残る。
+                attachmentNames: matchedTextContent ? [matchedTextContent.label] : [],
                 driveLinks: googleEntries.map(t => t.label),
                 // ゾーンT: この候補者に割り当てられたエントリの台帳＋メール全体サマリー
                 pipeline_trace: ledger.serializeTrace(matchedTextContent ? [(matchedTextContent as SourceEntry).entryId] : []),
