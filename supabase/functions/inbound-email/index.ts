@@ -572,6 +572,49 @@ export function isInsideParens(text: string, matchIndex: number): boolean {
   return depth > 0
 }
 
+// ── 会社名の検閲（2026-08-29 追加） ──────────────────────────────────────────
+// 会社名の抽出経路は5つ（前株・後株・英字社名・本文冒頭の「〜の〜担当です」・件名の【】）
+// あり、それぞれが営業文の断片を拾っていた。経路ごとに直すと漏れるので、国籍と同じく
+// 「返す直前に1か所で検閲する」方式にする。
+// 実測（2026-08-29・直近7日）で 72人ぶんが下記のいずれかだった。
+
+/** 文の断片。「医療法人Sクリニックにてスタッフマネージャー兼事務担当として」（25人） */
+const COMPANY_NG_SENTENCE = /(にて|として|ました|ています|いたします|お願い|参画し|勤務し|在籍し|従事し)/
+/** 人数表現。「PM・PMO・コンサル7名」「インフラ5名」「その他5名」（27人） */
+const COMPANY_NG_HEADCOUNT = /\d+\s*名$|^その他/
+/** 個人属性。「31歳女性」「27歳男性」（5人） */
+const COMPANY_NG_PERSON = /^\d{1,2}\s*歳/
+/** 日付。「10月」 */
+const COMPANY_NG_DATE = /^\d{1,2}\s*月$/
+/** 役割・職種だけ。「QA/テスター」（9人）。法人格があれば社名の一部とみなして通す */
+const COMPANY_NG_ROLE_ONLY =
+  /^(QA|PM|PMO|PL|TL|SE|PG|BSE|インフラ|テスター|テスト|コンサル|コンサルタント|フリーランス|エンジニア|開発|運用|保守|営業|事務|ヘルプデスク|キッティング)(?:[\s　\/・、,＋+&]+(?:QA|PM|PMO|PL|TL|SE|PG|BSE|インフラ|テスター|テスト|コンサル|コンサルタント|フリーランス|エンジニア|開発|運用|保守|営業|事務|ヘルプデスク|キッティング))*$/
+/** 一般語だけ。「ご依頼」「フリーランス」 */
+const COMPANY_NG_GENERIC =
+  /^(ご?依頼|ご?紹介|人材|要員|案件|不明|担当|営業|弊社|当社|自社|御社|貴社|プロパ|正社員|個人|直請|元請)$/
+/** ランダムな英数字列。「dYCOy6foGK」（識別子や短縮URLの断片） */
+const COMPANY_NG_RANDOM = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z0-9]{8,}$/
+/** 法人格を含むか（含む場合は役割語・一般語の判定を通す） */
+const COMPANY_HAS_CORP = /(株式会社|有限会社|合同会社|一般社団法人|医療法人|\(株\)|（株）|㈱|Inc\.?|Corp\.?|LLC|Ltd\.?|Co\.,?\s*Ltd)/
+
+/** 会社名として妥当か。ダメなら null にして「不明」として扱う（誤った社名より無しが安全） */
+function isPlausibleCompanyName(name: string): boolean {
+  const s = name.trim()
+  if (s.length < 2 || s.length > 40) return false
+  // 文の断片・人数・個人属性・日付・ランダム文字列は、法人格があっても社名ではない
+  if (COMPANY_NG_SENTENCE.test(s)) return false
+  if (COMPANY_NG_HEADCOUNT.test(s)) return false
+  if (COMPANY_NG_PERSON.test(s)) return false
+  if (COMPANY_NG_DATE.test(s)) return false
+  if (COMPANY_NG_RANDOM.test(s)) return false
+  // 役割語・一般語だけの場合は、法人格が付いていれば社名として通す
+  if (!COMPANY_HAS_CORP.test(s)) {
+    if (COMPANY_NG_ROLE_ONLY.test(s)) return false
+    if (COMPANY_NG_GENERIC.test(s)) return false
+  }
+  return true
+}
+
 function sanitizeFromCompany(value: string | null | undefined): string | null {
   if (!value) return null
   let trimmed = value.trim()
@@ -2979,6 +3022,8 @@ function extractCandidateFieldsRegex(
 
   // 国籍は抽出経路が多く営業文の断片を拾いやすいため、返す直前に1か所で検閲する
   if (nationality && !isValidNationality(nationality)) nationality = null
+  // 会社名も同じ理由で検閲する（抽出経路が5つあり、それぞれで営業文を拾っていた）
+  if (fromCompany && !isPlausibleCompanyName(fromCompany)) fromCompany = null
   return { name, age, gender, nationality, nearestStation, nearestStationLine, prefecture, experienceYears, experienceYearsIsDedicated, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
 }
 
