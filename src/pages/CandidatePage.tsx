@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
-import { toViewerUrl } from '../lib/viewerUrl'
+import { toViewerUrl, isRosterLinkAlive } from '../lib/viewerUrl'
 import { matchesSkillFilter } from '../lib/skillWordMatch'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
 import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
@@ -2059,18 +2059,66 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           const m = bodyText.match(/https:\/\/drive\.google\.com\/[^\s"'<>\]）]+/)
                           return m ? m[0] : null
                         })()
-                        return resumeLink ? (
-                          <a
-                            href={toViewerUrl(resumeLink)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
-                            title="経歴書を開く"
-                          >
-                            <ExternalLink size={14} />
-                            経歴書
-                          </a>
-                        ) : null
+                        if (resumeLink) {
+                          return (
+                            <a
+                              href={toViewerUrl(resumeLink)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
+                              title="経歴書を開く"
+                            >
+                              <ExternalLink size={14} />
+                              経歴書
+                            </a>
+                          )
+                        }
+                        // 名簿メールで本人ぶんを特定できなかった場合は、メールの添付一覧を出す。
+                        // 「名簿に自分のものが無かった」ことも営業が判断できる
+                        const roster = (selectedCandidate.raw_profile as
+                          { rosterAttachments?: { label: string; url: string }[] })?.rosterAttachments ?? []
+                        if (roster.length === 0) return null
+                        // 実体は raw/ に1日だけ置かれる。期限切れならリンクを出さず理由を示す
+                        if (!isRosterLinkAlive(selectedCandidate.created_at)) {
+                          return (
+                            <span
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-400"
+                              title={`名簿メールの添付${roster.length}件は保持期間（1日）を過ぎて削除されています`}
+                            >
+                              経歴書（未特定・添付は保持期間切れ）
+                            </span>
+                          )
+                        }
+                        return (
+                          <details className="relative">
+                            <summary
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-amber-200 bg-amber-50 rounded-lg text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer list-none"
+                              title="本人ぶんを特定できなかったため、メールに付いていた添付を一覧で表示します"
+                            >
+                              <ExternalLink size={14} />
+                              経歴書（未特定・添付{roster.length}件）
+                            </summary>
+                            <div className="absolute right-0 z-20 mt-1 w-80 rounded-lg border border-amber-200 bg-white p-3 shadow-lg">
+                              <p className="text-xs text-gray-500 mb-2">
+                                名簿メールの添付一覧です。どれがこの人のものかは判別できませんでした。
+                              </p>
+                              <ul className="space-y-1 max-h-64 overflow-y-auto">
+                                {roster.map((r) => (
+                                  <li key={r.url}>
+                                    <a
+                                      href={toViewerUrl(r.url)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-sm text-blue-600 hover:underline break-all"
+                                    >
+                                      {r.label}
+                                    </a>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          </details>
+                        )
                       })()}
                       {selectedCandidate.box_url && (
                         <>

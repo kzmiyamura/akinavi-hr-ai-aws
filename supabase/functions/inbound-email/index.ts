@@ -10254,6 +10254,9 @@ Deno.serve(async (req: Request) => {
     // ③ 重複メール判定（同一メールが複数受信箱に転送された場合の二重処理防止）
     // dedup_salt: poll-email が添付分割する際に添付ファイル名を渡す（分割呼び出し間の衝突を防ぐ）
     const dedupSalt = raw.dedup_salt ?? ''
+    // poll-email が保存した受信添付のパス（raw/<msg>/attN.ext）。名簿メールで本人ぶんの
+    // 経歴書を特定できなかった候補者に、参照用のリンクとして持たせる（アップロードはしない）
+    const rawPaths: string[] = Array.isArray(raw.raw_paths) ? raw.raw_paths as string[] : []
     tracePhase = 'dedup_check'
     const { isDuplicate, configKey: _dedupConfigKey } = await checkEmailDuplicate(supabase, from, subject, body, dedupSalt)
     dedupConfigKey = _dedupConfigKey
@@ -10548,6 +10551,34 @@ Deno.serve(async (req: Request) => {
         // undefined = まだ計算していない / null = アップロード失敗または対象外 / string = URL
         let caseBSharedResumeUrl: string | null | undefined = undefined
 
+        // ── 名簿の添付一覧（2026-08-29 追加） ───────────────────────────────────
+        // 経歴書を本人に割り当てられなかったブロックには、これまで何も残していなかった。
+        // 画面には「経歴書なし」としか出ず、営業は元メールを探しに行くしかない。
+        // 「あなたのは特定できませんでした。このメールに付いていたのはこの一覧です」と
+        // 見せられるよう、メール単位で全添付をアップロードしてURLの一覧を持たせる。
+        //
+        // resume_url には入れない。本人のものと確定していないので、マッチングや
+        // AI校正が「本人の経歴書」として読むと他人の情報で汚染される（2026-08-29 に
+        // 直したケースCと同じ事故になる）。あくまで人が目で見るための参照。
+        //
+        // 実体は poll-email が既に raw/ に保存しているので、コピーは作らない（保存量ゼロ増）。
+        // raw/ の保持は1日なので、翌日以降はリンク切れになる。当日中に「名簿を見て、
+        // 自分のぶんが無いことを確かめる」用途に限る割り切り（2026-08-29 ユーザー判断）。
+        // 画面側は登録からの経過日数を見て、切れている場合はリンクを出さず理由を表示する。
+        const hasUnassignedBlock = multiBlocks.some((_, i) => !blockAttachAssignment.has(i))
+        const storagePublicBase = `${Deno.env.get('SUPABASE_URL') ?? ''}/storage/v1/object/public/attachments/`
+        const rosterAttachments: { label: string; url: string }[] | undefined =
+          hasUnassignedBlock && rawPaths.length > 0
+            ? rawPaths.map((p, i) => ({
+              // ラベルは解析済みの添付名を優先し、無ければ保存パスの末尾を使う
+              label: allTextContents[i]?.label ?? p.split('/').pop() ?? p,
+              url: storagePublicBase + p,
+            }))
+            : undefined
+        if (rosterAttachments) {
+          console.log(`[multi] 名簿添付リンク: ${rosterAttachments.length}件（未割当ブロックあり・raw参照）`)
+        }
+
         // 同一添付テキストのスキル照合結果をメモ化（ケースC等で全ブロックが同じ attachText を
         // 照合し、重い extractAndRemoveSkills をブロック数ぶん重複実行して546になるのを防ぐ）
         const attachSkillCache = new Map<string, { name: string; category: string }[]>()
@@ -10830,6 +10861,9 @@ Deno.serve(async (req: Request) => {
                 // 名前だけ全件並ぶと、画面上も「9人ぶんの経歴書を持つ1人」に見えて誤解を生む。
                 // メールに何が添付されていたかは allParsedAttachmentLabels に残る。
                 attachmentNames: matchedTextContent ? [matchedTextContent.label] : [],
+                // 本人の経歴書を特定できなかった人にだけ、メールに付いていた添付の一覧を渡す。
+                // 「名簿には自分のものが無かった」ことも含めて営業が判断できるようにする。
+                rosterAttachments: matchedTextContent ? undefined : rosterAttachments,
                 driveLinks: googleEntries.map(t => t.label),
                 // ゾーンT: この候補者に割り当てられたエントリの台帳＋メール全体サマリー
                 pipeline_trace: ledger.serializeTrace(matchedTextContent ? [(matchedTextContent as SourceEntry).entryId] : []),

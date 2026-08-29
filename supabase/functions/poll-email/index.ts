@@ -651,8 +651,18 @@ async function saveRawAttachments(
   attachments: { name?: string; contentType?: string; contentBytes?: string }[],
 ): Promise<string[]> {
   const saved: string[] = []
-  // Storage キーは ASCII のみ安全。元のファイル名は台帳側に残っているのでここでは連番にする
-  const safeMsg = messageId.replace(/[^a-zA-Z0-9]/g, '').slice(-16)
+  // Storage キーは ASCII のみ安全。元のファイル名は台帳側に残っているのでここでは連番にする。
+  //
+  // 記号を全部消して末尾16文字だけ取ると、別のメールが同じフォルダ名になる（2026-08-29 実測）。
+  // Outlook のメールIDは Base64URL で、連番の変化が `-` と `_` に出るため、末尾1文字だけ
+  // 違うIDが日常的に発生する。記号を落とすとその違いが消え、upsert:true で先に保存された
+  // 添付が黙って上書きされていた（直近7日で 6,059通中 58通・約1%）。
+  //   例) …E8MDAD_AAAA と …E8MDAD-AAAA → どちらも …E8MDADAAAA
+  //
+  // 実データに出る記号は `=` `-` `_` の3種だけで、いずれも Storage キーに使える
+  // （同じバケットの resumes/ は `_` を含むファイル名で1,000件以上動いている）。
+  // Base64 の詰め物である `=` だけ落とし、`-` と `_` は残す。長さも 32 文字に広げる。
+  const safeMsg = messageId.replace(/=+$/g, '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-32)
   for (const [i, a] of attachments.entries()) {
     try {
       if (!a.contentBytes) continue
@@ -864,6 +874,10 @@ async function callInboundEmail(
   type: 'candidate' | 'project',
   dataEnv: 'prod' | 'demo',
   dedupSalt = '',
+  /** 受信添付の保存先パス（raw/<msg>/attN.xlsx）。名簿メールで本人ぶんを特定できなかった
+   *  候補者に「メールに何が付いていたか」の参照リンクを持たせるために渡す。
+   *  実体は raw/ の1日保持なので、翌日以降はリンク切れになる前提（画面側で案内する）。 */
+  rawPaths: string[] = [],
 ): Promise<void> {
   const payload = {
     type,
@@ -877,6 +891,8 @@ async function callInboundEmail(
     skip_relevance: false,
     // 添付分割時に各呼び出しを区別（inbound-email のデdup判定で使用）
     dedup_salt: dedupSalt,
+    // 受信添付の保存先（raw/<msg>/attN.ext）。名簿メールの参照リンク用
+    raw_paths: rawPaths,
     attachments: attachments.map(a => ({
       name:     a.name,
       mimeType: a.contentType,
@@ -1319,7 +1335,7 @@ async function pollAccount(
             console.log(`[poll] 添付分割: "${officeAtt.name}" 登録完了`)
           }
         } else {
-          await callInboundEmail(email, attachments, finalType, config.dataEnv)
+          await callInboundEmail(email, attachments, finalType, config.dataEnv, '', savedRawPaths)
         }
         processed++
         // 処理完了後にメールを削除（DB に保存済みのため Outlook 側は不要）

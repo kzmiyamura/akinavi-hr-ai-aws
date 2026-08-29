@@ -4,7 +4,7 @@ import { ArrowLeft, Pencil, Loader2, ExternalLink, Reply } from 'lucide-react'
 import { fetchCandidateById, type Candidate } from '../lib/db/candidates'
 import { patchCandidateInCache } from '../lib/candidateCache'
 import { CandidateProfileFields, CandidateEditModal } from './CandidatePage'
-import { toViewerUrl } from '../lib/viewerUrl'
+import { toViewerUrl, isRosterLinkAlive } from '../lib/viewerUrl'
 import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
@@ -68,6 +68,8 @@ export function CandidateDetailPage({ candidateId, nickname, dataEnv, onBack }: 
             const m = (rawText ?? '').match(/https:\/\/drive\.google\.com\/[^\s"'<>\]）]+/)
             return m ? m[0] : null
           })()
+          // 名簿メールで本人の経歴書を特定できなかった場合の、メール添付一覧
+          const roster = (rp?.rosterAttachments as { label: string; url: string }[] | undefined) ?? []
           return (
             <>
               {resumeLink && (
@@ -80,6 +82,42 @@ export function CandidateDetailPage({ candidateId, nickname, dataEnv, onBack }: 
                   <ExternalLink size={15} />
                   経歴書
                 </a>
+              )}
+              {!resumeLink && roster.length > 0 && !isRosterLinkAlive(candidate.created_at) && (
+                <span
+                  className="inline-flex items-center gap-2 text-sm border border-gray-200 rounded-lg px-4 py-2 text-gray-400"
+                  title={`名簿メールの添付${roster.length}件は保持期間（1日）を過ぎて削除されています`}
+                >
+                  経歴書（本人ぶんを特定できず・添付は保持期間切れ）
+                </span>
+              )}
+              {!resumeLink && roster.length > 0 && isRosterLinkAlive(candidate.created_at) && (
+                <details className="inline-block align-top">
+                  <summary className="inline-flex items-center gap-2 text-sm border border-amber-200 bg-amber-50 rounded-lg px-4 py-2 text-amber-700 cursor-pointer hover:bg-amber-100 transition-colors list-none">
+                    <ExternalLink size={15} />
+                    経歴書（本人ぶんを特定できず・メールの添付 {roster.length}件）
+                  </summary>
+                  <div className="mt-2 rounded-lg border border-amber-200 bg-white p-3 shadow-sm">
+                    <p className="text-xs text-gray-500 mb-2">
+                      名簿メールに付いていた添付の一覧です。どれがこの人のものかは判別できませんでした
+                      （この人のぶんが添付されていない場合もあります）。
+                    </p>
+                    <ul className="space-y-1">
+                      {roster.map((r) => (
+                        <li key={r.url}>
+                          <a
+                            href={toViewerUrl(r.url)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm text-blue-600 hover:underline break-all"
+                          >
+                            {r.label}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </details>
               )}
               {from && (() => {
                 const reSubject = encodeURIComponent(`Re: ${subject ?? ''}`)
