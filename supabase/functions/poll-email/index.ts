@@ -250,6 +250,36 @@ const PROJECT_BODY_PATTERNS = [
   /案件情報を(?:展開|お送り|ご案内)/,
 ]
 
+// ── 件名だけで「人材メール」と分かるパターン（2026-08-28 追加） ───────────────
+// 送り手が「人を紹介する」と名乗っている形。実データ3,878件で調整した。
+
+/** 「【人材」「★人材情報」「要員情報」「弊社技術者のご紹介」等の名乗り */
+const CANDIDATE_SUBJECT_HEADER =
+  /【[^】]{0,10}人材|★[^★】]{0,10}人材|人材情報|人材[ー－-]|要員情報|要員紹介|技術者情報|(?:弊社)?(?:正社員)?技術者の?ご紹介|弊社技術者|自社\s*要員|スキルシート|経歴書/
+
+/** 個人プロフィールの痕跡。案件メールに出る年齢制限（45歳まで/23歳以上/60歳前後）は除く */
+const CANDIDATE_SUBJECT_AGE =
+  /\d{2}\s*歳(?!\s*(?:位|くらい|程度|前後)?\s*(?:まで|迄|以下|未満|以上|前後))/
+
+/** 案件を「探している」側の言い回し（人材メール特有） */
+const CANDIDATE_SUBJECT_PHRASE =
+  /案件(?:希望|のみ希望|を?探し|ご紹介くださ|をご紹介くださ)|参画先(?:希望|募集)/
+
+/** これがあれば案件。上の脱出口を使わせない */
+const HARD_PROJECT_SUBJECT =
+  /【\s*案件|案件情報|案件のご紹介|案件ご紹介\s*[】)）]|必須スキル|【商\s*流】|募集|人月|エンド直|直案件|元請け?直|エンジニア様?のご紹介をお待ち|見合う方がおりましたら/
+
+/**
+ * 件名だけで人材メールと判定できるか。
+ * 案件の強いシグナルがある場合は false（案件側の判定に委ねる）。
+ */
+function isCandidateBySubject(subject: string): boolean {
+  if (HARD_PROJECT_SUBJECT.test(subject)) return false
+  return CANDIDATE_SUBJECT_HEADER.test(subject)
+    || CANDIDATE_SUBJECT_AGE.test(subject)
+    || CANDIDATE_SUBJECT_PHRASE.test(subject)
+}
+
 /**
  * ルールベースで案件メールか判定する
  * 件名と本文冒頭500文字を対象とする
@@ -267,7 +297,11 @@ function isProjectByRuleBase(subject: string, plainBody500: string): boolean {
  * 件名と本文（先頭1000文字）の両方を確認する
  * @returns 'skip' | 'candidate' | 'project' | 'unknown'
  */
-function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' | 'unknown' {
+function preFilterEmail(
+  email: GraphMessage,
+  /** 件名による人材救済を使うか。app_config.subject_candidate_rescue='false' で即時に切れる */
+  useCandidateRescue = true,
+): 'skip' | 'candidate' | 'project' | 'unknown' {
   const subject = email.subject ?? ''
   const rawBody = email.body?.content ?? ''
   const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000)
@@ -282,6 +316,18 @@ function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' |
   if (SKIP_BODY_PATTERNS.some(p => p.test(plainBody))) {
     return 'skip'
   }
+
+  // 件名が「人を紹介する側」だと名乗っているなら人材とみなす（2026-08-28）。
+  //
+  // 実害: 人材メールが案件と判定され、案件解析OFFのため何も保存されずに捨てられていた。
+  // 実測（3日・ai_logs）で案件扱い2,645件のうち733件（27.7%）が人材メール。
+  // 原因は「要件定義」「案件希望」「プロジェクト管理」等、人材メールが普通に含む語を
+  // 案件の証拠として扱っていたこと（例: 件名の「要件」だけで project 確定）。
+  //
+  // ここは「人材への脱出口」だけを足す。案件と判定する条件は一切増やさないので、
+  // いま人材として取り込めているメールが案件に化けることは構造上ありえない
+  // （実データ1,233件でも反転0件を確認）。
+  if (useCandidateRescue && isCandidateBySubject(subject)) return 'candidate'
 
   // 件名だけで案件確定のパターン（HR判定前に先にチェック）
   if (/エンド直|直案件|直\s*案件|合う人材|ご紹介をお待ち|エンドユーザー.*直/.test(subject)) return 'project'
@@ -1117,9 +1163,12 @@ async function pollAccount(
 
     // ---- ルールベース事前フィルター ----
     // Gemini を呼ぶ前に件名で明らかなスパムを除外
+    // 件名による人材救済は app_config で即時に切れる（デプロイなしで元の挙動へ戻せる）
+    const rescueOff = (await getAppConfigValue(supabase, 'subject_candidate_rescue')) === 'false'
+    if (rescueOff) console.log('[poll] 件名による人材救済は無効（subject_candidate_rescue=false）')
     const preFilterResults = emails.map(email => ({
       email,
-      preResult: preFilterEmail(email),
+      preResult: preFilterEmail(email, !rescueOff),
     }))
 
     const ruleSkipped  = preFilterResults.filter(r => r.preResult === 'skip')
