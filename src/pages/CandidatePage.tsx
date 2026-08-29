@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
 import { toViewerUrl, isRosterLinkAlive } from '../lib/viewerUrl'
+import { isSameCompany as isSameCompanyName } from '../lib/companyName'
 import { matchesSkillFilter } from '../lib/skillWordMatch'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
 import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
@@ -2254,10 +2255,13 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     // 同じ会社から来た同じ人は「別ルート」ではなく単なる二重登録。
                     // 実測（2026-08-21 prod）: 同一人物ペア329組のうち245組が同じ会社で、
                     // 「別ルート・別会社」という見出しが実態と逆になっていた（ユーザー指摘）
-                    const normCo = (v: unknown) => String(v ?? '').replace(/[\s　]/g, '').toLowerCase()
-                    const myCo = normCo(selectedCandidate.from_company)
+                    // 法人格の有無で同じ会社が別扱いになっていた（「JapanTechnology」78人 と
+                    // 「株式会社JapanTechnology」37人・2026-08-29 実測）。正規化して比較する
                     const isSameCompany = (d: Candidate) =>
-                      myCo !== '' && normCo((d as unknown as Record<string, unknown>).from_company) === myCo
+                      isSameCompanyName(
+                        selectedCandidate.from_company,
+                        (d as unknown as Record<string, unknown>).from_company as string | null,
+                      )
                     const sameCoCount = dupCandidates.filter(isSameCompany).length
                     return (
                     <details className="mt-4 border border-yellow-200 rounded-lg bg-yellow-50" open>
