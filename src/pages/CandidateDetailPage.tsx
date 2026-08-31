@@ -5,6 +5,7 @@ import { fetchCandidateById, type Candidate } from '../lib/db/candidates'
 import { patchCandidateInCache } from '../lib/candidateCache'
 import { CandidateProfileFields, CandidateEditModal } from './CandidatePage'
 import { toViewerUrl, isRosterLinkAlive } from '../lib/viewerUrl'
+import { BookmarkStar } from '../components/BookmarkStar'
 import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
@@ -72,6 +73,12 @@ export function CandidateDetailPage({ candidateId, nickname, dataEnv, onBack }: 
           const roster = (rp?.rosterAttachments as { label: string; url: string }[] | undefined) ?? []
           return (
             <>
+              <BookmarkStar
+                candidateId={candidate.id}
+                dataEnv={dataEnv}
+                bookmarked={candidate.bookmarked === true}
+                size="md"
+              />
               {resumeLink && (
                 <a
                   href={toViewerUrl(resumeLink)}

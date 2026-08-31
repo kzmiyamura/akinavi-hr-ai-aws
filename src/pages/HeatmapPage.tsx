@@ -5,6 +5,7 @@ import type { GeoPermissibleObjects } from 'd3-geo'
 import { feature } from 'topojson-client'
 import type { Topology } from 'topojson-specification'
 import { fetchPrefectureCounts, fetchSkillNames, fetchCandidatesByPrefecture } from '../lib/db/heatmap'
+import { BookmarkStar } from '../components/BookmarkStar'
 import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
@@ -402,6 +403,10 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
                     className={`px-4 py-2.5 flex items-start gap-3 transition-colors ${canOpen ? 'cursor-pointer hover:bg-amber-50' : ''}`}
                     onClick={canOpen ? () => onSelectCandidate(c.id) : undefined}
                   >
+                    {/* アーカイブ済みは candidates から消えているので星を出さない */}
+                    {!c.is_archived && (
+                      <BookmarkStar candidateId={c.id} dataEnv={dataEnv} bookmarked={c.bookmarked} />
+                    )}
                     <div className="shrink-0 text-xs text-gray-400 mt-0.5 whitespace-nowrap">
                       {formatDate(c.created_at)}
                     </div>

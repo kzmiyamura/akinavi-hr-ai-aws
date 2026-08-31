@@ -23,6 +23,8 @@ export interface Candidate {
   /** 失敗回数。jsonb の ->> なので文字列で返る */
   llm_attempts?: string | null
   duplicate_flag: boolean
+  /** ブックマーク（星）。チーム共有の1状態。人材が保持日数で消えると一緒に消える */
+  bookmarked?: boolean
   merged_into: string | null
   created_by: string
   updated_by: string | null
@@ -197,6 +199,8 @@ export async function searchCandidatesForMatching(
   mode: 'AND' | 'OR',
   limit: number,
   offset = 0,
+  /** true なら★を付けた人だけ。50件ずつしか引かないので手元では絞れない（サーバー側で絞る） */
+  bookmarkedOnly = false,
 ): Promise<Candidate[]> {
   const { data, error } = await supabase.rpc('search_candidates_for_matching', {
     p_data_env: dataEnv,
@@ -204,6 +208,7 @@ export async function searchCandidatesForMatching(
     p_mode: mode,
     p_limit: limit,
     p_offset: offset,
+    p_bookmarked_only: bookmarkedOnly,
   })
   if (error) throw new Error(`人材の取得に失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
@@ -378,6 +383,9 @@ export async function fetchCandidatesPage(
   offset: number,
   limit = 100,
   prioritySkills?: string[] | null,
+  /** true なら★を付けた人だけ。一覧は100件ずつのページングなので、
+   *  手元にある分だけを絞ると★の付いた人が出てこないことがある。サーバー側で絞る */
+  bookmarkedOnly = false,
 ): Promise<{ candidates: Candidate[]; totalCount: number | null }> {
   const selectOpts = offset === 0 ? ({ count: 'exact' } as const) : {}
   let q = supabase
@@ -385,7 +393,7 @@ export async function fetchCandidatesPage(
     .select(
       // AI校正の状態は raw_profile 内にあるが、一覧では通信量削減のため raw_profile 全体を
       // 取得していない。必要な2キーだけを JSON パス指定で取り出す（2026-08-10）
-      'id, name, email, phone, skills, experience_years, desired_rate, from_company, resume_url, drive_url, box_url, box_status, created_at, updated_at, duplicate_flag, merged_into, data_env, created_by, ' +
+      'id, name, email, phone, skills, experience_years, desired_rate, from_company, resume_url, drive_url, box_url, box_status, created_at, updated_at, duplicate_flag, bookmarked, merged_into, data_env, created_by, ' +
       'llm_checked_at:raw_profile->>_llm_checked_at, llm_stage:raw_profile->>_llm_stage, ' +
       'llm_attempts:raw_profile->>_llm_attempts',
       selectOpts,
@@ -401,6 +409,8 @@ export async function fetchCandidatesPage(
   if (prioritySkills?.length) {
     q = q.or(skillFilterOrTerms(prioritySkills).join(','))
   }
+
+  if (bookmarkedOnly) q = q.eq('bookmarked', true)
 
   const { data, error, count } = await q
     .order('created_at', { ascending: false })
@@ -583,6 +593,24 @@ export async function updateCandidate(input: UpdateCandidateInput): Promise<Cand
 
   if (error) throw new Error(`候補者の更新に失敗しました: ${error.message}`)
   return data as Candidate
+}
+
+/**
+ * ブックマーク（星）を切り替える。
+ *
+ * チーム共有の1状態なので、そのまま上書きする（後勝ち）。
+ * 星の付け外しが同時に走っても実害が無いため、排他制御はしない。
+ * 一覧を取り直すと100件ぶん（約100KB）が飛ぶので、呼び出し側は
+ * patchCandidateInCache で手元のキャッシュだけ書き換えること。
+ */
+export async function setBookmark(id: string, dataEnv: DataEnv, next: boolean): Promise<void> {
+  const { error } = await supabase
+    .from('candidates')
+    .update({ bookmarked: next })
+    .eq('id', id)
+    .eq('data_env', dataEnv)
+
+  if (error) throw new Error(`ブックマークの更新に失敗しました: ${error.message}`)
 }
 
 /** 候補者を削除する */

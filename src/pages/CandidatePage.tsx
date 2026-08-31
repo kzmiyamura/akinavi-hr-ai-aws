@@ -1,8 +1,10 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon, Star } from 'lucide-react'
 import { toViewerUrl, isRosterLinkAlive } from '../lib/viewerUrl'
 import { isSameCompany as isSameCompanyName } from '../lib/companyName'
+import { BookmarkStar } from '../components/BookmarkStar'
+import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
 import { matchesSkillFilter } from '../lib/skillWordMatch'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
 import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
@@ -886,6 +888,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const boxUploadTargetRef = useRef<Candidate | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showFilterPopup, setShowFilterPopup] = useState(false)
+  // 「★のみ表示」は端末ごとの設定（星そのものはチーム共有で DB にある）
+  const [bookmarkOnly, setBookmarkOnly] = useState(() => readBookmarkOnly('candidates'))
   const [filterDraft, setFilterDraft] = useState<FilterDraft>(EMPTY_DRAFT)
   const [appliedFilter, setAppliedFilter] = useState<CandidateFilter>({})
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null)
@@ -1137,9 +1141,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   // 通常ブラウズ（検索なし）
   const browseInfiniteQuery = useInfiniteQuery({
-    queryKey: ['candidates-paged', dataEnv, activePrioritySkills],
+    queryKey: ['candidates-paged', dataEnv, activePrioritySkills, bookmarkOnly],
     queryFn: ({ pageParam }: { pageParam: number }) =>
-      fetchCandidatesPage(dataEnv, pageParam, 100, activePrioritySkills),
+      fetchCandidatesPage(dataEnv, pageParam, 100, activePrioritySkills, bookmarkOnly),
     initialPageParam: 0,
     getNextPageParam: (lastPage, _allPages, lastPageParam) =>
       lastPage.candidates.length < 100 ? undefined : lastPageParam + 100,
@@ -1812,6 +1816,26 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
               {showAllCandidates ? '優先スキルで絞る' : `優先スキル: ${effectivePrioritySkills!.join('・')}`}
             </button>
           )}
+          {/* ★のみ表示（端末ごとの設定。星そのものはチーム共有） */}
+          {!isFiltered && (
+            <button
+              type="button"
+              onClick={() => {
+                const next = !bookmarkOnly
+                setBookmarkOnly(next)
+                writeBookmarkOnly('candidates', next)
+              }}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors shrink-0 ${
+                bookmarkOnly
+                  ? 'bg-amber-500 text-white hover:bg-amber-600'
+                  : 'border border-gray-300 text-gray-600 hover:bg-gray-50'
+              }`}
+              title={bookmarkOnly ? 'ブックマークの絞り込みを外す' : 'ブックマークした人材だけを表示する'}
+            >
+              <Star size={14} fill={bookmarkOnly ? 'currentColor' : 'none'} />
+              {bookmarkOnly ? '★のみ表示中' : '★のみ'}
+            </button>
+          )}
           {/* 絞り込みボタン */}
           <button
             type="button"
@@ -1921,6 +1945,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         : 'hover:bg-gray-50'
                     }`}
                   >
+                    <BookmarkStar candidateId={c.id} dataEnv={dataEnv} bookmarked={c.bookmarked === true} />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-gray-800 truncate flex items-center gap-1">
                         <span className={isUsableCandidateName(c.name) ? '' : 'text-gray-400 italic'} title={c.name ?? ''}>
@@ -2053,6 +2078,12 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <BookmarkStar
+                        candidateId={selectedCandidate.id}
+                        dataEnv={dataEnv}
+                        bookmarked={selectedCandidate.bookmarked === true}
+                        size="md"
+                      />
                       {(() => {
                         // drive_url → resume_url → raw_profile.text内のDrive URL の順で探す
                         const resumeLink = selectedCandidate.drive_url || selectedCandidate.resume_url || (() => {

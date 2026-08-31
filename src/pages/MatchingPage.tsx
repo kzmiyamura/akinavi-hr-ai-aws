@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail, SlidersHorizontal, RotateCcw, Reply, ExternalLink } from 'lucide-react'
+import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail, SlidersHorizontal, RotateCcw, Reply, ExternalLink, Star } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { CandidateProfileFields } from './CandidatePage'
 import {
@@ -37,6 +37,8 @@ import type { AiSpecialist } from '../lib/projectInterpretation'
 import { RecommendationNote, getRecommendation, VERDICT_STYLE, compareByVerdictThenScore } from '../components/RecommendationNote'
 import { MatchingInputs, MatchingWeightsLine, resolveScoringWeights } from '../components/MatchingInputs'
 import type { SkillMatcher } from '../lib/db/skillMatch'
+import { BookmarkStar } from '../components/BookmarkStar'
+import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
@@ -692,6 +694,11 @@ function ProjectModeRankCard({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
+            <BookmarkStar
+              candidateId={s.candidate.id}
+              dataEnv={s.candidate.data_env}
+              bookmarked={s.candidate.bookmarked === true}
+            />
             {onOpenCandidateDetail ? (
               <button
                 type="button"
@@ -1294,9 +1301,14 @@ const { data: projects = [] } = useQuery({
   // 引き継ぐと、新しい検索でいきなり 500 件引いてしまう
   useEffect(() => { setCandidateDisplayLimit(50) }, [searchKeywordsKey, searchMode])
 
+  // 「★のみ表示」は端末ごとの設定（星そのものはチーム共有で DB にある）。
+  // 人材タブとは別に持つので、片方で絞ってももう片方には影響しない
+  const [bookmarkOnly, setBookmarkOnly] = useState(() => readBookmarkOnly('matching'))
+
   const { data: candidates = EMPTY_CANDIDATES, isLoading: isLoadingCandidates } = useQuery({
-    queryKey: ['candidates-page', dataEnv, searchKeywordsKey, searchMode, candidateDisplayLimit],
-    queryFn: () => searchCandidatesForMatching(dataEnv, searchKeywords, searchMode, candidateDisplayLimit),
+    queryKey: ['candidates-page', dataEnv, searchKeywordsKey, searchMode, candidateDisplayLimit, bookmarkOnly],
+    queryFn: () =>
+      searchCandidatesForMatching(dataEnv, searchKeywords, searchMode, candidateDisplayLimit, 0, bookmarkOnly),
     enabled: mode === 'candidate',
     placeholderData: (prev) => prev, // 「もっと見る」で一覧が消えないように
   })
@@ -2487,6 +2499,24 @@ const { data: projects = [] } = useQuery({
                         {m}
                       </button>
                     ))}
+                    {/* ★のみ表示（端末ごとの設定。星そのものはチーム共有） */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !bookmarkOnly
+                        setBookmarkOnly(next)
+                        writeBookmarkOnly('matching', next)
+                        setSelectedCandidateId(null)
+                        setCandidateDisplayLimit(50)
+                      }}
+                      className={`flex items-center gap-1 px-2.5 py-1.5 md:py-0.5 text-xs rounded font-medium transition-colors ${
+                        bookmarkOnly ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}
+                      title={bookmarkOnly ? 'ブックマークの絞り込みを外す' : 'ブックマークした人材だけを表示する'}
+                    >
+                      <Star size={12} fill={bookmarkOnly ? 'currentColor' : 'none'} />
+                      ★のみ
+                    </button>
                     {searchQuery && (
                       <span className="ml-auto text-xs text-gray-400 self-center">{candidateCount}件</span>
                     )}
@@ -2516,6 +2546,7 @@ const { data: projects = [] } = useQuery({
                         isSelected ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-gray-50'
                       }`}
                     >
+                      <BookmarkStar candidateId={c.id} dataEnv={dataEnv} bookmarked={c.bookmarked === true} />
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-gray-800 truncate">{c.name}</div>
                         <div className="flex items-center gap-2 text-xs mt-0.5">

@@ -38,6 +38,64 @@ export function patchCandidateInCache(
   })
 }
 
+/**
+ * 人材が出てくる**あらゆる**キャッシュを部分更新する。
+ *
+ * ブックマーク（星）は一覧・詳細・マッチング・人材マップのどこからでも押せるので、
+ * 押した場所以外の表示も同時に更新しないと、タブを切り替えたときに古い状態が見える。
+ * かといって invalidate すると一覧の再取得（約100KB/ページ）が走る。
+ *
+ * そこでキャッシュを走査し、「Candidate の配列」または「{pages:[{candidates:[]}]}」
+ * または「Candidate 単体」の形をしていれば、該当 id だけを差し替える。
+ * 形が違うキャッシュ（案件・提案履歴など）はそのまま返すので影響しない。
+ */
+export function patchCandidateEverywhere(
+  queryClient: QueryClient,
+  id: string,
+  patch: Partial<Candidate>,
+): void {
+  const isCandidate = (v: unknown): v is Candidate =>
+    !!v && typeof v === 'object' && 'id' in (v as Record<string, unknown>)
+      && 'skills' in (v as Record<string, unknown>)
+
+  queryClient.setQueriesData({ predicate: () => true }, (old: unknown) => {
+    if (!old) return old
+
+    // ① 無限スクロールの一覧 { pages: [{ candidates: [...] }] }
+    const paged = old as PagedCache
+    if (paged?.pages?.length && Array.isArray(paged.pages[0]?.candidates)) {
+      let hit = false
+      const pages = paged.pages.map((p) => ({
+        ...p,
+        candidates: p.candidates.map((c) => {
+          if (c.id !== id) return c
+          hit = true
+          return { ...c, ...patch }
+        }),
+      }))
+      return hit ? { ...paged, pages } : old
+    }
+
+    // ② 人材の配列
+    if (Array.isArray(old) && old.length > 0 && isCandidate(old[0])) {
+      let hit = false
+      const next = (old as Candidate[]).map((c) => {
+        if (c.id !== id) return c
+        hit = true
+        return { ...c, ...patch }
+      })
+      return hit ? next : old
+    }
+
+    // ③ 人材1件（詳細画面）
+    if (isCandidate(old) && (old as Candidate).id === id) {
+      return { ...(old as Candidate), ...patch }
+    }
+
+    return old
+  })
+}
+
 /** 一覧キャッシュから1人を取り除く（削除時）。
  *  totalCount は持っていれば1件減らして表示のズレを防ぐ */
 export function removeCandidateFromCache(

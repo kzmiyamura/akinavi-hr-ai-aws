@@ -26,7 +26,17 @@ describe('searchCandidatesForMatching', () => {
       p_mode: 'OR',
       p_limit: 50,
       p_offset: 100,
+      // ★のみの絞り込み。既定は false（全人材）。50件ずつしか引かないので
+      // 手元では絞れず、サーバー側に渡す必要がある（2026-08-31）
+      p_bookmarked_only: false,
     })
+  })
+
+  it('★のみ指定を SQL 側に渡す', async () => {
+    mockRpc.mockResolvedValue({ data: [], error: null })
+    await searchCandidatesForMatching('prod', [], 'AND', 50, 0, true)
+    expect(mockRpc).toHaveBeenCalledWith('search_candidates_for_matching',
+      expect.objectContaining({ p_bookmarked_only: true }))
   })
 
   it('キーワードが空なら null を渡す（SQL側の「絞り込みなし」分岐に乗せる）', async () => {

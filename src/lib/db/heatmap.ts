@@ -30,6 +30,8 @@ export interface PrefectureCandidate {
   subject: string | null
   created_at: string
   is_archived: boolean
+  /** ブックマーク（星）。アーカイブ済みは列を持たないので常に false */
+  bookmarked: boolean
 }
 
 /** 都道府県クリック時に最大10件の人材を取得（件名・受信日時・氏名） */
@@ -48,12 +50,16 @@ export async function fetchCandidatesByPrefecture(
     p_period: period,
   })
   if (error) throw error
-  return (data ?? []).map((r: { id: string; name: string; subject: string | null; created_at: string; is_archived: boolean }) => ({
+  return (data ?? []).map((r: {
+    id: string; name: string; subject: string | null; created_at: string
+    is_archived: boolean; bookmarked?: boolean
+  }) => ({
     id: r.id,
     name: r.name || '不明',
     subject: r.subject,
     created_at: r.created_at,
     is_archived: r.is_archived,
+    bookmarked: r.bookmarked === true,
   }))
 }
 
