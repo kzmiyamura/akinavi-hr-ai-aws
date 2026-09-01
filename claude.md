@@ -172,6 +172,18 @@ git add -A && git commit -m "fix: ..." && git push
 - **重複管理**: email一致で自動UPDATE。名前一致 + スキルJaccard ≥ 0.4 で `duplicate_flag=true`。
   同名照会は**最寄駅一致を先に引く**（イニシャル氏名は同名が多く、prod実測で同名10件超の氏名が52種・
   最大35件。無作為な上限で本人を取り逃すと毎日二重登録される・2026-08-21）
+- **役割の定義**: **`docs/ROLE_DEFINITION.md` が正**（2026-09-01）。
+  役割は「ラベル」ではなく **作用対象 × 権限 × 到達レベル** の3軸で定義する。
+  根拠は SFIA / IPA ITSS・情報処理技術者試験の対象者像 / 日本PMO協会 / PMI / Scrum Guide。
+  - `role_affinity` は2軸の式（`20260901_role_taxonomy.sql`）。PM×PMO は 0.2（対象も権限も最遠）
+  - 到達レベル（A主導/B担当/C従事/－裏付けなし）は `scoreProseRoles` が regex で判定し
+    `raw_profile._roleLevels` に入る。**実測で希望単価が単調に分かれた6役割にだけ付ける**
+    （PMO・PM・コンサルタント・アーキテクト・テックリード・インフラ）。
+    分かれない役割に印を付けない。意味のない印は害になる
+  - **役割は消さない。印を付けて営業に見せる**（消すと根拠が確認できない）
+  - 触る場所は4か所: 上記SQL / `match-batch` の `ROLE_AXIS` / `inbound-email` の `ROLE_DEFS` /
+    `project_apply.mjs` の `ROLE_LABELS` と `prompts.mjs`。
+    ズレ検出は `src/lib/__tests__/roleAffinityParity.test.ts` と `scripts/sql/test_role_affinity.sql`
 - **役割・業界の抽出**: `extractFromProse`（`supabase/functions/inbound-email/index.ts`）。
   経歴書は「業界を書いた文書」ではないので、**裸の一般語（大学・通信・公共・広告・HR・メーカー）は使わない**。
   業界は出現回数でスコア付けし上位 `INDUSTRY_MAX`(=4) 件だけ残す。役割は**上限なし**
