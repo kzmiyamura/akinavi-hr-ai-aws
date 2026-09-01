@@ -39,6 +39,7 @@ import { MatchingInputs, MatchingWeightsLine, resolveScoringWeights } from '../c
 import type { SkillMatcher } from '../lib/db/skillMatch'
 import { BookmarkStar } from '../components/BookmarkStar'
 import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
+import { readRoleLevel, roleLevelNote, rateMismatch, ROLE_LEVEL_STYLE } from '../lib/roleLevel'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
@@ -771,9 +772,13 @@ function ProjectModeRankCard({
                   const mainRole = Array.isArray(rp2?.roles) ? (rp2.roles as string[])[0] ?? null : null
                   const subRoles = Array.isArray(rp2?.roles) ? (rp2.roles as string[]).slice(1, 3) : []
                   const aff = requiredRole && mainRole ? roleAffinityLabel(requiredRole, mainRole) : null
+                  // 到達レベル（2026-09-01）。同じ「PMO」でも、官公庁のRFP評価をやった人と
+                  // 議事録・PC手配の人がいる。実測で平均希望単価が31万違う。落とさずに見せる
+                  const level = readRoleLevel(rp2 as Record<string, unknown> | null, mainRole)
+                  const mismatch = rateMismatch(level, s.candidate.desired_rate)
                   if (!mainRole && !requiredRole) return null
                   return (
-                    <div className="mt-1">
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
                       {mainRole ? (
                         <span
                           className={`text-[10px] rounded px-1.5 py-0.5 font-medium ${aff?.cls ?? 'bg-gray-100 text-gray-600'}`}
@@ -787,6 +792,22 @@ function ProjectModeRankCard({
                         <span className="text-[10px] bg-gray-100 text-gray-500 rounded px-1.5 py-0.5"
                           title={`経歴から役割を読み取れなかったため加減点なし（案件は ${requiredRole} を求めています）`}>
                           役割: 判定不可
+                        </span>
+                      )}
+                      {mainRole && level && (
+                        <span
+                          className={`text-[10px] rounded px-1.5 py-0.5 font-medium ${ROLE_LEVEL_STYLE[level].cls}`}
+                          title={roleLevelNote(mainRole, level)}
+                        >
+                          {ROLE_LEVEL_STYLE[level].mark}
+                        </span>
+                      )}
+                      {mismatch && (
+                        <span
+                          className="text-[10px] rounded px-1.5 py-0.5 font-medium bg-rose-100 text-rose-700"
+                          title={mismatch.note}
+                        >
+                          単価要確認
                         </span>
                       )}
                     </div>

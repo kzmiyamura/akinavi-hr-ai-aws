@@ -3096,7 +3096,10 @@ function inferRoleFamilyHint(
   }
 }
 
-function scoreProseRoles(prose: string, fullText: string): { roles: string[]; roleScores: Record<string, number> } {
+function scoreProseRoles(
+  prose: string,
+  fullText: string,
+): { roles: string[]; roleScores: Record<string, number>; roleLevels: Record<string, string> } {
   const ROLE_DEFS: Array<{ re: RegExp; label: string }> = [
     { re: /(?<![A-Z])PMO(?![A-Z])|プロジェクト[　 ]?マネジメント[　 ]?オフィス/, label: 'PMO' },
     { re: /(?<![A-Z])PM(?!O)(?![A-Z])|プロジェクト[　 ]?マネージャー/, label: 'プロジェクトマネージャー' },
@@ -3104,7 +3107,13 @@ function scoreProseRoles(prose: string, fullText: string): { roles: string[]; ro
     // 「リーダー経験あり」「サブリーダーを務めた」等と書いているのに拾えていなかった。
     // 綴りが違うだけで、仕事内容からの推論ではない。
     // リーダーシップ（資質の話）は除く。
-    { re: /(?<![A-Z])PL(?![A-Z])|(?:プロジェクト|チーム|サブ|開発|PJ)[　 ]?リーダー(?!シップ)|リーダー(?!シップ)(?=として|経験|を務め|業務|\/)/, label: 'プロジェクトリーダー' },
+    // ⚠ 「サブリーダー」を PL に含めないこと（2026-09-01 ユーザー指摘で除外）。
+    //   前日に「リーダー表記の取りこぼし」を直した際、サブリーダーも PL に寄せてしまった。
+    //   サブリーダーは PL の補佐で、責任範囲も規模も違う。マッチングは役割を
+    //   同一+15 / 系統違い-9 で採点するため、サブリーダーの人が PL 案件で満点を取る。
+    //   実測（2026-09-01・直近3日）で、サブリーダーだけを根拠に PL が付いた人が55人いた。
+    //   先読みの (?<!サブ) は「サブリーダー」を除きつつ「チームリーダー」等は残すため。
+    { re: /(?<![A-Z])PL(?![A-Z])|(?<!サブ)(?:プロジェクト|チーム|開発|PJ)[　 ]?リーダー(?!シップ)|(?<!サブ)リーダー(?!シップ)(?=として|経験|を務め|業務|\/)/, label: 'プロジェクトリーダー' },
     { re: /(?<![A-Z])TL(?![A-Z])|テックリード|テック[　 ]?リード/,   label: 'テックリード' },
     // ⚠ 英字の前後ガードが要る。`SE(?![A-Z])` だけだと DATABASE / BASE / LICENSE /
     //   RESPONSE / USE の末尾 SE に当たって「システムエンジニア」が付いていた（2026-08-21）。
@@ -3133,9 +3142,74 @@ function scoreProseRoles(prose: string, fullText: string): { roles: string[]; ro
     // 「サービスデスク」「ユーザーサポート」「問い合わせ対応」も同じ役割として拾う
     { re: /ヘルプ[　 ]?デスク|サービス[　 ]?デスク|ユーザー[　 ]?サポート|問(?:い)?合(?:わ)?せ[　 ]?対応/, label: 'ヘルプデスク' },
   ]
+  // ── 到達レベル（2026-09-01 追加）────────────────────────────────────────────
+  // docs/ROLE_DEFINITION.md 軸3。**同じラベルの中を「どこまでやったか」で分ける。**
+  //
+  // 背景（ユーザー指摘 2026-09-01）:
+  //   「pmoなんて議事録取ったり、新規人材の受け入れしたり、ほぼ事務職やん」
+  //   「分からずにpmoとか書いて点数上げようとするバカ人材を見抜いて」
+  //   実データで、大手金融・官公庁のPMO支援（RFP〜ベンダ評価）をやった人と、
+  //   資格がPowerPoint上級・普通車免許の人が、同じ「PMO」ラベルで同じ点数だった。
+  //
+  // ⚠ **役割は消さない。** 消すと営業が根拠を確認できなくなる。印を付けて見せる。
+  //   （2026-09-01 に「必須裏付けが無ければ役割を落とす」案を検討したが、
+  //    テックリード200人は全員がカナで「テックリード」と書いており、
+  //    落とす設計だと正しい129人を消すところだった。実測して回避した）
+  //
+  // ⚠ **実測で単価が分かれた役割にだけ付ける。** 分かれない役割に印を付けても
+  //   意味が無いどころか誤解を招く。直近7日・prod の平均希望単価（A/B/C）:
+  //     コンサルタント 117/99/74万・アーキテクト 111/99/72万・PMO 97/76/66万
+  //     PM 106/85/77万・テックリード 105/89/79万・インフラ 81/66/56万
+  //   採用しなかった役割（語彙が悪く分かれない。改善したら足す）:
+  //     バックエンド(86/78/79 B<C逆転)・運用保守(80/72/76 逆転)
+  //     ヘルプデスク(69/69/59 A=B)・テストエンジニア(74/70/72 差なし)
+  //     クラウド(母数14で判断不能)
+  const ROLE_LEVEL_DEFS: Record<string, { a: RegExp; b: RegExp; c: RegExp }> = {
+    'PMO': {
+      a: /全社|EPMO|複数プロジェクト|横断|標準化|RFP|ベンダ評価|グランドデザイン|経営報告|PMO立ち上げ|PMO構築/,
+      b: /課題管理|リスク管理|進捗管理|工数管理|見える化|プロセス改善|WBS|要員調整/,
+      c: /議事録|資料作成|日程調整|入退場|アカウント発行|PC手配|備品|事務/,
+    },
+    'プロジェクトマネージャー': {
+      a: /複数プロジェクト|全体統括|[0-9]+億|[0-9]+千万|役員|経営報告|部門横断/,
+      b: /予算|見積|契約|要員計画|採算|原価|コスト管理|ベンダ|顧客折衝|体制構築/,
+      c: /進捗管理|課題管理|報告/,
+    },
+    'コンサルタント': {
+      a: /経営|役員|全社|中期計画|M&A|事業戦略/,
+      b: /提案|RFP|As-?Is|ToBe|グランドデザイン|業務改革|BPR|診断|評価選定/,
+      c: /支援|ヒアリング/,
+    },
+    'アーキテクト': {
+      a: /全体最適|マルチクラウド|大規模|技術戦略|標準化/,
+      b: /アーキテクチャ|方式設計|非機能|全体設計|技術選定|基盤設計/,
+      c: /設計/,
+    },
+    'テックリード': {
+      a: /技術戦略|技術標準|組織|内製化/,
+      b: /コードレビュー|設計レビュー|技術支援|技術選定/,
+      c: /リード|牽引/,
+    },
+    'インフラエンジニア': {
+      a: /冗長|可用性|方式設計|インフラ設計|標準化/,
+      b: /構築|Linux|Windows Server|VMware|仮想化/,
+      c: /監視|運用/,
+    },
+  }
+  /** その役割をどこまでやったか。A=主導 B=担当 C=従事 -=裏付けなし。判定できない役割は '' */
+  const judgeRoleLevel = (label: string): string => {
+    const d = ROLE_LEVEL_DEFS[label]
+    if (!d) return ''
+    if (d.a.test(fullText)) return 'A'
+    if (d.b.test(fullText)) return 'B'
+    if (d.c.test(fullText)) return 'C'
+    return '-'
+  }
+
   const roles: string[] = []
   const roleScores: Record<string, number> = {}
-  if (!prose.trim()) return { roles, roleScores }
+  const roleLevels: Record<string, string> = {}
+  if (!prose.trim()) return { roles, roleScores, roleLevels }
 
   // ── 否定された役割を落とす（2026-08-29 追加） ──────────────────────────────
   // 「運用保守NG」「ヘルプデスク以外の業務を希望」「PMOの経験はありません」を
@@ -3193,10 +3267,12 @@ function scoreProseRoles(prose: string, fullText: string): { roles: string[]; ro
     }
     roles.push(label)
     roleScores[label] = score
+    const level = judgeRoleLevel(label)
+    if (level) roleLevels[label] = level
   }
   // スコア降順（同点は辞書定義順を維持 = sort の安定性に依拠）
   roles.sort((a, b) => roleScores[b] - roleScores[a])
-  return { roles, roleScores }
+  return { roles, roleScores, roleLevels }
 }
 
 // 業界判定の false positive を避けるため、複合語や明示語のみマッチさせる。
@@ -3427,6 +3503,8 @@ function extractFromProse(bodyText: string, attachText: string): {
   industries: string[]
   workStyle: string | null
   roleScores: Record<string, number>
+  /** 役割ごとの到達レベル（A主導 / B担当 / C従事 / -裏付けなし）。判定対象外の役割はキーごと無い */
+  roleLevels: Record<string, string>
   industryScores: Record<string, number>
 } {
   // URL を除去（"https://example.com/cc.php" 等が PHP/HTTPS に誤マッチするのを防ぐ）
@@ -3447,7 +3525,7 @@ function extractFromProse(bodyText: string, attachText: string): {
   const prose = proseLines.join('\n')
 
   // 役割: スコアリングして主（先頭）・副（以降）の順に並べる
-  const { roles, roleScores } = scoreProseRoles(prose, allText)
+  const { roles, roleScores, roleLevels } = scoreProseRoles(prose, allText)
 
   // 業界判定もフェーズ表ヘッダー行を除外したテキストを対象にする
   // （以前は短い単語も拾うため全文対象だったが、誤検出が多いためフィルタ済みテキストに変更）
@@ -3472,7 +3550,7 @@ function extractFromProse(bodyText: string, attachText: string): {
     if (re.test(allText)) { workStyle = label; break }
   }
 
-  return { roles, industries, workStyle, roleScores, industryScores }
+  return { roles, industries, workStyle, roleScores, roleLevels, industryScores }
 }
 
 
@@ -10936,6 +11014,7 @@ Deno.serve(async (req: Request) => {
                 roles: blockProseFields.roles,
                 // 役割スコア（先頭=主の根拠。UI・デバッグ用）
                 _roleScores: Object.keys(blockProseFields.roleScores).length > 0 ? blockProseFields.roleScores : undefined,
+                _roleLevels: Object.keys(blockProseFields.roleLevels).length > 0 ? blockProseFields.roleLevels : undefined,
                 _industryScores: Object.keys(blockProseFields.industryScores).length > 0 ? blockProseFields.industryScores : undefined,
                 // 役割が取れなかった人の系統ヒント（表示・集計のみ。採点には未接続）
                 roleFamilyHint: inferRoleFamilyHint(
@@ -11558,6 +11637,7 @@ Deno.serve(async (req: Request) => {
           roles: resolvedRoles,
           // 役割スコア（先頭=主の根拠。UI・デバッグ用）
           _roleScores: Object.keys(proseFields.roleScores).length > 0 ? proseFields.roleScores : undefined,
+          _roleLevels: Object.keys(proseFields.roleLevels).length > 0 ? proseFields.roleLevels : undefined,
           _industryScores: Object.keys(proseFields.industryScores).length > 0 ? proseFields.industryScores : undefined,
           // 役割が取れなかった人の系統ヒント（表示・集計のみ。採点には未接続）
           roleFamilyHint: inferRoleFamilyHint(
