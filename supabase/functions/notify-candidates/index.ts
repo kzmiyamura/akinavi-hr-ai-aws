@@ -16,7 +16,7 @@
 //
 // 環境変数: GRAPH_CLIENT_ID / GRAPH_CLIENT_SECRET / GRAPH_REFRESH_TOKEN_HUMAN(初期値)
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { matchesRule, type CandidateLite, type NotifyRule } from './match.ts'
+import { matchesRule, matchedSkills, type CandidateLite, type NotifyRule } from './match.ts'
 
 const CLIENT_ID = Deno.env.get('GRAPH_CLIENT_ID') ?? ''
 const CLIENT_SECRET = Deno.env.get('GRAPH_CLIENT_SECRET') ?? ''
@@ -390,8 +390,22 @@ Deno.serve(async (req) => {
     for (const { rule, hits } of perRule.values()) {
       const title = rule.label || [rule.name_keyword, rule.skill_keywords.join('+'), rule.station_keyword]
         .filter(Boolean).join(' / ')
-      const lines = hits.map((h) =>
-        `・${h.name}${h.station.trim() ? `（${h.station.trim()}）` : ''}\n  スキル: ${h.skills.slice(0, 10).join(', ') || '－'}`)
+      // 「なぜ通知されたか」を先に出す（2026-09-01）。
+      // 以前はスキルを先頭10件だけ並べており、24個中23番目に Java がある人が
+      // 「C#でもJavaでもない人に通知が来た」と誤解される事故があった。
+      // 合致したスキルを明示し、残りは件数で示す。
+      const SKILL_PREVIEW = 10
+      const lines = hits.map((h) => {
+        const matched = matchedSkills(rule, h)
+        const rest = h.skills.filter((s) => !matched.includes(s))
+        const shown = rest.slice(0, SKILL_PREVIEW)
+        const more = rest.length - shown.length
+        return [
+          `・${h.name}${h.station.trim() ? `（${h.station.trim()}）` : ''}`,
+          `  該当: ${matched.join(', ') || '（スキル以外の条件で合致）'}`,
+          `  他のスキル: ${shown.join(', ') || '－'}${more > 0 ? ` ほか${more}件` : ''}`,
+        ].join('\n')
+      })
       const body = [
         `通知ルール「${title}」に合致する人材が登録・更新されました（${hits.length}名）。`,
         '',

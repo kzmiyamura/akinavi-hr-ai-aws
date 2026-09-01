@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   matchesRule,
+  matchedSkills,
   ruleHasCondition,
   type CandidateLite,
   type NotifyRule,
@@ -76,5 +77,47 @@ describe('matchesRule', () => {
 
   it('空白だけのスキルキーワードは条件として無視される', () => {
     expect(matchesRule(rule({ skill_keywords: ['  '] }), cand({}))).toBe(false)
+  })
+})
+
+/** 通知メールに「なぜ通知されたか」を出すための、合致スキルの抽出。
+ *
+ *  2026-09-01、営業から「C#でもJavaでもない人に通知が飛んでいる」と指摘があった。
+ *  実際には24個のスキルの23番目に Java があり判定は正しかったが、メールが
+ *  スキルを先頭10件しか出していなかったため根拠が見えなかった。
+ *  正しい通知を誤検知だと思わせるのは、通知そのものの信頼を損なう。
+ */
+describe('matchedSkills', () => {
+  const r = rule({ skill_keywords: ['C#', 'Java', 'AS/400', 'AS400'] })
+
+  it('合致したスキルだけを返す', () => {
+    expect(matchedSkills(r, cand({ skills: ['Java', 'Spring Boot', 'AWS'] }))).toEqual(['Java'])
+  })
+
+  it('11番目以降にあっても拾う（今回の実害。Y.M は24個中23番目が Java だった）', () => {
+    const many = [
+      'ネットワーク設計', 'AWS', '社内SE', 'PMO', 'プロジェクトマネジメント',
+      'Excel', '運用保守', 'データ分析', 'Access', 'VBA',
+      '要件定義', 'PHP', '組み込み開発', 'ヘルプデスク', '監視',
+      'CRM', '障害対応', 'テスト設計', 'UAT', '保守運用', 'Zoom',
+      'Java', 'デジタルマーケティング',
+    ]
+    expect(matchedSkills(r, cand({ skills: many }))).toEqual(['Java'])
+  })
+
+  it('複数合致すればすべて返す', () => {
+    expect(matchedSkills(r, cand({ skills: ['C#', 'Java', 'AWS'] }))).toEqual(['C#', 'Java'])
+  })
+
+  it('JavaScript は Java に合致しない（語境界の判定を matchesRule と共有している）', () => {
+    expect(matchedSkills(r, cand({ skills: ['JavaScript', 'React'] }))).toEqual([])
+  })
+
+  it('別名は正規化して拾う（AS/400 ≡ AS400）', () => {
+    expect(matchedSkills(r, cand({ skills: ['AS400'] }))).toEqual(['AS400'])
+  })
+
+  it('スキル条件が無いルールでは空（駅や氏名だけで合致した場合）', () => {
+    expect(matchedSkills(rule({ station_keyword: '大阪' }), cand({}))).toEqual([])
   })
 })

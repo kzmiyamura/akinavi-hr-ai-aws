@@ -70,6 +70,23 @@ export function ruleHasCondition(rule: NotifyRule): boolean {
  * AND では4つすべてを持つ人が要求され、該当0名のまま通知が1件も出ていなかった
  * （実データで確認: 大阪府の1名は C# と Java を持つが AS400 は持たない）。
  */
+/**
+ * ルールのどのスキルに合致したかを返す（通知メールに根拠を出すため）。
+ *
+ * 2026-09-01、営業から「C#でもJavaでもない人に通知が飛んでいる」と指摘があった。
+ * 実際には24個のスキルの23番目に Java があり、判定は正しかったが、
+ * メールがスキルを先頭10件しか出しておらず、根拠が見えなかった。
+ * 正しい通知を誤検知だと思わせるのは、通知そのものの信頼を損なう。
+ */
+export function matchedSkills(rule: NotifyRule, cand: CandidateLite): string[] {
+  const kws = rule.skill_keywords.map((k) => k.trim()).filter((k) => k !== '')
+  const hits: string[] = []
+  for (const s of cand.skills) {
+    if (kws.some((kw) => skillMatches(kw, s))) hits.push(s)
+  }
+  return hits
+}
+
 export function matchesRule(rule: NotifyRule, cand: CandidateLite): boolean {
   if (!ruleHasCondition(rule)) return false
   if (rule.data_env !== cand.data_env) return false
