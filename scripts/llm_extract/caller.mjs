@@ -42,6 +42,22 @@ const PROMPT_CWD = (() => {
 
 /** stdin にプロンプトを流して claude -p を実行（execFileのinputはSync専用のためspawnで）
  *  タイムアウト時は Windows なら taskkill でプロセスツリーごと落とす */
+/**
+ * 異常終了したときのエラーメッセージを組み立てる。
+ *
+ * stderr が空のまま exit=1 で落ちることがある（2026-08-26〜27 に62件発生し、
+ * ログには `Error: exit=1 ` としか残らず原因を追えなかった）。
+ * claude CLI は枠切れ等の通知を stdout 側に出すことがあるので、
+ * stderr が空なら stdout を代わりに載せる。両方空ならその旨を明示する
+ * （「何も出ていなかった」と「拾えていなかった」を区別できるようにするため）。
+ */
+export function formatSpawnError(code, stderr, stdout) {
+  const detail = String(stderr ?? '').trim()
+    || String(stdout ?? '').trim()
+    || '(stdout/stderr とも出力なし)'
+  return `exit=${code} ${detail.slice(0, 300)}`
+}
+
 function spawnWithStdin(cmd, args, input, timeoutMs = 180_000) {
   return new Promise((resolve, reject) => {
     const useExe = cmd === 'claude' && CLAUDE_EXE
@@ -67,7 +83,7 @@ function spawnWithStdin(cmd, args, input, timeoutMs = 180_000) {
     p.on('close', c => {
       clearTimeout(timer)
       if (c === 0) resolve(out)
-      else reject(new Error(`exit=${c} ${err.slice(0, 300)}`))
+      else reject(new Error(formatSpawnError(c, err, out)))
     })
     // 子プロセスが先に終了していると write が EPIPE / EOF を投げる。
     // stream の 'error' は未処理だと throw してワーカーごと落ちる
