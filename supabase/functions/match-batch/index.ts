@@ -181,42 +181,69 @@ function getRegion(prefCore: string): string | null {
 }
 
 // ─── 役割の合致度 ─────────────────────────────────────────────────────────────
-// ⚠ DB の role_master / role_affinity と**同じ内容**にすること
-//   （supabase/migrations/20260814_role_master.sql）。
+// ⚠ DB の role_axis / role_object_distance / role_affinity と**同じ内容**にすること
+//   （supabase/migrations/20260901_role_taxonomy.sql、定義は docs/ROLE_DEFINITION.md）。
 //   ズレると SQL が決める順位と、ここが決める表示スコアが食い違う。
-// PMO は management と support の両方に属する（2026-08-14 ユーザー指摘:
-//   「運用サポートはまさに PMO も含む」）。
-const ROLE_FAMILIES: Record<string, string[]> = {
-  'プロジェクトマネージャー': ['management'],
-  'PMO': ['management', 'support'],
-  'プロジェクトリーダー': ['management'],
-  'スクラムマスター': ['management'],
-  'コンサルタント': ['management'],
-  'システムエンジニア': ['engineering'],
-  'プログラマー': ['engineering'],
-  'テックリード': ['engineering', 'management'],
-  'アーキテクト': ['engineering', 'management'],
-  'インフラエンジニア': ['engineering'],
-  'フロントエンドエンジニア': ['engineering'],
-  'バックエンドエンジニア': ['engineering'],
-  'フルスタックエンジニア': ['engineering'],
-  'クラウドエンジニア': ['engineering'],
-  'データエンジニア': ['engineering'],
-  'MLエンジニア': ['engineering'],
-  'ヘルプデスク': ['support'],
-  '運用保守': ['support'],
-  'テストエンジニア': ['support'],
+//
+// 2026-09-01: 系統3分類（management / engineering / support）をやめ、
+//   「作用対象 × 権限」の2軸にした。旧実装は PM と PMO を同じ 'management' に入れて
+//   0.7（同系統）にしていたが、日本PMO協会の定義では PM は「プロジェクト」に、
+//   PMO は「プロジェクトマネジメント」に働きかける。対象が違い、権限も3段違う。
+//   ユーザー指摘「pmoはプロジェクトの事務所扱いに。pmとは雲泥の差があること」。
+//   多重所属のハック（PMOをmanagementとsupportの両方に入れる等）は不要になった。
+const ROLE_AXIS: Record<string, { object: string; authority: number }> = {
+  'プロジェクトマネージャー': { object: '成果',     authority: 4 },
+  'プロジェクトリーダー':     { object: '成果',     authority: 3 },
+  'PMO':                      { object: '仕組み',   authority: 1 },
+  'スクラムマスター':         { object: '仕組み',   authority: 2 },
+  'コンサルタント':           { object: '事業',     authority: 3 },
+  'アーキテクト':             { object: '製品',     authority: 3 },
+  'テックリード':             { object: '製品',     authority: 3 },
+  'システムエンジニア':       { object: '製品',     authority: 2 },
+  'プログラマー':             { object: '製品',     authority: 2 },
+  'フロントエンドエンジニア': { object: '製品',     authority: 2 },
+  'バックエンドエンジニア':   { object: '製品',     authority: 2 },
+  'フルスタックエンジニア':   { object: '製品',     authority: 2 },
+  'インフラエンジニア':       { object: '製品',     authority: 2 },
+  'クラウドエンジニア':       { object: '製品',     authority: 2 },
+  'データエンジニア':         { object: '製品',     authority: 2 },
+  'MLエンジニア':             { object: '製品',     authority: 2 },
+  'テストエンジニア':         { object: '製品',     authority: 2 },
+  '運用保守':                 { object: 'サービス', authority: 2 },
+  'ヘルプデスク':             { object: 'サービス', authority: 1 },
 }
+
+/** 作用対象どうしの距離。0=同一 1=隣接 2=遠い。根拠は docs/ROLE_DEFINITION.md 3章 */
+const OBJECT_DISTANCE: Record<string, Record<string, number>> = {
+  '事業':     { '事業': 0, '成果': 1, '仕組み': 2, '製品': 1, 'サービス': 2 },
+  '成果':     { '事業': 1, '成果': 0, '仕組み': 1, '製品': 1, 'サービス': 2 },
+  '仕組み':   { '事業': 2, '成果': 1, '仕組み': 0, '製品': 2, 'サービス': 1 },
+  '製品':     { '事業': 1, '成果': 1, '仕組み': 2, '製品': 0, 'サービス': 1 },
+  'サービス': { '事業': 2, '成果': 2, '仕組み': 1, '製品': 1, 'サービス': 0 },
+}
+
 /** SQL の p_weight_role の既定値と揃える */
 const ROLE_WEIGHT = 30
 
-/** 同一 1.0 / 同系統 0.7 / 系統違い 0.2 / どちらか不明 0.5（ゲートではない） */
+/**
+ * affinity = clamp(対象係数 × 権限係数, 0.2, 0.9)
+ *   対象係数 = 距離0→1.0 / 1→0.6 / 2→0.35
+ *   権限係数 = 差0→1.0 / 1→0.75 / 2→0.5 / 3→0.3
+ * 同一ラベル 1.0 / どちらか不明 1.0以外は中立 0.5（ゲートではない）。
+ * 下限0.2は据え置き（2026-08-14 ユーザー判断「系統違いでも0.2は残す」）。
+ */
 function roleAffinity(required: string | null, candidate: string | null): number {
   if (!required?.trim() || !candidate?.trim()) return 0.5
   if (required === candidate) return 1.0
-  const a = ROLE_FAMILIES[required] ?? []
-  const b = ROLE_FAMILIES[candidate] ?? []
-  return a.some((f) => b.includes(f)) ? 0.7 : 0.2
+  const r = ROLE_AXIS[required]
+  const c = ROLE_AXIS[candidate]
+  if (!r || !c) return 0.5   // 一覧に無いラベルは中立（旧実装は 0.2 に落としていた）
+  const d = OBJECT_DISTANCE[r.object]?.[c.object]
+  if (d == null) return 0.5
+  const objCoef = d === 0 ? 1.0 : d === 1 ? 0.6 : 0.35
+  const gap = Math.abs(r.authority - c.authority)
+  const authCoef = gap === 0 ? 1.0 : gap === 1 ? 0.75 : gap === 2 ? 0.5 : 0.3
+  return Math.min(0.9, Math.max(0.2, objCoef * authCoef))
 }
 
 // ─── ルールベーススコアリング ─────────────────────────────────────────────────
