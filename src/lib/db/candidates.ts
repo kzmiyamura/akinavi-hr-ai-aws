@@ -613,6 +613,56 @@ export async function setBookmark(id: string, dataEnv: DataEnv, next: boolean): 
   if (error) throw new Error(`ブックマークの更新に失敗しました: ${error.message}`)
 }
 
+/** 受信した元メール（マッチング画面で開いたときだけ取りに行く） */
+export type CandidateEmail = {
+  text: string | null
+  subject: string | null
+  fromAddress: string | null
+  receivedAt: string | null
+  agentComment: string | null
+}
+
+/**
+ * 人材1件の「元メール」を取る。**開いたときだけ呼ぶこと。**
+ *
+ * 2026-09-03 の営業要望:
+ *   「派遣で来てもらう必要のある案件で、その人の所属が個人事業主だったり
+ *     一社先だったりする場合があるので、AI判定だけでなく元のメールを
+ *     パッと見て確認したい。備考（人柄的なところ）も読みたい」
+ *
+ * ⚠ 一覧に本文を載せてはいけない。`candidates_lite` が `raw_profile.text` を
+ *   落としているのは意図的で、本文は平均6KB・500件で3MB になる（実測 2026-09-03）。
+ *   そのため一覧では本文が常に undefined になり、既にあった「元メールを見る」
+ *   ボタンが表示されない状態だった。ここで**1件だけ遅延取得**して直す。
+ *
+ * ⚠ `attachmentText`（経歴書の中身・平均13KB）は取らない。営業が見たいのは
+ *   商流と備考が書かれたメール本文であって、経歴書は別導線（経歴書を開く）がある。
+ */
+export async function fetchCandidateEmail(id: string): Promise<CandidateEmail | null> {
+  const { data, error } = await supabase
+    .from('candidates')
+    .select(
+      'text:raw_profile->>text,'
+      + 'subject:raw_profile->>subject,'
+      + 'fromAddress:raw_profile->>from,'
+      + 'receivedAt:raw_profile->>emailReceivedAt,'
+      + 'agentComment:raw_profile->>agentComment',
+    )
+    .eq('id', id)
+    .maybeSingle()
+
+  if (error) throw new Error(`元メールの取得に失敗しました: ${error.message}`)
+  if (!data) return null
+  const row = data as unknown as Record<string, string | null>
+  return {
+    text: row.text ?? null,
+    subject: row.subject ?? null,
+    fromAddress: row.fromAddress ?? null,
+    receivedAt: row.receivedAt ?? null,
+    agentComment: row.agentComment ?? null,
+  }
+}
+
 /** 候補者を削除する */
 export async function deleteCandidate(id: string, dataEnv: DataEnv): Promise<void> {
   const { error } = await supabase

@@ -11,9 +11,10 @@ import {
   searchCandidatesForMatching,
   countCandidatesForMatching,
   findDuplicateCandidatesBatch,
+  fetchCandidateEmail,
   DEFAULT_SCORING_WEIGHTS,
 } from '../lib/db/candidates'
-import type { ScoringWeights } from '../lib/db/candidates'
+import type { ScoringWeights, CandidateEmail } from '../lib/db/candidates'
 import { logError } from '../lib/errorLog'
 import {
   fetchOpenProjects,
@@ -40,6 +41,7 @@ import type { SkillMatcher } from '../lib/db/skillMatch'
 import { BookmarkStar } from '../components/BookmarkStar'
 import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
 import { readRoleLevel, roleLevelNote, rateMismatch, ROLE_LEVEL_STYLE } from '../lib/roleLevel'
+import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
 import type { Submission } from '../lib/db/submissions'
@@ -678,8 +680,30 @@ function ProjectModeRankCard({
   skillMatcher?: SkillMatcher
   agentDomainMap?: Map<string, { license_status: string }>
 }) {
+  // 元メールは開いたときだけ取りに行く（2026-09-03 営業要望）。
+  // 一覧が使う candidates_lite は raw_profile.text を落としている（本文は平均6KB・
+  // 500件で3MB になるため意図的）。そのため以前は rawText が常に undefined で、
+  // 「元メールを見る」ボタン自体が出ていなかった。
   const [showEmail, setShowEmail] = useState(false)
-  const rawText = (s.candidate.raw_profile as Record<string, unknown>)?.text as string | undefined
+  const [email, setEmail] = useState<CandidateEmail | null>(null)
+  const [emailLoading, setEmailLoading] = useState(false)
+  const [emailError, setEmailError] = useState<string | null>(null)
+  const toggleEmail = useCallback(async () => {
+    if (showEmail) { setShowEmail(false); return }
+    setShowEmail(true)
+    if (email || emailLoading) return
+    setEmailLoading(true)
+    setEmailError(null)
+    try {
+      const r = await fetchCandidateEmail(s.candidate.id)
+      setEmail(r)
+      if (!r?.text?.trim()) setEmailError('この人材には元メールの本文が保存されていません')
+    } catch (e) {
+      setEmailError(e instanceof Error ? e.message : '元メールを取得できませんでした')
+    } finally {
+      setEmailLoading(false)
+    }
+  }, [showEmail, email, emailLoading, s.candidate.id])
   // 雇用形態・派遣免許バッジ
   const fromEmail = (s.candidate.raw_profile as Record<string, unknown>)?.from as string | undefined
   const emailDomain = fromEmail?.split('@')[1]?.toLowerCase()
@@ -739,6 +763,13 @@ function ProjectModeRankCard({
                 <span className="text-[10px] bg-yellow-100 text-yellow-700 rounded px-1.5 py-0.5">派遣免許未確認</span>
               )
             )}
+            {/* 商流（2026-09-03 営業要望）。「派遣で来てもらう案件は所属が個人事業主
+                だったり一社先だったりする」ので、カードの時点で見えている必要がある。
+                人材詳細と同じ CommercialFlowBadge を使う（判定がズレないように） */}
+            <CommercialFlowBadge
+              flow={(s.candidate.raw_profile as Record<string, unknown>)?.commercialFlow as string | null}
+              size="xs"
+            />
           </div>
           {(() => {
             const rp2 = s.candidate.raw_profile as Record<string, unknown>
@@ -1001,24 +1032,48 @@ function ProjectModeRankCard({
               </>
             )}
           </div>
-          {rawText && (
-            <div className="mt-1.5">
-              <button
-                type="button"
-                onClick={() => setShowEmail(v => !v)}
-                className="inline-flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <Mail size={10} />
-                {showEmail ? '元メールを閉じる' : '元メールを見る'}
-                <ChevronDown size={10} className={`transition-transform ${showEmail ? 'rotate-180' : ''}`} />
-              </button>
-              {showEmail && (
-                <pre className="mt-1 text-[10px] text-gray-600 bg-gray-50 border border-gray-200 rounded p-2 whitespace-pre-wrap break-words leading-relaxed max-h-60 overflow-y-auto">
-                  {rawText}
-                </pre>
-              )}
-            </div>
-          )}
+          <div className="mt-1.5">
+            <button
+              type="button"
+              onClick={toggleEmail}
+              className="inline-flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 transition-colors"
+              title="AI判定の裏を取るために、受信した元メールをそのまま表示します（開いたときだけ取得）"
+            >
+              <Mail size={10} />
+              {showEmail ? '元メールを閉じる' : '元メールを見る'}
+              {emailLoading && <Loader2 size={10} className="animate-spin" />}
+              <ChevronDown size={10} className={`transition-transform ${showEmail ? 'rotate-180' : ''}`} />
+            </button>
+            {showEmail && (
+              <div className="mt-1">
+                {emailLoading && (
+                  <p className="text-[10px] text-gray-400">読み込み中…</p>
+                )}
+                {!emailLoading && emailError && (
+                  <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+                    {emailError}
+                  </p>
+                )}
+                {!emailLoading && email?.text?.trim() && (
+                  <>
+                    <div className="text-[10px] text-gray-500 bg-gray-100 border border-gray-200 border-b-0 rounded-t px-2 py-1 space-y-0.5">
+                      {email.subject && <div className="truncate">件名: {email.subject}</div>}
+                      {(email.fromAddress || email.receivedAt) && (
+                        <div className="truncate">
+                          {email.fromAddress ? `差出人: ${email.fromAddress}` : ''}
+                          {email.fromAddress && email.receivedAt ? ' ／ ' : ''}
+                          {email.receivedAt ? `受信: ${new Date(email.receivedAt).toLocaleString('ja-JP')}` : ''}
+                        </div>
+                      )}
+                    </div>
+                    <pre className="text-[10px] text-gray-600 bg-gray-50 border border-gray-200 rounded-b p-2 whitespace-pre-wrap break-words leading-relaxed max-h-72 overflow-y-auto">
+                      {email.text}
+                    </pre>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
       <div className="shrink-0 self-stretch sm:self-start flex flex-col gap-2">

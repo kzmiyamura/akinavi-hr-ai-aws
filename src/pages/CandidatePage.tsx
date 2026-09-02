@@ -4,6 +4,7 @@ import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, W
 import { toViewerUrl, isRosterLinkAlive } from '../lib/viewerUrl'
 import { isSameCompany as isSameCompanyName } from '../lib/companyName'
 import { BookmarkStar } from '../components/BookmarkStar'
+import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
 import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
 import { matchesSkillFilter } from '../lib/skillWordMatch'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
@@ -410,17 +411,8 @@ export function CandidateProfileFields({
           {agentInfo?.license_status === 'none' && c.from_company && (
             <span className="text-xs bg-red-50 text-red-500 rounded px-1.5 py-0.5">許可未確認</span>
           )}
-          {commercialFlow && (() => {
-            // 商流バッジ: 「うちから紹介で客先常駐できるか」を色で一目化。
-            // 自社=直接可(緑)／N社先=N社挟む(深いほど警戒色: 1社先=黄・2社先以上=赤)
-            const num = Number(commercialFlow.match(/^(\d+)社先/)?.[1] ?? 0)
-            const cls = commercialFlow === '自社'
-              ? 'bg-emerald-100 text-emerald-800 font-medium'
-              : num >= 2
-                ? 'bg-red-100 text-red-700 font-medium'
-                : 'bg-amber-100 text-amber-800 font-medium'
-            return <span className={`text-xs rounded px-1.5 py-0.5 ${cls}`} title="商流位置（自社=直接紹介可 / N社先=N社を挟む）">{commercialFlow}</span>
-          })()}
+          {/* 商流バッジ。マッチング画面と同じ判定にするため共通化した（2026-09-03） */}
+          <CommercialFlowBadge flow={commercialFlow} />
           {employmentType && (() => {
             // 雇用形態バッジ（縛りの種類）。商流バッジと役割が違うのでグレー系で控えめに
             const styles: Record<string, string> = {
