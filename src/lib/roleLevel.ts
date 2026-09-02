@@ -112,18 +112,25 @@ export function parseRateWan(rate: string | number | null | undefined): number |
 
 /**
  * 到達レベルと希望単価が食い違っていないか。
- * C級（事務局作業どまり）や裏付けなしで高単価を希望している場合に警告する。
- * **落とすのではなく気付かせる**（判断は営業がする）。
+ * **C級（周辺作業どまり）で高単価を希望している場合だけ**警告する。
+ * 落とすのではなく気付かせる（判断は営業がする）。
+ *
+ * ⚠ 「－ 裏付けなし」は警告しない（2026-09-02 実測で訂正）。
+ *   裏付けなし群（PMO 97人）は PM併記64.9%・予算/契約/要員への言及82.5%・
+ *   平均希望単価75万で、**C級(67万)より上**だった。
+ *   「－」は実力が無いのではなく「その役割としての記述が無い」＝ラベルが当てに
+ *   ならないだけ。ここに単価警告を出すと誤報になる。
+ *   （当初「裏付けゼロで80万以上の26人＝見抜くべき人」と報告したが言い過ぎだった）
  */
 export function rateMismatch(
   level: RoleLevel | null,
   desiredRate: string | number | null | undefined,
 ): { note: string } | null {
-  if (level !== 'C' && level !== '-') return null
+  if (level !== 'C') return null
   const wan = parseRateWan(desiredRate)
   if (wan == null || wan < 80) return null
-  const why = level === 'C'
-    ? '経歴の記述は従事レベル（事務局作業・周辺作業）どまりです'
-    : '名乗っている役割の裏付けが経歴から読み取れません'
-  return { note: `希望${wan}万に対し、${why}。経歴書の確認をおすすめします。` }
+  return {
+    note: `希望${wan}万に対し、経歴の記述は従事レベル（周辺作業）どまりです。`
+      + `経歴書の確認をおすすめします。`,
+  }
 }
