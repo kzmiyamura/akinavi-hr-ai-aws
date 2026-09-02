@@ -10,7 +10,7 @@ import { resolve } from 'node:path'
  * **テキストとして読んで** 定義表と係数を取り出し、SQL 側の単体テスト
  * （scripts/sql/test_role_affinity.sql）と同じ期待値に一致するかを見る。
  *
- * 定義は docs/ROLE_DEFINITION.md、SQL 実体は 20260901_role_taxonomy.sql。
+ * 定義は docs/ROLE_DEFINITION.md、SQL 実体は 20260902_role_affinity_level.sql。
  */
 const SRC = readFileSync(
   resolve(__dirname, '../../../supabase/functions/match-batch/index.ts'),
@@ -44,7 +44,12 @@ function parseDistance(): Record<string, Record<string, number>> {
 const AXIS = parseAxis()
 const DIST = parseDistance()
 
-function affinity(required: string | null, candidate: string | null): number {
+/** docs/ROLE_DEFINITION.md 3章の式。実効権限＝ラベルの権限＋レベル補正 */
+function affinity(
+  required: string | null,
+  candidate: string | null,
+  lv?: string | null,
+): number {
   if (!required?.trim() || !candidate?.trim()) return 0.5
   if (required === candidate) return 1.0
   const r = AXIS[required], c = AXIS[candidate]
@@ -52,8 +57,14 @@ function affinity(required: string | null, candidate: string | null): number {
   const d = DIST[r.object]?.[c.object]
   if (d == null) return 0.5
   const objCoef = d === 0 ? 1.0 : d === 1 ? 0.6 : 0.35
-  const gap = Math.abs(r.authority - c.authority)
-  const authCoef = gap === 0 ? 1.0 : gap === 1 ? 0.75 : gap === 2 ? 0.5 : 0.3
+  const adj = lv === 'A' ? 2 : lv === 'C' ? -1 : 0
+  const eff = Math.min(4, Math.max(1, c.authority + adj))
+  const gap = eff - r.authority
+  const authCoef = gap === 0
+    ? 1.0
+    : gap > 0
+      ? (gap === 1 ? 0.9 : gap === 2 ? 0.8 : 0.7)
+      : (gap === -1 ? 0.75 : gap === -2 ? 0.5 : 0.3)
   return Math.min(0.9, Math.max(0.2, objCoef * authCoef))
 }
 
@@ -75,44 +86,70 @@ describe('match-batch の定義表が読めていること', () => {
     }
   })
 
-  it('係数が docs/ROLE_DEFINITION.md のとおり書かれている', () => {
+  it('係数と実効権限の式が docs/ROLE_DEFINITION.md のとおり書かれている', () => {
     expect(SRC).toContain('d === 0 ? 1.0 : d === 1 ? 0.6 : 0.35')
-    expect(SRC).toContain('gap === 0 ? 1.0 : gap === 1 ? 0.75 : gap === 2 ? 0.5 : 0.3')
+    // 格上（gap>0）は 0.9/0.8/0.7、格下は 0.75/0.5/0.3
+    expect(SRC).toContain('gap === 1 ? 0.9 : gap === 2 ? 0.8 : 0.7')
+    expect(SRC).toContain('gap === -1 ? 0.75 : gap === -2 ? 0.5 : 0.3')
+    // 到達レベルによる権限補正 A:+2 / C:-1
+    expect(SRC).toContain("candidateLevel === 'A' ? 2 : candidateLevel === 'C' ? -1 : 0")
+    expect(SRC).toContain('Math.min(4, Math.max(1, c.authority + adj))')
     expect(SRC).toContain('Math.min(0.9, Math.max(0.2, objCoef * authCoef))')
   })
 })
 
 describe('SQL の単体テストと同じ期待値になること', () => {
-  // scripts/sql/test_role_affinity.sql と同じ23ケース
-  const cases: Array<[string | null, string | null, number, string]> = [
-    ['PMO', 'PMO', 1.0, '同一ラベル'],
-    ['ヘルプデスク', 'ヘルプデスク', 1.0, '同一ラベル'],
-    ['プロジェクトマネージャー', 'PMO', 0.2, '★PM案件にPMO＝最遠。旧0.7'],
-    ['PMO', 'プロジェクトマネージャー', 0.2, '★逆向きも同じ'],
-    ['プロジェクトマネージャー', 'プロジェクトリーダー', 0.75, '対象同じ・権限1段差'],
-    ['システムエンジニア', 'プログラマー', 0.9, '同じマス（上限0.9）'],
-    ['ヘルプデスク', '運用保守', 0.75, 'サービス同士・権限1段差'],
-    ['システムエンジニア', 'アーキテクト', 0.75, '製品同士・権限1段差'],
-    ['PMO', 'スクラムマスター', 0.75, '仕組み同士'],
-    ['ヘルプデスク', 'PMO', 0.6, '権限同じL1・対象隣接'],
-    ['プロジェクトリーダー', 'テックリード', 0.6, '統率同士'],
-    ['コンサルタント', 'アーキテクト', 0.6, '事業↔製品の隣接'],
-    ['運用保守', 'PMO', 0.45, '対象隣接・権限1段差'],
-    ['プロジェクトリーダー', 'システムエンジニア', 0.45, '旧0.2は誤り'],
-    ['プロジェクトマネージャー', 'システムエンジニア', 0.3, '対象隣接・権限2段差'],
-    ['プログラマー', 'プロジェクトマネージャー', 0.3, '逆向き'],
-    ['システムエンジニア', 'PMO', 0.2625, '★実装案件のPMO。低いまま維持'],
-    ['プロジェクトマネージャー', 'ヘルプデスク', 0.2, '対象も権限も最遠'],
-    ['ヘルプデスク', 'MLエンジニア', 0.45, '畑違いはスキル側で落ちる'],
-    ['システムエンジニア', null, 0.5, '人材側に役割なし'],
-    [null, 'PMO', 0.5, '案件側に要求役割なし'],
-    ['', 'PMO', 0.5, '空文字も不明扱い'],
-    ['システムエンジニア', 'データサイエンティスト', 0.5, '一覧に無いラベルは中立'],
+  // scripts/sql/test_role_affinity.sql と同じケース
+  const cases: Array<[string | null, string | null, string | null, number, string]> = [
+    // 完全一致
+    ['PMO', 'PMO', null, 1.0, '同一ラベル'],
+    ['ヘルプデスク', 'ヘルプデスク', null, 1.0, '同一ラベル'],
+    ['プロジェクトマネージャー', 'プロジェクトマネージャー', 'C', 1.0, '同一ラベルはレベルで割り引かない'],
+
+    // ★ 到達レベルが効くこと
+    ['プロジェクトマネージャー', 'PMO', 'A', 0.45, '★PMO A級はPM案件に届く'],
+    ['プロジェクトマネージャー', 'PMO', 'B', 0.2, '★B級は最遠のまま'],
+    ['プロジェクトマネージャー', 'PMO', 'C', 0.2, '★C級（議事録・PC手配）は最遠のまま'],
+    ['プロジェクトマネージャー', 'PMO', '-', 0.2, '裏付けなしは補正しない'],
+    ['プロジェクトマネージャー', 'PMO', null, 0.2, 'レベル未判定は補正しない'],
+    ['プロジェクトマネージャー', 'テックリード', 'A', 0.6, 'A級TLはPM案件で権限が並ぶ'],
+    ['プロジェクトマネージャー', 'テックリード', null, 0.45, '無印TL'],
+    ['プロジェクトマネージャー', 'テックリード', 'C', 0.3, 'C級TLは落ちる'],
+
+    // 格上は落としすぎない（非対称）
+    ['システムエンジニア', 'アーキテクト', null, 0.9, '格上1段。旧は対称で0.75だった'],
+    ['システムエンジニア', 'アーキテクト', 'A', 0.8, '格上2段'],
+    ['ヘルプデスク', '運用保守', null, 0.9, '格上1段'],
+    ['PMO', 'スクラムマスター', null, 0.9, '格上1段'],
+    ['PMO', 'プロジェクトマネージャー', null, 0.42, 'PMO案件にPM人材＝格上3段'],
+    ['プログラマー', 'プロジェクトマネージャー', null, 0.48, '格上2段'],
+    ['ヘルプデスク', 'MLエンジニア', null, 0.54, '畑違いはスキル側で落ちる'],
+
+    // 格下は従来どおり
+    ['プロジェクトマネージャー', 'プロジェクトリーダー', null, 0.75, '格下1段'],
+    ['プロジェクトリーダー', 'システムエンジニア', null, 0.45, '対象隣接・格下1段'],
+    ['プロジェクトリーダー', 'システムエンジニア', 'C', 0.3, 'C級は格下2段まで落ちる'],
+    ['プロジェクトマネージャー', 'システムエンジニア', null, 0.3, '対象隣接・格下2段'],
+    ['運用保守', 'PMO', null, 0.45, '対象隣接・格下1段'],
+    ['システムエンジニア', 'PMO', null, 0.2625, '★実装案件のPMO。低いまま維持'],
+    ['プロジェクトマネージャー', 'ヘルプデスク', null, 0.2, '対象も権限も最遠'],
+
+    // 同じ高さ
+    ['システムエンジニア', 'プログラマー', null, 0.9, '同じマス（上限0.9）'],
+    ['ヘルプデスク', 'PMO', null, 0.6, '権限同じL1・対象隣接'],
+    ['プロジェクトリーダー', 'テックリード', null, 0.6, '統率同士'],
+    ['コンサルタント', 'アーキテクト', null, 0.6, '事業↔製品の隣接'],
+
+    // 不明は中立
+    ['システムエンジニア', null, null, 0.5, '人材側に役割なし'],
+    [null, 'PMO', null, 0.5, '案件側に要求役割なし'],
+    ['', 'PMO', null, 0.5, '空文字も不明扱い'],
+    ['システムエンジニア', 'データサイエンティスト', null, 0.5, '一覧に無いラベルは中立'],
   ]
 
-  for (const [req, cand, expected, memo] of cases) {
-    it(`${req ?? '(null)'} × ${cand ?? '(null)'} = ${expected}（${memo}）`, () => {
-      expect(affinity(req, cand)).toBeCloseTo(expected, 6)
+  for (const [req, cand, lv, expected, memo] of cases) {
+    it(`${req ?? '(null)'} × ${cand ?? '(null)'}${lv ? `(${lv}級)` : ''} = ${expected}（${memo}）`, () => {
+      expect(affinity(req, cand, lv)).toBeCloseTo(expected, 6)
     })
   }
 })

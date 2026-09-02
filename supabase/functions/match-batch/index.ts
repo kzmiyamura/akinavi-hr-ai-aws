@@ -109,6 +109,9 @@ interface CandidateInput {
   skillYears?: Record<string, number> | null  // スキル別経験月数（Excelから抽出）
   desiredProject?: string | null              // 希望案件・希望分野（raw_profile.desiredProject）
   roles?: string[] | null                     // 役割（raw_profile.roles）。先頭が主役割
+  // 役割ごとの到達レベル（raw_profile._roleLevels）。A主導/B担当/C従事/-裏付けなし。
+  // 呼び出し側がまだ渡していない場合は undefined＝レベル未判定として扱う
+  roleLevels?: Record<string, string> | null
   hakenOk?: boolean | null                    // 派遣・常駐OK/NG（raw_profile.hakenOk）
   englishLevel?: 'business' | 'daily' | null // 英語レベル: business=業務レベル / daily=日常会話
   employmentType?: string | null             // 雇用形態: 派遣社員/正社員/フリーランス/業務委託/SES等
@@ -227,12 +230,21 @@ const ROLE_WEIGHT = 30
 
 /**
  * affinity = clamp(対象係数 × 権限係数, 0.2, 0.9)
+ *   実効権限 = ラベルの権限 + レベル補正（A:+2 / B:0 / C:-1 / 不明:0）を 1〜4 に丸める
  *   対象係数 = 距離0→1.0 / 1→0.6 / 2→0.35
- *   権限係数 = 差0→1.0 / 1→0.75 / 2→0.5 / 3→0.3
- * 同一ラベル 1.0 / どちらか不明 1.0以外は中立 0.5（ゲートではない）。
- * 下限0.2は据え置き（2026-08-14 ユーザー判断「系統違いでも0.2は残す」）。
+ *   権限係数（非対称・2026-09-02）
+ *     差0        1.0
+ *     格上1/2/3+ 0.9 / 0.8 / 0.7   ← 「PM経験者をPL案件に」は実務で普通
+ *     格下1/2/3+ 0.75 / 0.5 / 0.3  ← 「PL経験者をPM案件に」は不安
+ * 同一ラベル 1.0（案件側に要求レベルが無いので、レベルで割り引かない。
+ *   水準の不一致は単価マッチングが受け持つ＝二重に減点しない）。
+ * どちらか不明は中立 0.5。下限0.2は据え置き（2026-08-14 ユーザー判断）。
  */
-function roleAffinity(required: string | null, candidate: string | null): number {
+function roleAffinity(
+  required: string | null,
+  candidate: string | null,
+  candidateLevel?: string | null,
+): number {
   if (!required?.trim() || !candidate?.trim()) return 0.5
   if (required === candidate) return 1.0
   const r = ROLE_AXIS[required]
@@ -241,8 +253,14 @@ function roleAffinity(required: string | null, candidate: string | null): number
   const d = OBJECT_DISTANCE[r.object]?.[c.object]
   if (d == null) return 0.5
   const objCoef = d === 0 ? 1.0 : d === 1 ? 0.6 : 0.35
-  const gap = Math.abs(r.authority - c.authority)
-  const authCoef = gap === 0 ? 1.0 : gap === 1 ? 0.75 : gap === 2 ? 0.5 : 0.3
+  const adj = candidateLevel === 'A' ? 2 : candidateLevel === 'C' ? -1 : 0
+  const eff = Math.min(4, Math.max(1, c.authority + adj))
+  const gap = eff - r.authority
+  const authCoef = gap === 0
+    ? 1.0
+    : gap > 0
+      ? (gap === 1 ? 0.9 : gap === 2 ? 0.8 : 0.7)
+      : (gap === -1 ? 0.75 : gap === -2 ? 0.5 : 0.3)
   return Math.min(0.9, Math.max(0.2, objCoef * authCoef))
 }
 
@@ -623,11 +641,13 @@ function calcRuleScore(
   const requiredRole = project.requiredRole ?? null
   const mainRole = candidate.roles?.[0] ?? null
   if (requiredRole && mainRole) {
-    const affinity = roleAffinity(requiredRole, mainRole)
+    const mainLevel = candidate.roleLevels?.[mainRole] ?? null
+    const affinity = roleAffinity(requiredRole, mainRole, mainLevel)
     const delta = Math.round((affinity - 0.5) * ROLE_WEIGHT)
     if (delta !== 0) {
       total = Math.max(0, Math.min(110, total + delta))
-      roleNote = ` [役割${delta > 0 ? '+' : ''}${delta}pt(要求:${requiredRole}／本人:${mainRole})]`
+      const lv = mainLevel ? `・${mainLevel}級` : ''
+      roleNote = ` [役割${delta > 0 ? '+' : ''}${delta}pt(要求:${requiredRole}／本人:${mainRole}${lv})]`
     }
   } else if (requiredRole && !mainRole) {
     roleNote = ` [役割不明(要求:${requiredRole})]`
