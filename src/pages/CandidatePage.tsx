@@ -2069,7 +2069,12 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         )}
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {/* 携帯で横スクロールになっていた（2026-09-03 指摘）。
+                        shrink-0 は「縮むな」なので、星・経歴書・Box・返信・再解析・
+                        編集・削除を1列に並べた幅を確保しようとする。flex-wrap があっても
+                        この箱自体が縮まないため画面からはみ出していた。
+                        携帯では横幅いっぱいの別行に落とし、sm 以上は従来どおり右寄せで固定する */}
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 w-full sm:w-auto min-w-0 sm:shrink-0">
                       <BookmarkStar
                         candidateId={selectedCandidate.id}
                         dataEnv={dataEnv}
@@ -2089,7 +2094,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                               href={toViewerUrl(resumeLink)}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
+                              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
                               title="経歴書を開く"
                             >
                               <ExternalLink size={14} />
@@ -2106,7 +2111,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         if (!isRosterLinkAlive(selectedCandidate.created_at)) {
                           return (
                             <span
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-400"
+                              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-gray-200 rounded-lg text-gray-400"
                               title={`名簿メールの添付${roster.length}件は保持期間（1日）を過ぎて削除されています`}
                             >
                               経歴書（未特定・添付は保持期間切れ）
@@ -2116,7 +2121,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         return (
                           <details className="relative">
                             <summary
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-amber-200 bg-amber-50 rounded-lg text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer list-none"
+                              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-amber-200 bg-amber-50 rounded-lg text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer list-none"
                               title="本人ぶんを特定できなかったため、メールに付いていた添付を一覧で表示します"
                             >
                               <ExternalLink size={14} />
@@ -2150,7 +2155,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                             href={selectedCandidate.box_url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-200 rounded-lg text-orange-600 hover:bg-orange-50 transition-colors"
+                            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-orange-200 rounded-lg text-orange-600 hover:bg-orange-50 transition-colors"
                             title="Box経歴書を開く"
                           >
                             <ExternalLink size={14} />
@@ -2158,7 +2163,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           </a>
                           {boxWorking ? (
                             <span
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-300 rounded-lg text-orange-700 bg-orange-50"
+                              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-orange-300 rounded-lg text-orange-700 bg-orange-50"
                               title="サーバー側で処理中です。他の画面に移動しても継続します"
                             >
                               <Loader2 size={14} className="animate-spin" />
@@ -2169,7 +2174,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                               <button
                                 type="button"
                                 onClick={() => requestBoxFetch(selectedCandidate)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-400 rounded-lg text-white bg-orange-500 hover:bg-orange-600 transition-colors"
+                                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-orange-400 rounded-lg text-white bg-orange-500 hover:bg-orange-600 transition-colors"
                                 title="Boxから経歴書を自動ダウンロードして再解析（AI上書きまで自動）"
                               >
                                 <RefreshCw size={14} />
@@ -2182,7 +2187,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                                   boxFileInputRef.current?.click()
                                 }}
                                 disabled={boxUploadingId === selectedCandidate.id}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-300 rounded-lg text-orange-700 hover:bg-orange-50 transition-colors disabled:opacity-50"
+                                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-orange-300 rounded-lg text-orange-700 hover:bg-orange-50 transition-colors disabled:opacity-50"
                                 title="Boxからダウンロードしたファイルをアップロードして解析"
                               >
                                 {boxUploadingId === selectedCandidate.id
@@ -2214,7 +2219,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         return (
                           <a
                             href={`mailto:${raw.from}?subject=${subject}&body=${body}`}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
                             title="返信（元メール引用）"
                           >
                             <Reply size={14} />
@@ -2227,7 +2232,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           type="button"
                           onClick={() => handleReplay(selectedCandidate)}
                           disabled={replayingId === selectedCandidate.id}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-violet-200 rounded-lg text-violet-600 hover:text-violet-800 hover:border-violet-400 transition-colors disabled:opacity-50"
+                          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-violet-200 rounded-lg text-violet-600 hover:text-violet-800 hover:border-violet-400 transition-colors disabled:opacity-50"
                           title="保存済みメール本文を再解析して新規登録"
                         >
                           {replayingId === selectedCandidate.id
@@ -2240,7 +2245,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         type="button"
                         onClick={() => setEditingCandidate(selectedCandidate)}
                         disabled={isLoadingFullProfile}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors disabled:opacity-40"
+                        className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors disabled:opacity-40"
                         title={isLoadingFullProfile ? '読み込み中...' : '編集'}
                       >
                         <Pencil size={14} />
@@ -2250,7 +2255,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         type="button"
                         onClick={() => handleDelete(selectedCandidate)}
                         disabled={deletingId === selectedCandidate.id}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-red-600 hover:border-red-300 transition-colors disabled:opacity-50"
+                        className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-red-600 hover:border-red-300 transition-colors disabled:opacity-50"
                         title="削除"
                       >
                         {deletingId === selectedCandidate.id
