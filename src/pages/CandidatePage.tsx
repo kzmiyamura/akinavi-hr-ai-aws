@@ -2,7 +2,7 @@ import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon, Star } from 'lucide-react'
 import { toViewerUrl, isRosterLinkAlive } from '../lib/viewerUrl'
-import { isSameCompany as isSameCompanyName } from '../lib/companyName'
+import { isSameCompany as isSameCompanyName, keepOtherCompanyOnly } from '../lib/companyName'
 import { BookmarkStar } from '../components/BookmarkStar'
 import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
 import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
@@ -387,10 +387,15 @@ export function CandidateProfileFields({
               🏢 {c.from_company}
             </span>
           )}
-          {/* 別会社から同じ人が来ている可能性（レコードは統合しない・2026-08-20） */}
+          {/* 別会社から同じ人が来ている可能性（レコードは統合しない・2026-08-20）。
+              取り込み時の同社判定は法人格の有無を落としていないため、
+              「株式会社X」と「X」が別会社として記録されることがある。
+              表示側でも正規化して同社なら出さない（2026-09-05・prod実測 127件中1件） */}
           {(() => {
             const same = readSameAsOtherAgency(c.raw_profile)
-            return same ? <SameAsOtherAgencyBadge info={same} /> : null
+            if (!same) return null
+            if (isSameCompanyName(c.from_company, same.company)) return null
+            return <SameAsOtherAgencyBadge info={same} />
           })()}
           {agentInfo?.haken_number && (
             <a
@@ -2280,26 +2285,25 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       duplicate_flag の条件は外した（全員 false で表示されていなかった・2026-08-20）。
                       レコードは統合しない方針なので、ここで並べて単価を比較できるようにする */}
                   {dupCandidates && dupCandidates.length > 0 && (() => {
-                    // 同じ会社から来た同じ人は「別ルート」ではなく単なる二重登録。
-                    // 実測（2026-08-21 prod）: 同一人物ペア329組のうち245組が同じ会社で、
-                    // 「別ルート・別会社」という見出しが実態と逆になっていた（ユーザー指摘）
-                    // 法人格の有無で同じ会社が別扱いになっていた（「JapanTechnology」78人 と
-                    // 「株式会社JapanTechnology」37人・2026-08-29 実測）。正規化して比較する
-                    const isSameCompany = (d: Candidate) =>
-                      isSameCompanyName(
-                        selectedCandidate.from_company,
-                        (d as unknown as Record<string, unknown>).from_company as string | null,
-                      )
-                    const sameCoCount = dupCandidates.filter(isSameCompany).length
+                    // 同じ会社から来た同じ人は「別ルート」ではなく単なる二重登録で、
+                    // 単価も条件も同じなので営業の判断材料にならない。**出さない**
+                    // （2026-09-05 ユーザー指示「他社のだけでいい」）。
+                    // 法人格の有無で同じ会社が別扱いになるため正規化して比較する
+                    // （「JapanTechnology」78人 と「株式会社JapanTechnology」37人・2026-08-29 実測）。
+                    // 会社名が取れていない相手は同社と断定できないので残す（prod 1,760ペア）
+                    const others = keepOtherCompanyOnly(
+                      dupCandidates as unknown as (Candidate & { from_company?: string | null })[],
+                      selectedCandidate.from_company,
+                    )
+                    if (others.length === 0) return null
                     return (
                     <details className="mt-4 border border-yellow-200 rounded-lg bg-yellow-50" open>
                       <summary className="px-3 py-2 text-xs font-medium text-yellow-700 cursor-pointer select-none hover:bg-yellow-100 rounded-lg flex items-center gap-1">
                         <span className="text-yellow-500">⚠</span>
-                        同一人材の可能性 {dupCandidates.length}件
-                        {sameCoCount > 0 && `（うち同じ会社からの二重登録 ${sameCoCount}件）`}
+                        同一人材の可能性 {others.length}件
                       </summary>
                       <div className="px-3 pb-3 pt-1 space-y-2">
-                        {dupCandidates.map((dup) => (
+                        {others.map((dup) => (
                           // カード全体を押せるようにする（2026-08-20 ユーザー要望）。
                           // 右端の「この人を見る」ボタンは残す（押せることが明示的に分かるため）
                           <div
@@ -2315,12 +2319,10 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                               <div className="min-w-0 flex-1">
                                 <p className="text-xs font-semibold text-gray-800 flex items-center gap-1.5">
                                   {dup.name}
-                                  <span className={`text-[10px] font-normal rounded px-1 py-px border ${
-                                    isSameCompany(dup)
-                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                      : 'bg-white text-gray-500 border-gray-200'
-                                  }`}>
-                                    {isSameCompany(dup) ? '同じ会社の二重登録' : '別会社'}
+                                  {/* 同社は上で除外済み。会社名が取れていない相手だけ
+                                      「別会社」と断定せずに会社不明と出す */}
+                                  <span className="text-[10px] font-normal rounded px-1 py-px border bg-white text-gray-500 border-gray-200">
+                                    {dup.from_company ? '別会社' : '会社不明'}
                                   </span>
                                 </p>
                                 {/* 会社・登録日・経験年数 */}

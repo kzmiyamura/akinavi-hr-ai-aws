@@ -11923,8 +11923,16 @@ Deno.serve(async (req: Request) => {
               // 変われば mail_from は変わる（実害: 株式会社Flexibility の担当違いで
               // 同社の同一人物に「別の紹介会社から来た同一人材」バッジが出た・2026-08-21）。
               // 会社名が一致するなら同一エージェント扱いにして1レコードへ統合する。
+              // 法人格の有無・全角半角も揃える。空白と小文字化だけでは
+              // 「株式会社JapanTechnology」と「JapanTechnology」が別会社になり、
+              // 同社の二重登録に「別の紹介会社」バッジが出ていた
+              // （src/lib/companyName.ts の normalizeCompany と同じ規則・2026-09-05）
               const norm = (v: string | null | undefined) =>
-                String(v ?? '').replace(/[\s　]/g, '').toLowerCase()
+                String(v ?? '')
+                  .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+                  .replace(/(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|医療法人|\(株\)|（株）|\(有\)|（有）|㈱|㈲|Inc\.?|Corp(?:oration)?\.?|Co\.,?\s*Ltd\.?|Ltd\.?|LLC|K\.?K\.?)/gi, '')
+                  .replace(/[\s　・･\-‐−ー–—.,、。]/g, '')
+                  .toLowerCase()
               const myCompany = norm(sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany))
               const theirCompany = norm(s.from_company)
               const sameAgent = (s.mail_from ?? null) === from

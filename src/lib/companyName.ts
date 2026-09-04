@@ -37,3 +37,20 @@ export function isSameCompany(a: string | null | undefined, b: string | null | u
   const nb = normalizeCompany(b)
   return na !== '' && na === nb
 }
+
+/**
+ * 「同一人材の可能性」に並べるのは**他社のレコードだけ**にする（2026-09-05 ユーザー指示）。
+ *
+ * 同じ会社から同じ人が2回来ているのは「別ルートの提案」ではなく単なる二重登録で、
+ * 単価も条件も同じなので営業の判断材料にならない。prod 実測（2026-09-05・正規化名が
+ * 一致するペア 38,466組）では 2,241組（5.8%）が同一会社だった。
+ *
+ * 会社名が片方でも取れていない相手は**残す**。同社だと断定できないため
+ * （同 1,760組）。落とすと本物の他社レコードまで消える。
+ */
+export function keepOtherCompanyOnly<T extends { from_company?: string | null }>(
+  list: readonly T[],
+  myCompany: string | null | undefined,
+): T[] {
+  return list.filter((d) => !isSameCompany(myCompany, d.from_company))
+}
