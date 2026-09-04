@@ -250,6 +250,36 @@ const PROJECT_BODY_PATTERNS = [
   /案件情報を(?:展開|お送り|ご案内)/,
 ]
 
+// ── 件名だけで「人材メール」と分かるパターン（2026-08-28 追加） ───────────────
+// 送り手が「人を紹介する」と名乗っている形。実データ3,878件で調整した。
+
+/** 「【人材」「★人材情報」「要員情報」「弊社技術者のご紹介」等の名乗り */
+const CANDIDATE_SUBJECT_HEADER =
+  /【[^】]{0,10}人材|★[^★】]{0,10}人材|人材情報|人材[ー－-]|要員情報|要員紹介|技術者情報|(?:弊社)?(?:正社員)?技術者の?ご紹介|弊社技術者|自社\s*要員|スキルシート|経歴書/
+
+/** 個人プロフィールの痕跡。案件メールに出る年齢制限（45歳まで/23歳以上/60歳前後）は除く */
+const CANDIDATE_SUBJECT_AGE =
+  /\d{2}\s*歳(?!\s*(?:位|くらい|程度|前後)?\s*(?:まで|迄|以下|未満|以上|前後))/
+
+/** 案件を「探している」側の言い回し（人材メール特有） */
+const CANDIDATE_SUBJECT_PHRASE =
+  /案件(?:希望|のみ希望|を?探し|ご紹介くださ|をご紹介くださ)|参画先(?:希望|募集)/
+
+/** これがあれば案件。上の脱出口を使わせない */
+const HARD_PROJECT_SUBJECT =
+  /【\s*案件|案件情報|案件のご紹介|案件ご紹介\s*[】)）]|必須スキル|【商\s*流】|募集|人月|エンド直|直案件|元請け?直|エンジニア様?のご紹介をお待ち|見合う方がおりましたら/
+
+/**
+ * 件名だけで人材メールと判定できるか。
+ * 案件の強いシグナルがある場合は false（案件側の判定に委ねる）。
+ */
+function isCandidateBySubject(subject: string): boolean {
+  if (HARD_PROJECT_SUBJECT.test(subject)) return false
+  return CANDIDATE_SUBJECT_HEADER.test(subject)
+    || CANDIDATE_SUBJECT_AGE.test(subject)
+    || CANDIDATE_SUBJECT_PHRASE.test(subject)
+}
+
 /**
  * ルールベースで案件メールか判定する
  * 件名と本文冒頭500文字を対象とする
@@ -267,7 +297,11 @@ function isProjectByRuleBase(subject: string, plainBody500: string): boolean {
  * 件名と本文（先頭1000文字）の両方を確認する
  * @returns 'skip' | 'candidate' | 'project' | 'unknown'
  */
-function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' | 'unknown' {
+function preFilterEmail(
+  email: GraphMessage,
+  /** 件名による人材救済を使うか。app_config.subject_candidate_rescue='false' で即時に切れる */
+  useCandidateRescue = true,
+): 'skip' | 'candidate' | 'project' | 'unknown' {
   const subject = email.subject ?? ''
   const rawBody = email.body?.content ?? ''
   const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000)
@@ -282,6 +316,18 @@ function preFilterEmail(email: GraphMessage): 'skip' | 'candidate' | 'project' |
   if (SKIP_BODY_PATTERNS.some(p => p.test(plainBody))) {
     return 'skip'
   }
+
+  // 件名が「人を紹介する側」だと名乗っているなら人材とみなす（2026-08-28）。
+  //
+  // 実害: 人材メールが案件と判定され、案件解析OFFのため何も保存されずに捨てられていた。
+  // 実測（3日・ai_logs）で案件扱い2,645件のうち733件（27.7%）が人材メール。
+  // 原因は「要件定義」「案件希望」「プロジェクト管理」等、人材メールが普通に含む語を
+  // 案件の証拠として扱っていたこと（例: 件名の「要件」だけで project 確定）。
+  //
+  // ここは「人材への脱出口」だけを足す。案件と判定する条件は一切増やさないので、
+  // いま人材として取り込めているメールが案件に化けることは構造上ありえない
+  // （実データ1,233件でも反転0件を確認）。
+  if (useCandidateRescue && isCandidateBySubject(subject)) return 'candidate'
 
   // 件名だけで案件確定のパターン（HR判定前に先にチェック）
   if (/エンド直|直案件|直\s*案件|合う人材|ご紹介をお待ち|エンドユーザー.*直/.test(subject)) return 'project'
@@ -605,8 +651,18 @@ async function saveRawAttachments(
   attachments: { name?: string; contentType?: string; contentBytes?: string }[],
 ): Promise<string[]> {
   const saved: string[] = []
-  // Storage キーは ASCII のみ安全。元のファイル名は台帳側に残っているのでここでは連番にする
-  const safeMsg = messageId.replace(/[^a-zA-Z0-9]/g, '').slice(-16)
+  // Storage キーは ASCII のみ安全。元のファイル名は台帳側に残っているのでここでは連番にする。
+  //
+  // 記号を全部消して末尾16文字だけ取ると、別のメールが同じフォルダ名になる（2026-08-29 実測）。
+  // Outlook のメールIDは Base64URL で、連番の変化が `-` と `_` に出るため、末尾1文字だけ
+  // 違うIDが日常的に発生する。記号を落とすとその違いが消え、upsert:true で先に保存された
+  // 添付が黙って上書きされていた（直近7日で 6,059通中 58通・約1%）。
+  //   例) …E8MDAD_AAAA と …E8MDAD-AAAA → どちらも …E8MDADAAAA
+  //
+  // 実データに出る記号は `=` `-` `_` の3種だけで、いずれも Storage キーに使える
+  // （同じバケットの resumes/ は `_` を含むファイル名で1,000件以上動いている）。
+  // Base64 の詰め物である `=` だけ落とし、`-` と `_` は残す。長さも 32 文字に広げる。
+  const safeMsg = messageId.replace(/=+$/g, '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-32)
   for (const [i, a] of attachments.entries()) {
     try {
       if (!a.contentBytes) continue
@@ -818,6 +874,10 @@ async function callInboundEmail(
   type: 'candidate' | 'project',
   dataEnv: 'prod' | 'demo',
   dedupSalt = '',
+  /** 受信添付の保存先パス（raw/<msg>/attN.xlsx）。名簿メールで本人ぶんを特定できなかった
+   *  候補者に「メールに何が付いていたか」の参照リンクを持たせるために渡す。
+   *  実体は raw/ の1日保持なので、翌日以降はリンク切れになる前提（画面側で案内する）。 */
+  rawPaths: string[] = [],
 ): Promise<void> {
   const payload = {
     type,
@@ -831,6 +891,8 @@ async function callInboundEmail(
     skip_relevance: false,
     // 添付分割時に各呼び出しを区別（inbound-email のデdup判定で使用）
     dedup_salt: dedupSalt,
+    // 受信添付の保存先（raw/<msg>/attN.ext）。名簿メールの参照リンク用
+    raw_paths: rawPaths,
     attachments: attachments.map(a => ({
       name:     a.name,
       mimeType: a.contentType,
@@ -1091,10 +1153,16 @@ async function pollAccount(
     // リフレッシュトークンをローテーション保存
     await saveRefreshToken(supabase, config.configKey, newRefreshToken)
 
-    // 全件モードの場合は保存済みの nextLink を取得
+    // 全件モード・復旧モードは保存済みの nextLink から続きを取得する。
+    // 復旧モードは 2026-08-29 まで nextLink を持たず、再実行しても毎回同じ先頭50件を
+    // 読み直していた（期間指定が日付単位なので途中再開もできない）。
+    // 分類の誤りで捨てられた人材メールは3日で約2,600通あり、50件ずつでは届かないため
+    // full と同じページ送りに乗せる。
     let storedNextLink: string | null = null
-    if (mode === 'full') {
-      const nextLinkKey = `email_full_import_nextlink_${config.configKey}`
+    if (mode === 'full' || mode === 'recover') {
+      const nextLinkKey = mode === 'recover'
+        ? `email_recover_nextlink_${config.configKey}`
+        : `email_full_import_nextlink_${config.configKey}`
       const stored = await getAppConfigValue(supabase, nextLinkKey)
       if (stored === 'DONE') {
         // このアカウントは既に完了済み
@@ -1117,9 +1185,12 @@ async function pollAccount(
 
     // ---- ルールベース事前フィルター ----
     // Gemini を呼ぶ前に件名で明らかなスパムを除外
+    // 件名による人材救済は app_config で即時に切れる（デプロイなしで元の挙動へ戻せる）
+    const rescueOff = (await getAppConfigValue(supabase, 'subject_candidate_rescue')) === 'false'
+    if (rescueOff) console.log('[poll] 件名による人材救済は無効（subject_candidate_rescue=false）')
     const preFilterResults = emails.map(email => ({
       email,
-      preResult: preFilterEmail(email),
+      preResult: preFilterEmail(email, !rescueOff),
     }))
 
     const ruleSkipped  = preFilterResults.filter(r => r.preResult === 'skip')
@@ -1264,7 +1335,7 @@ async function pollAccount(
             console.log(`[poll] 添付分割: "${officeAtt.name}" 登録完了`)
           }
         } else {
-          await callInboundEmail(email, attachments, finalType, config.dataEnv)
+          await callInboundEmail(email, attachments, finalType, config.dataEnv, '', savedRawPaths)
         }
         processed++
         // 処理完了後にメールを削除（DB に保存済みのため Outlook 側は不要）
@@ -1287,9 +1358,11 @@ async function pollAccount(
       }
     }
 
-    // 全件モードの nextLink 管理
-    if (mode === 'full') {
-      const nextLinkKey = `email_full_import_nextlink_${config.configKey}`
+    // 全件モード・復旧モードの nextLink 管理
+    if (mode === 'full' || mode === 'recover') {
+      const nextLinkKey = mode === 'recover'
+        ? `email_recover_nextlink_${config.configKey}`
+        : `email_full_import_nextlink_${config.configKey}`
       if (nextLink) {
         // 次のページあり → 保存して次回継続
         await setAppConfigValue(supabase, nextLinkKey, nextLink)
@@ -1452,10 +1525,24 @@ Deno.serve(async (req: Request) => {
     const totalProcessed = summary.reduce((s, r) => s + r.processed, 0)
     const totalErrors    = summary.flatMap(r => r.errors)
 
-    // 復旧モードは1回きり。実行後は必ず incremental に戻す（暴発防止）
+    // 復旧モードはページ送りが尽きるまで継続し、終わったら incremental に戻す。
+    // 復旧中は通常の受信取り込みが止まる（メールは未読のまま残るので取りこぼしはないが、
+    // 反映が遅れる）ため、暴走しないよう実行回数に上限を設ける。
     if (mode === 'recover') {
-      await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
-      console.log('[poll-email] 復旧モード完了 → incremental に戻しました')
+      const runs = Number((await getAppConfigValue(supabase, 'email_recover_runs')) ?? '0') + 1
+      const allDone = summary.every(r => r.fullImportDone)
+      const RECOVER_MAX_RUNS = 120
+      if (allDone || runs >= RECOVER_MAX_RUNS) {
+        await setAppConfigValue(supabase, 'email_poll_mode', 'incremental')
+        await setAppConfigValue(supabase, 'email_recover_runs', '0')
+        for (const config of POLL_CONFIGS) {
+          await setAppConfigValue(supabase, `email_recover_nextlink_${config.configKey}`, '')
+        }
+        console.log(`[poll-email] 復旧モード終了（${runs}回目・${allDone ? '全ページ完了' : '上限到達'}） → incremental に戻しました`)
+      } else {
+        await setAppConfigValue(supabase, 'email_recover_runs', String(runs))
+        console.log(`[poll-email] 復旧モード継続（${runs}回目・次ページあり）`)
+      }
     }
 
     // 全件モード完了チェック: 全アカウントが fullImportDone なら incremental に戻す

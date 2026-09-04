@@ -16,7 +16,7 @@
 //
 // 環境変数: GRAPH_CLIENT_ID / GRAPH_CLIENT_SECRET / GRAPH_REFRESH_TOKEN_HUMAN(初期値)
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { matchesRule, type CandidateLite, type NotifyRule } from './match.ts'
+import { matchesRule, matchedSkills, type CandidateLite, type NotifyRule } from './match.ts'
 
 const CLIENT_ID = Deno.env.get('GRAPH_CLIENT_ID') ?? ''
 const CLIENT_SECRET = Deno.env.get('GRAPH_CLIENT_SECRET') ?? ''
@@ -174,6 +174,65 @@ async function checkInboundStall(sb: Sb, notifyTo: string): Promise<Record<strin
   return { stalled: true, silentHours: Number(silentHours.toFixed(1)), alerted: true, to }
 }
 
+/**
+ * ストレージ容量の監視（2026-08-30 追加）。
+ *
+ * 実害: raw/（受信添付の控え）が掃除の不具合で 1.7GB まで膨らみ、無料枠1GBを超過。
+ * 2026-08-30 にプロジェクト全体が 402 を返して停止した（Fair Use Policy）。
+ * このとき実サイズは既に 204MB まで削っていたが、Supabase が見るのは
+ * **請求期間の平均**（Average in period）なので、超過した数日が平均を押し上げたまま
+ * 解除されず、Pro へのアップグレードでしか復旧できなかった。
+ *
+ * つまり「超えてから減らす」では手遅れになる。超える前に気づくための監視。
+ * 実サイズが枠の一定割合を超えたら通報する。
+ */
+const STORAGE_ALERT_DEFAULT_PCT = 70
+const STORAGE_ALERT_INTERVAL_H = 24
+
+async function checkStorageQuota(sb: Sb, notifyTo: string): Promise<Record<string, unknown>> {
+  const to = (await getConfig(sb, 'inbound_stall_alert_email')) || notifyTo
+  if (!to) return { checked: false, reason: 'no_recipient' }
+
+  // 枠は契約プランで変わるので設定で持つ（Free=1GB / Pro=100GB）
+  const quota = Number(await getConfig(sb, 'storage_quota_bytes')) || 1_073_741_824
+  const alertPct = Number(await getConfig(sb, 'storage_alert_pct')) || STORAGE_ALERT_DEFAULT_PCT
+
+  const { data, error } = await sb.rpc('storage_usage')
+  if (error) return { checked: false, reason: `rpc: ${error.message}` }
+  const rows = (data ?? []) as Array<{ bucket: string; files: number; bytes: number }>
+  const bytes = rows.reduce((s, r) => s + Number(r.bytes ?? 0), 0)
+  const pct = quota > 0 ? (100 * bytes) / quota : 0
+  const mb = (n: number) => (n / 1024 / 1024).toFixed(0)
+
+  if (pct < alertPct) return { pct: Number(pct.toFixed(1)), mb: mb(bytes), alerted: false }
+
+  // 1日1回まで
+  const last = await getConfig(sb, 'storage_alert_last_at')
+  if (last && Date.now() - new Date(last).getTime() < STORAGE_ALERT_INTERVAL_H * 3600_000) {
+    return { pct: Number(pct.toFixed(1)), mb: mb(bytes), alerted: false, reason: 'throttled' }
+  }
+
+  const token = await getAccessTokenForSend(sb)
+  if ('error' in token) return { pct: Number(pct.toFixed(1)), alerted: false, reason: `token: ${token.error}` }
+
+  const detail = rows.map((r) => `  ${r.bucket}: ${r.files}ファイル ${mb(Number(r.bytes))}MB`).join('\n')
+  const err = await sendMail(token.accessToken, to,
+    `[AkiNavi] ストレージが枠の ${pct.toFixed(0)}% に達しています`,
+    `ストレージ使用量: ${mb(bytes)}MB / ${mb(quota)}MB（${pct.toFixed(1)}%）\n\n${detail}\n\n` +
+    `超えるとプロジェクト全体が 402 を返して停止します（2026-08-30 に実際に停止しました）。\n` +
+    `判定は「請求期間の平均」なので、超えてから減らしても即座には解除されません。\n` +
+    `いま減らしてください。\n\n` +
+    `減らし方:\n` +
+    `・app_config.raw_retention_days（受信添付の控え・既定1日）を短くする\n` +
+    `・app_config.storage_retention_days（経歴書・既定7日）を短くする\n` +
+    `・設定画面の「ファイル保持期間」からも変更できます\n\n` +
+    `この通知は ${STORAGE_ALERT_INTERVAL_H} 時間おきです。枠は app_config.storage_quota_bytes で変えられます。`)
+  if (err) return { pct: Number(pct.toFixed(1)), alerted: false, reason: err }
+
+  await setConfig(sb, 'storage_alert_last_at', new Date().toISOString())
+  return { pct: Number(pct.toFixed(1)), mb: mb(bytes), alerted: true, to }
+}
+
 async function sendMail(accessToken: string, to: string, subject: string, text: string): Promise<string | null> {
   const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
     method: 'POST',
@@ -227,7 +286,16 @@ Deno.serve(async (req) => {
     }
     if (stall.alerted) console.log('[notify] 取り込み停止を通報:', JSON.stringify(stall))
 
-    if (rules.length === 0) return json(200, { ok: true, matched: 0, reason: 'no_rules', stall })
+    // ストレージ容量の監視も人材ルールと独立にまわす（失敗しても通知本体を止めない）
+    let storage: Record<string, unknown>
+    try {
+      storage = await checkStorageQuota(sb, rules[0]?.notify_email ?? '')
+    } catch (e) {
+      storage = { checked: false, reason: String(e).slice(0, 200) }
+    }
+    if (storage.alerted) console.log('[notify] ストレージ逼迫を通報:', JSON.stringify(storage))
+
+    if (rules.length === 0) return json(200, { ok: true, matched: 0, reason: 'no_rules', stall, storage })
 
     // チェック窓: 前回実行時刻から（上限24時間。復旧直後の大量流入で過去分を丸ごと通知しない）
     const runStartedAt = new Date().toISOString()
@@ -285,7 +353,7 @@ Deno.serve(async (req) => {
 
     if (cands.length === 0) {
       await setConfig(sb, 'notify_last_checked_at', nextWatermark)
-      return json(200, { ok: true, matched: 0, checked: 0 })
+      return json(200, { ok: true, matched: 0, checked: 0, stall, storage })
     }
 
     // ルールごとのマッチ（通知済みは除外）
@@ -304,7 +372,7 @@ Deno.serve(async (req) => {
     }
     if (perRule.size === 0) {
       await setConfig(sb, 'notify_last_checked_at', nextWatermark)
-      return json(200, { ok: true, matched: 0, checked: cands.length })
+      return json(200, { ok: true, matched: 0, checked: cands.length, stall, storage })
     }
 
     // 送信トークン取得（Mail.Send 未同意ならここで止まる → エラーを画面から見える場所に記録）
@@ -322,8 +390,22 @@ Deno.serve(async (req) => {
     for (const { rule, hits } of perRule.values()) {
       const title = rule.label || [rule.name_keyword, rule.skill_keywords.join('+'), rule.station_keyword]
         .filter(Boolean).join(' / ')
-      const lines = hits.map((h) =>
-        `・${h.name}${h.station.trim() ? `（${h.station.trim()}）` : ''}\n  スキル: ${h.skills.slice(0, 10).join(', ') || '－'}`)
+      // 「なぜ通知されたか」を先に出す（2026-09-01）。
+      // 以前はスキルを先頭10件だけ並べており、24個中23番目に Java がある人が
+      // 「C#でもJavaでもない人に通知が来た」と誤解される事故があった。
+      // 合致したスキルを明示し、残りは件数で示す。
+      const SKILL_PREVIEW = 10
+      const lines = hits.map((h) => {
+        const matched = matchedSkills(rule, h)
+        const rest = h.skills.filter((s) => !matched.includes(s))
+        const shown = rest.slice(0, SKILL_PREVIEW)
+        const more = rest.length - shown.length
+        return [
+          `・${h.name}${h.station.trim() ? `（${h.station.trim()}）` : ''}`,
+          `  該当: ${matched.join(', ') || '（スキル以外の条件で合致）'}`,
+          `  他のスキル: ${shown.join(', ') || '－'}${more > 0 ? ` ほか${more}件` : ''}`,
+        ].join('\n')
+      })
       const body = [
         `通知ルール「${title}」に合致する人材が登録・更新されました（${hits.length}名）。`,
         '',
@@ -352,7 +434,7 @@ Deno.serve(async (req) => {
     await setConfig(sb, 'notify_last_checked_at', nextWatermark)
     await setConfig(sb, 'notify_last_error', errors.length > 0 ? errors.join(' | ').slice(0, 500) : '')
     console.log(`[notify] checked=${cands.length} rules=${rules.length} sent=${sent} errors=${errors.length}`)
-    return json(200, { ok: errors.length === 0, checked: cands.length, sent, errors })
+    return json(200, { ok: errors.length === 0, checked: cands.length, sent, errors, stall, storage })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[notify] FATAL:', msg)

@@ -572,6 +572,49 @@ export function isInsideParens(text: string, matchIndex: number): boolean {
   return depth > 0
 }
 
+// ── 会社名の検閲（2026-08-29 追加） ──────────────────────────────────────────
+// 会社名の抽出経路は5つ（前株・後株・英字社名・本文冒頭の「〜の〜担当です」・件名の【】）
+// あり、それぞれが営業文の断片を拾っていた。経路ごとに直すと漏れるので、国籍と同じく
+// 「返す直前に1か所で検閲する」方式にする。
+// 実測（2026-08-29・直近7日）で 72人ぶんが下記のいずれかだった。
+
+/** 文の断片。「医療法人Sクリニックにてスタッフマネージャー兼事務担当として」（25人） */
+const COMPANY_NG_SENTENCE = /(にて|として|ました|ています|いたします|お願い|参画し|勤務し|在籍し|従事し)/
+/** 人数表現。「PM・PMO・コンサル7名」「インフラ5名」「その他5名」（27人） */
+const COMPANY_NG_HEADCOUNT = /\d+\s*名$|^その他/
+/** 個人属性。「31歳女性」「27歳男性」（5人） */
+const COMPANY_NG_PERSON = /^\d{1,2}\s*歳/
+/** 日付。「10月」 */
+const COMPANY_NG_DATE = /^\d{1,2}\s*月$/
+/** 役割・職種だけ。「QA/テスター」（9人）。法人格があれば社名の一部とみなして通す */
+const COMPANY_NG_ROLE_ONLY =
+  /^(QA|PM|PMO|PL|TL|SE|PG|BSE|インフラ|テスター|テスト|コンサル|コンサルタント|フリーランス|エンジニア|開発|運用|保守|営業|事務|ヘルプデスク|キッティング)(?:[\s　\/・、,＋+&]+(?:QA|PM|PMO|PL|TL|SE|PG|BSE|インフラ|テスター|テスト|コンサル|コンサルタント|フリーランス|エンジニア|開発|運用|保守|営業|事務|ヘルプデスク|キッティング))*$/
+/** 一般語だけ。「ご依頼」「フリーランス」 */
+const COMPANY_NG_GENERIC =
+  /^(ご?依頼|ご?紹介|人材|要員|案件|不明|担当|営業|弊社|当社|自社|御社|貴社|プロパ|正社員|個人|直請|元請)$/
+/** ランダムな英数字列。「dYCOy6foGK」（識別子や短縮URLの断片） */
+const COMPANY_NG_RANDOM = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z0-9]{8,}$/
+/** 法人格を含むか（含む場合は役割語・一般語の判定を通す） */
+const COMPANY_HAS_CORP = /(株式会社|有限会社|合同会社|一般社団法人|医療法人|\(株\)|（株）|㈱|Inc\.?|Corp\.?|LLC|Ltd\.?|Co\.,?\s*Ltd)/
+
+/** 会社名として妥当か。ダメなら null にして「不明」として扱う（誤った社名より無しが安全） */
+function isPlausibleCompanyName(name: string): boolean {
+  const s = name.trim()
+  if (s.length < 2 || s.length > 40) return false
+  // 文の断片・人数・個人属性・日付・ランダム文字列は、法人格があっても社名ではない
+  if (COMPANY_NG_SENTENCE.test(s)) return false
+  if (COMPANY_NG_HEADCOUNT.test(s)) return false
+  if (COMPANY_NG_PERSON.test(s)) return false
+  if (COMPANY_NG_DATE.test(s)) return false
+  if (COMPANY_NG_RANDOM.test(s)) return false
+  // 役割語・一般語だけの場合は、法人格が付いていれば社名として通す
+  if (!COMPANY_HAS_CORP.test(s)) {
+    if (COMPANY_NG_ROLE_ONLY.test(s)) return false
+    if (COMPANY_NG_GENERIC.test(s)) return false
+  }
+  return true
+}
+
 function sanitizeFromCompany(value: string | null | undefined): string | null {
   if (!value) return null
   let trimmed = value.trim()
@@ -2979,6 +3022,8 @@ function extractCandidateFieldsRegex(
 
   // 国籍は抽出経路が多く営業文の断片を拾いやすいため、返す直前に1か所で検閲する
   if (nationality && !isValidNationality(nationality)) nationality = null
+  // 会社名も同じ理由で検閲する（抽出経路が5つあり、それぞれで営業文を拾っていた）
+  if (fromCompany && !isPlausibleCompanyName(fromCompany)) fromCompany = null
   return { name, age, gender, nationality, nearestStation, nearestStationLine, prefecture, experienceYears, experienceYearsIsDedicated, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
 }
 
@@ -3051,11 +3096,24 @@ function inferRoleFamilyHint(
   }
 }
 
-function scoreProseRoles(prose: string, fullText: string): { roles: string[]; roleScores: Record<string, number> } {
+function scoreProseRoles(
+  prose: string,
+  fullText: string,
+): { roles: string[]; roleScores: Record<string, number>; roleLevels: Record<string, string> } {
   const ROLE_DEFS: Array<{ re: RegExp; label: string }> = [
     { re: /(?<![A-Z])PMO(?![A-Z])|プロジェクト[　 ]?マネジメント[　 ]?オフィス/, label: 'PMO' },
     { re: /(?<![A-Z])PM(?!O)(?![A-Z])|プロジェクト[　 ]?マネージャー/, label: 'プロジェクトマネージャー' },
-    { re: /(?<![A-Z])PL(?![A-Z])|プロジェクト[　 ]?リーダー/,       label: 'プロジェクトリーダー' },
+    // 「リーダー」表記の取りこぼし（2026-08-29 追加）。役割ゼロ270人のうち100人が
+    // 「リーダー経験あり」「サブリーダーを務めた」等と書いているのに拾えていなかった。
+    // 綴りが違うだけで、仕事内容からの推論ではない。
+    // リーダーシップ（資質の話）は除く。
+    // ⚠ 「サブリーダー」を PL に含めないこと（2026-09-01 ユーザー指摘で除外）。
+    //   前日に「リーダー表記の取りこぼし」を直した際、サブリーダーも PL に寄せてしまった。
+    //   サブリーダーは PL の補佐で、責任範囲も規模も違う。マッチングは役割を
+    //   同一+15 / 系統違い-9 で採点するため、サブリーダーの人が PL 案件で満点を取る。
+    //   実測（2026-09-01・直近3日）で、サブリーダーだけを根拠に PL が付いた人が55人いた。
+    //   先読みの (?<!サブ) は「サブリーダー」を除きつつ「チームリーダー」等は残すため。
+    { re: /(?<![A-Z])PL(?![A-Z])|(?<!サブ)(?:プロジェクト|チーム|開発|PJ)[　 ]?リーダー(?!シップ)|(?<!サブ)リーダー(?!シップ)(?=として|経験|を務め|業務|\/)/, label: 'プロジェクトリーダー' },
     { re: /(?<![A-Z])TL(?![A-Z])|テックリード|テック[　 ]?リード/,   label: 'テックリード' },
     // ⚠ 英字の前後ガードが要る。`SE(?![A-Z])` だけだと DATABASE / BASE / LICENSE /
     //   RESPONSE / USE の末尾 SE に当たって「システムエンジニア」が付いていた（2026-08-21）。
@@ -3073,31 +3131,148 @@ function scoreProseRoles(prose: string, fullText: string): { roles: string[]; ro
     { re: /スクラム[　 ]?マスター/,                      label: 'スクラムマスター' },
     { re: /アーキテクト/,                                label: 'アーキテクト' },
     { re: /コンサルタント/,                              label: 'コンサルタント' },
-    { re: /テスト[　 ]?(?:リード|エンジニア|設計)/,      label: 'テストエンジニア' },
-    { re: /運用[　 ]?(?:保守|管理)/,                     label: '運用保守' },
+    // 「テスター」を追加（2026-08-29）。役割ゼロ270人中53人が該当。綴り違いの取りこぼし
+    { re: /テスト[　 ]?(?:リード|エンジニア|設計)|テスター/,      label: 'テストエンジニア' },
+    // 「保守運用」（語順違い）と「運用監視」を追加（2026-08-29）。
+    // 実文面では「要件定義～保守運用まで全工程」のように「運用保守」と全く同じ使われ方で、
+    // 綴りの違いだけで50人が取りこぼされていた。運用監視も「運用」の業務を明示している。
+    { re: /運用[　 ]?(?:保守|管理|監視)|保守[　 ]?運用/,  label: '運用保守' },
     // ヘルプデスクが抜けていた（2026-08-14 追加）。open 案件の半分が
     // ヘルプデスク系なのに人材側にラベルが付かず、役割マッチングが成立しなかった。
     // 「サービスデスク」「ユーザーサポート」「問い合わせ対応」も同じ役割として拾う
     { re: /ヘルプ[　 ]?デスク|サービス[　 ]?デスク|ユーザー[　 ]?サポート|問(?:い)?合(?:わ)?せ[　 ]?対応/, label: 'ヘルプデスク' },
   ]
+  // ── 到達レベル（2026-09-01 追加）────────────────────────────────────────────
+  // docs/ROLE_DEFINITION.md 軸3。**同じラベルの中を「どこまでやったか」で分ける。**
+  //
+  // 背景（ユーザー指摘 2026-09-01）:
+  //   「pmoなんて議事録取ったり、新規人材の受け入れしたり、ほぼ事務職やん」
+  //   「分からずにpmoとか書いて点数上げようとするバカ人材を見抜いて」
+  //   実データで、大手金融・官公庁のPMO支援（RFP〜ベンダ評価）をやった人と、
+  //   資格がPowerPoint上級・普通車免許の人が、同じ「PMO」ラベルで同じ点数だった。
+  //
+  // ⚠ **役割は消さない。** 消すと営業が根拠を確認できなくなる。印を付けて見せる。
+  //   （2026-09-01 に「必須裏付けが無ければ役割を落とす」案を検討したが、
+  //    テックリード200人は全員がカナで「テックリード」と書いており、
+  //    落とす設計だと正しい129人を消すところだった。実測して回避した）
+  //
+  // ⚠ **実測で単価が分かれた役割にだけ付ける。** 分かれない役割に印を付けても
+  //   意味が無いどころか誤解を招く。直近7日・prod の平均希望単価（A/B/C）:
+  //     コンサルタント 117/99/74万・アーキテクト 111/99/72万・PMO 97/76/66万
+  //     PM 106/85/77万・テックリード 105/89/79万・インフラ 81/66/56万
+  //   採用しなかった役割（語彙が悪く分かれない。改善したら足す）:
+  //     バックエンド(86/78/79 B<C逆転)・運用保守(80/72/76 逆転)
+  //     ヘルプデスク(69/69/59 A=B)・テストエンジニア(74/70/72 差なし)
+  //     クラウド(母数14で判断不能)
+  const ROLE_LEVEL_DEFS: Record<string, { a: RegExp; b: RegExp; c: RegExp }> = {
+    'PMO': {
+      a: /全社|EPMO|複数プロジェクト|横断|標準化|RFP|ベンダ評価|グランドデザイン|経営報告|PMO立ち上げ|PMO構築/,
+      // 工程管理・ベンダー調整を追加（2026-09-03）。
+      // 「元請けSE / PMO支援として複数ベンダー調整、工程管理、要件定義・設計の対応経験」
+      // という本物のPMOが「裏付けなし」と判定されていた（語彙の不足であって本人の問題ではない）
+      b: /課題管理|リスク管理|進捗管理|工数管理|工程管理|見える化|プロセス改善|WBS|要員調整|ベンダー?(?:調整|コントロール)/,
+      c: /議事録|資料作成|日程調整|入退場|アカウント発行|PC手配|備品|事務/,
+    },
+    'プロジェクトマネージャー': {
+      a: /複数プロジェクト|全体統括|[0-9]+億|[0-9]+千万|役員|経営報告|部門横断/,
+      b: /予算|見積|契約|要員計画|採算|原価|コスト管理|ベンダ|顧客折衝|体制構築/,
+      c: /進捗管理|課題管理|報告/,
+    },
+    'コンサルタント': {
+      a: /経営|役員|全社|中期計画|M&A|事業戦略/,
+      b: /提案|RFP|As-?Is|ToBe|グランドデザイン|業務改革|BPR|診断|評価選定/,
+      c: /支援|ヒアリング/,
+    },
+    'アーキテクト': {
+      a: /全体最適|マルチクラウド|大規模|技術戦略|標準化/,
+      b: /アーキテクチャ|方式設計|非機能|全体設計|技術選定|基盤設計/,
+      c: /設計/,
+    },
+    'テックリード': {
+      a: /技術戦略|技術標準|組織|内製化/,
+      b: /コードレビュー|設計レビュー|技術支援|技術選定/,
+      c: /リード|牽引/,
+    },
+    'インフラエンジニア': {
+      a: /冗長|可用性|方式設計|インフラ設計|標準化/,
+      b: /構築|Linux|Windows Server|VMware|仮想化/,
+      c: /監視|運用/,
+    },
+  }
+  /** その役割をどこまでやったか。A=主導 B=担当 C=従事 -=裏付けなし。判定できない役割は '' */
+  const judgeRoleLevel = (label: string): string => {
+    const d = ROLE_LEVEL_DEFS[label]
+    if (!d) return ''
+    if (d.a.test(fullText)) return 'A'
+    if (d.b.test(fullText)) return 'B'
+    if (d.c.test(fullText)) return 'C'
+    return '-'
+  }
+
   const roles: string[] = []
   const roleScores: Record<string, number> = {}
-  if (!prose.trim()) return { roles, roleScores }
+  const roleLevels: Record<string, string> = {}
+  if (!prose.trim()) return { roles, roleScores, roleLevels }
+
+  // ── 否定された役割を落とす（2026-08-29 追加） ──────────────────────────────
+  // 「運用保守NG」「ヘルプデスク以外の業務を希望」「PMOの経験はありません」を
+  // そのまま役割として付けていた（実測: 直近7日で10人）。マッチングは役割を
+  // 同一+15 / 系統違い-9 で採点するため、否定された役割が付くと順位が狂う。
+  //
+  // ただし実文面を見ると、素朴な否定判定は新しい誤りを生む:
+  //   「未経験領域も自走で完遂しました」    ← 未経験 だが肯定的
+  //   「C#以外にもTypeScriptも経験がある」  ← 「以外にも」は追加であって否定ではない
+  //   「NG企業：NRI、…」                    ← 役割とは無関係
+  // そこで「役割語の直後（15文字以内）に否定が来る」形だけに限定する。
+  const NEGATION_AFTER =
+    '(?:' +
+    'NG(?!企業)' +                        // 「運用保守NG」（NG企業 は除く）
+    '|は?不可' +                          // 「PMOは不可」
+    '|は?未経験(?!領域|技術|分野|の分野)' + // 「PMOは未経験」。未経験領域/技術は肯定文なので除く
+    '|の?経験は?(?:あり|ござい)ません' +   // 「運用保守の経験はありません」
+    '|は?希望(?:しません|しない|外)' +     // 「運用保守は希望しません」
+    '|以外(?:の|を)' +                     // 「ヘルプデスク以外の業務を希望」（以外にも は除く）
+    ')'
+  /** その役割語の出現が「否定された」ものか */
+  const isNegated = (text: string, roleSrc: string): boolean => {
+    const neg = new RegExp(`(?:${roleSrc})[^。、，（(\\n]{0,15}?${NEGATION_AFTER}`)
+    return neg.test(text)
+  }
+  /** 否定されている出現を取り除いたテキスト（数え上げから外すため） */
+  const dropNegated = (text: string, roleSrc: string): string =>
+    text.replace(new RegExp(`(?:${roleSrc})[^。、，（(\\n]{0,15}?${NEGATION_AFTER}`, 'g'), '')
   const head = fullText.slice(0, 200)
   const lines = fullText.split(/\r?\n/)
   for (const { re, label } of ROLE_DEFS) {
     if (!re.test(prose)) continue
+    // 否定されている出現を外したうえで、まだ残っているかを見る。
+    // 「運用保守NG」しか書かれていない人には運用保守を付けない。
+    const posProse = isNegated(prose, re.source) ? dropNegated(prose, re.source) : prose
+    if (!re.test(posProse)) continue
     let score = 0
     // 出現回数（最大3）
     const g = new RegExp(re.source, 'g')
     let count = 0
-    while (g.exec(prose) !== null && count < 3) count++
+    while (g.exec(posProse) !== null && count < 3) count++
     score += count
     // 冒頭（件名・営業の売り文句）
     if (re.test(head)) score += 3
     // 明示ラベル同一行 /「として」「の経歴」（対応可・も可の"盛り"文脈は除外）
     const labelLineRE = new RegExp(`(?:職種|ポジション|役割|役職)[　 ]*[：:][　 ]*[^\\n]{0,20}?(?:${re.source})`)
-    const asRoleRE = new RegExp(`(?:${re.source})(?:として|を担当|の経歴|がメイン)(?![^\\n。]{0,15}(?:対応可|も可))`)
+    // 「〜として」に +5 を与えるのは、それが本人の主たる立場として書かれているとき。
+    // 「…もあり」「…経験も」のように “ついでに書いてある” 言及には与えない。
+    //
+    // 実データ（2026-09-03 ユーザー指摘）:
+    //   COBOL22年・経験39年のエンジニアの PR 末尾に
+    //   「ExcelVBA・AccessVBAを用いたツール開発やPMOとしての進捗・障害・資産管理経験もあり」
+    //   とあり、この +5 だけで PMO(6点) が 運用保守(4点) を抜いて**主役割**になっていた。
+    //   ユーザー判断:「これはcobolエンジニアやって。pm補佐くらいならできるのかもね」
+    //   ＝ PMO は副役割としては残してよいが、先頭に来てはいけない。
+    const asRoleRE = new RegExp(
+      `(?:${re.source})(?:として|を担当|の経歴|がメイン)`
+      + `(?![^\\n。]{0,15}(?:対応可|も可))`
+      + `(?![^\\n。]{0,30}(?:経験も|なども|等も|もあり|もある))`,
+    )
     if (labelLineRE.test(fullText) || asRoleRE.test(fullText)) score += 5
     // ラベル行の次行（経歴表の縦積み: 「ポジション」\n「PMO」）
     for (let i = 0; i < lines.length - 1; i++) {
@@ -3108,10 +3283,19 @@ function scoreProseRoles(prose: string, fullText: string): { roles: string[]; ro
     }
     roles.push(label)
     roleScores[label] = score
+    const level = judgeRoleLevel(label)
+    if (level) roleLevels[label] = level
   }
   // スコア降順（同点は辞書定義順を維持 = sort の安定性に依拠）
+  //
+  // ⚠ 2026-09-03 に「同点なら到達レベルが '-' の役割を後ろへ」という決着を入れかけたが
+  //   取り下げた。レベル判定の対象外な役割（システムエンジニア等）は '-' にならないため、
+  //   「裏付けで決める」ではなく「判定していない方を優遇する」になってしまう。
+  //   実際に Q3（件名【PMO要員】）で システムエンジニア が主役割に化けた。
+  //   冒頭200字ボーナスが 199字目か 201字目かで付き外れする脆さは残っているが、
+  //   別の直し方（例: 冒頭ボーナスを距離に応じて減衰させる）で扱うべき。
   roles.sort((a, b) => roleScores[b] - roleScores[a])
-  return { roles, roleScores }
+  return { roles, roleScores, roleLevels }
 }
 
 // 業界判定の false positive を避けるため、複合語や明示語のみマッチさせる。
@@ -3342,6 +3526,8 @@ function extractFromProse(bodyText: string, attachText: string): {
   industries: string[]
   workStyle: string | null
   roleScores: Record<string, number>
+  /** 役割ごとの到達レベル（A主導 / B担当 / C従事 / -裏付けなし）。判定対象外の役割はキーごと無い */
+  roleLevels: Record<string, string>
   industryScores: Record<string, number>
 } {
   // URL を除去（"https://example.com/cc.php" 等が PHP/HTTPS に誤マッチするのを防ぐ）
@@ -3362,7 +3548,7 @@ function extractFromProse(bodyText: string, attachText: string): {
   const prose = proseLines.join('\n')
 
   // 役割: スコアリングして主（先頭）・副（以降）の順に並べる
-  const { roles, roleScores } = scoreProseRoles(prose, allText)
+  const { roles, roleScores, roleLevels } = scoreProseRoles(prose, allText)
 
   // 業界判定もフェーズ表ヘッダー行を除外したテキストを対象にする
   // （以前は短い単語も拾うため全文対象だったが、誤検出が多いためフィルタ済みテキストに変更）
@@ -3387,7 +3573,7 @@ function extractFromProse(bodyText: string, attachText: string): {
     if (re.test(allText)) { workStyle = label; break }
   }
 
-  return { roles, industries, workStyle, roleScores, industryScores }
+  return { roles, industries, workStyle, roleScores, roleLevels, industryScores }
 }
 
 
@@ -9612,7 +9798,33 @@ function assignAttachmentsToBlocks<T extends AssignableAttachment>(
       }
       return map
     }
-    const blockNums = byNum(blocks.map((b, i) => [i, numsOf(b.text ?? '')]))
+    // 冒頭の一覧（「本日は下記の要員をご紹介いたします ①■5756 ②■24130 ③■31873」）が
+    // 1人目のブロックに含まれると、他人の番号まで1人目に出てしまい「1箇所だけ」の条件が
+    // 崩れて2人目以降が全滅する（2026-08-29 実測・キャル(株) 12人）。
+    // 各ブロックでは「その番号が最も詳しく書かれている1箇所」だけを数える:
+    //   ある番号が複数ブロックに現れる場合、その番号の前後の記述量が最も多いブロックを
+    //   本人とみなす。一覧行は短く、本人ブロックは長いので分離できる。
+    const contextLenOf = (s: string, n: string) => {
+      let best = 0
+      for (const m of s.matchAll(new RegExp(`(?<!\\d)${n}(?!\\d)`, 'g'))) {
+        // その番号を含む行の長さを、その番号の「詳しさ」とみなす
+        const start = s.lastIndexOf('\n', m.index ?? 0) + 1
+        const endRel = s.indexOf('\n', m.index ?? 0)
+        const end = endRel === -1 ? s.length : endRel
+        best = Math.max(best, end - start)
+      }
+      return best
+    }
+    const blockNumsRaw = byNum(blocks.map((b, i) => [i, numsOf(b.text ?? '')]))
+    const blockNums = new Map<string, number[]>()
+    for (const [n, idxs] of blockNumsRaw) {
+      if (idxs.length <= 1) { blockNums.set(n, idxs); continue }
+      // 同じ番号が複数ブロックにある → 最も詳しく書かれているブロックだけを残す
+      const scored = idxs.map((i) => ({ i, len: contextLenOf(blocks[i].text ?? '', n) }))
+      const max = Math.max(...scored.map((s) => s.len))
+      const winners = scored.filter((s) => s.len === max).map((s) => s.i)
+      blockNums.set(n, winners)
+    }
     const attNums = byNum(attachments.map((att, i) => {
       const filenameMatch = att.label.match(/\(([^)]+)\)/)
       return [i, numsOf(filenameMatch ? filenameMatch[1] : att.label)]
@@ -9713,7 +9925,7 @@ function assignAttachmentsToBlocks<T extends AssignableAttachment>(
 const MULTI_CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：:]|(?:^|\n)[ 　]*[■●▪▶]?[ 　]*(?:名前|氏[ 　]*名)[　 ]*[：:]|[■●▪▶]?[ 　]*(?:最寄(?:り?駅?)|希望単価|希望単金|スキル|業務経験|稼働開始|稼働時期|アピール)/
 // 【 氏 名 】（半角スペース区切り形式）・■氏名：形式・■SI（28歳／男性）形式にも対応
 // 「■MM（石川町）男性・57歳」（括弧内は駅名、性別・年齢は括弧の外に「・」区切りで続く）にも対応
-const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏[ 　]*名[　 ]*[：:]|^名前[　 ]*[：:]|[◇◆]名前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
+const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏[ 　]*名[　 ]*[：:]|^[■●▪▶◇◆]?[ 　]*名[ 　]*前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
 
 function splitMultiCandidateBody(body: string): string[] | null {
   const CANDIDATE_FIELD_RE = MULTI_CANDIDATE_FIELD_RE
@@ -10254,6 +10466,9 @@ Deno.serve(async (req: Request) => {
     // ③ 重複メール判定（同一メールが複数受信箱に転送された場合の二重処理防止）
     // dedup_salt: poll-email が添付分割する際に添付ファイル名を渡す（分割呼び出し間の衝突を防ぐ）
     const dedupSalt = raw.dedup_salt ?? ''
+    // poll-email が保存した受信添付のパス（raw/<msg>/attN.ext）。名簿メールで本人ぶんの
+    // 経歴書を特定できなかった候補者に、参照用のリンクとして持たせる（アップロードはしない）
+    const rawPaths: string[] = Array.isArray(raw.raw_paths) ? raw.raw_paths as string[] : []
     tracePhase = 'dedup_check'
     const { isDuplicate, configKey: _dedupConfigKey } = await checkEmailDuplicate(supabase, from, subject, body, dedupSalt)
     dedupConfigKey = _dedupConfigKey
@@ -10548,6 +10763,34 @@ Deno.serve(async (req: Request) => {
         // undefined = まだ計算していない / null = アップロード失敗または対象外 / string = URL
         let caseBSharedResumeUrl: string | null | undefined = undefined
 
+        // ── 名簿の添付一覧（2026-08-29 追加） ───────────────────────────────────
+        // 経歴書を本人に割り当てられなかったブロックには、これまで何も残していなかった。
+        // 画面には「経歴書なし」としか出ず、営業は元メールを探しに行くしかない。
+        // 「あなたのは特定できませんでした。このメールに付いていたのはこの一覧です」と
+        // 見せられるよう、メール単位で全添付をアップロードしてURLの一覧を持たせる。
+        //
+        // resume_url には入れない。本人のものと確定していないので、マッチングや
+        // AI校正が「本人の経歴書」として読むと他人の情報で汚染される（2026-08-29 に
+        // 直したケースCと同じ事故になる）。あくまで人が目で見るための参照。
+        //
+        // 実体は poll-email が既に raw/ に保存しているので、コピーは作らない（保存量ゼロ増）。
+        // raw/ の保持は1日なので、翌日以降はリンク切れになる。当日中に「名簿を見て、
+        // 自分のぶんが無いことを確かめる」用途に限る割り切り（2026-08-29 ユーザー判断）。
+        // 画面側は登録からの経過日数を見て、切れている場合はリンクを出さず理由を表示する。
+        const hasUnassignedBlock = multiBlocks.some((_, i) => !blockAttachAssignment.has(i))
+        const storagePublicBase = `${Deno.env.get('SUPABASE_URL') ?? ''}/storage/v1/object/public/attachments/`
+        const rosterAttachments: { label: string; url: string }[] | undefined =
+          hasUnassignedBlock && rawPaths.length > 0
+            ? rawPaths.map((p, i) => ({
+              // ラベルは解析済みの添付名を優先し、無ければ保存パスの末尾を使う
+              label: allTextContents[i]?.label ?? p.split('/').pop() ?? p,
+              url: storagePublicBase + p,
+            }))
+            : undefined
+        if (rosterAttachments) {
+          console.log(`[multi] 名簿添付リンク: ${rosterAttachments.length}件（未割当ブロックあり・raw参照）`)
+        }
+
         // 同一添付テキストのスキル照合結果をメモ化（ケースC等で全ブロックが同じ attachText を
         // 照合し、重い extractAndRemoveSkills をブロック数ぶん重複実行して546になるのを防ぐ）
         const attachSkillCache = new Map<string, { name: string; category: string }[]>()
@@ -10579,9 +10822,20 @@ Deno.serve(async (req: Request) => {
               blockAttachText = singleSafeUnassignedEntry?.content ?? ''
               blockAttachLabel = singleSafeUnassignedEntry?.label ?? ''
             } else {
-              // ケースC
-              blockAttachText = attachText
-              blockAttachLabel = attachmentNames
+              // ケースC: このブロックの名前が取れていない。
+              //
+              // 以前はここで全添付のテキスト（attachText）を渡していたが、名簿メールでは
+              // それは「他人全員の経歴書」を1人ぶんとして渡すことに等しく、年齢・最寄駅・
+              // スキル・役割のすべてが他人の値で埋まる（2026-08-29 実測、直近4日で8件）。
+              //   実害: ai・more の9人名簿で、氏名の取れないブロックが他人の行から
+              //         「R.M」を拾い、最寄駅に YT の「銚子駅（JR東日本…）」由来の
+              //         「東日本旅客鉄道」、本文に H.H の居住地が入った偽レコードを生成。
+              //         「ﾌﾘｶﾞﾅ」という氏名（他人のExcelの見出し行）も同じ経路。
+              //
+              // 名前が取れないブロックに他人の経歴書を渡して得をすることは無いので、
+              // ケースB（添付なし）と同じ扱いにする。自分のブロック本文だけで作る。
+              blockAttachText = ''
+              blockAttachLabel = ''
             }
 
             // ── Step3: ブロック固有のスキル照合 ──────────────────────────────────
@@ -10617,7 +10871,16 @@ Deno.serve(async (req: Request) => {
                 blockRegexFields.prefecture = stationPref
               }
             }
-            const blockProseFields = extractFromProse(blockRegexBodyText, blockAttachText)
+            // 役割・業界は件名を見ない（2026-08-29）。
+            // 件名は名簿の全員に共通なので、そこに出た役割が兄弟ブロック全員に付く。
+            //   実例: 件名「【Miraie塩田】弊社社員のご紹介(サーバ運用,Java,社内SE)」で
+            //         6ブロック中5つに「システムエンジニア」が漏れた（実際のSEは1人）。
+            //         件名「【弊社直人材】PMO/生保/小売/…」では21人全員にPMOが付いた。
+            // スキル年数の抽出では既に同じ理由で件名を除外している（下の skillYears 参照）。
+            // ※ ここだけ差し替える。blockRegexBodyText は氏名・年齢・駅・単価の抽出にも
+            //    使われており、そちらは件名に依存した動作が既にあるため触らない。
+            const blockProseText = decodeHtmlEntities([block, blockAttachLabel].join('\n'))
+            const blockProseFields = extractFromProse(blockProseText, blockAttachText)
 
             // 名前解決の優先順位:
             // 1. blockMetas 事前パス（添付テキストなし・ブロック本文のみ）: 兄弟ブロックの添付が混入しない
@@ -10774,6 +11037,7 @@ Deno.serve(async (req: Request) => {
                 roles: blockProseFields.roles,
                 // 役割スコア（先頭=主の根拠。UI・デバッグ用）
                 _roleScores: Object.keys(blockProseFields.roleScores).length > 0 ? blockProseFields.roleScores : undefined,
+                _roleLevels: Object.keys(blockProseFields.roleLevels).length > 0 ? blockProseFields.roleLevels : undefined,
                 _industryScores: Object.keys(blockProseFields.industryScores).length > 0 ? blockProseFields.industryScores : undefined,
                 // 役割が取れなかった人の系統ヒント（表示・集計のみ。採点には未接続）
                 roleFamilyHint: inferRoleFamilyHint(
@@ -10814,12 +11078,14 @@ Deno.serve(async (req: Request) => {
                 // 添付はあるのにスキル年数が0件のケースで、パース失敗なのか本当に0件だったのかを
                 // 切り分けるための診断メモ（問題がなければ undefined）
                 excelParseNotes: excelParseNotes.length > 0 ? excelParseNotes : undefined,
-                // ケースA: マッチした添付のラベルのみ / ケースB: [] / ケースC: 全添付（フォールバック）
-                attachmentNames: matchedTextContent
-                  ? [matchedTextContent.label]
-                  : blockNameForMatch
-                    ? []
-                    : [...allAttachments.map(a => a.name ?? a.mimeType), ...officeTextContents.map(t => t.label)],
+                // ケースA: マッチした添付のラベルのみ / ケースB・C: []
+                // ケースCで全添付を並べていたのをやめる（2026-08-29）。実体を渡していないのに
+                // 名前だけ全件並ぶと、画面上も「9人ぶんの経歴書を持つ1人」に見えて誤解を生む。
+                // メールに何が添付されていたかは allParsedAttachmentLabels に残る。
+                attachmentNames: matchedTextContent ? [matchedTextContent.label] : [],
+                // 本人の経歴書を特定できなかった人にだけ、メールに付いていた添付の一覧を渡す。
+                // 「名簿には自分のものが無かった」ことも含めて営業が判断できるようにする。
+                rosterAttachments: matchedTextContent ? undefined : rosterAttachments,
                 driveLinks: googleEntries.map(t => t.label),
                 // ゾーンT: この候補者に割り当てられたエントリの台帳＋メール全体サマリー
                 pipeline_trace: ledger.serializeTrace(matchedTextContent ? [(matchedTextContent as SourceEntry).entryId] : []),
@@ -11394,6 +11660,7 @@ Deno.serve(async (req: Request) => {
           roles: resolvedRoles,
           // 役割スコア（先頭=主の根拠。UI・デバッグ用）
           _roleScores: Object.keys(proseFields.roleScores).length > 0 ? proseFields.roleScores : undefined,
+          _roleLevels: Object.keys(proseFields.roleLevels).length > 0 ? proseFields.roleLevels : undefined,
           _industryScores: Object.keys(proseFields.industryScores).length > 0 ? proseFields.industryScores : undefined,
           // 役割が取れなかった人の系統ヒント（表示・集計のみ。採点には未接続）
           roleFamilyHint: inferRoleFamilyHint(

@@ -7,6 +7,30 @@ TS_FILE="supabase/functions/${FUNCTION}/index.ts"
 
 echo "=== deno check: ${TS_FILE} ==="
 
+# deno が無い環境では「チェックしていない」ことを明示する。
+# 2026-08-29 まで、deno 未インストールのマシンでも `|| true` でエラーを握りつぶし、
+# 出力に TS2304 が無いという理由で必ず「✅」と表示してデプロイに進んでいた。
+# 無検査であることに気づけないのが危険なので、代わりに esbuild で構文だけ確認する。
+if ! command -v deno >/dev/null 2>&1; then
+  echo "⚠ deno が見つかりません。型チェックは実行されません。"
+  echo "   代わりに esbuild で構文チェックのみ行います（型エラーは検出できません）。"
+  if npx --no-install esbuild "$TS_FILE" --loader:.ts=ts --outfile=/dev/null >/dev/null 2>&1; then
+    echo "✅ 構文エラーなし（型チェックは未実施）"
+  else
+    echo "❌ 構文エラーがあります。デプロイを中止します。"
+    npx --no-install esbuild "$TS_FILE" --loader:.ts=ts --outfile=/dev/null
+    exit 1
+  fi
+  echo ""
+  echo "=== supabase functions deploy: ${FUNCTION} ==="
+  if command -v supabase >/dev/null 2>&1; then
+    supabase functions deploy "$FUNCTION"
+  else
+    npx supabase functions deploy "$FUNCTION"
+  fi
+  exit $?
+fi
+
 # deno check を実行してエラー出力を取得（終了コードは無視）
 CHECK_OUTPUT=$(deno check --no-npm "$TS_FILE" 2>&1 || true)
 

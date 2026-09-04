@@ -1,7 +1,11 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
-import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon } from 'lucide-react'
-import { toViewerUrl } from '../lib/viewerUrl'
+import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon, Star } from 'lucide-react'
+import { toViewerUrl, isRosterLinkAlive } from '../lib/viewerUrl'
+import { isSameCompany as isSameCompanyName } from '../lib/companyName'
+import { BookmarkStar } from '../components/BookmarkStar'
+import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
+import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
 import { matchesSkillFilter } from '../lib/skillWordMatch'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
 import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
@@ -407,17 +411,8 @@ export function CandidateProfileFields({
           {agentInfo?.license_status === 'none' && c.from_company && (
             <span className="text-xs bg-red-50 text-red-500 rounded px-1.5 py-0.5">許可未確認</span>
           )}
-          {commercialFlow && (() => {
-            // 商流バッジ: 「うちから紹介で客先常駐できるか」を色で一目化。
-            // 自社=直接可(緑)／N社先=N社挟む(深いほど警戒色: 1社先=黄・2社先以上=赤)
-            const num = Number(commercialFlow.match(/^(\d+)社先/)?.[1] ?? 0)
-            const cls = commercialFlow === '自社'
-              ? 'bg-emerald-100 text-emerald-800 font-medium'
-              : num >= 2
-                ? 'bg-red-100 text-red-700 font-medium'
-                : 'bg-amber-100 text-amber-800 font-medium'
-            return <span className={`text-xs rounded px-1.5 py-0.5 ${cls}`} title="商流位置（自社=直接紹介可 / N社先=N社を挟む）">{commercialFlow}</span>
-          })()}
+          {/* 商流バッジ。マッチング画面と同じ判定にするため共通化した（2026-09-03） */}
+          <CommercialFlowBadge flow={commercialFlow} />
           {employmentType && (() => {
             // 雇用形態バッジ（縛りの種類）。商流バッジと役割が違うのでグレー系で控えめに
             const styles: Record<string, string> = {
@@ -885,6 +880,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const boxUploadTargetRef = useRef<Candidate | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showFilterPopup, setShowFilterPopup] = useState(false)
+  // 「★のみ表示」は端末ごとの設定（星そのものはチーム共有で DB にある）
+  const [bookmarkOnly, setBookmarkOnly] = useState(() => readBookmarkOnly('candidates'))
   const [filterDraft, setFilterDraft] = useState<FilterDraft>(EMPTY_DRAFT)
   const [appliedFilter, setAppliedFilter] = useState<CandidateFilter>({})
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null)
@@ -1136,9 +1133,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
 
   // 通常ブラウズ（検索なし）
   const browseInfiniteQuery = useInfiniteQuery({
-    queryKey: ['candidates-paged', dataEnv, activePrioritySkills],
+    queryKey: ['candidates-paged', dataEnv, activePrioritySkills, bookmarkOnly],
     queryFn: ({ pageParam }: { pageParam: number }) =>
-      fetchCandidatesPage(dataEnv, pageParam, 100, activePrioritySkills),
+      fetchCandidatesPage(dataEnv, pageParam, 100, activePrioritySkills, bookmarkOnly),
     initialPageParam: 0,
     getNextPageParam: (lastPage, _allPages, lastPageParam) =>
       lastPage.candidates.length < 100 ? undefined : lastPageParam + 100,
@@ -1811,6 +1808,26 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
               {showAllCandidates ? '優先スキルで絞る' : `優先スキル: ${effectivePrioritySkills!.join('・')}`}
             </button>
           )}
+          {/* ★のみ表示（端末ごとの設定。星そのものはチーム共有） */}
+          {!isFiltered && (
+            <button
+              type="button"
+              onClick={() => {
+                const next = !bookmarkOnly
+                setBookmarkOnly(next)
+                writeBookmarkOnly('candidates', next)
+              }}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors shrink-0 ${
+                bookmarkOnly
+                  ? 'bg-amber-500 text-white hover:bg-amber-600'
+                  : 'border border-gray-300 text-gray-600 hover:bg-gray-50'
+              }`}
+              title={bookmarkOnly ? 'ブックマークの絞り込みを外す' : 'ブックマークした人材だけを表示する'}
+            >
+              <Star size={14} fill={bookmarkOnly ? 'currentColor' : 'none'} />
+              {bookmarkOnly ? '★のみ表示中' : '★のみ'}
+            </button>
+          )}
           {/* 絞り込みボタン */}
           <button
             type="button"
@@ -1920,6 +1937,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         : 'hover:bg-gray-50'
                     }`}
                   >
+                    <BookmarkStar candidateId={c.id} dataEnv={dataEnv} bookmarked={c.bookmarked === true} />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-gray-800 truncate flex items-center gap-1">
                         <span className={isUsableCandidateName(c.name) ? '' : 'text-gray-400 italic'} title={c.name ?? ''}>
@@ -2051,7 +2069,18 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         )}
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {/* 携帯で横スクロールになっていた（2026-09-03 指摘）。
+                        shrink-0 は「縮むな」なので、星・経歴書・Box・返信・再解析・
+                        編集・削除を1列に並べた幅を確保しようとする。flex-wrap があっても
+                        この箱自体が縮まないため画面からはみ出していた。
+                        携帯では横幅いっぱいの別行に落とし、sm 以上は従来どおり右寄せで固定する */}
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 w-full sm:w-auto min-w-0 sm:shrink-0">
+                      <BookmarkStar
+                        candidateId={selectedCandidate.id}
+                        dataEnv={dataEnv}
+                        bookmarked={selectedCandidate.bookmarked === true}
+                        size="md"
+                      />
                       {(() => {
                         // drive_url → resume_url → raw_profile.text内のDrive URL の順で探す
                         const resumeLink = selectedCandidate.drive_url || selectedCandidate.resume_url || (() => {
@@ -2059,18 +2088,66 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           const m = bodyText.match(/https:\/\/drive\.google\.com\/[^\s"'<>\]）]+/)
                           return m ? m[0] : null
                         })()
-                        return resumeLink ? (
-                          <a
-                            href={toViewerUrl(resumeLink)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
-                            title="経歴書を開く"
-                          >
-                            <ExternalLink size={14} />
-                            経歴書
-                          </a>
-                        ) : null
+                        if (resumeLink) {
+                          return (
+                            <a
+                              href={toViewerUrl(resumeLink)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
+                              title="経歴書を開く"
+                            >
+                              <ExternalLink size={14} />
+                              経歴書
+                            </a>
+                          )
+                        }
+                        // 名簿メールで本人ぶんを特定できなかった場合は、メールの添付一覧を出す。
+                        // 「名簿に自分のものが無かった」ことも営業が判断できる
+                        const roster = (selectedCandidate.raw_profile as
+                          { rosterAttachments?: { label: string; url: string }[] })?.rosterAttachments ?? []
+                        if (roster.length === 0) return null
+                        // 実体は raw/ に1日だけ置かれる。期限切れならリンクを出さず理由を示す
+                        if (!isRosterLinkAlive(selectedCandidate.created_at)) {
+                          return (
+                            <span
+                              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-gray-200 rounded-lg text-gray-400"
+                              title={`名簿メールの添付${roster.length}件は保持期間（1日）を過ぎて削除されています`}
+                            >
+                              経歴書（未特定・添付は保持期間切れ）
+                            </span>
+                          )
+                        }
+                        return (
+                          <details className="relative">
+                            <summary
+                              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-amber-200 bg-amber-50 rounded-lg text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer list-none"
+                              title="本人ぶんを特定できなかったため、メールに付いていた添付を一覧で表示します"
+                            >
+                              <ExternalLink size={14} />
+                              経歴書（未特定・添付{roster.length}件）
+                            </summary>
+                            <div className="absolute right-0 z-20 mt-1 w-80 rounded-lg border border-amber-200 bg-white p-3 shadow-lg">
+                              <p className="text-xs text-gray-500 mb-2">
+                                名簿メールの添付一覧です。どれがこの人のものかは判別できませんでした。
+                              </p>
+                              <ul className="space-y-1 max-h-64 overflow-y-auto">
+                                {roster.map((r) => (
+                                  <li key={r.url}>
+                                    <a
+                                      href={toViewerUrl(r.url)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-sm text-blue-600 hover:underline break-all"
+                                    >
+                                      {r.label}
+                                    </a>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          </details>
+                        )
                       })()}
                       {selectedCandidate.box_url && (
                         <>
@@ -2078,7 +2155,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                             href={selectedCandidate.box_url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-200 rounded-lg text-orange-600 hover:bg-orange-50 transition-colors"
+                            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-orange-200 rounded-lg text-orange-600 hover:bg-orange-50 transition-colors"
                             title="Box経歴書を開く"
                           >
                             <ExternalLink size={14} />
@@ -2086,7 +2163,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           </a>
                           {boxWorking ? (
                             <span
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-300 rounded-lg text-orange-700 bg-orange-50"
+                              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-orange-300 rounded-lg text-orange-700 bg-orange-50"
                               title="サーバー側で処理中です。他の画面に移動しても継続します"
                             >
                               <Loader2 size={14} className="animate-spin" />
@@ -2097,7 +2174,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                               <button
                                 type="button"
                                 onClick={() => requestBoxFetch(selectedCandidate)}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-400 rounded-lg text-white bg-orange-500 hover:bg-orange-600 transition-colors"
+                                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-orange-400 rounded-lg text-white bg-orange-500 hover:bg-orange-600 transition-colors"
                                 title="Boxから経歴書を自動ダウンロードして再解析（AI上書きまで自動）"
                               >
                                 <RefreshCw size={14} />
@@ -2110,7 +2187,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                                   boxFileInputRef.current?.click()
                                 }}
                                 disabled={boxUploadingId === selectedCandidate.id}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-orange-300 rounded-lg text-orange-700 hover:bg-orange-50 transition-colors disabled:opacity-50"
+                                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-orange-300 rounded-lg text-orange-700 hover:bg-orange-50 transition-colors disabled:opacity-50"
                                 title="Boxからダウンロードしたファイルをアップロードして解析"
                               >
                                 {boxUploadingId === selectedCandidate.id
@@ -2142,7 +2219,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         return (
                           <a
                             href={`mailto:${raw.from}?subject=${subject}&body=${body}`}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors"
                             title="返信（元メール引用）"
                           >
                             <Reply size={14} />
@@ -2155,7 +2232,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                           type="button"
                           onClick={() => handleReplay(selectedCandidate)}
                           disabled={replayingId === selectedCandidate.id}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-violet-200 rounded-lg text-violet-600 hover:text-violet-800 hover:border-violet-400 transition-colors disabled:opacity-50"
+                          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-violet-200 rounded-lg text-violet-600 hover:text-violet-800 hover:border-violet-400 transition-colors disabled:opacity-50"
                           title="保存済みメール本文を再解析して新規登録"
                         >
                           {replayingId === selectedCandidate.id
@@ -2168,7 +2245,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         type="button"
                         onClick={() => setEditingCandidate(selectedCandidate)}
                         disabled={isLoadingFullProfile}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors disabled:opacity-40"
+                        className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-blue-600 hover:border-blue-300 transition-colors disabled:opacity-40"
                         title={isLoadingFullProfile ? '読み込み中...' : '編集'}
                       >
                         <Pencil size={14} />
@@ -2178,7 +2255,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         type="button"
                         onClick={() => handleDelete(selectedCandidate)}
                         disabled={deletingId === selectedCandidate.id}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-red-600 hover:border-red-300 transition-colors disabled:opacity-50"
+                        className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-gray-200 rounded-lg text-gray-600 hover:text-red-600 hover:border-red-300 transition-colors disabled:opacity-50"
                         title="削除"
                       >
                         {deletingId === selectedCandidate.id
@@ -2206,10 +2283,13 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     // 同じ会社から来た同じ人は「別ルート」ではなく単なる二重登録。
                     // 実測（2026-08-21 prod）: 同一人物ペア329組のうち245組が同じ会社で、
                     // 「別ルート・別会社」という見出しが実態と逆になっていた（ユーザー指摘）
-                    const normCo = (v: unknown) => String(v ?? '').replace(/[\s　]/g, '').toLowerCase()
-                    const myCo = normCo(selectedCandidate.from_company)
+                    // 法人格の有無で同じ会社が別扱いになっていた（「JapanTechnology」78人 と
+                    // 「株式会社JapanTechnology」37人・2026-08-29 実測）。正規化して比較する
                     const isSameCompany = (d: Candidate) =>
-                      myCo !== '' && normCo((d as unknown as Record<string, unknown>).from_company) === myCo
+                      isSameCompanyName(
+                        selectedCandidate.from_company,
+                        (d as unknown as Record<string, unknown>).from_company as string | null,
+                      )
                     const sameCoCount = dupCandidates.filter(isSameCompany).length
                     return (
                     <details className="mt-4 border border-yellow-200 rounded-lg bg-yellow-50" open>

@@ -18,6 +18,17 @@ function extractDriveFileId(url: string): string | null {
  * - supabase.co/storage の場合: 直接ダウンロードURLとしてそのまま返す
  * - その他: Google Docs Viewer でラップ
  */
+/** 受信添付の実体（raw/）の保持日数。cleanup-storage の raw_retention_days と揃える。
+ *  名簿メールの参照リンクはここを過ぎると消えるので、画面はリンクを出さず理由を表示する。 */
+export const RAW_ATTACHMENT_RETENTION_DAYS = 1
+
+/** 名簿メールの参照リンクがまだ生きているか（登録日時から判定） */
+export function isRosterLinkAlive(createdAt: string | null | undefined): boolean {
+  if (!createdAt) return false
+  const ms = Date.now() - new Date(createdAt).getTime()
+  return Number.isFinite(ms) && ms < RAW_ATTACHMENT_RETENTION_DAYS * 24 * 60 * 60 * 1000
+}
+
 export function toViewerUrl(url: string): string {
   if (url.includes('docs.google.com')) {
     return url
