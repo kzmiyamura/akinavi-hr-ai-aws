@@ -1,7 +1,8 @@
-import { useState, useRef, useMemo, useEffect } from 'react'
+import { useState, useRef, useMemo, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon, Star } from 'lucide-react'
 import { toViewerUrl, isRosterLinkAlive } from '../lib/viewerUrl'
+import { captureScroll, scrollToRestore } from '../lib/listScrollMemory'
 import { isSameCompany as isSameCompanyName, keepOtherCompanyOnly } from '../lib/companyName'
 import { BookmarkStar } from '../components/BookmarkStar'
 import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
@@ -895,16 +896,57 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const fileInputRef = useRef<HTMLInputElement>(null)
   const listScrollRef = useRef<HTMLDivElement>(null)
   const savedScrollTop = useRef<number>(0)
+  const savedWindowScroll = useRef<number>(0)
   const queryClient = useQueryClient()
+
+  /**
+   * 一覧 → 詳細。戻ったときのために一覧の位置を覚えてから開く。
+   *
+   * ⚠ スマホでは一覧の div に高さ制約が無い（`md:max-h-[640px]` は md 以上だけ）ので、
+   * スクロールしているのは**ウィンドウそのもの**で div の scrollTop は常に 0。
+   * #80 の復元が保存値 0 で素通りしていた（2026-09-05 ユーザー指摘）。両方覚えて両方戻す。
+   *
+   * 詳細から別の人材へ飛ぶとき（同一人材の可能性）は保存し直さない。
+   * 上書きすると一覧に戻ったとき詳細側の位置に飛ぶ。
+   */
+  const openCandidate = useCallback((id: string) => {
+    const next = captureScroll(
+      selectedId !== null,
+      { container: savedScrollTop.current, window: savedWindowScroll.current },
+      { container: listScrollRef.current?.scrollTop ?? 0, window: window.scrollY },
+    )
+    savedScrollTop.current = next.container
+    savedWindowScroll.current = next.window
+    setSelectedId(id)
+    // スマホは一覧と詳細が同じ場所に出る（一覧は hidden md:block）。開いた瞬間に
+    // 前の位置のままだと詳細の途中から始まって見えるので先頭に送る
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
+      window.scrollTo({ top: 0 })
+    }
+  }, [selectedId])
+
+  /** 詳細 → 一覧。位置の復元は下の useEffect が受け持つ */
+  const closeCandidate = useCallback(() => setSelectedId(null), [])
 
   // 詳細パネルを閉じた後にリストのスクロール位置を復元する (#80)
   useEffect(() => {
-    if (selectedId === null && listScrollRef.current && savedScrollTop.current > 0) {
-      const target = savedScrollTop.current
-      requestAnimationFrame(() => {
-        if (listScrollRef.current) listScrollRef.current.scrollTop = target
+    if (selectedId !== null) return
+    const target = scrollToRestore({
+      container: savedScrollTop.current,
+      window: savedWindowScroll.current,
+    })
+    if (!target) return
+    // 一覧が再描画されて高さが決まるまで待つ。1フレームだと戻り切らないことがある
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        if (listScrollRef.current && target.container > 0) {
+          listScrollRef.current.scrollTop = target.container
+        }
+        if (target.window > 0) window.scrollTo({ top: target.window })
       })
-    }
+    })
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2) }
   }, [selectedId])
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1229,7 +1271,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
       ? `登録完了（重複の疑いフラグあり）: ${candidate.name}`
       : `登録完了: ${candidate.name}`
     setMessage({ type: 'success', text: msg })
-    setSelectedId(candidate.id)
+    openCandidate(candidate.id)
   }
 
   const noAiMutation = useMutation({
@@ -1925,15 +1967,11 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     key={c.id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => {
-                      if (!isSelected) savedScrollTop.current = listScrollRef.current?.scrollTop ?? 0
-                      setSelectedId(isSelected ? null : c.id)
-                    }}
+                    onClick={() => { if (isSelected) closeCandidate(); else openCandidate(c.id) }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
-                        if (!isSelected) savedScrollTop.current = listScrollRef.current?.scrollTop ?? 0
-                        setSelectedId(isSelected ? null : c.id)
+                        if (isSelected) closeCandidate(); else openCandidate(c.id)
                       }
                     }}
                     className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer border-b border-gray-50 last:border-0 transition-colors ${
@@ -2015,7 +2053,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   {/* モバイル用「一覧に戻る」ボタン */}
                   <button
                     type="button"
-                    onClick={() => { setSelectedId(null) }}
+                    onClick={() => { closeCandidate() }}
                     className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 md:hidden -mt-1 mb-1"
                   >
                     ← 一覧に戻る
@@ -2310,8 +2348,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                             key={dup.id}
                             role="button"
                             tabIndex={0}
-                            onClick={() => setSelectedId(dup.id)}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedId(dup.id) } }}
+                            onClick={() => openCandidate(dup.id)}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCandidate(dup.id) } }}
                             title={`${dup.name} の詳細を開く（${(dup as any).from_company ?? '会社不明'}からの情報）`}
                             className="bg-white border border-yellow-200 rounded-lg p-2 cursor-pointer hover:bg-yellow-50 hover:border-yellow-400 transition-colors"
                           >
@@ -2359,7 +2397,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                                 )}
                               </div>
                               <button
-                                onClick={() => setSelectedId(dup.id)}
+                                onClick={() => openCandidate(dup.id)}
                                 className="shrink-0 text-[10px] bg-yellow-100 hover:bg-yellow-200 text-yellow-700 rounded px-2 py-1 whitespace-nowrap"
                               >
                                 この人を見る
@@ -2403,7 +2441,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   <span>{isLoadingFullProfile ? '読み込み中...' : 'この人材の情報を取得できませんでした'}</span>
                   <button
                     type="button"
-                    onClick={() => setSelectedId(null)}
+                    onClick={() => closeCandidate()}
                     className="text-blue-600 hover:text-blue-800 underline"
                   >
                     ← 一覧に戻る
