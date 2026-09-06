@@ -10636,6 +10636,15 @@ Deno.serve(async (req: Request) => {
       // 名簿行エントリの氏名が本文ブロックの誰とも一致しない場合、行テキストを候補者ブロックに
       // 昇格させ、本文由来の候補者と同じ検証・dedup処理を通す。
       const rosterRowEntries = allTextContents.filter(e => e.rosterRowName)
+      // 名簿行から起こしたブロックの氏名。行テキスト → その行の本人名。
+      //
+      // ⚠ 名簿行は「誰の行か」が確定しているのに、下の blockMetas が
+      // `[件名, ブロック本文]` から氏名を取り直していた。行テキストに氏名ラベルが
+      // 無いと本文（＝別人）の氏名に解決され、**1通の名簿24人が全員同じ名前**で
+      // 登録された（TES株式会社 IT.xlsx・楊F(ヨウ)×24件・2026-09-05 実害）。
+      // 添付ラベルには `IT.xlsx#李A（リ）` と本人名が残っていたので、取り違えではなく
+      // 「持っている名前を捨てて推測し直していた」のが原因。確定名を持ち回す。
+      const promotedBlockNames = new Map<string, string>()
       if (rosterRowEntries.length > 0) {
         const baseBlocks = multiBlocks && multiBlocks.length >= 2 ? multiBlocks : [effectiveBody]
         const baseNames = baseBlocks.map(b => {
@@ -10643,6 +10652,7 @@ Deno.serve(async (req: Request) => {
           return extractCandidateFieldsRegex(t, '').name ?? extractNameFallback(t)
         })
         const promoted = promoteUnassignedRosterEntries(rosterRowEntries, baseNames, ledger)
+        for (const p of promoted) promotedBlockNames.set(p.rowText, p.name)
         if (promoted.length > 0) {
           if (multiBlocks && multiBlocks.length >= 2) {
             multiBlocks = [...multiBlocks, ...promoted.map(p => p.rowText)]
@@ -10709,8 +10719,10 @@ Deno.serve(async (req: Request) => {
         const blockMetas = multiBlocks.map((block) => {
           const text = decodeHtmlEntities([subject, block].join('\n'))
           const fields = extractCandidateFieldsRegex(text, '')
+          // 名簿行由来のブロックは本人名が確定している。推測より確定を優先する
+          const promotedName = promotedBlockNames.get(block) ?? null
           return {
-            name: fields.name ?? extractNameFallback(text) ?? null,
+            name: promotedName ?? fields.name ?? extractNameFallback(text) ?? null,
             station: fields.nearestStation ?? null,
             // 管理番号マッチ（パス1.5）用。件名も含むが、件名由来の番号は全ブロックに
             // 共通して現れるため一意性条件で自然に無効化される
@@ -11187,6 +11199,12 @@ Deno.serve(async (req: Request) => {
                 blockSameMailDistinct = true
                 const why = sameMailConflicts(mine, prevs[prevs.length - 1]).join('・')
                 console.log(`[multi-candidate] 同一メール内の同名 "${blockResolvedName}" だが ${why} が不一致 → 別人として新規登録`)
+                // 1通の中で同名が何人も「別人」になるのは氏名解決の失敗を疑う。
+                // 実害: 名簿24人が全員 "楊F(ヨウ)" で登録された（2026-09-05）。
+                // 登録は止めない（取りこぼしより残す）が、必ず記録に出して気付けるようにする
+                if (prevs.length >= 3) {
+                  console.error(`[roster-anomaly] 同一メール内で同名 "${blockResolvedName}" が${prevs.length + 1}人目。氏名解決の失敗の可能性 subject=${subject.slice(0, 60)}`)
+                }
               }
             }
             // ② 同エージェント（同一 from）から同名が既に登録済み → UPDATE 判定
