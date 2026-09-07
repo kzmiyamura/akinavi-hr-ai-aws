@@ -1628,6 +1628,40 @@ function stationNameCandidates(station: string): string[] {
 }
 
 /**
+ * 駅名として妥当か。**station_master（8,443駅）への照合で肯定的に確かめる**。
+ *
+ * NGワードを足していく方式では漏れ続けた。prod 実測（2026-09-07）で最寄駅を持つ
+ * 3,259人のうち 86人（2.6%）が駅でない値だった:
+ *   Excelの見出し … 最終学歴7・氏6・専攻学科2・誕生日2・生年月日・路線名・取得日
+ *   性別欄        … 男・男性
+ *   数値セル      … 28・3
+ *   地名（駅でない）… 大阪府八尾市10・沖縄4・北津軽郡2
+ * 「見出しの語」を列挙し続けるのではなく、駅名の一覧に**在ること**を要求する。
+ *
+ * 「〇〇駅」と明記されているものは master に無くても通す（新駅・表記ゆれの取りこぼしを防ぐ）。
+ * 判定は stationNameCandidates と同じ候補生成を使うので、ヶ/ケ・路線名直結・
+ * 「名鉄 犬山駅」形式はそのまま吸収される。
+ */
+function isPlausibleStation(name: string | null | undefined): boolean {
+  const v = String(name ?? '').trim()
+  if (!v) return false
+  if (/駅$/.test(v)) return true
+  // 「JR国分寺」「都営大江戸」のように運営者名が直結しているものも見る
+  const stripped = v.replace(/^(JR|ＪＲ|都営|東京メトロ|地下鉄|市営)[\s　]*/, '')
+  const candidates = [...stationNameCandidates(v), ...stationNameCandidates(stripped)]
+  // 「小田急小田原線本厚木」のように路線名が区切りなしで直結している表記。
+  // lookupStationPrefectureFromDb と同じ「最後の『線』以降」を候補に足す
+  // （足さないと実在駅を弾いてしまう。テストで検出: stationGate.test.ts）
+  const cleaned = v.replace(/駅$/, '').replace(/[\s　]+/g, '')
+  const lastLineIdx = cleaned.lastIndexOf('線')
+  if (lastLineIdx >= 0 && cleaned.length - lastLineIdx - 1 >= 2) {
+    const tail = cleaned.slice(lastLineIdx + 1)
+    candidates.push(tail, tail.replace(/ヶ/g, 'ケ'))
+  }
+  return candidates.some(c => !!STATION_MASTER_MAP[c])
+}
+
+/**
  * station_master のスナップショット（scripts/export_station_master.mjs で書き出し・
  * デプロイ物に同梱）。実行時のDB往復（egress・レイテンシ・DB障害時の欠損）を無くすため、
  * 静的importでバンドルする。DBを更新したら export_station_master.mjs を再実行してから
@@ -2732,6 +2766,15 @@ function extractCandidateFieldsRegex(
       nearestStationLine = null
     }
   }
+  // 駅名一覧に無く「〇〇駅」でもない値は駅として採らない（上のNGワード列挙の取りこぼし対策）。
+  // 捨てる前に地名を拾い直す: 「大阪府八尾市」のような値は駅ではないが居住地の情報なので
+  // 都道府県として活かす（下の都道府県抽出でこれを初期値にする）
+  let prefectureFromStation: string | null = null
+  if (nearestStation && !isPlausibleStation(nearestStation)) {
+    prefectureFromStation = PREFECTURES.find(p => nearestStation!.includes(p)) ?? null
+    nearestStation = null
+    nearestStationLine = null
+  }
 
   // ── 都道府県 ──────────────────────────────────────────────────
   // ラベル付き抽出を優先し、なければ全文から都道府県リストを検索
@@ -2740,7 +2783,7 @@ function extractCandidateFieldsRegex(
     bodyText, attachText,
     v => PREFECTURES.some(p => v.includes(p)),
     40,
-  )
+  ) ?? prefectureFromStation
   if (prefecture) {
     // 「大阪府大阪市〜」から都道府県部分だけ取り出す
     const found = PREFECTURES.find(p => prefecture!.includes(p))
