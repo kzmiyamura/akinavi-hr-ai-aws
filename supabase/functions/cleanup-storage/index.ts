@@ -1,11 +1,22 @@
 /**
  * cleanup-storage Edge Function
  *
- * Supabase Storage に蓄積した古いファイル（7日以上前）を削除して無料枠を回復する。
+ * Supabase Storage に蓄積した古いファイルを削除して枠を回復する。
  * pg_cron から毎日 JST 1:00 に呼び出される。
  *
- * 対象バケット: 'resumes'（PDFや経歴書）
- * 削除基準: created_at が retention_days（既定 7日）以上前のオブジェクト
+ * 対象: attachments バケットの resumes/ と raw/
+ * 削除基準: created_at が保持日数以上前のオブジェクト
+ *   resumes/ … 営業が画面から開く経歴書（storage_retention_days・既定7日）
+ *   raw/     … poll-email が残す受信添付の控え。アプリからは一切読まれない
+ *              （raw_retention_days・既定2日）
+ *
+ * ⚠ 削除対象は **DB（storage.objects）に聞く**。Storage API の list でフォルダを
+ *   辿ってはいけない。過去2回、同じ理由で掃除が止まっている:
+ *     2026-08-28  limit:1000 の1回だけで打ち切り、5,000件目以降に永久に到達しなかった
+ *     2026-09-09  110秒の予算で中断する作りにしたが、再開位置を持たないので毎回
+ *                 offset 0 から走り直し、予算内に届かない後半が永久に残った
+ *                 （raw_retention_days=1 なのに 1,880件・319MB が残存）
+ *   list は「どこまで消したか」を持てない。DB に聞けば、古いものだけが必ず先に返る。
  */
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
@@ -21,6 +32,22 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+/** Storage の remove は1回あたりの件数に上限があるので分割する */
+export function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+/**
+ * 削除してよいパスだけを残す。RPC が想定外のプレフィックスを返しても、
+ * 掃除対象のフォルダ外を消さないための最後の関門。
+ */
+export function pathsUnderPrefix(paths: readonly string[], prefix: string): string[] {
+  const p = prefix.endsWith('/') ? prefix : `${prefix}/`
+  return paths.filter((x) => x.startsWith(p) && !x.includes('..'))
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -28,11 +55,6 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(getEnv('SUPABASE_URL'), getEnv('SUPABASE_SERVICE_ROLE_KEY'))
 
-  // 保持日数はフォルダごとに分ける（2026-08-28）。
-  //   resumes/ … 営業が画面から開く経歴書。短くすると業務が困る
-  //   raw/     … poll-email が残す受信添付の控え。アプリからは一切読まれない
-  // 実測では raw/ が全体の88%（1,198MB / 1,359MB）を占めており、経歴書を削っても
-  // 容量は減らない。読まれない側を短くするのが正しい。
   const getDays = async (key: string, fallback: number): Promise<number> => {
     const { data } = await supabase.from('app_config').select('value').eq('key', key).maybeSingle()
     const v = parseInt(String(data?.value ?? ''), 10)
@@ -45,146 +67,96 @@ Deno.serve(async (req) => {
   const cutoffISO = isoDaysAgo(retentionDays)
   const rawCutoffISO = isoDaysAgo(rawRetentionDays)
 
-  // バケット名 → フォルダプレフィックスのマッピング
-  // attachments バケットの resumes/ フォルダが対象（2026-05-23以降 Storage書き込みは廃止済み）
-  const TARGETS: { bucket: string; folder: string }[] = [
-    { bucket: 'attachments', folder: 'resumes' },
-  ]
-  const summary: Record<string, { deleted: number; errors: number; freedBytes: number }> = {}
+  const BUCKET = 'attachments'
+  const PAGE = 500          // 1回のRPCで引く削除対象の件数
+  const REMOVE_BATCH = 100  // Storage remove の1回あたり件数
+  const BUDGET_MS = 110_000
 
-  for (const { bucket, folder } of TARGETS) {
+  const summary: Record<string, {
+    deleted: number; errors: number; freedBytes: number; remaining: boolean
+  }> = {}
+
+  /**
+   * prefix 配下の古いファイルを消す。
+   * 削除するたびに対象は減るので、常に「今いちばん古い PAGE 件」を引き直せばよい。
+   * 予算切れで途中終了しても、次回は残った最古から再開される（再開位置を持つ必要がない）。
+   */
+  const sweep = async (prefix: string, cutoff: string, onDeleted?: (paths: string[]) => Promise<void>) => {
     let deleted = 0
     let errors = 0
     let freedBytes = 0
-    const PAGE_SIZE = 100
-    // created_at 昇順で常に先頭ページを読む。削除でリストが縮むと次の最古ファイルが
-    // 先頭に繰り上がるため、offset は進めない（進めると削除で詰めた分を読み飛ばす）。
-    // 安全弁: 想定件数を大きく超えたら中断（無限ループ防止）
-    const MAX_ITERS = 100000
-    let iter = 0
-
-    while (iter++ < MAX_ITERS) {
-      const { data: files, error: listError } = await supabase.storage
-        .from(bucket)
-        .list(folder, { limit: PAGE_SIZE, offset: 0, sortBy: { column: 'created_at', order: 'asc' } })
-
-      if (listError) {
-        console.error(`[cleanup-storage] list error bucket=${bucket}/${folder}:`, listError.message)
-        break
-      }
-      if (!files || files.length === 0) break
-
-      // cutoff より古いファイルだけ対象（created_at がない場合も削除対象にする）。
-      // 昇順ソートなので古いファイルは必ず先頭に固まる = oldFiles は先頭からの連続。
-      const oldFiles = files.filter(f => {
-        const created = f.created_at ?? (f.metadata as Record<string, string> | null)?.lastModified
-        return !created || created < cutoffISO
-      })
-
-      // 先頭ページに削除対象が無い = 残りは全て cutoff より新しい → 完了
-      if (oldFiles.length === 0) break
-
-      // Storage のパスはフォルダ名を含める必要がある
-      const paths = oldFiles.map(f => `${folder}/${f.name}`)
-      const { error: removeError } = await supabase.storage.from(bucket).remove(paths)
-      if (removeError) {
-        // 削除に失敗すると同じファイルを再listしてしまい無限ループになるため中断
-        console.error(`[cleanup-storage] remove error bucket=${bucket}/${folder}:`, removeError.message)
-        errors += paths.length
-        break
-      }
-
-      deleted += paths.length
-      freedBytes += oldFiles.reduce((sum, f) => sum + ((f.metadata as Record<string, number> | null)?.size ?? 0), 0)
-      console.log(`[cleanup-storage] deleted ${paths.length} files from ${bucket}/${folder}: ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? '...' : ''}`)
-
-      // 削除したファイルを参照している candidates.resume_url を NULL クリア
-      const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
-      const publicUrlPrefix = `${supabaseUrl}/storage/v1/object/public/${bucket}/`
-      const deletedUrls = paths.map(p => `${publicUrlPrefix}${p}`)
-      const { error: urlClearError } = await supabase
-        .from('candidates')
-        .update({ resume_url: null })
-        .in('resume_url', deletedUrls)
-      if (urlClearError) {
-        console.error(`[cleanup-storage] resume_url clear error:`, urlClearError.message)
-      } else {
-        console.log(`[cleanup-storage] cleared resume_url for up to ${deletedUrls.length} candidates`)
-      }
-
-      // このページに新しいファイルが混じっていた = 古いものは全て消し終えた → 完了
-      if (oldFiles.length < files.length) break
-    }
-
-    summary[`${bucket}/${folder}`] = { deleted, errors, freedBytes }
-  }
-
-  // ── raw/<messageId>/ 配下（受信添付の実体・2026-08-19 追加） ──
-  // 割り当て成否と無関係に poll-email が保存する調査用の実体。resumes/ と違い
-  // 1階層深いので、サブフォルダを列挙してから中のファイルを見る。
-  // ここを掃除しないと無制限に増える（PIIを抱え続けることにもなる）。
-  {
-    const bucket = 'attachments'
-    let deleted = 0
-    let errors = 0
-    let freedBytes = 0
-    // フォルダは offset で最後まで辿る。以前は limit:1000 の1回だけで打ち切っており、
-    // 5,000件を超えた時点で残りに永久に到達しなかった（2026-08-28 実測で 7,466 フォルダ、
-    // うち掃除できていたのは先頭1,000件ぶんだけ）。
-    // フォルダのプレースホルダには created_at が無いので、日付は中のファイルで判定する。
-    // 実行時間には上限があるので、使い切ったら次回に続きを任せる（毎日走るので追いつく）。
-    const BUDGET_MS = 110_000
+    let remaining = false
     const startedAt = Date.now()
-    let scanned = 0
-    let exhausted = false
-    for (let offset = 0; ;) {
-      if (Date.now() - startedAt > BUDGET_MS) break
-      const { data: folders, error: folderError } = await supabase.storage
-        .from(bucket).list('raw', { limit: 100, offset, sortBy: { column: 'name', order: 'asc' } })
-      if (folderError) {
-        console.error('[cleanup-storage] list error attachments/raw:', folderError.message)
+
+    for (;;) {
+      if (Date.now() - startedAt > BUDGET_MS) { remaining = true; break }
+
+      const { data: rows, error } = await supabase.rpc('list_old_storage_objects', {
+        p_bucket: BUCKET, p_prefix: `${prefix}/`, p_cutoff: cutoff, p_limit: PAGE,
+      })
+      if (error) {
+        console.error(`[cleanup-storage] rpc error ${prefix}:`, error.message)
         errors++
         break
       }
-      if (!folders || folders.length === 0) { exhausted = true; break }
-      let emptied = 0
-      for (const f of folders) {
-        scanned++
-        const { data: files, error: listError } = await supabase.storage
-          .from(bucket).list(`raw/${f.name}`, { limit: 100 })
-        if (listError) { errors++; continue }
-        const oldFiles = (files ?? []).filter((x) => {
-          const created = x.created_at ?? (x.metadata as Record<string, string> | null)?.lastModified
-          return !created || created < rawCutoffISO
-        })
-        if (oldFiles.length === 0) continue
-        const paths = oldFiles.map((x) => `raw/${f.name}/${x.name}`)
-        const { error: removeError } = await supabase.storage.from(bucket).remove(paths)
+      const targets = (rows ?? []) as { path: string; bytes: number }[]
+      if (targets.length === 0) break
+
+      const sizeOf = new Map(targets.map((t) => [t.path, Number(t.bytes) || 0]))
+      const paths = pathsUnderPrefix(targets.map((t) => t.path), prefix)
+      if (paths.length !== targets.length) {
+        console.error(`[cleanup-storage] ${prefix}: 想定外のパスを ${targets.length - paths.length} 件除外した`)
+      }
+      if (paths.length === 0) break
+
+      let progressed = false
+      for (const batch of chunk(paths, REMOVE_BATCH)) {
+        const { error: removeError } = await supabase.storage.from(BUCKET).remove(batch)
         if (removeError) {
-          console.error(`[cleanup-storage] remove error raw/${f.name}:`, removeError.message)
-          errors += paths.length
+          console.error(`[cleanup-storage] remove error ${prefix}:`, removeError.message)
+          errors += batch.length
           continue
         }
-        deleted += paths.length
-        freedBytes += oldFiles.reduce((sum, x) => sum + ((x.metadata as Record<string, number> | null)?.size ?? 0), 0)
-        if (oldFiles.length === (files ?? []).length) emptied++
+        deleted += batch.length
+        freedBytes += batch.reduce((s, p) => s + (sizeOf.get(p) ?? 0), 0)
+        progressed = true
+        if (onDeleted) await onDeleted(batch)
       }
-      if (folders.length < 100) { exhausted = true; break }
-      // 空になったフォルダは一覧から消え、後続がその分だけ繰り上がる。
-      // 単純に +100 すると繰り上がったぶんを読み飛ばすので、消えた数を差し引く。
-      offset += folders.length - emptied
+
+      // 1件も消せなかった = 同じ対象を引き直すだけなので打ち切る（無限ループ防止）
+      if (!progressed) { remaining = true; break }
     }
-    summary['attachments/raw'] = { deleted, errors, freedBytes }
-    console.log(`[cleanup-storage] attachments/raw scanned=${scanned} deleted=${deleted} errors=${errors} exhausted=${exhausted} cutoff=${rawCutoffISO}`)
+
+    console.log(`[cleanup-storage] ${prefix} deleted=${deleted} errors=${errors} `
+      + `freed=${(freedBytes / 1048576).toFixed(1)}MB remaining=${remaining} cutoff=${cutoff}`)
+    summary[`${BUCKET}/${prefix}`] = { deleted, errors, freedBytes, remaining }
   }
+
+  // resumes/ — 消したら candidates.resume_url も外す（リンク切れを残さない）
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
+  const publicUrlPrefix = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/`
+  await sweep('resumes', cutoffISO, async (paths) => {
+    const urls = paths.map((p) => `${publicUrlPrefix}${p}`)
+    const { error } = await supabase.from('candidates').update({ resume_url: null }).in('resume_url', urls)
+    if (error) console.error('[cleanup-storage] resume_url clear error:', error.message)
+  })
+
+  // raw/ — アプリから読まれない受信添付の控え。PIIを抱え続けないよう短く保つ
+  await sweep('raw', rawCutoffISO)
 
   const totalDeleted = Object.values(summary).reduce((s, v) => s + v.deleted, 0)
   const totalFreed = Object.values(summary).reduce((s, v) => s + v.freedBytes, 0)
-  console.log(`[cleanup-storage] done. deleted=${totalDeleted} freed=${(totalFreed / 1024 / 1024).toFixed(1)}MB retentionDays=${retentionDays}`)
+  const incomplete = Object.values(summary).some((v) => v.remaining)
+  console.log(`[cleanup-storage] done. deleted=${totalDeleted} `
+    + `freed=${(totalFreed / 1048576).toFixed(1)}MB retentionDays=${retentionDays} incomplete=${incomplete}`)
 
   return new Response(
-    // 実際に使った保持日数と締切を応答に含める（設定が効いているかを外から確認するため）
-    JSON.stringify({ ok: true, summary, retentionDays, cutoff: cutoffISO, rawRetentionDays, rawCutoff: rawCutoffISO }),
+    // 実際に使った保持日数と締切を応答に含める（設定が効いているかを外から確認するため）。
+    // incomplete=true は「予算切れで残りがある」= 翌日の実行で続きが消える
+    JSON.stringify({
+      ok: true, summary, retentionDays, cutoff: cutoffISO,
+      rawRetentionDays, rawCutoff: rawCutoffISO, incomplete,
+    }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
   )
 })
