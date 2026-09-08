@@ -2077,7 +2077,26 @@ function extractCandidateCode(subject: string): string | null {
  * ② ラベルがなければ「T・Y」「T Y」形式のイニシャル（大文字2文字＋スペースor・）のみ
  * 直後に値がなければ即 null（不明）。
  */
+/**
+ * 「氏名」「フリガナ」「生年月日」のような**見出し語そのもの**を人名として採らない。
+ *
+ * Excel の見出し行が1人の人材として登録されていた（prod 実測 2026-09-09: 3,150人中4件。
+ * アドリンクスの1通では「氏名」と「フリガナ」で2人分が起きた）。
+ * `looksLikeRosterName` は名簿展開の経路にしか掛からず、本文ブロックや
+ * `extractNameFallback` の経路は素通りしていたので、氏名を決める2か所で共通に検閲する。
+ */
+function isLabelWordName(v: string | null | undefined): boolean {
+  const s = String(v ?? '').replace(/[\s　:：]+/g, '')
+  if (!s) return true
+  return /^(?:氏名|お名前|名前|候補者名|フルネーム|ふりがな|フリガナ|よみがな|ヨミガナ|カナ|生年月日|年齢|性別|住所|現住所|居住地|最寄駅|最寄り駅|沿線|国籍|経験年数|経験|スキル|保有スキル|希望単価|単価|希望|備考|補足|コメント|専攻学科|学歴|最終学歴|卒業|資格|保有資格|所属|会社名|企業名|担当|役職|部署|自己PR|PR|稼働|稼働時期|参画時期|連絡先|電話番号|メールアドレス|No|NO|ナンバー|番号|項目|区分|状況|ステータス|新規)$/i.test(s)
+}
+
 function extractNameFallback(text: string): string | null {
+  const v = extractNameFallbackRaw(text)
+  return v && !isLabelWordName(v) ? v : null
+}
+
+function extractNameFallbackRaw(text: string): string | null {
   // ⓪ カンマ区切りイニシャル「【氏　名】：H,I」。①のキャプチャは , を終端として扱うため
   //    ここで先に拾わないと「H」だけになり、2文字未満として捨てられる（2026-08-18）。
   //    ラベル直後に限定しているので「言語：C,C++」等を名前と誤認する危険は無い。
@@ -3065,6 +3084,8 @@ function extractCandidateFieldsRegex(
 
   // 国籍は抽出経路が多く営業文の断片を拾いやすいため、返す直前に1か所で検閲する
   if (nationality && !isValidNationality(nationality)) nationality = null
+  // 氏名も同様に、Excel の見出し語そのものが人名として残らないよう検閲する
+  if (name && isLabelWordName(name)) name = null
   // 会社名も同じ理由で検閲する（抽出経路が5つあり、それぞれで営業文を拾っていた）
   if (fromCompany && !isPlausibleCompanyName(fromCompany)) fromCompany = null
   return { name, age, gender, nationality, nearestStation, nearestStationLine, prefecture, experienceYears, experienceYearsIsDedicated, desiredRate, availableFrom, desiredProject, fromCompany, nameSkillYears }
@@ -9101,20 +9122,55 @@ function stripInitialSuffix(name: string): string {
  * 拾いやすい。実害: 「※上記人材にマッチする案件〜」から「上記人」を国籍として登録した（#134）。
  * そのため 人/国 で終わる場合は既知の国名に限定する。
  */
+/** 国籍として認める国名・地域名。「〜籍」「〜人」を剥がした芯がこれで終わることを要求する。 */
+const NATIONALITY_NAMES = [
+  '日本', '中国', '韓国', '朝鮮', '台湾', '香港', 'マカオ',
+  'ベトナム', 'インド', 'ネパール', 'フィリピン', 'ミャンマー', 'インドネシア',
+  'タイ', 'マレーシア', 'シンガポール', 'カンボジア', 'ラオス', 'スリランカ',
+  'バングラデシュ', 'パキスタン', 'モンゴル', 'ウズベキスタン', 'カザフスタン',
+  'ブラジル', 'ペルー', 'メキシコ', 'アルゼンチン', 'コロンビア', 'チリ',
+  'アメリカ', 'カナダ', 'イギリス', 'フランス', 'ドイツ', 'イタリア', 'スペイン',
+  'ポルトガル', 'オランダ', 'ベルギー', 'スイス', 'オーストリア', 'ポーランド',
+  'ロシア', 'ウクライナ', 'ルーマニア', 'ハンガリー', 'チェコ', 'ギリシャ',
+  'スウェーデン', 'ノルウェー', 'デンマーク', 'フィンランド',
+  'オーストラリア', 'ニュージーランド',
+  'トルコ', 'イラン', 'イスラエル', 'エジプト', 'モロッコ',
+  'ナイジェリア', 'ケニア', 'ガーナ', 'エチオピア', 'カメルーン',
+  '外国', '海外',                        // 国名を伏せた「外国籍」「海外籍」
+]
+
 /**
  * 国籍として妥当な値か。抽出経路が7か所あり、それぞれで「※上記人材」「1人」「全国」等の
  * 営業文の断片を拾っていた（直近7日の監査で国籍付き394件中109件=27.7%が不正値）。
  * 経路ごとに直すのではなく、最終的にこの1か所で検閲する。
- * 妥当: 「〜籍」で終わる / 既知の国名を含む（日本人・中国・外国籍 等）
+ *
+ * 2026-09-09: 「籍で終われば通す」をやめた。経歴書の業務内容にある「電子書籍」24件・
+ * 「多国籍」12件・「現在も在籍」が国籍として保存されていた（prod 実測。国籍付き約450人中38件）。
+ * 経路ごとの NG ワード列挙（EXCLUDE_NAT に 書籍/在籍/国籍 を並べる方式）は
+ * 「電子書籍」「多国籍」のような複合語をすり抜けるので収束しない。最寄駅と同じく、
+ * **国名を要求する**方向に反転させた。
  */
 function isValidNationality(v: string): boolean {
-  const s = String(v ?? '').trim()
+  let s = String(v ?? '').trim()
   if (!s || s.length > 15) return false
   if (/[0-9０-９]/.test(s)) return false                        // 「1人」等
   if (/^(?:上記|下記|当該|該当|本人|弊社|貴社|全|各)/.test(s)) return false
-  if (/籍$/.test(s)) return true
-  const COUNTRIES = /日本|中国|韓国|台湾|ベトナム|インド|ネパール|フィリピン|ミャンマー|インドネシア|ブラジル|ペルー|アメリカ|イギリス|フランス|ドイツ|ロシア|モンゴル|スリランカ|バングラデシュ|パキスタン|タイ|マレーシア|シンガポール|ウズベキスタン|カンボジア|ラオス|外国/
-  return COUNTRIES.test(s)
+  // 前置きの記号・性別（「：中国」「男性・日本籍」）と、括弧・※以降の補足を落とす
+  s = s.replace(/^[：:・／/\s　]+/, '').replace(/^(?:男性|女性|男|女)[\s　・／/,、]*/, '')
+  s = s.split(/[（(※＊]/)[0].trim()
+  if (!s) return false
+  // 「籍」「国籍」「人」「系」等を剥がしながら、どの段階でも国名で終われば妥当。
+  // 交替1本で剥がすと分岐を取り逃す（「中国籍」から先に"国籍"が取れて「中」になる）ので全通り試す
+  const SUFFIXES = ['国籍', '籍', '人', '系', '出身', '在住', '生まれ']
+  const cores = new Set([s])
+  for (let depth = 0; depth < 3; depth++) {
+    for (const c of [...cores]) {
+      for (const suf of SUFFIXES) {
+        if (c.length > suf.length && c.endsWith(suf)) cores.add(c.slice(0, -suf.length))
+      }
+    }
+  }
+  return [...cores].some(c => NATIONALITY_NAMES.some(n => c.endsWith(n)))
 }
 
 function extractNationalityMark(text: string): string | null {

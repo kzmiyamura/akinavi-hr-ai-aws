@@ -72,6 +72,8 @@ const TARGET_FUNCTIONS = [
   'sameMailConflicts',      // 同一メール内の同名を別人と判定する（駅・県・年齢・単価の食い違い）
   'mergeRawProfileOnUpdate', // 既存レコード上書き時の raw_profile 合成（AI校正の印は引き継がない）
   'extractNameFallback',              // 氏名のフォールバック抽出（カンマ区切りイニシャル含む）
+  'extractNameFallbackRaw',           // 同上の実体（extractNameFallback が見出し語を検閲して呼ぶ）
+  'isLabelWordName',                  // 見出し語そのものを人名として採らない検閲
   'isInsideParens',                   // 署名の括弧内注記を会社名として拾わないためのガード
   'extractPrefectureFromStationText', // 駅表記に併記された都道府県（推定より優先）
   'inferPrefectureFromStation',       // ハードコードマップによる駅→県の推定
@@ -393,6 +395,7 @@ const TARGET_CONSTS = [
   'MULTI_NAME_FIELD_RE',      // 同上（氏名欄の判定）
   'PREFECTURES',       // extractPrefectureFromStationText が参照（複数行定義）
   'STATION_TO_PREFECTURE', // inferPrefectureFromStation が参照（複数行定義）
+  'NATIONALITY_NAMES', // isValidNationality が参照する国名表（複数行定義）
   // sanitizeFromCompany（会社名の後処理）が参照する法人格の表・自社名
   'OWN_COMPANY_NAMES',
   'CORP_PREFIX_FORMS',
