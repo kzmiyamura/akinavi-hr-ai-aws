@@ -2,6 +2,7 @@ import type { QueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import type { AnalyzeProjectResponse } from '../ai/types'
 import { normalizeProjectIntegerColumns } from './projectIntegers'
+import { buildSkillWeights } from '../skillWeights'
 import type { DataEnv } from '../dataEnv'
 
 /** 案件リスト用 TanStack Query キー（data_env ごとにキャッシュを分離） */
@@ -191,6 +192,27 @@ async function resolveWorkPrefecture(
   return { resolved: true, prefecture: (data as string | null) ?? null }
 }
 
+/**
+ * 必須スキルごとの重みを組み直す（#185）。
+ * カテゴリ（言語=4 … 工程語=1）が要るので skill_master に引きに行く。
+ * 全件（951行）は引かず、必要なスキルぶんだけを RPC で問い合わせる。
+ * 引けなかったときは null を返し、呼び出し側は列を送らない（今の重みを消さない）。
+ */
+async function rebuildSkillWeights(
+  requiredSkills: string[],
+  rawData: Record<string, unknown>,
+): Promise<Record<string, number> | null> {
+  if (requiredSkills.length === 0) return {}
+  const { data, error } = await supabase.rpc('skill_categories', { p_names: requiredSkills })
+  if (error) return null
+  const byLower = new Map(
+    ((data ?? []) as { name: string; category: string | null }[])
+      .map((r) => [r.name.toLowerCase(), r.category]),
+  )
+  const years = (rawData.requiredSkillYears ?? {}) as Record<string, number[]>
+  return buildSkillWeights(requiredSkills, (s) => byLower.get(s.toLowerCase()) ?? null, years)
+}
+
 /** 案件を手動更新する（IDで直接UPDATE） */
 export async function updateProject(input: UpdateProjectInput): Promise<Project> {
   const { id, dataEnv, ...rest } = input
@@ -214,6 +236,11 @@ export async function updateProject(input: UpdateProjectInput): Promise<Project>
   // 判定できなかったとき（通信失敗）は列を送らず、既存の値を消さない。
   const pref = await resolveWorkPrefecture(rest.work_location)
 
+  // 必須スキルを直したら重みも組み直す（#185）。
+  // skill_weights は採点RPCに渡っている（MatchingPage → p_skill_weights）ので、
+  // ここが登録時のままだと「求める人」と「スキルの重み」が食い違ったまま順位に効く。
+  const skillWeights = await rebuildSkillWeights(rest.required_skills, rest.raw_data)
+
   const { data, error } = await supabase
     .from('projects')
     .update({
@@ -224,6 +251,7 @@ export async function updateProject(input: UpdateProjectInput): Promise<Project>
       settlement_min: settlementMin,
       settlement_max: settlementMax,
       ...(pref.resolved ? { work_prefecture: pref.prefecture } : {}),
+      ...(skillWeights ? { skill_weights: Object.keys(skillWeights).length > 0 ? skillWeights : null } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq('id', id)
