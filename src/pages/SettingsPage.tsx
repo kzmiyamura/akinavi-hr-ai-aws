@@ -913,7 +913,12 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
         {/* ---- 改善案・バグメモ ---- */}
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
           <h2 className="text-base font-semibold text-gray-800 mb-1">改善案・バグメモ</h2>
-          <p className="text-xs text-gray-400 mb-3">気づいた改善点やバグをメモしておけます。全端末で共有されます。</p>
+          {/* 消し方が分からないという報告（#184）。消す手段はあった（全消しして保存）が、
+              どこにも書いていなかった。専用のボタンを置いて、説明にも書く。 */}
+          <p className="text-xs text-gray-400 mb-3">
+            気づいた改善点やバグをメモしておけます。全端末で共有されます。
+            消すときは本文を消して「保存」するか、「メモを消す」を押してください。
+          </p>
           <textarea
             value={memo}
             onChange={e => setMemo(e.target.value)}
@@ -939,6 +944,20 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
             >
               {issueMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <GitPullRequest size={14} />}
               Issue登録
+            </button>
+            {/* 全端末で共有される1つのメモなので、消す前に確認する（#184） */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!window.confirm('メモを消します。全端末で共有されているので、他の人が書いた内容も消えます。よろしいですか？')) return
+                setMemo('')
+                memoMutation.mutate('')
+              }}
+              disabled={memoMutation.isPending || (!memo.trim() && !savedMemo.trim())}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-800 disabled:opacity-40 transition-colors"
+            >
+              <Trash2 size={14} />
+              メモを消す
             </button>
             {memoMutation.isSuccess && <span className="text-sm text-green-600">保存しました</span>}
             {memoMutation.isError && <span className="text-sm text-red-600">保存に失敗しました</span>}
