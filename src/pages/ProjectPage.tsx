@@ -24,6 +24,8 @@ import { getIsImportActive } from '../lib/db/emailSettings'
 import { supabase } from '../lib/supabase'
 import { calcProjectWeights } from '../lib/db/candidates'
 import { getAiInterpretation, aiRelatedSkillMap } from '../lib/projectInterpretation'
+import { findDuplicateProjectByText } from '../lib/projectDuplicate'
+import type { ProjectLike } from '../lib/projectDuplicate'
 
 interface Props {
   nickname: string
@@ -747,6 +749,14 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
       setReplayProjectMsg({ id: p.id, text: 'メール本文（raw_data.text）がないため再解析できません', ok: false })
       return
     }
+    // この操作は既存案件に触れず、元メールから**別の案件を作る**。
+    // 「更新される」と誤解して押すと、手で直す前の内容の案件がもう1件並ぶ（#182）。
+    // ボタンが「編集」の隣にあり、説明が title 属性だけ＝スマホでは読めなかった。
+    if (!window.confirm(
+      `「${p.title}」のメール本文を解析し直して、別の案件として新しく登録します。\n\n`
+      + '今の案件は消えません。手で直した内容もそのまま残るので、'
+      + '同じ案件が2件並びます。不要なほうは後で削除してください。\n\n続けますか？'
+    )) return
     setReplayingProjectId(p.id)
     setReplayProjectMsg(null)
     try {
@@ -826,6 +836,25 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
     onSuccess: onProjectRegisterSuccess,
     onError: (e) => { setMessage({ type: 'error', text: String(e) }) },
   })
+
+  /**
+   * 登録前に「同じ本文の案件が既にあるか」を見る（#182）。
+   * 案件側には重複判定が無く、修正のつもりで本文を貼り直すと黙って2件目ができていた
+   * （prod 2026-09-08: 同一本文694文字が42分差で2件。抽出タイトルが揺れるので
+   *   タイトルでは気付けない）。一覧は raw_data ごと読み込み済みなので追加の問い合わせは不要。
+   */
+  function handleRegisterClick() {
+    const dup = findDuplicateProjectByText(projects as ProjectLike[], text)
+    if (dup) {
+      const when = dup.created_at ? formatDate(dup.created_at) : '登録済み'
+      if (!window.confirm(
+        `同じ本文の案件が既に登録されています。\n\n「${dup.title}」（${when}）\n\n`
+        + '内容を直したい場合は、登録し直さずにその案件の「編集」から直してください。\n'
+        + 'このまま登録すると、同じ案件が2件並びます。\n\n続けますか？'
+      )) return
+    }
+    noAiMutation.mutate(text)
+  }
 
   const selectedProject = projects.find((p: Project) => p.id === selectedId) ?? null
 
@@ -932,7 +961,7 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                 キャンセル
               </button>
               <button
-                onClick={() => { setMessage(null); noAiMutation.mutate(text) }}
+                onClick={() => { setMessage(null); handleRegisterClick() }}
                 disabled={!text.trim() || noAiMutation.isPending || fileLoading}
                 className="flex items-center gap-2 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
@@ -1129,12 +1158,13 @@ export function ProjectPage({ nickname, dataEnv, demoUiEnabled = false, onOpenPr
                           onClick={() => handleProjectReplay(selectedProject)}
                           disabled={replayingProjectId === selectedProject.id}
                           className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-violet-200 rounded-lg text-violet-600 hover:text-violet-800 hover:border-violet-400 transition-colors disabled:opacity-50"
-                          title="保存済みメール本文を再解析して新規登録"
+                          title="保存済みメール本文を解析し直して、別の案件として新規登録する（今の案件は残る）"
                         >
                           {replayingProjectId === selectedProject.id
                             ? <Loader2 size={14} className="animate-spin" />
                             : <RefreshCw size={14} />}
-                          再解析
+                          {/* 「再解析」だけだと更新されると誤解される。実際は別案件が増える（#182） */}
+                          再解析して複製
                         </button>
                       )}
                       <button
