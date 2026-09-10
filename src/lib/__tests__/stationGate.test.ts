@@ -24,15 +24,20 @@ function loadGate(): (name: string | null | undefined) => boolean {
   const code = `
     const STATION_MASTER_MAP = {
       '国分寺': [{}], '大江戸': [{}], '阿佐ケ谷': [{}], '犬山': [{}], '本厚木': [{}],
+      '北新地': [{}], '成増': [{}],
     };
     ${pick('stationNameCandidates').replace(/: string(\[\])?/g, '')}
     ${pick('isPlausibleStation').replace(/: string \| null \| undefined/g, '').replace(/: boolean/g, '')}
-    return isPlausibleStation
+    return { isPlausibleStation, stationNameCandidates }
   `
-  return new Function(code)() as (name: string | null | undefined) => boolean
+  return new Function(code)() as {
+    isPlausibleStation: (name: string | null | undefined) => boolean
+    stationNameCandidates: (station: string) => string[]
+  }
 }
 
-const ok = loadGate()
+const gate = loadGate()
+const ok = gate.isPlausibleStation
 
 describe('isPlausibleStation', () => {
   it('Excelの見出しを駅として採らない（実データ由来）', () => {
@@ -78,5 +83,27 @@ describe('isPlausibleStation', () => {
     expect(ok('')).toBe(false)
     expect(ok(null)).toBe(false)
     expect(ok(undefined)).toBe(false)
+  })
+})
+
+describe('stationNameCandidates（事業者名の直結・#183）', () => {
+  const cand = gate.stationNameCandidates
+
+  it('事業者名が駅名に直結していても駅名だけの候補を出す', () => {
+    // 従来はトークン走査が語頭 JR の語を丸ごと捨てるため 'JR北新地' しか出ず、
+    // 辞書に当たらなかった（案件の勤務地が大阪府と判定できなかった実害）
+    expect(cand('JR北新地駅')).toContain('北新地')
+    expect(cand('JR北新地駅（駅から 徒歩3分）')).toContain('北新地')
+    expect(cand('東京メトロ大江戸駅')).toContain('大江戸')
+  })
+
+  it('原表記を先に出す（既存の一致を横取りしない）', () => {
+    // 「地下鉄成増」は実在の駅名。剥がした「成増」より先に原表記が来ること
+    const c = cand('地下鉄成増駅')
+    expect(c.indexOf('地下鉄成増')).toBeLessThan(c.indexOf('成増'))
+  })
+
+  it('空白区切りの事業者名は従来どおり除外される', () => {
+    expect(cand('名鉄 犬山駅')).toContain('犬山')
   })
 })

@@ -1614,7 +1614,13 @@ function stationNameCandidates(station: string): string[] {
   // 正規化形は保土ヶ谷→保土ケ谷のような表記ゆれ吸収のフォールバックとして残す。
   const push = (s: string) => {
     const raw = s.replace(/駅$/, '').replace(/\s+/g, '').trim()
-    for (const k of [raw, raw.replace(/ヶ/g, 'ケ')]) {
+    // 「JR北新地駅」のように事業者名が駅名に直結している表記も駅名だけにする。
+    // 下のトークン走査は語頭が JR の語を丸ごと除外するため、glue された表記は
+    // 'JR北新地' しか候補にならず辞書に当たらなかった（#183: 大阪府と判定できず）。
+    // 原表記を先に出すので、これが既存の一致を横取りすることはない。
+    const noOperator = raw.replace(
+      /^(?:JR[東西]?日?本?|ＪＲ|都営(?:地下鉄)?|東京メトロ|市営(?:地下鉄)?|地下鉄|新交通)/, '')
+    for (const k of [raw, raw.replace(/ヶ/g, 'ケ'), noOperator, noOperator.replace(/ヶ/g, 'ケ')]) {
       if (k && !out.includes(k)) out.push(k)
     }
   }
@@ -1765,6 +1771,19 @@ async function resolveProjectPrefecture(
       if (pref) return pref
     }
   }
+  // 勤務地欄が空でも、本文に「・最寄り駅：JR北新地駅（駅から 徒歩3分）」と書かれていることがある。
+  // 都道府県名の走査より先にここを見る（駅名のほうが勤務地として具体的なため）。
+  // 実害(#183): 勤務地欄が空・本文に県名なしの案件で、大阪府と判定できなかった。
+  const nearestLine = (fallbackText ?? '').match(
+    /最[　 ]*寄[　 ]*り?[　 ]*駅?[　 ]*[：:][　 ]*([^\n\r]{2,40})/)
+  if (nearestLine) {
+    const rawLine = nearestLine[1].trim()
+    for (const token of [rawLine, ...splitLocationTokens(rawLine)]) {
+      const pref = await lookupStationPrefectureFromDb(token)
+      if (pref) return pref
+    }
+  }
+
   // 勤務地欄から取れない場合のみ本文を走査（出現順で最初の都道府県を採用）
   let firstIdx = Infinity
   let firstPref: string | null = null

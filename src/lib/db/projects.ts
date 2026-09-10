@@ -173,6 +173,24 @@ export interface UpdateProjectInput {
   updated_by: string
 }
 
+/**
+ * 勤務地の文字列から都道府県を解決する（#183）。
+ * 駅名で引く必要がある（北新地→大阪府）ので判定は DB 側の関数に置いてある。
+ * station_master は 8,443駅あり、フロントに同梱するとバンドルが太るため。
+ *
+ * 戻り値の使い分け:
+ *   { resolved: true,  prefecture }  … 判定できた／勤務地に県が無いと確定した
+ *   { resolved: false }              … 通信等で判定できなかった（既存の値を消さない）
+ */
+async function resolveWorkPrefecture(
+  workLocation: string | null,
+): Promise<{ resolved: true; prefecture: string | null } | { resolved: false }> {
+  if (!workLocation?.trim()) return { resolved: true, prefecture: null }
+  const { data, error } = await supabase.rpc('resolve_work_prefecture', { p_text: workLocation })
+  if (error) return { resolved: false }
+  return { resolved: true, prefecture: (data as string | null) ?? null }
+}
+
 /** 案件を手動更新する（IDで直接UPDATE） */
 export async function updateProject(input: UpdateProjectInput): Promise<Project> {
   const { id, dataEnv, ...rest } = input
@@ -190,6 +208,12 @@ export async function updateProject(input: UpdateProjectInput): Promise<Project>
       settlement_min: rest.settlement_min,
       settlement_max: rest.settlement_max,
     })
+  // 勤務地を直したら都道府県も追随させる（#183）。
+  // マッチングは work_prefecture を優先する（matchRuleScore.ts）ので、ここが古いままだと
+  // 「北新地」を「大阪」に直しても大阪府として扱われない。
+  // 判定できなかったとき（通信失敗）は列を送らず、既存の値を消さない。
+  const pref = await resolveWorkPrefecture(rest.work_location)
+
   const { data, error } = await supabase
     .from('projects')
     .update({
@@ -199,6 +223,7 @@ export async function updateProject(input: UpdateProjectInput): Promise<Project>
       headcount,
       settlement_min: settlementMin,
       settlement_max: settlementMax,
+      ...(pref.resolved ? { work_prefecture: pref.prefecture } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq('id', id)
