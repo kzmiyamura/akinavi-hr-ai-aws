@@ -28,6 +28,7 @@ import { DemoMatchingTestPanel } from '../components/DemoMatchingTestPanel'
 import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../lib/fileParser'
 import { findSkillMonths } from '../lib/skillYearsMatch'
 import { SameAsOtherAgencyBadge, readSameAsOtherAgency } from '../components/SameAsOtherAgencyBadge'
+import { OriginalEmailDetails } from '../components/OriginalEmailDetails'
 
 interface SkillsByCategory {
   languages: string[]
@@ -2434,30 +2435,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     </details>
                     )
                   })()}
-                  {/* 元メール本文 */}
-                  {(() => {
-                    const raw = getRaw(selectedCandidate)
-                    const bodyText = raw.text ?? ''
-                    if (!bodyText.trim()) return null
-                    return (
-                      <details className="mt-4 border border-gray-200 rounded-lg">
-                        <summary className="px-3 py-2 text-xs font-medium text-gray-500 cursor-pointer select-none hover:bg-gray-50 rounded-lg">
-                          元メール本文
-                        </summary>
-                        <div className="px-3 pb-3 pt-1">
-                          {raw.subject && (
-                            <p className="text-xs text-gray-400 mb-1">件名: {raw.subject}</p>
-                          )}
-                          {raw.from && (
-                            <p className="text-xs text-gray-400 mb-2">差出人: {raw.from}</p>
-                          )}
-                          <pre className="text-xs text-gray-700 whitespace-pre-wrap break-words leading-relaxed bg-gray-50 rounded p-2 max-h-96 overflow-y-auto">
-                            {bodyText}
-                          </pre>
-                        </div>
-                      </details>
-                    )
-                  })()}
+                  {/* 元メール本文（人材詳細画面と同じものを使う。経路で表示が変わらないように） */}
+                  <OriginalEmailDetails candidate={selectedCandidate} />
                 </div>
               ) : selectedId ? (
                 // 選択済みなのに中身が無い状態。取得中か、削除済みなど。

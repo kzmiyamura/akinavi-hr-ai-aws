@@ -6,6 +6,7 @@ import { patchCandidateInCache } from '../lib/candidateCache'
 import { CandidateProfileFields, CandidateEditModal } from './CandidatePage'
 import { toViewerUrl, isRosterLinkAlive } from '../lib/viewerUrl'
 import { BookmarkStar } from '../components/BookmarkStar'
+import { OriginalEmailDetails } from '../components/OriginalEmailDetails'
 import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
@@ -188,6 +189,9 @@ export function CandidateDetailPage({ candidateId, nickname, dataEnv, onBack }: 
       {candidate && (
         <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 min-w-0">
           <CandidateProfileFields c={candidate} isExpanded={false} detailMode />
+          {/* 人材一覧の詳細ペインにしか無く、人材マップ・マッチング・案件詳細から
+              開いたときだけ元メールが読めなかった（2026-09-12 営業から指摘） */}
+          <OriginalEmailDetails candidate={candidate} />
         </div>
       )}
     </div>
