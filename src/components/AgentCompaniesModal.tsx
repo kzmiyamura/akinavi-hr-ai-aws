@@ -1,8 +1,10 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Building2, ChevronDown, Loader2, X } from 'lucide-react'
 import { fetchAllAgentCompanies, updateAgentCompanyStatus } from '../lib/db/agentCompanies'
 import type { AgentCompany, LicenseStatus } from '../lib/db/agentCompanies'
+import { sortAgentCompanies, sortMetaLabel, AGENT_SORT_OPTIONS } from '../lib/agentCompanySort'
+import type { AgentSortKey } from '../lib/agentCompanySort'
 
 const LICENSE_STATUS_OPTIONS: { value: LicenseStatus; label: string; color: string }[] = [
   { value: 'unknown', label: '未確認', color: 'text-gray-500' },
@@ -16,9 +18,12 @@ const LICENSE_STATUS_OPTIONS: { value: LicenseStatus; label: string; color: stri
 
 function AgentCompanyRow({
   company,
+  metaLabel,
   onUpdate,
 }: {
   company: AgentCompany
+  /** 並び替えの基準になっている値（日付順のときだけ入る） */
+  metaLabel?: string | null
   onUpdate: (status: LicenseStatus, hakenNum?: string, shokaiNum?: string) => void
 }) {
   const [editing, setEditing] = useState(false)
@@ -50,7 +55,10 @@ function AgentCompanyRow({
         </span>
         <div className="flex-1 min-w-0">
           <span className="text-xs font-medium text-gray-800 truncate block">{company.company_name ?? '（会社名不明）'}</span>
-          <span className="text-[10px] text-gray-400">{company.domain}</span>
+          <span className="text-[10px] text-gray-400">
+            {company.domain}
+            {metaLabel && <span className="ml-1.5 text-gray-300">{metaLabel}</span>}
+          </span>
         </div>
         {company.haken_number && (
           <span className="text-[10px] text-blue-600 shrink-0 hidden sm:block">{company.haken_number}</span>
@@ -119,6 +127,7 @@ function AgentCompaniesContent() {
   const queryClient = useQueryClient()
   const [searchText, setSearchText] = useState('')
   const [filterStatus, setFilterStatus] = useState<LicenseStatus | 'all'>('all')
+  const [sortKey, setSortKey] = useState<AgentSortKey>('newest')
   const [showAll, setShowAll] = useState(false)
 
   const { data: companies = [], isLoading } = useQuery({
@@ -136,11 +145,14 @@ function AgentCompaniesContent() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agent-companies'] }),
   })
 
-  const filtered = companies.filter(c => {
-    if (searchText && !c.company_name?.toLowerCase().includes(searchText.toLowerCase()) && !c.domain.includes(searchText)) return false
-    if (filterStatus !== 'all' && c.license_status !== filterStatus) return false
-    return true
-  })
+  const filtered = useMemo(() => {
+    const hit = companies.filter(c => {
+      if (searchText && !c.company_name?.toLowerCase().includes(searchText.toLowerCase()) && !c.domain.includes(searchText)) return false
+      if (filterStatus !== 'all' && c.license_status !== filterStatus) return false
+      return true
+    })
+    return sortAgentCompanies(hit, sortKey)
+  }, [companies, searchText, filterStatus, sortKey])
   const displayList = showAll ? filtered : filtered.slice(0, 30)
 
   const statusCounts = {
@@ -185,6 +197,17 @@ function AgentCompaniesContent() {
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
+        {/* 並び替え。「要確認を先に」で照合できず・未確認を上から潰せる */}
+        <select
+          value={sortKey}
+          onChange={e => setSortKey(e.target.value as AgentSortKey)}
+          className="border border-gray-200 rounded px-2 py-1 text-xs"
+          title="並び替え"
+        >
+          {AGENT_SORT_OPTIONS.map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
       </div>
 
       {/* 一覧 */}
@@ -198,6 +221,7 @@ function AgentCompaniesContent() {
             <AgentCompanyRow
               key={company.domain}
               company={company}
+              metaLabel={sortMetaLabel(company, sortKey)}
               onUpdate={(status, hakenNum, shokaiNum) =>
                 updateMutation.mutate({ domain: company.domain, status, hakenNum, shokaiNum })
               }

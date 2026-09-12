@@ -3,9 +3,16 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// ビルドごとに変わる ID。永続キャッシュ（localStorage）の buster に使う。
-// デプロイすると値が変わり、古い形のデータを復元しなくなる（src/lib/queryPersist.ts）
-const buildId = String(Date.now())
+// 永続キャッシュ（localStorage）の buster に使う ID（src/lib/queryPersist.ts）。
+//
+// **コミットごとに変える。ビルドごとではない。**
+// Date.now() にしていたため、同じコミットでもビルドのたびに値が変わり、
+// バンドルの内容が変わってチャンク名のハッシュまで変わっていた。
+// Vercel はプロジェクトが2つある（akinavi-hr-ai / akinavi-hr-ai-aws）ので、
+// 同じコミットでも別々のハッシュが生成され、**再デプロイのたびに開いている
+// タブが全部「読み込みに失敗」になる**状態だった（2026-09-12）。
+// コミットSHAなら中身が変わったときだけハッシュが変わる。
+const buildId = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ?? `dev-${Date.now()}`
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -20,8 +27,10 @@ export default defineConfig({
       workbox: {
         // /docs/ 配下はService Workerを経由せずサーバーから直接取得（PDF等の静的ファイル）
         navigateFallbackDenylist: [/^\/docs\//],
-        // JSバンドル・CSS・画像をキャッシュ（初回以降は即時表示）
-        globPatterns: ['**/*.{js,css,html,ico,svg,png,woff2}'],
+        // JSバンドル・CSS・画像をキャッシュ（初回以降は即時表示）。
+        // json を入れているのは人材マップの地図データ（japan.topojson・425KB）のため。
+        // 漏れていたので開くたびに再検証が走っていた（2026-09-12 実測）
+        globPatterns: ['**/*.{js,css,html,ico,svg,png,woff2,json}'],
         // pdfjs等の大きなチャンクもキャッシュ対象
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
         runtimeCaching: [
