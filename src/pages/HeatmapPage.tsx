@@ -6,6 +6,7 @@ import { feature } from 'topojson-client'
 import type { Topology } from 'topojson-specification'
 import { fetchPrefectureCounts, fetchSkillNames, fetchCandidatesByPrefecture } from '../lib/db/heatmap'
 import { BookmarkStar } from '../components/BookmarkStar'
+import { readRecentSkills, writeRecentSkills, pushRecentSkill } from '../lib/recentSkillFilters'
 import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
@@ -57,6 +58,8 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   const [selectedPref, setSelectedPref] = useState<string | null>(null)
   const [zoom, setZoom] = useState<ZoomState>(ZOOM_NONE)
   const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([])
+  // 最近の絞り込みは端末ごとに覚える（認証が無くユーザーを識別できないため）
+  const [recentSkills, setRecentSkills] = useState<string[]>(() => readRecentSkills())
   const svgRef = useRef<SVGSVGElement>(null)
 
   useEffect(() => {
@@ -119,13 +122,27 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   }, [inputValue, skillFilter, skillNames])
 
   function applySkill(skill: string) {
-    setSkillFilter(skill)
-    setInputValue(skill)
+    const s = skill.trim()
+    setSkillFilter(s)
+    setInputValue(s)
+    // 空打ち（クリア相当）は履歴に残さない
+    if (!s) return
+    setRecentSkills((prev) => {
+      const next = pushRecentSkill(prev, s)
+      writeRecentSkills(next)
+      return next
+    })
   }
 
   function clearFilter() {
     setSkillFilter('')
     setInputValue('')
+  }
+
+  /** 履歴だけを消す。いま掛かっている絞り込みには触らない */
+  function clearRecent() {
+    setRecentSkills([])
+    writeRecentSkills([])
   }
 
   function handleMouseMove(e: React.MouseEvent<SVGPathElement>, name: string, count: number) {
@@ -225,6 +242,35 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
               </button>
             )}
           </div>
+
+          {/* 最近の絞り込み（この端末に保存。同じスキルを打ち直す手間を省く） */}
+          {recentSkills.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap mt-1.5">
+              <span className="text-[10px] text-gray-400 shrink-0">最近:</span>
+              {recentSkills.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => applySkill(s)}
+                  className={`text-[11px] rounded-full px-2 py-0.5 border transition-colors ${
+                    s === skillFilter
+                      ? 'bg-blue-50 border-blue-300 text-blue-700 font-medium'
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {s}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={clearRecent}
+                title="この端末の履歴を消す"
+                className="text-[10px] text-gray-300 hover:text-gray-500 px-1"
+              >
+                ×
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
