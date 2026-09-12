@@ -1,0 +1,36 @@
+{
+  // テストだけ node の型を通す。
+  // テストは本番の index.ts を readFileSync で読んで関数を切り出す作りなので
+  // node:fs / node:path / __dirname が要る（レプリカを作らないための仕組み）。
+  // 画面のコードに同じ型を通すと fs や process をうっかり書けてしまうため、
+  // tsconfig.app.json は types: ["vite/client"] のままにして、ここだけ分ける。
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["vite/client", "node", "vitest/globals"],
+    "skipLibCheck": true,
+
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  // globals.d.ts は、テストから import した本体コード（queryPersist 等）が
+  // __APP_BUILD_ID__ を参照するので必要
+  "include": [
+    "src/globals.d.ts",
+    "src/**/__tests__/**/*",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/test"
+  ]
+}

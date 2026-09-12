@@ -21,5 +21,9 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  // テストは tsconfig.test.json 側で見る。
+  // テストは index.ts を readFileSync で読んで切り出すため node の型が要るが、
+  // 画面のコードに node の型を通すと fs や process をうっかり書けてしまう（ブラウザで動かない）。
+  "include": ["src"],
+  "exclude": ["src/**/__tests__/**", "src/**/*.test.ts", "src/**/*.test.tsx", "src/test"]
 }

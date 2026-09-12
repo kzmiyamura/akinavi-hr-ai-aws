@@ -14,6 +14,18 @@
 - **Testing**: Vitest, React Testing Library, MSW
 - **Deployment**: Vercel (Frontend), Supabase (Backend)
 
+### フロントの配信でハマった点（2026-09-12）
+- **型チェックは `npx tsc -b`。** `npx tsc --noEmit` はルートの `tsconfig.json`（`files: []`）
+  だけを見るので**1ファイルも検査せず成功する**。長いあいだ型エラーを見逃していた
+- `vercel.json` の `buildCommand` は **`tsc -b && vite build`**。
+  `vite build` だけにすると型エラーがそのまま本番に出る
+- `rewrites` から **`assets/` を除外している**。除外しないと、消えたチャンクの URL に
+  `index.html` が 200 で返り、ブラウザが
+  「Failed to fetch dynamically imported module」を出す（404 なら原因が一目で分かる）
+- 遅延読み込みは `lazy` ではなく **`src/lib/lazyPage.ts` の `lazyPage`** を使う。
+  デプロイでチャンク名のハッシュが変わると、開いたままのタブが消えたファイルを掴むため、
+  1回だけ自動でリロードする
+
 ---
 
 ## 3. Claude Code 操作権限ポリシー
@@ -23,7 +35,7 @@
 | カテゴリ | 具体例 |
 |---|---|
 | ファイル読み書き | Read / Edit / Write |
-| TypeScript ビルド確認 | `npx tsc --noEmit` |
+| TypeScript ビルド確認 | **`npx tsc -b`**（`npx tsc --noEmit` は `files:[]` のルート設定だけを見るので**1ファイルも検査せず成功する**・2026-09-12 発覚） |
 | テスト実行 | `npm test` / `npx vitest run` |
 | 依存パッケージ追加 | `npm install <package>` |
 | Edge Function デプロイ | `bash scripts/check-and-deploy-edge.sh <function>` |

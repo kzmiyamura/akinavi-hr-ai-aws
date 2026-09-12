@@ -14,7 +14,10 @@ import { resolve } from 'node:path'
 
 const SRC = resolve(__dirname, '../../../supabase/functions/inbound-email/index.ts')
 
-function loadGate(): (name: string | null | undefined) => boolean {
+function loadGate(): {
+  isPlausibleStation: (name: string | null | undefined) => boolean
+  stationNameCandidates: (station: string) => string[]
+} {
   const src = readFileSync(SRC, 'utf8')
   const pick = (name: string) => {
     const m = src.match(new RegExp(`function ${name}\\(([\\s\\S]*?)\\n\\}`))

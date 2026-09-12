@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect, useMemo, useState, Component } from 'react'
+import { Suspense, useEffect, useMemo, useState, Component } from 'react'
 import type { ReactNode } from 'react'
+import { lazyPage, isChunkLoadError } from './lib/lazyPage'
 import { QueryClient } from '@tanstack/react-query'
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
 import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister'
@@ -16,13 +17,16 @@ import type { Page } from './components/Layout'
 import { MatchingPage } from './pages/MatchingPage'
 import { AuthCallbackPage } from './pages/AuthCallbackPage'
 
-const CandidatePage = lazy(() => import('./pages/CandidatePage').then(m => ({ default: m.CandidatePage })))
-const ProjectPage = lazy(() => import('./pages/ProjectPage').then(m => ({ default: m.ProjectPage })))
-const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
-const CandidateDetailPage = lazy(() => import('./pages/CandidateDetailPage').then(m => ({ default: m.CandidateDetailPage })))
-const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage').then(m => ({ default: m.ProjectDetailPage })))
-const HeatmapPage = lazy(() => import('./pages/HeatmapPage').then(m => ({ default: m.HeatmapPage })))
-const NotificationsPage = lazy(() => import('./pages/NotificationsPage').then(m => ({ default: m.NotificationsPage })))
+// lazy ではなく lazyPage を使う。デプロイでチャンク名のハッシュが変わると、
+// 開いたままのタブが消えたファイルを掴んで «ページの読み込みに失敗しました» になる。
+// lazyPage はそれを検知して1回だけ自動で再読み込みする（2026-09-12 営業から報告）
+const CandidatePage = lazyPage(() => import('./pages/CandidatePage').then(m => ({ default: m.CandidatePage })))
+const ProjectPage = lazyPage(() => import('./pages/ProjectPage').then(m => ({ default: m.ProjectPage })))
+const SettingsPage = lazyPage(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
+const CandidateDetailPage = lazyPage(() => import('./pages/CandidateDetailPage').then(m => ({ default: m.CandidateDetailPage })))
+const ProjectDetailPage = lazyPage(() => import('./pages/ProjectDetailPage').then(m => ({ default: m.ProjectDetailPage })))
+const HeatmapPage = lazyPage(() => import('./pages/HeatmapPage').then(m => ({ default: m.HeatmapPage })))
+const NotificationsPage = lazyPage(() => import('./pages/NotificationsPage').then(m => ({ default: m.NotificationsPage })))
 import type { DataEnv } from './lib/dataEnv'
 import {
   applyDemoKeyFromUrlToggle,
@@ -45,9 +49,19 @@ class TabErrorBoundary extends Component<
   }
   render() {
     if (this.state.error) {
+      // チャンクが取れない＝自動再読み込みを1回試してもダメだった状態。
+      // 回線が切れているか、配信側がまだ新しいファイルを配れていない。
+      // 原因が違えば直し方も違うので、同じ赤文字にまとめない
+      const isChunk = isChunkLoadError(this.state.error)
       return (
         <div className="flex flex-col items-center justify-center p-10 gap-4 text-center">
           <p className="text-red-600 font-medium">ページの読み込みに失敗しました</p>
+          {isChunk && (
+            <p className="text-sm text-gray-600 max-w-sm">
+              アプリが更新されたか、通信が切れています。
+              少し待ってから再読み込みしてください。
+            </p>
+          )}
           <p className="text-xs text-gray-400 max-w-sm break-all">{this.state.error.message}</p>
           <button
             onClick={() => { this.setState({ error: null }); window.location.reload() }}

@@ -1,7 +1,10 @@
 {
+  // ⚠ 型チェックは `npx tsc -b`。`npx tsc --noEmit` は files:[] のここだけを見るので
+  //   **1ファイルも検査せず成功する**（2026-09-12 に発覚。型エラーを見逃していた）
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },
-    { "path": "./tsconfig.node.json" }
+    { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.test.json" }
   ]
 }

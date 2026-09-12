@@ -1,5 +1,6 @@
 {
-  "buildCommand": "vite build",
+  "//": "buildCommand から tsc -b を外すと型エラーが本番に出る（2026-09-12 に発覚）。外さないこと。",
+  "buildCommand": "tsc -b && vite build",
   "outputDirectory": "dist",
   "framework": "vite",
   "functions": {
@@ -9,6 +10,6 @@
   },
   "rewrites": [
     { "source": "/docs/(.*)", "destination": "/docs/$1" },
-    { "source": "/((?!docs/).*)", "destination": "/" }
+    { "source": "/((?!docs/|assets/).*)", "destination": "/" }
   ]
 }
