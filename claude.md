@@ -94,6 +94,9 @@
 - `node scripts/reverify_agent_licenses.mjs <入力json> <出力json>` — agent_companies を一括で引き直す（結果はJSON、DBは触らない）
 - `node scripts/gen_agent_license_repair.mjs <出力sql> <結果json>...` — 上の結果から本番修復SQLを生成（人が読んでから流す）
 - `node scripts/audit_agent_company_names.mjs <会社名json>` — 既存の会社名を今の検閲に通し直して壊れている行を出す
+- `node scripts/archive_local.mjs [--dry-run] [--dir <保存先>]` — 本番の控えをローカルに増分で貯める（既定 `~/akinavi-archive`）
+- `node scripts/archive_query.mjs summary|daily|company|missed` — **控えを集計する。本番を引かない**。
+  人材は7日で消えるので、過去との比較はこちらで行う（egress ゼロ）
 
 ### Excel/Word解析 精度改善ループ
 
