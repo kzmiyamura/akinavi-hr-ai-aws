@@ -613,11 +613,38 @@ async function markAsUnread(accessToken: string, messageId: string): Promise<voi
   })
 }
 
-async function deleteMessage(accessToken: string, messageId: string): Promise<void> {
-  await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${accessToken}` },
+/**
+ * 処理済みメールを「削除済みアイテム」へ**移動**する。
+ *
+ * 以前は `DELETE /me/messages/{id}` を呼んでいたが、このアカウントでは
+ * **完全削除**になっていて原本がどこにも残らなかった（2026-09-12 実測）。
+ *   ・Outlook.com の仕様では削除済みアイテムは30日保持・ユーザー変更不可
+ *   ・なのに 9/11 に処理した 2,337 通は1通も残っていなかった
+ *   ・同日処理ぶんも受信トレイ・迷惑メール・削除済みのどこにも無かった
+ *
+ * 原本が消えると困ることが2つある:
+ *   1. 取りこぼし（人材メールの19.4%が未登録）の原因を後から追えない
+ *   2. `mode='recover'` が削除済みから読み直す設計なのに、読む先が空で機能しない
+ *
+ * 明示的に移動すれば、30日ぶんの原本が Outlook 側に残り、
+ * ローカル（このリポジトリの scripts/outlook_export.ps1）が回収できる。
+ * 30日を過ぎた分は Outlook が自動で消すので、放っておいても溢れない。
+ * 画面上の見え方（受信トレイから消える）は DELETE と変わらない。
+ */
+async function moveToDeletedItems(accessToken: string, messageId: string): Promise<void> {
+  const res = await fetch(`https://graph.microsoft.com/v1.0/me/messages/${messageId}/move`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ destinationId: 'deleteditems' }),
   })
+  if (!res.ok) {
+    // 失敗を握りつぶすと、受信トレイに残って次回また処理され二重登録になる。
+    // 呼び出し側で捕まえられるよう投げる（従来どおりログには残す）
+    throw new Error(`削除済みへの移動に失敗 (${res.status}): ${(await res.text()).slice(0, 200)}`)
+  }
 }
 
 // ---- Microsoft Graph: 添付ファイル取得 ----
@@ -1197,13 +1224,15 @@ async function pollAccount(
     const ruleResolved = preFilterResults.filter(r => r.preResult !== 'skip' && r.preResult !== 'unknown')
     const needAi       = preFilterResults.filter(r => r.preResult === 'unknown')
 
-    // ルールでスキップ確定したものを削除
+    // ルールでスキップ確定したものを削除済みへ移す
     for (const { email } of ruleSkipped) {
       try {
-        if (mode === 'incremental' && !noSideEffect) await deleteMessage(accessToken, email.id)
-        console.log(`[poll] 事前フィルタースキップ${noSideEffect ? '(非削除)' : '・削除'}: "${email.subject}"`)
+        if (mode === 'incremental' && !noSideEffect) await moveToDeletedItems(accessToken, email.id)
+        console.log(`[poll] 事前フィルタースキップ${noSideEffect ? '(移動なし)' : '・削除済みへ移動'}: "${email.subject}"`)
         skipped++
-      } catch { /* ignore */ }
+      } catch (e) {
+        console.error(`[poll] 事前フィルタースキップ後の移動に失敗: "${email.subject}": ${String(e).slice(0, 200)}`)
+      }
     }
 
     console.log(`[poll] ${config.configKey}: 事前フィルター結果 skip=${ruleSkipped.length} resolved=${ruleResolved.length} needAi=${needAi.length}`)
@@ -1235,8 +1264,8 @@ async function pollAccount(
     for (const { email, emailType } of toProcessLimited) {
       try {
         if (emailType === 'other') {
-          if (mode === 'incremental' && !noSideEffect) await deleteMessage(accessToken, email.id)
-          console.log(`[poll] スキップ${noSideEffect ? '(非削除)' : '・削除'} (other): "${email.subject}" (${config.configKey})`)
+          if (mode === 'incremental' && !noSideEffect) await moveToDeletedItems(accessToken, email.id)
+          console.log(`[poll] スキップ${noSideEffect ? '(移動なし)' : '・削除済みへ移動'} (other): "${email.subject}" (${config.configKey})`)
           skipped++
           continue
         }
@@ -1338,12 +1367,20 @@ async function pollAccount(
           await callInboundEmail(email, attachments, finalType, config.dataEnv, '', savedRawPaths)
         }
         processed++
-        // 処理完了後にメールを削除（DB に保存済みのため Outlook 側は不要）
-        // 復旧モード・テストモード(dryNoDelete)は削除しない（再実行できるよう残す）
+        // 処理完了後に「削除済みアイテム」へ移す。
+        // DB には保存済みだが、**原本は捨てない**。Outlook 側に30日残り、
+        // その間にローカル（scripts/outlook_export.ps1）が回収する。
+        // 復旧モード・テストモード(dryNoDelete)は動かさない（再実行できるよう残す）
         if (!noSideEffect) {
-          try { await deleteMessage(accessToken, email.id) } catch { /* ignore */ }
+          try {
+            await moveToDeletedItems(accessToken, email.id)
+          } catch (e) {
+            // 移動に失敗すると受信トレイに残り、次回また処理されて二重登録になる。
+            // 握りつぶさずログに出す（既読にはしてあるので incremental では拾われない）
+            console.error(`[poll] 削除済みへの移動に失敗: "${email.subject}": ${String(e).slice(0, 200)}`)
+          }
         }
-        console.log(`[poll] 処理完了${noSideEffect ? '(非削除)' : '・削除'}: "${email.subject}" type=${finalType} (${config.configKey})`)
+        console.log(`[poll] 処理完了${noSideEffect ? '(移動なし)' : '・削除済みへ移動'}: "${email.subject}" type=${finalType} (${config.configKey})`)
       } catch (e) {
         // 失敗したら未読に戻して次回ポーリングで再試行
         const msg = `メール処理失敗 "${email.subject}": ${String(e)}`
