@@ -591,11 +591,23 @@ const COMPANY_NG_ROLE_ONLY =
   /^(QA|PM|PMO|PL|TL|SE|PG|BSE|インフラ|テスター|テスト|コンサル|コンサルタント|フリーランス|エンジニア|開発|運用|保守|営業|事務|ヘルプデスク|キッティング)(?:[\s　\/・、,＋+&]+(?:QA|PM|PMO|PL|TL|SE|PG|BSE|インフラ|テスター|テスト|コンサル|コンサルタント|フリーランス|エンジニア|開発|運用|保守|営業|事務|ヘルプデスク|キッティング))*$/
 /** 一般語だけ。「ご依頼」「フリーランス」 */
 const COMPANY_NG_GENERIC =
-  /^(ご?依頼|ご?紹介|人材|要員|案件|不明|担当|営業|弊社|当社|自社|御社|貴社|プロパ|正社員|個人|直請|元請)$/
+  /^(ご?依頼|ご?紹介|人材|要員|案件|不明|担当|営業|弊社|当社|自社|御社|貴社|プロパ|正社員|個人|直請|元請|企業|中小企業|大企業|法人|会社|組合)$/
 /** ランダムな英数字列。「dYCOy6foGK」（識別子や短縮URLの断片） */
 const COMPANY_NG_RANDOM = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z0-9]{8,}$/
 /** 法人格を含むか（含む場合は役割語・一般語の判定を通す） */
 const COMPANY_HAS_CORP = /(株式会社|有限会社|合同会社|一般社団法人|医療法人|\(株\)|（株）|㈱|Inc\.?|Corp\.?|LLC|Ltd\.?|Co\.,?\s*Ltd)/
+/** 法人格だけを外して識別名を取り出す（「株式会社営業部」→「営業部」） */
+const COMPANY_CORP_STRIP =
+  /^(?:株式会社|有限会社|合同会社|合資会社|一般社団法人|一般財団法人|医療法人|\(株\)|（株）|㈱)[\s　]*|[\s　]*(?:株式会社|有限会社|合同会社|合資会社|\(株\)|（株）|㈱)$/g
+/**
+ * 法人格を外すと部署名しか残らない。「株式会社営業部」（mts-soft.co.jp）
+ * 「株式会社西日本営業部」（alten.com）が実際に登録されていた。
+ * 署名の「株式会社◯◯ 西日本営業部」から社名部分だけ落ちた形。
+ */
+const COMPANY_NG_DEPT_ONLY =
+  /^(?:東日本|西日本|関東|関西|東京|大阪|名古屋|福岡|札幌|北海道|九州|中部|東北|中国|四国)?(?:営業|技術|開発|人事|総務|経理|管理|事業|企画|システム|情報|製造|品質|採用)?(?:本部|支社|支店|事業部|部|課|室|係|グループ|チーム|センター)$/
+/** 法人格を外すと数字・記号しか残らない。「6819_株式会社」（ait.co.jp）が実際に登録されていた */
+const COMPANY_NG_NO_IDENT = /^[0-9０-９_＿\-‐－–—\s　.．,，]*$/
 
 /** 会社名として妥当か。ダメなら null にして「不明」として扱う（誤った社名より無しが安全） */
 function isPlausibleCompanyName(name: string): boolean {
@@ -607,19 +619,57 @@ function isPlausibleCompanyName(name: string): boolean {
   if (COMPANY_NG_PERSON.test(s)) return false
   if (COMPANY_NG_DATE.test(s)) return false
   if (COMPANY_NG_RANDOM.test(s)) return false
-  // 役割語・一般語だけの場合は、法人格が付いていれば社名として通す
-  if (!COMPANY_HAS_CORP.test(s)) {
-    if (COMPANY_NG_ROLE_ONLY.test(s)) return false
-    if (COMPANY_NG_GENERIC.test(s)) return false
-  }
+  // 法人格が付いていても、それを外した識別名が部署名・役割語・一般語・数字だけなら
+  // 社名ではない。法人格の有無を通行証にしていたため「株式会社営業部」「6819_株式会社」
+  // が素通りしていた（2026-09-12・派遣会社管理の一覧で発覚）
+  const core = s.replace(COMPANY_CORP_STRIP, '').trim()
+  const target = COMPANY_HAS_CORP.test(s) ? core : s
+  if (COMPANY_HAS_CORP.test(s) && COMPANY_NG_DEPT_ONLY.test(core)) return false
+  if (COMPANY_HAS_CORP.test(s) && COMPANY_NG_NO_IDENT.test(core)) return false
+  if (COMPANY_NG_ROLE_ONLY.test(target)) return false
+  if (COMPANY_NG_GENERIC.test(target)) return false
   return true
+}
+
+/** 自社ドメイン。派遣・紹介会社の一覧には載せない */
+const AGENT_OWN_DOMAIN = 'i-voice.co.jp'
+/** 会社のドメインではない送信元（フリーメール・デモ用） */
+const AGENT_NG_DOMAIN = /(^|\.)(gmail|yahoo|outlook|hotmail|icloud|demo\.invalid)(\.|$)/
+
+/**
+ * この送信元を「派遣・紹介会社」として登録してよいか。
+ *
+ * 会社名も許可番号も取れない送信元を登録しない。理由は2つ:
+ *   ・verify-agent-license は社名で引くので、名前が無い行は**永久に未確認のまま**
+ *   ・画面には「（会社名不明）」として並ぶだけで、免許確認の役に立たない
+ * 実測（2026-09-12）: 321社のうち53社が会社名なしで、その中身は迷惑メールの
+ * 送信ドメイン（arm.liangjiusheng.com 等）・通知メール・test.local / example.com だった。
+ * 人材が purge されても会社の行だけは残り続けるので、入口で止めないと溜まる一方になる。
+ *
+ * 後のメールで署名が取れれば、そのとき upsert されて載る。取りこぼしにはならない。
+ */
+function shouldRegisterAgentCompany(
+  emailDomain: string | null,
+  companyName: string | null,
+  licenseNumber: string | null | undefined,
+): boolean {
+  if (!emailDomain) return false
+  if (emailDomain === AGENT_OWN_DOMAIN) return false
+  if (AGENT_NG_DOMAIN.test(emailDomain)) return false
+  return Boolean(companyName || licenseNumber)
 }
 
 function sanitizeFromCompany(value: string | null | undefined): string | null {
   if (!value) return null
-  let trimmed = value.trim()
-  // 行頭の記号・箇条書き（「ーPlayGram株式会社」「・NG：株式会社◯◯」）を落とす
-  trimmed = trimmed.replace(/^[・･\-‐−ー–—:：、。\s　]+/, '')
+  // ゼロ幅文字（HTMLメールの装飾由来）。目に見えないまま社名に混ざり、
+  // 検索も突合も一致しなくなる（prod 実害:「‍お​届」が社名として登録されていた）
+  let trimmed = value.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim()
+  // 行頭の記号・箇条書き・罫線（「ーPlayGram株式会社」「・NG：株式会社◯◯」
+  // 「━━アエスト株式会社」）を落とす
+  trimmed = trimmed.replace(/^[・･\-‐−ー–—━─―＝=■□●○◆◇▼▲★☆*＊#＃:：、。\s　]+/, '')
+  // 末尾の罫線（「株式会社WizTech━━━━━━━━━┓」実害）。
+  // 長音「ー」とハイフンは社名の一部になりうる（「株式会社スカイツリー」）ので外さない
+  trimmed = trimmed.replace(/[━─―＝=■□●○◆◇▼▲★☆＊#＃┓┏┛┗│┃｜|\s　]+$/, '')
   // 末尾の敬称（「株式会社エクスプラザ様」）を落とす。宛先判定をすり抜けて
   // 社名の一部として取り込まれることがある
   trimmed = trimmed.replace(/(?:様|御中|ご担当(?:者様)?)\s*$/, '').trim()
@@ -11508,9 +11558,8 @@ Deno.serve(async (req: Request) => {
           const afterMulti = (t: string, i: number, l: number) => /^[\r\n　 ]*(?:様|御中|ご担当|担当者様)/.test(t.slice(i + l, i + l + 40))
           while ((mMulti = preReMulti.exec(sigAreaMulti)) !== null) { if (!afterMulti(sigAreaMulti, mMulti.index, mMulti[0].length)) bestPreMulti = mMulti }
           const companyName = bestPreMulti ? sanitizeFromCompany(`${bestPreMulti[0].match(preHeadMulti)?.[0] ?? ''}${bestPreMulti[1]}`) : null
-          const ownDomain = 'i-voice.co.jp'
-          if (emailDomain && emailDomain !== ownDomain && !emailDomain.includes('gmail') && !emailDomain.includes('yahoo') && !emailDomain.includes('outlook') && !emailDomain.includes('demo.invalid')) {
-            const { haken, shokai } = extractLicenseNumbers(body)
+          const { haken, shokai } = extractLicenseNumbers(body)
+          if (shouldRegisterAgentCompany(emailDomain, companyName, haken ?? shokai)) {
             const licenseStatus = haken && shokai ? 'both' : haken ? 'haken' : shokai ? 'shokai' : undefined
             const upsertPayload: Record<string, unknown> = { domain: emailDomain, source: 'email' }
             if (companyName) upsertPayload.company_name = companyName
@@ -12216,9 +12265,8 @@ Deno.serve(async (req: Request) => {
       {
         const emailDomain = from ? from.split('@')[1]?.toLowerCase().trim() : null
         const companyName = sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany)
-        const ownDomain = 'i-voice.co.jp'
-        if (emailDomain && emailDomain !== ownDomain && !emailDomain.includes('gmail') && !emailDomain.includes('yahoo') && !emailDomain.includes('outlook') && !emailDomain.includes('demo.invalid')) {
-          const { haken, shokai } = extractLicenseNumbers(body)
+        const { haken, shokai } = extractLicenseNumbers(body)
+        if (shouldRegisterAgentCompany(emailDomain, companyName, haken ?? shokai)) {
           const licenseStatus = haken && shokai ? 'both' : haken ? 'haken' : shokai ? 'shokai' : undefined
           const upsertPayload: Record<string, unknown> = {
             domain: emailDomain,

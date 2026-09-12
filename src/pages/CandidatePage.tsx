@@ -415,7 +415,11 @@ export function CandidateProfileFields({
             </a>
           )}
           {agentInfo?.license_status === 'none' && c.from_company && (
-            <span className="text-xs bg-red-50 text-red-500 rounded px-1.5 py-0.5">許可未確認</span>
+            <span className="text-xs bg-red-50 text-red-500 rounded px-1.5 py-0.5">免許なし</span>
+          )}
+          {/* 引けなかっただけの状態。赤で「なし」と出すと取引可否を誤らせる（2026-09-12） */}
+          {agentInfo?.license_status === 'notfound' && c.from_company && (
+            <span className="text-xs bg-amber-50 text-amber-700 rounded px-1.5 py-0.5">許可番号 照合できず</span>
           )}
           {/* 商流バッジ。マッチング画面と同じ判定にするため共通化した（2026-09-03） */}
           <CommercialFlowBadge flow={commercialFlow} />

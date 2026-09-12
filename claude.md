@@ -75,6 +75,10 @@
 - `node scripts/test_excel_parsing.mjs` — 詳細デバッグ出力（人力調査用）
 - `node scripts/test_excel_anomalies.mjs` — 想定異常系の合成テスト（34ケース）。新しい異常フォーマットを発見したらまずここにケースを足してから修正（テストファースト）
 - `node scripts/sync_extractors.mjs` — index.ts の純粋関数を `_extractors.gen.mjs` に再生成（index.ts を変更したら必ず実行）
+- `node scripts/mhlw_lookup.mjs "<社名>"` — 厚労省サイトで許可番号を引く（DBは触らない）。`--number 派13-xxxxxx` で番号から正式社名を引く
+- `node scripts/reverify_agent_licenses.mjs <入力json> <出力json>` — agent_companies を一括で引き直す（結果はJSON、DBは触らない）
+- `node scripts/gen_agent_license_repair.mjs <出力sql> <結果json>...` — 上の結果から本番修復SQLを生成（人が読んでから流す）
+- `node scripts/audit_agent_company_names.mjs <会社名json>` — 既存の会社名を今の検閲に通し直して壊れている行を出す
 
 ### Excel/Word解析 精度改善ループ
 
@@ -135,6 +139,7 @@ git add -A && git commit -m "fix: ..." && git push
 | `app_config` | アプリ全体設定・Microsoft OAuthトークン保存 |
 | `notification_rules` | 人材ウォッチ通知ルール（通知タブでCRUD）。7/23復旧日にマイグレーション適用 |
 | `notification_log` | 通知送信済み記録（ルール×人材で一意・二重通知防止） |
+| `agent_companies` | 派遣・紹介会社（メール送信元ドメインが主キー）。人材画面「会社管理」で編集。`license_status` は `unknown`（社名が取れず未照合）/ `haken` / `shokai` / `both` / **`notfound`（厚労省サイトで引けなかった＝免許が無いとは限らない）** / `none`（人が免許なしと確認）。`fetch_candidates_for_project` の `p_require_haken` は `haken`/`both` だけ通すので、判定を間違えるとその会社の人材が派遣案件から丸ごと消える |
 
 ### app_config の主要キー
 | キー | 既定 | 内容 |

@@ -751,6 +751,9 @@ function ProjectModeRankCard({
             {isHaken && (
               licenseStatus === 'haken' || licenseStatus === 'both' ? (
                 <span className="text-[10px] bg-blue-100 text-blue-700 rounded px-1.5 py-0.5 font-medium">派遣免許あり</span>
+              ) : licenseStatus === 'notfound' ? (
+                // 厚労省サイトで引けなかっただけ。「なし」と言い切らない（2026-09-12）
+                <span className="text-[10px] bg-amber-100 text-amber-700 rounded px-1.5 py-0.5">派遣免許 照合できず</span>
               ) : licenseStatus === 'none' ? (
                 <span className="flex items-center gap-0.5 text-[10px] bg-red-100 text-red-600 rounded px-1.5 py-0.5 font-medium">
                   <AlertTriangle size={10} />派遣免許なし

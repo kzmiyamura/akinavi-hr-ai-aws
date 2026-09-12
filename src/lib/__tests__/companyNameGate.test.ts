@@ -16,7 +16,9 @@ const SRC = resolve(__dirname, '../../../supabase/functions/inbound-email/index.
 function loadGate(): (name: string) => boolean {
   const src = readFileSync(SRC, 'utf8')
   const pick = (name: string) => {
-    const m = src.match(new RegExp(`const ${name} =\\s*(/[\\s\\S]*?/)\\r?\\n`))
+    // フラグ（COMPANY_CORP_STRIP の g）まで取る。落とすと前株しか外れず、
+    // テストだけ通って本番と挙動が変わる
+    const m = src.match(new RegExp(`const ${name} =\\s*(/[\\s\\S]*?/[gimsuy]*)\\r?\\n`))
     if (!m) throw new Error(`${name} を index.ts から取り出せませんでした`)
     return m[1]
   }
@@ -31,6 +33,9 @@ function loadGate(): (name: string) => boolean {
     const COMPANY_NG_GENERIC = ${pick('COMPANY_NG_GENERIC')};
     const COMPANY_NG_RANDOM = ${pick('COMPANY_NG_RANDOM')};
     const COMPANY_HAS_CORP = ${pick('COMPANY_HAS_CORP')};
+    const COMPANY_CORP_STRIP = ${pick('COMPANY_CORP_STRIP')};
+    const COMPANY_NG_DEPT_ONLY = ${pick('COMPANY_NG_DEPT_ONLY')};
+    const COMPANY_NG_NO_IDENT = ${pick('COMPANY_NG_NO_IDENT')};
     return function (name) {${body[1].replace(/: string/g, '')}\n}
   `
   return new Function(code)() as (name: string) => boolean
@@ -55,6 +60,15 @@ describe('会社名の検閲: 実際に登録されていた誤抽出を弾く',
     ['ご依頼', '一般語'],
     ['フリーランス', '一般語'],
     ['dYCOy6foGK', 'ランダム文字列'],
+    // 2026-09-12 に「派遣・紹介会社管理」の一覧で見つかった実データ。
+    // 法人格が付いていることを通行証にしていたため素通りしていた
+    ['株式会社営業部', '法人格＋部署名だけ・mts-soft.co.jp'],
+    ['株式会社西日本営業部', '法人格＋部署名だけ・alten.com'],
+    ['6819_株式会社', '識別名が数字だけ・ait.co.jp'],
+    ['株式会社中小企業', '法人格＋一般語だけ・smes-chikara.co.jp'],
+    ['株式会社事業部', '法人格＋部署名だけ'],
+    ['株式会社', '法人格だけ'],
+    ['営業部株式会社', '後株でも同じ（COMPANY_CORP_STRIP の g フラグが効いていること）'],
   ]
   for (const [name, why] of NG) {
     it(`弾く: ${name}（${why}）`, () => {
@@ -82,6 +96,12 @@ describe('会社名の検閲: 実在する会社名は通す', () => {
     'キャル(株)',
     'Next IT Consulting株式会社',
     '株式会社Branding Engineer',
+    // 部署名を弾く判定で実在社名まで落とさないこと（識別名が残っていれば通す）
+    '株式会社セントラル',
+    '株式会社東北電力システムズ',
+    '西日本電信電話株式会社',
+    '株式会社DrivenX',
+    '株式会社スカイツリー', // 末尾の長音を罫線と間違えて削らないこと
   ]
   for (const name of OK) {
     it(`通す: ${name}`, () => {

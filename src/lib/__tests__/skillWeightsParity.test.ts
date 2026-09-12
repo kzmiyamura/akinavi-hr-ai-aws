@@ -25,7 +25,10 @@ function loadEdgeVersion() {
   if (!fn) throw new Error('buildSkillWeights を index.ts から取り出せませんでした')
 
   const code = `
-    const SKILL_CATEGORY_WEIGHT = {${table[1]}}
+    // 閉じ括弧の前で必ず改行する。表の最後の行に「// 英語 等」が付いているので、
+    // 改行を挟まないと閉じ括弧までコメントに飲まれる。CRLF のときだけ CR が
+    // 行末として効いて偶然通っていた（Mac の LF チェックアウトでは落ちる・2026-09-12）
+    const SKILL_CATEGORY_WEIGHT = {${table[1]}\n}
     const SKILL_WEIGHT_MAX = ${max[1]}
     ${`function buildSkillWeights(${fn[1]}\n}`
       .replace(/: string\[\]/g, '')

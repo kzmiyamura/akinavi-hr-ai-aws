@@ -9,6 +9,8 @@ const LICENSE_STATUS_OPTIONS: { value: LicenseStatus; label: string; color: stri
   { value: 'haken', label: '派遣可', color: 'text-blue-700' },
   { value: 'shokai', label: '紹介可', color: 'text-green-700' },
   { value: 'both', label: '派遣・紹介可', color: 'text-blue-700' },
+  // 自動照合が引けなかった状態。「免許なし」と別に持つ（断定できるのは人だけ）
+  { value: 'notfound', label: '照合できず', color: 'text-amber-700' },
   { value: 'none', label: '免許なし', color: 'text-red-600' },
 ]
 
@@ -41,6 +43,7 @@ function AgentCompanyRow({
           company.license_status === 'haken' || company.license_status === 'both' ? 'bg-blue-100 text-blue-700' :
           company.license_status === 'shokai' ? 'bg-green-100 text-green-700' :
           company.license_status === 'none' ? 'bg-red-100 text-red-600' :
+          company.license_status === 'notfound' ? 'bg-amber-100 text-amber-700' :
           'bg-gray-100 text-gray-500'
         }`}>
           {statusOpt?.label ?? '未確認'}
@@ -143,6 +146,7 @@ function AgentCompaniesContent() {
   const statusCounts = {
     unknown: companies.filter(c => c.license_status === 'unknown').length,
     haken: companies.filter(c => c.license_status === 'haken' || c.license_status === 'both').length,
+    notfound: companies.filter(c => c.license_status === 'notfound').length,
     none: companies.filter(c => c.license_status === 'none').length,
   }
 
@@ -150,6 +154,7 @@ function AgentCompaniesContent() {
     <div className="space-y-3">
       <p className="text-xs text-gray-400">
         メール送信元の会社一覧です。派遣免許の確認状況を手動で設定できます。
+        「照合できず」は厚労省サイトで引けなかっただけで、免許が無いという意味ではありません。
       </p>
 
       {/* サマリー */}
@@ -157,6 +162,7 @@ function AgentCompaniesContent() {
         <span className="bg-gray-100 text-gray-600 rounded px-2 py-1">全 {companies.length} 社</span>
         <span className="bg-orange-50 text-orange-600 rounded px-2 py-1">未確認 {statusCounts.unknown}社</span>
         <span className="bg-blue-50 text-blue-700 rounded px-2 py-1">派遣可 {statusCounts.haken}社</span>
+        <span className="bg-amber-50 text-amber-700 rounded px-2 py-1">照合できず {statusCounts.notfound}社</span>
         <span className="bg-red-50 text-red-600 rounded px-2 py-1">免許なし {statusCounts.none}社</span>
       </div>
 

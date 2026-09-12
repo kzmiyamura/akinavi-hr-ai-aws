@@ -1,6 +1,14 @@
 import { supabase } from '../supabase'
 
-export type LicenseStatus = 'unknown' | 'haken' | 'shokai' | 'both' | 'none'
+/**
+ * 免許の確認状況。
+ *
+ * `notfound`（照合できず）と `none`（免許なし）は別物。厚労省サイトで引けなかった
+ * だけの会社を「免許なし」と赤字で出していたため、実在の派遣元が取引不可に見え、
+ * さらに p_require_haken の絞り込みでその会社の人材がマッチングから消えていた。
+ * 「無い」と断定してよいのは人が確認したときだけ（2026-09-12）。
+ */
+export type LicenseStatus = 'unknown' | 'haken' | 'shokai' | 'both' | 'notfound' | 'none'
 
 export interface AgentCompany {
   domain: string
@@ -91,6 +99,8 @@ export function licenseStatusLabel(status: LicenseStatus | null): {
       return { label: '派遣・紹介可', color: 'text-blue-700', bg: 'bg-blue-100' }
     case 'none':
       return { label: '免許なし', color: 'text-red-700', bg: 'bg-red-100' }
+    case 'notfound':
+      return { label: '照合できず', color: 'text-amber-700', bg: 'bg-amber-100' }
     case 'unknown':
       return { label: '未確認', color: 'text-gray-500', bg: 'bg-gray-100' }
     default:

@@ -24,7 +24,10 @@ function loadGate(): (v: string) => boolean {
   if (!fn) throw new Error('isValidNationality を index.ts から取り出せませんでした')
 
   const code = `
-    const NATIONALITY_NAMES = [${names[1]}]
+    // 閉じ括弧の前で必ず改行する。最後の要素に行コメントが付いていると、
+    // 改行を挟まない限り括弧までコメントに飲まれる（CRLF のときだけ CR が
+    // 行末になって偶然通っていた・2026-09-12）
+    const NATIONALITY_NAMES = [${names[1]}\n]
     ${`function isValidNationality(${fn[1]}\n}`
       .replace(/: string/g, '')
       .replace(/: boolean/g, '')}
