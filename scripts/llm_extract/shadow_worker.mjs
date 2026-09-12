@@ -762,9 +762,15 @@ async function boxQueue() {
   //    打ち切った失敗（box_attempts が上限）は二度と拾わない。
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
   const retryBefore = new Date(Date.now() - BOX_RETRY_AFTER_MIN * 60 * 1000).toISOString()
+  //    _llm_stage の条件も外した。「進行中は触らない」ための除外だったが、
+  //    `is.null` は **完了(done)・打ち切り(failed) まで除外**してしまう。
+  //    AI校正が終わった人は二度と Box を取りに行けない状態だった。
+  //    そもそもこのワーカーは cycle() → boxQueue() を順に回す単一スレッドで、
+  //    LLM 処理と Box 取込が同時に走ることはない（上のコメントに既出）。
+  //    進行中(body/sonnet)の印は起動時の掃除で消える。
   const auto = manual.length >= 3 ? [] : (await rest(
     `candidates?select=${BOX_SELECT}&box_status=eq.pending&box_url=not.is.null` +
-    `&data_env=eq.${DATA_ENV}&raw_profile->>_llm_stage=is.null` +
+    `&data_env=eq.${DATA_ENV}` +
     `&box_attempts=lt.${BOX_MAX_ATTEMPTS}` +
     `&or=(box_tried_at.is.null,box_tried_at.lt.${encodeURIComponent(retryBefore)})` +
     `&created_at=gte.${encodeURIComponent(since)}` +
