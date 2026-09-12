@@ -19,6 +19,9 @@
   だけを見るので**1ファイルも検査せず成功する**。長いあいだ型エラーを見逃していた
 - `vercel.json` の `buildCommand` は **`tsc -b && vite build`**。
   `vite build` だけにすると型エラーがそのまま本番に出る
+- **`vercel.json` にコメント用の `"//"` キーを足さない。** Vercel は未知の
+  トップレベルプロパティを弾き、**ビルドに入る前にデプロイが失敗する**
+  （2026-09-12 に実際に失敗させた）。メモはこのファイルに書く
 - `rewrites` から **`assets/` を除外している**。除外しないと、消えたチャンクの URL に
   `index.html` が 200 で返り、ブラウザが
   「Failed to fetch dynamically imported module」を出す（404 なら原因が一目で分かる）
