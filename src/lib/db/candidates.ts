@@ -34,6 +34,8 @@ export interface Candidate {
   drive_url: string | null
   box_url: string | null
   box_status: string | null
+  /** Box取込の失敗理由。画面に出す（以前はワーカーのログにしか無かった・2026-09-12） */
+  box_error?: string | null
   desired_rate: string | null
   from_company: string | null
 }
@@ -393,7 +395,7 @@ export async function fetchCandidatesPage(
     .select(
       // AI校正の状態は raw_profile 内にあるが、一覧では通信量削減のため raw_profile 全体を
       // 取得していない。必要な2キーだけを JSON パス指定で取り出す（2026-08-10）
-      'id, name, email, phone, skills, experience_years, desired_rate, from_company, resume_url, drive_url, box_url, box_status, created_at, updated_at, duplicate_flag, bookmarked, merged_into, data_env, created_by, ' +
+      'id, name, email, phone, skills, experience_years, desired_rate, from_company, resume_url, drive_url, box_url, box_status, box_error, created_at, updated_at, duplicate_flag, bookmarked, merged_into, data_env, created_by, ' +
       'llm_checked_at:raw_profile->>_llm_checked_at, llm_stage:raw_profile->>_llm_stage, ' +
       'llm_attempts:raw_profile->>_llm_attempts',
       selectOpts,

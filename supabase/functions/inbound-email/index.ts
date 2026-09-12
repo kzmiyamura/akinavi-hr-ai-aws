@@ -12162,7 +12162,31 @@ Deno.serve(async (req: Request) => {
         }
         if (resumeUrl) updatePayload.resume_url = resumeUrl
         if (dbPayload.from_company) updatePayload.from_company = dbPayload.from_company
-        if (boxUrls.length > 0) { updatePayload.box_url = boxUrls[0]; updatePayload.box_status = 'pending' }
+        // Box の共有リンク。**同じリンクなら状態を戻さない。**
+        //
+        // 以前は再登録のたびに無条件で 'pending' に戻していた。同じ人材が毎日
+        // 再送されてくるため、404 で恒久的に失敗した共有リンクを**毎日引き直して**いた
+        // （2026-09-12 実測: AT / TM / FS が9/05〜9/12 に毎日404）。
+        // リンクが変わったときだけ「新しい紙が来た」とみなして取り直す。
+        if (boxUrls.length > 0) {
+          updatePayload.box_url = boxUrls[0]
+          const { data: prev } = await supabase
+            .from('candidates')
+            .select('box_url, box_status')
+            .eq('id', existingCandidateId)
+            .maybeSingle()
+          const urlChanged = (prev?.box_url ?? null) !== boxUrls[0]
+          if (urlChanged) {
+            // 新しいリンク＝別の紙。試行回数と理由をまっさらにしてやり直す
+            updatePayload.box_status = 'pending'
+            updatePayload.box_attempts = 0
+            updatePayload.box_error = null
+            updatePayload.box_tried_at = null
+          } else if (prev?.box_status !== 'failed' && prev?.box_status !== 'enriched') {
+            // 同じリンクで、まだ決着していないものだけ再開させる
+            updatePayload.box_status = 'pending'
+          }
+        }
         const { error: updateError } = await supabase
           .from('candidates')
           .update(updatePayload)

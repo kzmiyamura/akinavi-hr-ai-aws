@@ -651,9 +651,13 @@ async function recommendCycle() {
 //   別人のデータが混ざるためスキップする（同一 from+件名 の兄弟レコードで判定）
 const BOX_POLL_MS = 30 * 1000
 const CAND_SELECT = 'id,name,resume_url,raw_profile,created_at,desired_rate,from_company,experience_years,skills'
-const BOX_SELECT = 'id,name,box_url,data_env,from_company,desired_rate,' +
+const BOX_SELECT = 'id,name,box_url,data_env,from_company,desired_rate,box_attempts,' +
   'mailfrom:raw_profile->>from,subject:raw_profile->>subject,body:raw_profile->>text'
 const AUTO_BOX_PER_POLL = 2   // 全自動取込は1ポーリング2人まで（手動依頼を優先）
+/** 一時的な失敗を何回まで試すか。404 等の恒久的な失敗はこの値まで一気に飛ばして打ち切る */
+const BOX_MAX_ATTEMPTS = Number(process.env.SHADOW_BOX_MAX_ATTEMPTS ?? 3)
+/** 一時的な失敗のあと、次に試すまで空ける時間（分） */
+const BOX_RETRY_AFTER_MIN = Number(process.env.SHADOW_BOX_RETRY_MIN ?? 60)
 
 /** 同一メール（from+件名）から複数人が登録されていたら true（再解析でデータ混線するため除外） */
 async function hasSiblings(c) {
@@ -710,16 +714,36 @@ async function processBoxCandidate(c) {
     await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'enriched' }) })
     log(`  [box:${c.name}] 完了`)
   } catch (e) {
-    log(`  [box:${c.name}] 失敗:`, String(e).slice(0, 200))
-    await rest(`candidates?id=eq.${c.id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'failed' }) }).catch(() => {})
+    const reason = String(e).slice(0, 300)
+    log(`  [box:${c.name}] 失敗:`, reason)
+    // 何度やっても直らない失敗は、その場で打ち切る。
+    // 以前は理由を見ずに 'failed' にするだけで、inbound-email が再登録時に
+    // 状態を戻すため**毎日404を引き直していた**（2026-09-12 実測）。
+    const permanent = isPermanentBoxFailure(reason)
+    await rest(`candidates?id=eq.${c.id}`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({
+        box_status: 'failed',
+        box_error: reason,
+        box_attempts: permanent ? BOX_MAX_ATTEMPTS : (Number(c.box_attempts ?? 0) + 1),
+        box_tried_at: new Date().toISOString(),
+      }),
+    }).catch(() => {})
   }
+}
+
+/** 何度やっても直らない失敗か。リンクが無い・DLが禁止されている、はブラウザでも直らない */
+function isPermanentBoxFailure(reason) {
+  return /box page 40[0-9]|returned html|parse failed|共有リンク/i.test(reason)
 }
 
 async function boxQueue() {
   if (state.dayCount >= MAX_PER_DAY) return
   // ① 手動依頼（UIボタン）を最優先
   const manual = await rest(
-    `candidates?select=${BOX_SELECT}&box_status=eq.fetch_requested&order=created_at.asc&limit=3`) ?? []
+    `candidates?select=${BOX_SELECT}&box_status=eq.fetch_requested&box_attempts=lt.${BOX_MAX_ATTEMPTS}` +
+    `&order=created_at.asc&limit=3`) ?? []
   // ② 全自動取込: 経歴書未取得（resume_url なし）の pending prod 人材。
   //    旧条件は「_llm_checked_at がある＝AI校正済み」を要求していた（2026-08-10）。
   //    本文LLM処理との競合を避ける意図だったが、ワーカーは cycle() → boxQueue() を
@@ -730,10 +754,19 @@ async function boxQueue() {
   //    順序としてもBoxで経歴書を取ってから校正する方が良い（校正時に経歴書を読める）。
   //    進行中のものだけは触らないよう _llm_stage で除外する。
   //    古い在庫を掘り返さないよう本サイクルと同じ LOOKBACK_DAYS の足切りは残す
+  //    2026-09-12: `resume_url=is.null` を外した。
+  //    「経歴書がまだ無い人」だけを対象にしていたため、Box URL を持つ12人全員が
+  //    対象外のまま永久に処理されず、画面には「処理待ち」と出続けていた。
+  //    営業にボタンを押させない方針なので、**Box URL があれば必ず取りに行く**。
+  //    紹介会社はメール添付に簡易版、Box に詳細版を置くことが多い。
+  //    打ち切った失敗（box_attempts が上限）は二度と拾わない。
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
+  const retryBefore = new Date(Date.now() - BOX_RETRY_AFTER_MIN * 60 * 1000).toISOString()
   const auto = manual.length >= 3 ? [] : (await rest(
-    `candidates?select=${BOX_SELECT}&box_status=eq.pending&resume_url=is.null&box_url=not.is.null` +
+    `candidates?select=${BOX_SELECT}&box_status=eq.pending&box_url=not.is.null` +
     `&data_env=eq.${DATA_ENV}&raw_profile->>_llm_stage=is.null` +
+    `&box_attempts=lt.${BOX_MAX_ATTEMPTS}` +
+    `&or=(box_tried_at.is.null,box_tried_at.lt.${encodeURIComponent(retryBefore)})` +
     `&created_at=gte.${encodeURIComponent(since)}` +
     `&order=created_at.desc&limit=${AUTO_BOX_PER_POLL}`)) ?? []
   for (const c of [...manual, ...auto]) {

@@ -2228,8 +2228,23 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                             title="Box経歴書を開く"
                           >
                             <ExternalLink size={14} />
-                            Box{selectedCandidate.box_status === 'pending' ? '（処理待ち）' : ''}
+                            {/* 「処理待ち」と書くと、待てば処理されるように見える。
+                                実際はワーカーが自動で取りに行く（2026-09-12 から全件対象）ので
+                                「自動取込の順番待ち」であることを短く示す */}
+                            Box{selectedCandidate.box_status === 'pending' ? '（自動取込待ち）' : ''}
                           </a>
+                          {/* 失敗理由を画面に出す。以前は pm2 のログにしか無く、
+                              営業も開発も「失敗」としか分からなかった（2026-09-12） */}
+                          {selectedCandidate.box_status === 'failed' && selectedCandidate.box_error && (
+                            <span
+                              className="text-[11px] text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1 max-w-xs truncate"
+                              title={selectedCandidate.box_error}
+                            >
+                              {/^.*(40[0-9]|共有リンク).*$/.test(selectedCandidate.box_error)
+                                ? 'Boxの共有リンクが切れています（再試行しても直りません）'
+                                : selectedCandidate.box_error}
+                            </span>
+                          )}
                           {boxWorking ? (
                             <span
                               className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm border border-orange-300 rounded-lg text-orange-700 bg-orange-50"
