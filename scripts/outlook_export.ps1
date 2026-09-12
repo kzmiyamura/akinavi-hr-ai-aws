@@ -170,4 +170,42 @@ Write-Output ""
 Write-Output ("新規 {0} 件 / 取得済みのため省略 {1} 件 / 添付 {2} 件" -f $totalNew, $totalSkip, $totalAtt)
 Write-Output ("保存先: {0}" -f $Dest)
 
+# 毎回の状況を1行ずつ記録する。目的は2つ:
+#   1. 削除済みフォルダが「何分で空になるか」を実測して、回収間隔を当て推量でなく決める
+#      （いちばん古いメールが何分前のものかを見れば、保持時間の下限が分かる）
+#   2. 長時間ゼロが続いたら異常と気づける（pm2 が黙って死んだ前例がある）
+try {
+  $delCount = 0
+  $oldestRecv = -1
+  $oldestMoved = -1
+  foreach ($store in $ns.Stores) {
+    if ($store.DisplayName -notlike "akinavi*") { continue }
+    $df = $store.GetDefaultFolder(3)
+    $delCount = $df.Items.Count
+    foreach ($m in $df.Items) {
+      if ($m.Class -ne 43) { continue }
+      $r = [int]((Get-Date) - $m.ReceivedTime).TotalMinutes
+      if ($r -gt $oldestRecv) { $oldestRecv = $r }
+      # 削除済みへ移された時刻の近似。受信時刻ではこれが測れない
+      # （朝届いて夕方処理されたメールは「何時間も前」に見えてしまう）。
+      # 知りたいのは「削除済みに入ってから何分生き延びるか」なので LastModificationTime を見る
+      try {
+        $mv = [int]((Get-Date) - $m.LastModificationTime).TotalMinutes
+        if ($mv -gt $oldestMoved) { $oldestMoved = $mv }
+      } catch { }
+    }
+  }
+  $line = "{0:yyyy-MM-dd HH:mm},{1},{2},{3},{4},{5},{6}" -f (Get-Date), $totalNew, $totalSkip, $totalAtt, $delCount, $oldestMoved, $oldestRecv
+  $logPath = Join-Path $Dest "_runs.csv"
+  if (-not (Test-Path $logPath)) {
+    "日時,新規,省略,添付,削除済み件数,移動からの最古(分),受信からの最古(分)" | Out-File $logPath -Encoding utf8
+  }
+  $line | Out-File $logPath -Encoding utf8 -Append
+  Write-Output ("削除済み {0} 件 / 移動から最長 {1} 分 生き延びている（この値が回収間隔の上限）" -f $delCount, $oldestMoved)
+} catch {
+  Write-Output ("実行記録の書き込みに失敗: {0}" -f $_.Exception.Message)
+}
+
+
+
 
