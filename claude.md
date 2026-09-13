@@ -97,6 +97,10 @@
 - `node scripts/archive_local.mjs [--dry-run] [--dir <保存先>]` — 本番の控えをローカルに増分で貯める（既定 `~/akinavi-archive`）
 - `node scripts/archive_query.mjs summary|daily|company|missed` — **控えを集計する。本番を引かない**。
   人材は7日で消えるので、過去との比較はこちらで行う（egress ゼロ）
+- `npx supabase db query --linked -f scripts/sql/quality_check.sql` — **品質チェック（結果だけ返す版）**。
+  **3.4KB**で済む。`npm run quality`（quality_check.mjs）は判定のために raw_profile を
+  丸ごと引いており**1回7MB**（繁忙日15〜20MB）かかるので、日常の確認はSQL版を使う。
+  実際の値を見たいときだけ `quality_check.mjs --fetch-body` か、ローカル控えを使う
 
 ### Excel/Word解析 精度改善ループ
 
