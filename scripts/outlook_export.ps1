@@ -141,6 +141,10 @@ foreach ($fpath in $Folders) {
       from         = $sender
       senderName   = $m.SenderName
       receivedTime = "{0:yyyy-MM-ddTHH:mm:ss}" -f $m.ReceivedTime
+      # Outlook COM はローカル時刻(JST)を返す。DB の emailReceivedAt は Graph 由来で UTC。
+      # 素で突き合わせると9時間ずれて全件が「未登録」に見える（2026-09-14 に誤集計した）。
+      # 比較用に UTC も持たせる
+      receivedTimeUtc = "{0:yyyy-MM-ddTHH:mm:ss}Z" -f $m.ReceivedTime.ToUniversalTime()
       folder       = $fpath
       size         = $m.Size
       attachments  = $attList
@@ -205,6 +209,7 @@ try {
 } catch {
   Write-Output ("実行記録の書き込みに失敗: {0}" -f $_.Exception.Message)
 }
+
 
 
 

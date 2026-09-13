@@ -672,6 +672,11 @@ const RAW_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
  * 受信時点で必ず1本保存しておけば、割り当てに失敗しても後から中身を確認・再解析できる。
  * 保存の失敗は取り込み本体を止めない（握りつぶしてログのみ）。
  */
+/**
+ * ⚠ 2026-09-14 から**呼ばれていない**（raw/ への保存を廃止した）。
+ * 原本はこのPCが Outlook から回収している（scripts/outlook_export.ps1）。
+ * 関数は消さずに残してある。戻したくなったら呼び出し側の1行を差し替えるだけでよい。
+ */
 async function saveRawAttachments(
   supabase: ReturnType<typeof createClient>,
   messageId: string,
@@ -1297,10 +1302,23 @@ async function pollAccount(
 
         console.log(`[poll] 添付: hasAttachments=${email.hasAttachments} 取得件数=${attachments.length}`, attachments.map(a => ({ name: a.name, type: a.contentType, bytesLen: a.contentBytes?.length ?? 0 })))
 
-        // 割り当て成否と無関係に実体を保存する（後から必ず再解析できるようにする）
-        const savedRawPaths = attachments.length > 0
-          ? await saveRawAttachments(supabase, email.id, attachments)
-          : []
+        // ── raw/ への保存は 2026-09-14 に廃止した ──
+        //
+        // 目的は「後から必ず再解析できるように原本を残す」ことだったが、
+        // `raw_retention_days=1` で**当日しか再解析できず**、目的を果たしていなかった。
+        // しかも Storage の流入の8割超がこれで、Free 1GB 枠を圧迫していた
+        // （繁忙日は1日250MB前後。9/11 は2,337通）。
+        //
+        // 代わりに **処理済みメールを削除済みアイテムへ移し**（DELETE→move・2026-09-12）、
+        // このPCが15分おきに原本ごと回収している（scripts/outlook_export.ps1）。
+        //   ・Outlook 側に30日残る（raw/ の1日より遥かに長い）
+        //   ・PCが止まっていても、復帰後にまとめて回収できる
+        //   ・添付は元のファイル名で展開され、.msg の正本も残る
+        //   ・egress も Storage も消費しない
+        // 保存先: D:\akinavi-archive\mail\<日付>\<messageId>\
+        //
+        // 戻す場合はこの行を saveRawAttachments(...) に戻すだけでよい。
+        const savedRawPaths: string[] = []
 
         // ── 添付台帳を DB に恒久記録（Graphが返した完全な内訳・型込み） ──
         // fetchAttachments が落とす referenceAttachment（クラウド添付）も含めて記録し、

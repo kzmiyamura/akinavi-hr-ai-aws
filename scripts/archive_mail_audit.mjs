@@ -33,21 +33,37 @@ function* dbRows(table) {
 const agentDomains = new Set()
 for (const a of dbRows('agent_companies')) agentDomains.add(String(a.domain).toLowerCase())
 
-// 登録された人材の「送信元＋受信時刻」。これに当たれば、そのメールは実際に人材になった
+/**
+ * 受信時刻を UTC の「分まで」に揃える。
+ *
+ * **Outlook COM はローカル時刻（JST）、Graph（DBの emailReceivedAt）は UTC** を返す。
+ * 素で突き合わせると9時間ずれて、**全件が「登録されなかった」に見える**
+ * （2026-09-14 に実際に誤った集計を報告した）。
+ * タイムゾーン指定が無い文字列はローカル時刻として解釈されるので、Date に通して UTC へ直す。
+ */
+function utcMinute(s) {
+  if (!s) return null
+  const d = new Date(String(s))
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString().slice(0, 16)
+}
+
+// 登録された人材の「送信元＋受信時刻(UTC)」。これに当たれば、そのメールは実際に人材になった
 const registered = new Map()
 for (const c of dbRows('candidates')) {
   const from = String(c.rp_from ?? '').toLowerCase()
-  const recv = String(c.rp_received ?? '').slice(0, 16) // 分まで
+  const recv = utcMinute(c.rp_received)
   if (!from || !recv) continue
   const k = `${from}|${recv}`
   registered.set(k, (registered.get(k) ?? 0) + 1)
 }
 
-// 人材の控えが実際に持っている日付。ここに無い日のメールを「登録されなかった」と
-// 判定するのは不公平（人材は7日で消えるので、控えを取り始める前の日は端から空）
+// 人材の控えが実際に持っている日付（UTC基準）。ここに無い日のメールを
+// 「登録されなかった」と判定するのは不公平（人材は7日で消えるので、
+// 控えを取り始める前の日は端から空）
 const covered = new Set()
 for (const c of dbRows('candidates')) {
-  const d = String(c.rp_received ?? c.created_at ?? '').slice(0, 10)
+  const d = (utcMinute(c.rp_received ?? c.created_at) ?? '').slice(0, 10)
   if (d) covered.add(d)
 }
 
@@ -73,8 +89,9 @@ for (const day of readdirSync(MAIL_DIR).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test
     const isAgent = agentDomains.has(dom)
     if (isAgent) stats.agent++; else stats.nonAgent++
 
-    const recv = String(m.receivedTime ?? '').slice(0, 16)
-    const recvDay = String(m.receivedTime ?? '').slice(0, 10)
+    // 回収メール側もローカル時刻なので UTC に直してから突き合わせる
+    const recv = utcMinute(m.receivedTimeUtc ?? m.receivedTime)
+    const recvDay = (recv ?? '').slice(0, 10)
     const hit = registered.get(`${from}|${recv}`) ?? 0
     if (hit > 0) { stats.registered++; stats.people += hit }
 
