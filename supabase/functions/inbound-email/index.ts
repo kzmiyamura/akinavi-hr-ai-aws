@@ -2249,7 +2249,20 @@ function flexLabel(label: string): string {
 
 // Phase2bで「ラベルのみ行の直後行」を値として拾う際、直後行がこれら他フィールドの
 // ラベル行（例:「年齢：31」）だった場合に誤ってその値を採用しないためのガード
-const OTHER_LABEL_LINE_RE = /^[　 ]*(?:フリガナ|ふりがな|氏名|名前|お名前|年齢|性別|最寄駅|最寄り駅|最終学歴|学歴|現住所|住所|居住地|経験年数|経験|希望単価|希望月額|単価|希望稼働|稼働希望|参画時期|稼働時期|開始時期|自己PR|保有資格|資格|国籍)[　 ]?[：:]/
+/** 単独値の希望単価: XX万円以上 / XX万/月 / XX万程度。
+ *  **スラッシュは全角も受ける。**「希望 57万／月（精算要）」が取れず、
+ *  単価が丸ごと「希望案件」に化けていた（2026-09-14・ローカル控えとの突合で発覚） */
+const RATE_STANDALONE_RE = /(\d{2,3})\s*万\s*円?(?:以上|[\/／]月|程度|台)/
+/** 「・Ｉ．Ｙ（男性）」形式: 括弧の中に**性別だけ**があり、年齢は別の行にある。
+ *  既存パターンは全て「括弧内に年齢と性別が揃っている」前提で、この形を拾えなかった。
+ *  本番は氏名を「H」という別人の値で登録していた（2026-09-14 発覚） */
+const NAME_GENDER_ONLY_RE =
+  /(?:^|\n)[ 　]*[■●◆▶◇★※▼▪→・･]?[ 　]?([^\d\s　（(\n【]{1,20})[ 　]?[（(](男性|女性|男|女)[）)]/m
+/** 名前と離れた行に単独で書かれた年齢（「51才」「45歳」）。
+ *  「20代」「30歳以上」を年齢として拾わないよう直後を見る */
+const AGE_ALONE_RE = /(?:^|[\s　（(])(\d{2})[才歳](?![以上代半])/m
+
+const OTHER_LABEL_LINE_RE =/^[　 ]*(?:フリガナ|ふりがな|氏名|名前|お名前|年齢|性別|最寄駅|最寄り駅|最終学歴|学歴|現住所|住所|居住地|経験年数|経験|希望単価|希望月額|単価|希望稼働|稼働希望|参画時期|稼働時期|開始時期|自己PR|保有資格|資格|国籍)[　 ]?[：:]/
 
 function extractFieldTwoPhase(
   labels: string[],
@@ -2595,6 +2608,28 @@ function extractCandidateFieldsRegex(
       // 4番目の要素が駅名であれば nearestStation にも設定（後でoverrideされる可能性あり）
       if (nlBracket[4]?.includes('駅')) bracketStation = nlBracket[4].trim()
     }
+    // 「・Ｉ．Ｙ（男性）」形式: 括弧の中に**性別だけ**があり、年齢は別の行にある。
+    // 既存パターンは全て「括弧内に年齢と性別が揃っている」前提で、この形を拾えず
+    // 氏名も性別も落ちていた（2026-09-14・ローカル控えとの突合で発覚。
+    // 本番は氏名を「H」という別人の値で登録していた）。
+    // 行頭の「・」も装飾として認める。
+    if (!name || gender === null) {
+      const ngM = allTextForName.match(NAME_GENDER_ONLY_RE)
+      if (ngM) {
+        if (!name) name = ngM[1].trim() || null
+        if (gender === null) gender = ngM[2]
+      }
+    }
+    // 年齢が名前と離れた行に単独で書かれている形式（「51才」「45歳」）。
+    // 「20代」「30歳以上」を年齢として拾わないよう直後を見る
+    if (age === null) {
+      const ageAlone = allTextForName.match(AGE_ALONE_RE)
+      if (ageAlone) {
+        const n = parseInt(ageAlone[1], 10)
+        if (n >= 18 && n <= 75) age = n
+      }
+    }
+
     // ≪名前 (年齢歳) 性別≫ 形式（Dearism等の「≪≫」デリミタ形式）(#94)
     if (!name || age === null || gender === null) {
       const dearismPat = /≪([^≪≫（(\n]{1,20}?)[ 　]*[（(](\d{2})[才歳][）)][ 　]*(男性|女性|男|女)/
@@ -2980,10 +3015,7 @@ function extractCandidateFieldsRegex(
     const rateM2 = !rateM1 ? allText.match(
       /(\d{2,3})\s*[〜~]\s*(\d{2,3})\s*万\s*円?/
     ) : null
-    // ③ 単独値: XX万円以上 / XX万/月 / XX万程度
-    const rateM3 = (!rateM1 && !rateM2) ? allText.match(
-      /(\d{2,3})\s*万\s*円?(?:以上|\/月|程度|台)/
-    ) : null
+    const rateM3 = (!rateM1 && !rateM2) ? allText.match(RATE_STANDALONE_RE) : null
 
     if (rateM1) {
       const raw = rateM1[1]
@@ -2996,7 +3028,8 @@ function extractCandidateFieldsRegex(
       const amount = parseInt(rateM3[1], 10)
       if (amount >= 20 && amount <= 300) {
         const raw = rateM3[0]
-        const suffix = raw.includes('以上') ? '万円以上' : raw.includes('/月') ? '万円/月' : '万円'
+        const suffix = raw.includes('以上') ? '万円以上'
+          : (raw.includes('/月') || raw.includes('／月')) ? '万円/月' : '万円'
         desiredRate = `${amount}${suffix}`
       }
     }
