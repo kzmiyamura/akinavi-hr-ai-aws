@@ -21,7 +21,7 @@
  *   （スキル年数・案件履歴）は別の仕組みが要るので、ここでは扱わない。
  */
 
-import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { callModel } from './llm_extract/caller.mjs'
 
@@ -61,8 +61,11 @@ for (const c of dbRows('candidates')) {
   actual.get(k).push(c)
 }
 
-// 原本のうち、DBに登録された人がいるものだけを採点対象にする
-const targets = []
+// 原本を全部読み、鍵（差出人＋受信時刻）ごとに数える。
+// **同じ差出人が同じ分に複数通送る**ことがあり、鍵が衝突すると
+// 別のメールの内容を同じ人材と突き合わせてしまう
+// （2026-09-15 の初回実行で、3通が同じ人材 M.Y に対応付いて全項目が不一致になった）。
+const mailsByKey = new Map()
 for (const day of readdirSync(MAIL_DIR).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().reverse()) {
   for (const msg of readdirSync(join(MAIL_DIR, day))) {
     const p = join(MAIL_DIR, day, msg, 'message.json')
@@ -70,25 +73,39 @@ for (const day of readdirSync(MAIL_DIR).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test
     let m
     try { m = readJson(p) } catch { continue }
     const k = `${String(m.from ?? '').toLowerCase()}|${utcMinute(m.receivedTimeUtc ?? m.receivedTime)}`
-    const rows = actual.get(k)
-    if (!rows || rows.length !== 1) continue   // 複数人メールは対応付けが曖昧なので外す
-    targets.push({ mail: m, row: rows[0] })
-    if (targets.length >= LIMIT) break
+    if (!mailsByKey.has(k)) mailsByKey.set(k, [])
+    mailsByKey.get(k).push(m)
   }
+}
+
+// 採点できるのは「メール1通 ↔ 人材1行」が確実に言える組み合わせだけ
+const targets = []
+for (const [k, mails] of mailsByKey) {
+  if (mails.length !== 1) continue           // 同じ分に複数通 → どれがどれか決められない
+  const rows = actual.get(k)
+  if (!rows || rows.length !== 1) continue   // 複数人メール → 同上
+  targets.push({ mail: mails[0], row: rows[0] })
   if (targets.length >= LIMIT) break
 }
 
 if (targets.length === 0) {
-  console.error('採点できる組み合わせがありません（原本とDB行が1対1で対応するものが無い）')
-  console.error('回収が進むと増えます。まず scripts/outlook_export.ps1 と archive_local.mjs を回してください')
-  process.exit(1)
+  // 日次で回すので、ここで異常終了させると毎日「失敗」に見える。
+  // ただし何日も0が続くのは**対応付けが壊れた合図**なので、記録には0を残す
+  mkdirSync(OUT_DIR, { recursive: true })
+  const h = join(OUT_DIR, '_history.csv')
+  if (!existsSync(h)) writeFileSync(h, '日時,採点数,項目,一致,不一致,DBが空,記載なし,正答率\n', 'utf8')
+  appendFileSync(h, `${new Date().toISOString().slice(0, 16).replace('T', ' ')},0,(採点対象なし),,,,,\n`, 'utf8')
+  console.log('採点できる組み合わせがありません（原本とDB行が1対1で対応するものが無い）')
+  console.log('回収が進むと増えます。0 が続くようなら outlook_export.ps1 / archive_local.mjs を確認すること')
+  process.exit(0)
 }
 
 const PROMPT = (m) => `あなたは人材紹介メールを読む採用担当です。
 下のメールから、**本文に明示されている場合のみ**次の項目を JSON で出してください。
 書かれていない・読み取れない項目は null にしてください。推測で埋めないこと。
 
-- name: 技術者の氏名やイニシャル（例 "A.S" "田中" "KT"）
+- personCount: このメールで紹介されている技術者の人数（数値）。1人なら 1
+- name: 技術者の氏名やイニシャル（例 "A.S" "田中" "KT"）。複数人なら最初の1人
 - experienceYears: IT経験年数（数値。「10年」なら 10。複数の年数が書かれていても合計しない）
 - desiredRate: 希望単価（原文のまま。例 "70万" "60〜65万"）
 - nearestStation: 最寄駅（駅名のみ。「〇〇駅」の駅は付けない）
@@ -115,15 +132,42 @@ const FIELDS = [
   ['gender', (r) => r.rp_gender],
 ]
 
-/** 比べる前に表記を揃える。全角/半角・空白・「駅」「歳」「円」の有無で不一致にしない */
-function norm(v) {
+/**
+ * 比べる前に表記を揃える。**同じことを言っているのに不一致にしない。**
+ * 初回実行では「男性 vs 男」「日本 vs 日本籍」「南浦和 vs JR南浦和」が
+ * すべて不一致に数えられ、性別の正答率が 8% という嘘の数字になった（2026-09-15）。
+ */
+function norm(field, v) {
   if (v === null || v === undefined || v === '') return null
   let s = String(v).trim()
     .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
     .replace(/[\s　]/g, '')
-    .replace(/駅$/, '')
-    .replace(/[歳才]$/, '')
+    .replace(/[．。]/g, '.')
     .toLowerCase()
+
+  if (field === 'gender') {
+    if (/^(男性|男)$/.test(s)) return '男'
+    if (/^(女性|女)$/.test(s)) return '女'
+  }
+  if (field === 'nationality') {
+    // 「日本」「日本籍」「日本人」は同じ
+    s = s.replace(/[籍人]$/, '')
+  }
+  if (field === 'nearestStation') {
+    // 事業者名の前置き（JR／東京メトロ／都営…）と末尾の「駅」は表記の違い
+    s = s.replace(/^(?:jr[東西九州海道本]*|ＪＲ|東京メトロ|都営(?:地下鉄)?|地下鉄|新交通|京王|小田急|東急|西武|東武|京成|京急|相鉄|名鉄|近鉄|阪急|阪神|南海)/, '')
+         .replace(/駅$/, '')
+  }
+  if (field === 'age') s = s.replace(/[歳才]$/, '')
+  if (field === 'desiredRate') {
+    // 「65万」「65万円」「65万円/月」は同じ。前後の説明文は落とす
+    const m = s.match(/(\d{2,3})万/)
+    if (m) return `${Number(m[1])}万`
+  }
+  if (field === 'experienceYears') {
+    const m = s.match(/(\d+(?:\.\d+)?)/)
+    if (m) return String(Math.floor(Number(m[1])))   // 2.75年 と 2年 は同じ扱い
+  }
   if (/^\d+$/.test(s)) s = String(Number(s))
   return s || null
 }
@@ -131,6 +175,7 @@ function norm(v) {
 const stats = new Map(FIELDS.map(([f]) => [f, { ok: 0, ng: 0, dbNull: 0, truthNull: 0 }]))
 const mismatches = []
 let totalCost = 0
+let skippedMulti = 0
 
 for (const [i, t] of targets.entries()) {
   process.stdout.write(`\r採点中 ${i + 1}/${targets.length}…`)
@@ -148,10 +193,19 @@ for (const [i, t] of targets.entries()) {
   writeFileSync(join(OUT_DIR, `${t.row.id}.json`),
     JSON.stringify({ expected: truth, actual: Object.fromEntries(FIELDS.map(([f, g]) => [f, g(t.row)])) }, null, 2), 'utf8')
 
+  // 1通に複数人が書かれているメールは、どの人とDB行が対応するか決められない
+  if (Number(truth.personCount ?? 1) !== 1) { skippedMulti++; continue }
+
+  // 採点者は**本文しか読んでいない**。経歴書が添付されている場合、DBの経験年数は
+  // 添付の案件期間から計算された値で、本文の申告値と食い違って当然。
+  // ここを不一致に数えると指標が嘘になる（2026-09-15: 36% と出たが多くは正当な差）。
+  const hasAttachment = (t.mail.attachments ?? []).length > 0
+
   for (const [field, get] of FIELDS) {
-    const exp = norm(truth[field])
-    const act = norm(get(t.row))
     const s = stats.get(field)
+    if (field === 'experienceYears' && hasAttachment) { s.truthNull++; continue }
+    const exp = norm(field, truth[field])
+    const act = norm(field, get(t.row))
     if (exp === null) { s.truthNull++; continue }      // 本文に書いていない＝採点対象外
     if (act === null) { s.dbNull++; mismatches.push(`${field}: 本文「${truth[field]}」→ DBは空  (${t.row.name})`); continue }
     if (exp === act) s.ok++
@@ -159,7 +213,9 @@ for (const [i, t] of targets.entries()) {
   }
 }
 
-console.log(`\n\n採点 ${targets.length} 通（原本とDB行が1対1のものだけ）\n`)
+console.log(`\n\n採点 ${targets.length - skippedMulti} 通（原本とDB行が1対1のものだけ）`)
+if (skippedMulti > 0) console.log(`  ${skippedMulti} 通は複数人メールのため除外`)
+console.log('')
 console.log('項目              一致  不一致  DBが空  本文に記載なし  正答率')
 for (const [field, s] of stats) {
   const judged = s.ok + s.ng + s.dbNull
@@ -171,6 +227,23 @@ if (mismatches.length) {
   for (const m of mismatches.slice(0, 25)) console.log(`  ${m}`)
   if (mismatches.length > 25) console.log(`  …他 ${mismatches.length - 25} 件`)
 }
+// ── 推移を残す ──────────────────────────────────────────────
+// 抽出を直したときに「本当に良くなったか」を数字で言えるようにする。
+// 1回1項目1行の長い形。表計算でも grep でも読める
+const HIST = join(OUT_DIR, '_history.csv')
+if (!existsSync(HIST)) {
+  writeFileSync(HIST, '日時,採点数,項目,一致,不一致,DBが空,記載なし,正答率\n', 'utf8')
+}
+const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ')
+let histLines = ''
+for (const [field, s] of stats) {
+  const judged = s.ok + s.ng + s.dbNull
+  const rate = judged === 0 ? '' : ((s.ok / judged) * 100).toFixed(1)
+  histLines += `${stamp},${targets.length},${field},${s.ok},${s.ng},${s.dbNull},${s.truthNull},${rate}\n`
+}
+appendFileSync(HIST, histLines, 'utf8')
+
 console.log(`\n採点結果: ${OUT_DIR}`)
+console.log(`推移: ${HIST}`)
 // Max 枠で回しているので実課金ではない。1通あたりの重さの目安として出す
 console.log(`採点にかかった量: $${totalCost.toFixed(4)}（Max枠なので実課金ではない）`)
