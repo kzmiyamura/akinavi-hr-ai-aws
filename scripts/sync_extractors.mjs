@@ -39,6 +39,7 @@ const TARGET_FUNCTIONS = [
   'stripInitialSuffix',
   'sanitizeFromCompany',   // 会社名の後処理（敬称・丁寧表現・NG先の除去）
   'extractNationalityMark',
+  'cleanNationality', // isValidNationality が呼ぶ（先に定義が要る）
   'isValidNationality',
   'stationNameCandidates',
   'parseNearestStation',   // 最寄駅の記載 → {路線名, 駅名}（順序を仮定せず語の形で分類）

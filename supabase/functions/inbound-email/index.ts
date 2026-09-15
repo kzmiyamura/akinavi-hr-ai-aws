@@ -3184,8 +3184,11 @@ function extractCandidateFieldsRegex(
     if (bracketCand) fromCompany = bracketCand
   }
 
-  // 国籍は抽出経路が多く営業文の断片を拾いやすいため、返す直前に1か所で検閲する
-  if (nationality && !isValidNationality(nationality)) nationality = null
+  // 国籍は抽出経路が多く営業文の断片を拾いやすいため、返す直前に1か所で整形・検閲する
+  if (nationality) {
+    const cleaned = cleanNationality(nationality)
+    nationality = isValidNationality(cleaned) ? cleaned : null
+  }
   // 氏名も同様に、Excel の見出し語そのものが人名として残らないよう検閲する
   if (name && isLabelWordName(name)) name = null
   // 会社名も同じ理由で検閲する（抽出経路が5つあり、それぞれで営業文を拾っていた）
@@ -9252,15 +9255,32 @@ const NATIONALITY_NAMES = [
  * 「電子書籍」「多国籍」のような複合語をすり抜けるので収束しない。最寄駅と同じく、
  * **国名を要求する**方向に反転させた。
  */
-function isValidNationality(v: string): boolean {
+/**
+ * 国籍の前後に付いた余計な文字を落とす。
+ *
+ * 2026-09-15: 判定（isValidNationality）の中だけで整形していたため、
+ * **通ってしまった値はゴミが付いたまま保存されていた**。
+ *   本文「国籍：中国（ビザは技術・人文知識…）」→ DB「中国籍（ビザは技術・人文知識・」
+ *   本文「男性/日本人」                        → DB「男性/日本人」
+ * ラベル方式の regex は 15 文字まで何でも取るので、抽出側を1本ずつ直しても
+ * 経路が9つあり収束しない。**返す直前に1か所で整える**方向に寄せた。
+ */
+function cleanNationality(v: string): string {
   let s = String(v ?? '').trim()
+  // 前置きの記号・性別（「：中国」「男性・日本籍」「男性/日本人」）
+  s = s.replace(/^[：:・／/\s　]+/, '').replace(/^(?:男性|女性|男|女)[\s　・／/,、]*/, '')
+  // 括弧・※以降の補足（「中国籍（ビザは技術・人文知識・」）
+  s = s.split(/[（(※＊]/)[0]
+  // 区切り以降の続き（「中国／日本語ネイティブ」「日本、永住権あり」）
+  s = s.split(/[／/、,|｜]/)[0]
+  return s.trim()
+}
+
+function isValidNationality(v: string): boolean {
+  const s = cleanNationality(v)
   if (!s || s.length > 15) return false
   if (/[0-9０-９]/.test(s)) return false                        // 「1人」等
   if (/^(?:上記|下記|当該|該当|本人|弊社|貴社|全|各)/.test(s)) return false
-  // 前置きの記号・性別（「：中国」「男性・日本籍」）と、括弧・※以降の補足を落とす
-  s = s.replace(/^[：:・／/\s　]+/, '').replace(/^(?:男性|女性|男|女)[\s　・／/,、]*/, '')
-  s = s.split(/[（(※＊]/)[0].trim()
-  if (!s) return false
   // 「籍」「国籍」「人」「系」等を剥がしながら、どの段階でも国名で終われば妥当。
   // 交替1本で剥がすと分岐を取り逃す（「中国籍」から先に"国籍"が取れて「中」になる）ので全通り試す
   const SUFFIXES = ['国籍', '籍', '人', '系', '出身', '在住', '生まれ']

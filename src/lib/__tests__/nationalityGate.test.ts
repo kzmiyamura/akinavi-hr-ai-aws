@@ -14,7 +14,7 @@ import { resolve } from 'node:path'
 
 const SRC = resolve(__dirname, '../../../supabase/functions/inbound-email/index.ts')
 
-function loadGate(): (v: string) => boolean {
+function loadGate(): { ok: (v: string) => boolean; clean: (v: string) => string } {
   const src = readFileSync(SRC, 'utf8')
 
   const names = src.match(/const NATIONALITY_NAMES = \[([\s\S]*?)\n\]/)
@@ -23,20 +23,25 @@ function loadGate(): (v: string) => boolean {
   const fn = src.match(/function isValidNationality\(([\s\S]*?)\n\}/)
   if (!fn) throw new Error('isValidNationality を index.ts から取り出せませんでした')
 
+  const cleanFn = src.match(/function cleanNationality\(([\s\S]*?)\n\}/)
+  if (!cleanFn) throw new Error('cleanNationality を index.ts から取り出せませんでした')
+
   const code = `
     // 閉じ括弧の前で必ず改行する。最後の要素に行コメントが付いていると、
     // 改行を挟まない限り括弧までコメントに飲まれる（CRLF のときだけ CR が
     // 行末になって偶然通っていた・2026-09-12）
     const NATIONALITY_NAMES = [${names[1]}\n]
+    ${`function cleanNationality(${cleanFn[1]}\n}`
+      .replace(/: string/g, '')}
     ${`function isValidNationality(${fn[1]}\n}`
       .replace(/: string/g, '')
       .replace(/: boolean/g, '')}
-    return isValidNationality
+    return { ok: isValidNationality, clean: cleanNationality }
   `
-  return new Function(code)() as (v: string) => boolean
+  return new Function(code)() as { ok: (v: string) => boolean; clean: (v: string) => string }
 }
 
-const ok = loadGate()
+const { ok, clean } = loadGate()
 
 describe('isValidNationality', () => {
   it('経歴の業務内容を国籍として採らない（prod 実データ由来）', () => {
@@ -90,6 +95,44 @@ describe('isValidNationality', () => {
   it('空・長すぎ・数字入りは採らない', () => {
     for (const ng of ['', '   ', '日本人材を3名ご紹介いたします', '2人']) {
       expect(ok(ng), JSON.stringify(ng)).toBe(false)
+    }
+  })
+})
+
+/**
+ * 2026-09-15: 判定の中だけで整形していたため、**通った値はゴミが付いたまま保存**されていた。
+ * 下の左辺はすべて prod の raw_profile.nationality に実在した値。
+ */
+describe('cleanNationality（保存される値そのもの）', () => {
+  it('括弧以降の補足を落とす', () => {
+    expect(clean('中国籍（ビザは技術・人文知識・')).toBe('中国籍')
+    expect(clean('フィリピン籍(永住権取得済み')).toBe('フィリピン籍')
+    expect(clean('インド※日本語流暢')).toBe('インド')
+  })
+
+  it('性別の前置きを落とす', () => {
+    expect(clean('男性/日本人')).toBe('日本人')
+    expect(clean('男性・日本籍')).toBe('日本籍')
+    expect(clean('女性　中国')).toBe('中国')
+    expect(clean('：中国')).toBe('中国')
+  })
+
+  it('区切り以降の続きを落とす', () => {
+    expect(clean('中国（日本語：ネイティブ／日本')).toBe('中国')
+    expect(clean('日本、永住権あり')).toBe('日本')
+    expect(clean('ベトナム／N2')).toBe('ベトナム')
+  })
+
+  it('正しい値は変えない', () => {
+    for (const v of ['日本', '中国籍', '日本国籍', '外国籍', '日本人', 'ベトナム国籍', '元中国籍']) {
+      expect(clean(v), v).toBe(v)
+    }
+  })
+
+  it('整形後の値がそのまま判定を通る（保存値と判定のズレを作らない）', () => {
+    for (const v of ['中国籍（ビザは技術・人文知識・', '男性/日本人', '中国（日本語：ネイティブ／日本',
+                     'フィリピン籍(永住権取得済み', '男性・日本籍']) {
+      expect(ok(clean(v)), v).toBe(true)
     }
   })
 })
