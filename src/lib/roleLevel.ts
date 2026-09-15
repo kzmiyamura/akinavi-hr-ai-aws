@@ -85,6 +85,45 @@ export function readRoleLevel(
   return v === 'A' || v === 'B' || v === 'C' || v === '-' ? v : null
 }
 
+/**
+ * その役割が「工程・作業の言及」だけを根拠に付いているか（2026-09-16）。
+ *
+ * 実測（prod 2,976人）で 運用保守が67%・ヘルプデスクが29%に付いていた。根拠を数えると
+ *   「要件定義から運用保守まで一連の工程を経験しました」  ← どこまで関わったかの説明
+ *   「システム関連の問い合わせ対応、障害切り分けを担当」  ← 作業であって職種ではない
+ * が大半だった。**役割は消さない**ので、代わりに印を付けて営業に理由を見せる。
+ * 他に強い根拠の役割があればそちらが主役割になり、無ければこの役割が主役割のまま残る。
+ */
+export type RoleEvidence = '工程' | '作業'
+
+export const ROLE_EVIDENCE_STYLE: Record<RoleEvidence, { mark: string; cls: string; note: string }> = {
+  '工程': {
+    mark: '工程の記載のみ',
+    cls: 'bg-stone-100 text-stone-600',
+    note: '「要件定義〜運用保守」のような工程の並びの中にだけ出てきます。\n'
+      + 'どこまで関わったかの説明であって、その職種だったとは書かれていません。',
+  },
+  '作業': {
+    mark: '作業の記載のみ',
+    cls: 'bg-stone-100 text-stone-600',
+    note: '「問い合わせ対応」のような作業の記載だけが根拠です。職種としては名乗っていません。\n'
+      + 'ITIL の定義でも、ヘルプデスクは「単一窓口という役目を担っている」ことを指し、\n'
+      + '問い合わせに答えたことを指しません。',
+  },
+}
+
+/** raw_profile._roleEvidence からその役割の印を読む。強い根拠がある役割は null */
+export function readRoleEvidence(
+  rawProfile: Record<string, unknown> | null | undefined,
+  role: string | null | undefined,
+): RoleEvidence | null {
+  if (!rawProfile || !role) return null
+  const map = rawProfile._roleEvidence
+  if (!map || typeof map !== 'object') return null
+  const v = (map as Record<string, unknown>)[role]
+  return v === '工程' || v === '作業' ? v : null
+}
+
 /** バッジのツールチップ。判定の根拠（実測の単価分布）まで出す */
 export function roleLevelNote(role: string, level: RoleLevel): string {
   const meaning = MEANING[role]?.[level] ?? ''

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { readRoleLevel, roleLevelNote, rateMismatch, parseRateWan } from '../roleLevel'
+import {
+  readRoleLevel, roleLevelNote, rateMismatch, parseRateWan,
+  readRoleEvidence, ROLE_EVIDENCE_STYLE,
+} from '../roleLevel'
 
 describe('readRoleLevel', () => {
   it('raw_profile._roleLevels からその役割のレベルを読む', () => {
@@ -73,5 +76,28 @@ describe('roleLevelNote', () => {
   })
   it('実測が無い役割でも意味だけは出す', () => {
     expect(roleLevelNote('アーキテクト', 'A')).toContain('全体最適')
+  })
+})
+
+describe('readRoleEvidence（工程・作業の記載だけが根拠の印）', () => {
+  it('raw_profile._roleEvidence からその役割の印を読む', () => {
+    const rp = { _roleEvidence: { 運用保守: '工程', ヘルプデスク: '作業' } }
+    expect(readRoleEvidence(rp, '運用保守')).toBe('工程')
+    expect(readRoleEvidence(rp, 'ヘルプデスク')).toBe('作業')
+  })
+  it('強い根拠の役割には印が無いので null', () => {
+    expect(readRoleEvidence({ _roleEvidence: { 運用保守: '工程' } }, 'PMO')).toBeNull()
+  })
+  it('_roleEvidence が無い既存データでも落ちない', () => {
+    expect(readRoleEvidence({}, '運用保守')).toBeNull()
+    expect(readRoleEvidence(null, '運用保守')).toBeNull()
+    expect(readRoleEvidence({ _roleEvidence: 'こわれた値' }, '運用保守')).toBeNull()
+  })
+  it('知らない値は採らない', () => {
+    expect(readRoleEvidence({ _roleEvidence: { 運用保守: '?' } }, '運用保守')).toBeNull()
+  })
+  it('印には理由の説明が付く（営業が根拠を追える）', () => {
+    expect(ROLE_EVIDENCE_STYLE['工程'].note).toContain('工程')
+    expect(ROLE_EVIDENCE_STYLE['作業'].note).toContain('ITIL')
   })
 })

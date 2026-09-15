@@ -40,7 +40,7 @@ import { MatchingInputs, MatchingWeightsLine, resolveScoringWeights } from '../c
 import type { SkillMatcher } from '../lib/db/skillMatch'
 import { BookmarkStar } from '../components/BookmarkStar'
 import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
-import { readRoleLevel, roleLevelNote, rateMismatch, ROLE_LEVEL_STYLE } from '../lib/roleLevel'
+import { readRoleLevel, roleLevelNote, rateMismatch, ROLE_LEVEL_STYLE, readRoleEvidence, ROLE_EVIDENCE_STYLE } from '../lib/roleLevel'
 import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
@@ -812,6 +812,8 @@ function ProjectModeRankCard({
                   // 到達レベル（2026-09-01）。同じ「PMO」でも、官公庁のRFP評価をやった人と
                   // 議事録・PC手配の人がいる。実測で平均希望単価が31万違う。落とさずに見せる
                   const level = readRoleLevel(rp2 as Record<string, unknown> | null, mainRole)
+                  // 工程・作業の記載だけが根拠のとき、消さずに理由を見せる（2026-09-16）
+                  const evidence = readRoleEvidence(rp2 as Record<string, unknown> | null, mainRole)
                   const mismatch = rateMismatch(level, s.candidate.desired_rate)
                   if (!mainRole && !requiredRole) return null
                   return (
@@ -837,6 +839,16 @@ function ProjectModeRankCard({
                           title={roleLevelNote(mainRole, level)}
                         >
                           {ROLE_LEVEL_STYLE[level].mark}
+                        </span>
+                      )}
+                      {/* 工程・作業の記載だけが根拠のとき、その旨を出す（2026-09-16）。
+                          役割は消さない方針なので、消さずに理由を見せる */}
+                      {mainRole && evidence && (
+                        <span
+                          className={`text-[10px] rounded px-1.5 py-0.5 font-medium ${ROLE_EVIDENCE_STYLE[evidence].cls}`}
+                          title={`${mainRole} の根拠: ${ROLE_EVIDENCE_STYLE[evidence].mark}\n${ROLE_EVIDENCE_STYLE[evidence].note}`}
+                        >
+                          {ROLE_EVIDENCE_STYLE[evidence].mark}
                         </span>
                       )}
                       {mismatch && (

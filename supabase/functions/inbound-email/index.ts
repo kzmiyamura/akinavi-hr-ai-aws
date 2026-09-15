@@ -3268,8 +3268,14 @@ function inferRoleFamilyHint(
 function scoreProseRoles(
   prose: string,
   fullText: string,
-): { roles: string[]; roleScores: Record<string, number>; roleLevels: Record<string, string> } {
-  const ROLE_DEFS: Array<{ re: RegExp; label: string }> = [
+): {
+  roles: string[]
+  roleScores: Record<string, number>
+  roleLevels: Record<string, string>
+  /** 根拠が弱い役割の理由。'工程'=工程の列挙の中 / '作業'=作業語だけ。営業に見せる印 */
+  roleEvidence: Record<string, string>
+} {
+  const ROLE_DEFS: Array<{ re: RegExp; label: string; weak?: RegExp }> = [
     { re: /(?<![A-Z])PMO(?![A-Z])|プロジェクト[　 ]?マネジメント[　 ]?オフィス/, label: 'PMO' },
     { re: /(?<![A-Z])PM(?!O)(?![A-Z])|プロジェクト[　 ]?マネージャー/, label: 'プロジェクトマネージャー' },
     // プロダクトマネージャー（2026-09-16 追加）。**PM とは作用対象が違う**。
@@ -3343,8 +3349,39 @@ function scoreProseRoles(
     // ヘルプデスクが抜けていた（2026-08-14 追加）。open 案件の半分が
     // ヘルプデスク系なのに人材側にラベルが付かず、役割マッチングが成立しなかった。
     // 「サービスデスク」「ユーザーサポート」「問い合わせ対応」も同じ役割として拾う
-    { re: /ヘルプ[　 ]?デスク|サービス[　 ]?デスク|ユーザー[　 ]?サポート|問(?:い)?合(?:わ)?せ[　 ]?対応/, label: 'ヘルプデスク' },
+    // weak = 「その作業をした」だけで職種名ではない言い回し。役割は消さないが主役割にしない。
+    // ITIL 4 のサービスデスクの定義は「提供組織と利用者の**単一窓口**として需要を受け付ける」で、
+    // 問い合わせに答えたからヘルプデスクなのではない。運用・保守の技術者はほぼ全員が答える。
+    { re: /ヘルプ[　 ]?デスク|サービス[　 ]?デスク|ユーザー[　 ]?サポート|問(?:い)?合(?:わ)?せ[　 ]?対応/, label: 'ヘルプデスク',
+      weak: /ユーザー[　 ]?サポート|問(?:い)?合(?:わ)?せ[　 ]?対応/ },
   ]
+
+  // ── 工程の列挙を「職種の主張」と読まないための下ごしらえ（2026-09-16）────────
+  //
+  // 背景（実測・prod 2,976人）: 運用保守が人材の67%、ヘルプデスクが29%に付いていた。
+  // 3人に2人が運用保守というのは実態としてありえない。根拠を数えると、
+  //   「要件定義から運用保守まで一連の工程を経験しました」
+  //   「基本設計・詳細設計・製造・テスト・運用保守」
+  // のような **工程の列挙**が大半だった。これは「どこまで関わったか」の説明であって
+  // 「その職種だった」ではない。ヘルプデスクも同じで、714人中451人(63%)が
+  // 「ヘルプデスク」と自称しておらず「問い合わせ対応」等の作業語だけで付いていた。
+  //
+  // ⚠ **役割は消さない**（docs/ROLE_DEFINITION.md）。消すと営業が根拠を確認できない。
+  //   マッチングが見るのは `raw_profile->'roles'->>0` ＝ **主役割だけ**なので、
+  //   弱い根拠のものを主役割にしなければ順位の害は消える。印を付けて残す。
+  //
+  // 長い語を先に並べること（運用保守 より先に 運用 が当たると連なりが切れる）。
+  const PHASE_TOKEN =
+    '調査分析|要件定義|要件分析|基本設計|詳細設計|外部設計|内部設計|方式設計|設計' +
+    '|開発|製造|実装|コーディング|単体テスト|結合テスト|総合テスト|受入テスト|テスト' +
+    '|移行|導入|リリース|運用保守|保守運用|運用|保守'
+  const PHASE_LINK =
+    '(?:[\\s　]*(?:[～〜~\\-−–—・,、，/／|｜]|から|まで|および|及び)[\\s　]*)+'
+  /** 工程語が2つ以上つながっている塊（＝工程の列挙） */
+  const PHASE_CHAIN_SRC = `(?:${PHASE_TOKEN})(?:${PHASE_LINK}(?:${PHASE_TOKEN}))+`
+  /** 工程の列挙を同じ長さの空白に潰す。位置がずれないので他の判定を壊さない */
+  const maskPhaseChains = (t: string): string =>
+    t.replace(new RegExp(PHASE_CHAIN_SRC, 'g'), s => ' '.repeat(s.length))
   // ── 到達レベル（2026-09-01 追加）────────────────────────────────────────────
   // docs/ROLE_DEFINITION.md 軸3。**同じラベルの中を「どこまでやったか」で分ける。**
   //
@@ -3415,7 +3452,8 @@ function scoreProseRoles(
   const roles: string[] = []
   const roleScores: Record<string, number> = {}
   const roleLevels: Record<string, string> = {}
-  if (!prose.trim()) return { roles, roleScores, roleLevels }
+  const roleEvidence: Record<string, string> = {}
+  if (!prose.trim()) return { roles, roleScores, roleLevels, roleEvidence }
 
   // ── 否定された役割を落とす（2026-08-29 追加） ──────────────────────────────
   // 「運用保守NG」「ヘルプデスク以外の業務を希望」「PMOの経験はありません」を
@@ -3449,17 +3487,35 @@ function scoreProseRoles(
     text.replace(new RegExp(`(?:${roleSrc})[^。、，（(\\n]{0,15}?${NEGATION_AFTER}`, 'g'), '')
   const head = fullText.slice(0, 200)
   const lines = fullText.split(/\r?\n/)
-  for (const { re, label } of ROLE_DEFS) {
+  for (const { re, label, weak } of ROLE_DEFS) {
     if (!re.test(prose)) continue
     // 否定されている出現を外したうえで、まだ残っているかを見る。
     // 「運用保守NG」しか書かれていない人には運用保守を付けない。
     const posProse = isNegated(prose, re.source) ? dropNegated(prose, re.source) : prose
     if (!re.test(posProse)) continue
+
+    // ── 根拠の強さを見る（2026-09-16）────────────────────────────────────
+    // 工程の列挙の中にしか出てこない／作業語でしか出てこない役割は、
+    // 「その職種だった」の主張ではないので**主役割にしない**。ラベルは残す。
+    const withoutPhases = maskPhaseChains(posProse)
+    const strongProse = weak
+      ? withoutPhases.replace(new RegExp(weak.source, 'g'), s => ' '.repeat(s.length))
+      : withoutPhases
+    if (!re.test(strongProse)) {
+      // 工程の列挙で消えたのか、作業語で消えたのかを区別して印にする
+      roleEvidence[label] = re.test(withoutPhases) ? '作業' : '工程'
+      roles.push(label)
+      roleScores[label] = 0.5          // 必ず最後尾。0 にしないのは「根拠はある」ため
+      const lv = judgeRoleLevel(label)
+      if (lv) roleLevels[label] = lv
+      continue
+    }
+
     let score = 0
-    // 出現回数（最大3）
+    // 出現回数（最大3）。工程の列挙・作業語は数に入れない
     const g = new RegExp(re.source, 'g')
     let count = 0
-    while (g.exec(posProse) !== null && count < 3) count++
+    while (g.exec(strongProse) !== null && count < 3) count++
     score += count
     // 冒頭（件名・営業の売り文句）
     if (re.test(head)) score += 3
@@ -3501,7 +3557,7 @@ function scoreProseRoles(
   //   冒頭200字ボーナスが 199字目か 201字目かで付き外れする脆さは残っているが、
   //   別の直し方（例: 冒頭ボーナスを距離に応じて減衰させる）で扱うべき。
   roles.sort((a, b) => roleScores[b] - roleScores[a])
-  return { roles, roleScores, roleLevels }
+  return { roles, roleScores, roleLevels, roleEvidence }
 }
 
 // 業界判定の false positive を避けるため、複合語や明示語のみマッチさせる。
@@ -3734,6 +3790,8 @@ function extractFromProse(bodyText: string, attachText: string): {
   roleScores: Record<string, number>
   /** 役割ごとの到達レベル（A主導 / B担当 / C従事 / -裏付けなし）。判定対象外の役割はキーごと無い */
   roleLevels: Record<string, string>
+  /** 根拠が弱い役割の印。'工程'=工程の列挙の中だけ / '作業'=作業語だけ。営業に理由を見せる */
+  roleEvidence: Record<string, string>
   industryScores: Record<string, number>
 } {
   // URL を除去（"https://example.com/cc.php" 等が PHP/HTTPS に誤マッチするのを防ぐ）
@@ -3754,7 +3812,7 @@ function extractFromProse(bodyText: string, attachText: string): {
   const prose = proseLines.join('\n')
 
   // 役割: スコアリングして主（先頭）・副（以降）の順に並べる
-  const { roles, roleScores, roleLevels } = scoreProseRoles(prose, allText)
+  const { roles, roleScores, roleLevels, roleEvidence } = scoreProseRoles(prose, allText)
 
   // 業界判定もフェーズ表ヘッダー行を除外したテキストを対象にする
   // （以前は短い単語も拾うため全文対象だったが、誤検出が多いためフィルタ済みテキストに変更）
@@ -3779,7 +3837,7 @@ function extractFromProse(bodyText: string, attachText: string): {
     if (re.test(allText)) { workStyle = label; break }
   }
 
-  return { roles, industries, workStyle, roleScores, roleLevels, industryScores }
+  return { roles, industries, workStyle, roleScores, roleLevels, roleEvidence, industryScores }
 }
 
 
@@ -11308,6 +11366,7 @@ Deno.serve(async (req: Request) => {
                 // 役割スコア（先頭=主の根拠。UI・デバッグ用）
                 _roleScores: Object.keys(blockProseFields.roleScores).length > 0 ? blockProseFields.roleScores : undefined,
                 _roleLevels: Object.keys(blockProseFields.roleLevels).length > 0 ? blockProseFields.roleLevels : undefined,
+                _roleEvidence: Object.keys(blockProseFields.roleEvidence).length > 0 ? blockProseFields.roleEvidence : undefined,
                 _industryScores: Object.keys(blockProseFields.industryScores).length > 0 ? blockProseFields.industryScores : undefined,
                 // 役割が取れなかった人の系統ヒント（表示・集計のみ。採点には未接続）
                 roleFamilyHint: inferRoleFamilyHint(
@@ -11936,6 +11995,7 @@ Deno.serve(async (req: Request) => {
           // 役割スコア（先頭=主の根拠。UI・デバッグ用）
           _roleScores: Object.keys(proseFields.roleScores).length > 0 ? proseFields.roleScores : undefined,
           _roleLevels: Object.keys(proseFields.roleLevels).length > 0 ? proseFields.roleLevels : undefined,
+          _roleEvidence: Object.keys(proseFields.roleEvidence).length > 0 ? proseFields.roleEvidence : undefined,
           _industryScores: Object.keys(proseFields.industryScores).length > 0 ? proseFields.industryScores : undefined,
           // 役割が取れなかった人の系統ヒント（表示・集計のみ。採点には未接続）
           roleFamilyHint: inferRoleFamilyHint(
