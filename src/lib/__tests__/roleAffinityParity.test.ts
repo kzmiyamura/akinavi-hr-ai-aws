@@ -69,10 +69,12 @@ function affinity(
 }
 
 describe('match-batch の定義表が読めていること', () => {
-  it('19ラベルすべてに作用対象と権限がある', () => {
-    expect(Object.keys(AXIS)).toHaveLength(19)
+  it('20ラベルすべてに作用対象と権限がある', () => {
+    expect(Object.keys(AXIS)).toHaveLength(20)
     expect(AXIS['PMO']).toEqual({ object: '仕組み', authority: 1 })
     expect(AXIS['プロジェクトマネージャー']).toEqual({ object: '成果', authority: 4 })
+    // 2026-09-15 追加。フロントエンド・バックエンドと同列であること
+    expect(AXIS['モバイルアプリエンジニア']).toEqual({ object: '製品', authority: 2 })
   })
 
   it('対象距離が5×5そろっている', () => {

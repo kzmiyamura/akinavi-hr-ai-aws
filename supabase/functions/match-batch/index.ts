@@ -207,6 +207,7 @@ const ROLE_AXIS: Record<string, { object: string; authority: number }> = {
   'フロントエンドエンジニア': { object: '製品',     authority: 2 },
   'バックエンドエンジニア':   { object: '製品',     authority: 2 },
   'フルスタックエンジニア':   { object: '製品',     authority: 2 },
+  'モバイルアプリエンジニア': { object: '製品',     authority: 2 },
   'インフラエンジニア':       { object: '製品',     authority: 2 },
   'クラウドエンジニア':       { object: '製品',     authority: 2 },
   'データエンジニア':         { object: '製品',     authority: 2 },

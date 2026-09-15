@@ -391,6 +391,7 @@ const ROLE_FAMILIES_UI: Record<string, string[]> = {
   'テックリード': ['engineering', 'management'], 'アーキテクト': ['engineering', 'management'],
   'インフラエンジニア': ['engineering'], 'フロントエンドエンジニア': ['engineering'],
   'バックエンドエンジニア': ['engineering'], 'フルスタックエンジニア': ['engineering'],
+  'モバイルアプリエンジニア': ['engineering'],
   'クラウドエンジニア': ['engineering'], 'データエンジニア': ['engineering'],
   'MLエンジニア': ['engineering'],
   'ヘルプデスク': ['support'], '運用保守': ['support'], 'テストエンジニア': ['support'],
