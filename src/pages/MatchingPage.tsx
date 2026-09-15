@@ -395,6 +395,8 @@ const ROLE_FAMILIES_UI: Record<string, string[]> = {
   'クラウドエンジニア': ['engineering'], 'データエンジニア': ['engineering'],
   'MLエンジニア': ['engineering'],
   'ヘルプデスク': ['support'], '運用保守': ['support'], 'テストエンジニア': ['support'],
+  'プロダクトマネージャー': ['management'], '社内SE': ['engineering', 'support'],
+  'SRE': ['engineering', 'support'],
 }
 function roleAffinityLabel(required: string, candidate: string):
   { mark: string; cls: string; note: string } {

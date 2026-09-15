@@ -69,12 +69,26 @@ function affinity(
 }
 
 describe('match-batch の定義表が読めていること', () => {
-  it('20ラベルすべてに作用対象と権限がある', () => {
-    expect(Object.keys(AXIS)).toHaveLength(20)
+  it('23ラベルすべてに作用対象と権限がある', () => {
+    expect(Object.keys(AXIS)).toHaveLength(23)
     expect(AXIS['PMO']).toEqual({ object: '仕組み', authority: 1 })
     expect(AXIS['プロジェクトマネージャー']).toEqual({ object: '成果', authority: 4 })
     // 2026-09-15 追加。フロントエンド・バックエンドと同列であること
     expect(AXIS['モバイルアプリエンジニア']).toEqual({ object: '製品', authority: 2 })
+    // 2026-09-16 追加。いずれも空きマスに入ること（埋まっている所に重ねない）
+    expect(AXIS['プロダクトマネージャー']).toEqual({ object: '製品', authority: 4 })
+    expect(AXIS['SRE']).toEqual({ object: 'サービス', authority: 3 })
+    expect(AXIS['社内SE']).toEqual({ object: '事業', authority: 2 })
+  })
+
+  it('PM と PdM は対象が違う（同じマスに置かない）', () => {
+    expect(AXIS['プロジェクトマネージャー'].object).toBe('成果')
+    expect(AXIS['プロダクトマネージャー'].object).toBe('製品')
+  })
+
+  it('SRE は運用保守と同じ対象で権限が1段上', () => {
+    expect(AXIS['SRE'].object).toBe(AXIS['運用保守'].object)
+    expect(AXIS['SRE'].authority).toBe(AXIS['運用保守'].authority + 1)
   })
 
   it('対象距離が5×5そろっている', () => {
