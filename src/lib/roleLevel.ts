@@ -88,13 +88,15 @@ export function readRoleLevel(
 /**
  * その役割が「工程・作業の言及」だけを根拠に付いているか（2026-09-16）。
  *
- * 実測（prod 2,976人）で 運用保守が67%・ヘルプデスクが29%に付いていた。根拠を数えると
- *   「要件定義から運用保守まで一連の工程を経験しました」  ← どこまで関わったかの説明
- *   「システム関連の問い合わせ対応、障害切り分けを担当」  ← 作業であって職種ではない
- * が大半だった。**役割は消さない**ので、代わりに印を付けて営業に理由を見せる。
+ * 実測（prod 2,976人）で 運用保守が67%・ヘルプデスクが29%・PL が37.8%に付いていた。
+ * 根拠を数えると、職種の主張ではない言及が大半だった:
+ *   「要件定義から運用保守まで一連の工程を経験しました」  ← どこまで関わったかの説明（工程）
+ *   「システム関連の問い合わせ対応、障害切り分けを担当」  ← 作業であって職種ではない（作業）
+ *   「【希望案件】■PM、PMO案件希望」                   ← やりたいこと（希望）
+ * **役割は消さない**ので、代わりに印を付けて営業に理由を見せる。
  * 他に強い根拠の役割があればそちらが主役割になり、無ければこの役割が主役割のまま残る。
  */
-export type RoleEvidence = '工程' | '作業'
+export type RoleEvidence = '工程' | '作業' | '希望'
 
 export const ROLE_EVIDENCE_STYLE: Record<RoleEvidence, { mark: string; cls: string; note: string }> = {
   '工程': {
@@ -110,6 +112,12 @@ export const ROLE_EVIDENCE_STYLE: Record<RoleEvidence, { mark: string; cls: stri
       + 'ITIL の定義でも、ヘルプデスクは「単一窓口という役目を担っている」ことを指し、\n'
       + '問い合わせに答えたことを指しません。',
   },
+  '希望': {
+    mark: '希望欄のみ',
+    cls: 'bg-amber-50 text-amber-700',
+    note: '【希望案件】欄にだけ出てきます。**やりたいこと**であって、やったことではありません。\n'
+      + '経歴の側にこの役割の記載が見つかりませんでした。',
+  },
 }
 
 /** raw_profile._roleEvidence からその役割の印を読む。強い根拠がある役割は null */
@@ -121,7 +129,7 @@ export function readRoleEvidence(
   const map = rawProfile._roleEvidence
   if (!map || typeof map !== 'object') return null
   const v = (map as Record<string, unknown>)[role]
-  return v === '工程' || v === '作業' ? v : null
+  return v === '工程' || v === '作業' || v === '希望' ? v : null
 }
 
 /** バッジのツールチップ。判定の根拠（実測の単価分布）まで出す */

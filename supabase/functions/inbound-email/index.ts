@@ -3277,7 +3277,11 @@ function scoreProseRoles(
 } {
   const ROLE_DEFS: Array<{ re: RegExp; label: string; weak?: RegExp }> = [
     { re: /(?<![A-Z])PMO(?![A-Z])|プロジェクト[　 ]?マネジメント[　 ]?オフィス/, label: 'PMO' },
-    { re: /(?<![A-Z])PM(?!O)(?![A-Z])|プロジェクト[　 ]?マネージャー/, label: 'プロジェクトマネージャー' },
+    // ⚠ 「PM補佐」を PM にしない（2026-09-16）。サブリーダーを PL にしないのと同じ理由。
+    //   PM は権限L4（予算・契約・要員を自ら決め結果に責任を負う）で、補佐は決裁しない。
+    //   実データ:「MESチームのPM補佐を担当」「資料作成、PMO補佐、SE補佐、ヘルプデスク」
+    //   ※ PMO は定義そのものが支援（L1）なので「PMO支援」「PMO補佐」は除外しない。
+    { re: /(?<![A-Z])PM(?!O)(?![A-Z])(?![　 ]?(?:補佐|補助))|プロジェクト[　 ]?マネージャー/, label: 'プロジェクトマネージャー' },
     // プロダクトマネージャー（2026-09-16 追加）。**PM とは作用対象が違う**。
     // PM は「成果（このPJのQCD）」に、PdM は「製品（何を作るか）」に働きかける。
     // 控え7,342通で109通が該当し、うち50通が PM に丸められていた（対象違いの誤り）。
@@ -3302,14 +3306,18 @@ function scoreProseRoles(
     //   `PL(?![A-Z])` は次が `/` だと通ってしまうため、明示的に除外する。
     // ⚠ 「サブPL」も PL にしない。2026-09-01 に「サブリーダーを PL に含めない」と
     //   決めたのにカナ側だけ直しており、略称の綴りでは素通りしていた。
-    { re: /(?<![A-Z])(?<!サブ)PL(?![A-Z])(?![\/／\-](?:pg|PG)?[Ss][Qq][Ll])|(?<!サブ)(?:プロジェクト|チーム|開発|PJ)[　 ]?リーダー(?!シップ)|(?<!サブ)リーダー(?!シップ)(?=として|経験|を務め|業務|\/)/, label: 'プロジェクトリーダー' },
+    //   `PL SQL`（空白区切り）と `PL/I`・`PL/1`（IBM の言語）も除く。2026-09-16 の実データ:
+    //     「DB2/IMS、PL SQL、Windows Server」「COBOL(UNIX)、JCL、SQL、PL/1、ISM」
+    //   読点区切りの「PL、SQL」は役割＋スキルの並記なので**除かない**。
+    { re: /(?<![A-Z])(?<!サブ)PL(?![A-Z])(?!(?:[\/／\-][　 ]?|[　 ])(?:pg|PG)?[Ss][Qq][Ll])(?![\/／][1IＩ](?![A-Za-z]))(?![　 ]?(?:補佐|補助))|(?<!サブ)(?:プロジェクト|チーム|開発|PJ)[　 ]?リーダー(?!シップ)|(?<!サブ)リーダー(?!シップ)(?=として|経験|を務め|業務|\/)/, label: 'プロジェクトリーダー' },
     // 同上。「サブTL」はテックリードにしない。`テックリード` は `テック[　 ]?リード` に
     // 完全に含まれるので選択肢は1本で足りる（監査で同数165通の重複として出ていた）
     { re: /(?<![A-Z])(?<!サブ)TL(?![A-Z])|テック[　 ]?リード/,   label: 'テックリード' },
     // ⚠ 英字の前後ガードが要る。`SE(?![A-Z])` だけだと DATABASE / BASE / LICENSE /
     //   RESPONSE / USE の末尾 SE に当たって「システムエンジニア」が付いていた（2026-08-21）。
     //   カナのガード（バックエンドSE 等を別役割に譲る）は従来どおり残す。
-    { re: /(?<![A-Za-zバックエンドフロントクラウドデータML])SE(?![A-Za-z])|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
+    // 「SE補佐」も本人の役割にしない（2026-09-16。PM補佐・サブリーダーと同じ理由）
+    { re: /(?<![A-Za-zバックエンドフロントクラウドデータML])SE(?![A-Za-z])(?![　 ]?(?:補佐|補助))|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
     // 同上。`PG` 単独だと JPG / PNG / MPG / SPG に当たっていた
     { re: /(?<![A-Za-z])PG(?![A-Za-z])|プログラマー?/,    label: 'プログラマー' },
     { re: /インフラ[　 ]?エンジニア/,                    label: 'インフラエンジニア' },
@@ -3382,6 +3390,38 @@ function scoreProseRoles(
   /** 工程の列挙を同じ長さの空白に潰す。位置がずれないので他の判定を壊さない */
   const maskPhaseChains = (t: string): string =>
     t.replace(new RegExp(PHASE_CHAIN_SRC, 'g'), s => ' '.repeat(s.length))
+
+  // ── 「希望案件」ブロックは“やりたいこと”であって“やったこと”ではない（2026-09-16）──
+  //
+  // ユーザー指摘「pm pl が多すぎる問題」。スコア1（略称が1回出ただけ）で PM が主役割に
+  // なっている実物を見たところ、大半がこれだった:
+  //   「【希望案件】■PM、PMO案件希望 ■JAVA案件も対応可能でございます」
+  //   「【希望案件】kintone開発 / JavaScriptフロントエンド開発 / PM・PL（顧客折衝含む上流工程）」
+  //   「PM/PMOの上流案件から、手を動かすポジションまでなんでもご紹介ください！！」
+  // 営業が「この人にどんな案件を紹介してほしいか」を書いている欄で、経歴ではない。
+  //
+  // 見出しから、次の見出し・区切り線・空行までを1ブロックとして潰す。
+  const WISH_BLOCK_SRC =
+    '(?:【[　 ]*(?:希望案件|希望条件|希望業務|希望ポジション|ご希望|希望)[　 ]*】|(?:希望案件|希望条件|希望業務)[　 ]*[：:])'
+    + '[\\s\\S]{0,400}?(?=【|[＝=]{3,}|[─ー―-]{5,}|\\n[　 ]*\\n|$)'
+  // ⚠ ブロックの切り出しは **fullText** に対して行う。prose は
+  //   「20文字超 or 、。を含む行」に絞られた後なので、「【希望案件】」の見出し行
+  //   （6文字・句読点なし）が落ちていて、prose だけを見ると始まりが分からない。
+  //   拾った行を行単位で覚えておき、prose 側の同じ行を潰す。
+  const wishLines = new Set<string>()
+  {
+    const g = new RegExp(WISH_BLOCK_SRC, 'g')
+    let w: RegExpExecArray | null
+    while ((w = g.exec(fullText)) !== null) {
+      for (const l of w[0].split(/\r?\n/)) {
+        const t = l.trim()
+        if (t) wishLines.add(t)
+      }
+    }
+  }
+  const maskWishBlocks = (t: string): string =>
+    wishLines.size === 0 ? t
+      : t.split('\n').map(l => (wishLines.has(l.trim()) ? ' '.repeat(l.length) : l)).join('\n')
   // ── 到達レベル（2026-09-01 追加）────────────────────────────────────────────
   // docs/ROLE_DEFINITION.md 軸3。**同じラベルの中を「どこまでやったか」で分ける。**
   //
@@ -3453,6 +3493,8 @@ function scoreProseRoles(
   const roleScores: Record<string, number> = {}
   const roleLevels: Record<string, string> = {}
   const roleEvidence: Record<string, string> = {}
+  /** 役割ごとの「本文で最初に出た位置」。同点の決着に使う */
+  const firstAt: Record<string, number> = {}
   if (!prose.trim()) return { roles, roleScores, roleLevels, roleEvidence }
 
   // ── 否定された役割を落とす（2026-08-29 追加） ──────────────────────────────
@@ -3474,7 +3516,11 @@ function scoreProseRoles(
     // （2026-09-15 実測。控え7,325通のうち65通がこの言い回し）。
     // 例:「Android開発に関してはほとんど経験がないので難しいです」→ モバイルが付いていた
     '|(?:の|が|は)?経験(?:は|が)?(?:(?:あり|ござい)ません|な(?:い|し|く))' +
-    '|は?希望(?:しません|しない|外)' +     // 「運用保守は希望しません」
+    // 「希望せず」「得意ではありません」を追加（2026-09-16 実データ）:
+    //   「PMやPMOなどの調整系は得意ではありませんが、サブリーダーなどは問題ありません」
+    //   「PMポジションは希望せず、現場のエンジニアリング業務での稼働を希望」
+    '|は?希望(?:しません|しない|せず|しておりません|外)' +
+    '|は?得意で(?:は)?(?:あり|ござい)ません' +
     '|以外(?:の|を)' +                     // 「ヘルプデスク以外の業務を希望」（以外にも は除く）
     ')'
   /** その役割語の出現が「否定された」ものか */
@@ -3497,13 +3543,16 @@ function scoreProseRoles(
     // ── 根拠の強さを見る（2026-09-16）────────────────────────────────────
     // 工程の列挙の中にしか出てこない／作業語でしか出てこない役割は、
     // 「その職種だった」の主張ではないので**主役割にしない**。ラベルは残す。
-    const withoutPhases = maskPhaseChains(posProse)
+    const withoutWishes = maskWishBlocks(posProse)
+    const withoutPhases = maskPhaseChains(withoutWishes)
     const strongProse = weak
       ? withoutPhases.replace(new RegExp(weak.source, 'g'), s => ' '.repeat(s.length))
       : withoutPhases
     if (!re.test(strongProse)) {
-      // 工程の列挙で消えたのか、作業語で消えたのかを区別して印にする
-      roleEvidence[label] = re.test(withoutPhases) ? '作業' : '工程'
+      // どれで消えたのかを区別して印にする（営業に理由を見せるため）
+      roleEvidence[label] = !re.test(withoutWishes) ? '希望'
+        : re.test(withoutPhases) ? '作業'
+        : '工程'
       roles.push(label)
       roleScores[label] = 0.5          // 必ず最後尾。0 にしないのは「根拠はある」ため
       const lv = judgeRoleLevel(label)
@@ -3512,10 +3561,15 @@ function scoreProseRoles(
     }
 
     let score = 0
-    // 出現回数（最大3）。工程の列挙・作業語は数に入れない
+    // 出現回数（最大3）。工程の列挙・作業語は数に入れない。
+    // あわせて「本文で最初に出た位置」を控える（同点の決着に使う。下の sort 参照）
     const g = new RegExp(re.source, 'g')
     let count = 0
-    while (g.exec(strongProse) !== null && count < 3) count++
+    let mm: RegExpExecArray | null
+    while ((mm = g.exec(strongProse)) !== null && count < 3) {
+      if (firstAt[label] === undefined) firstAt[label] = mm.index
+      count++
+    }
     score += count
     // 冒頭（件名・営業の売り文句）
     if (re.test(head)) score += 3
@@ -3530,8 +3584,11 @@ function scoreProseRoles(
     //   とあり、この +5 だけで PMO(6点) が 運用保守(4点) を抜いて**主役割**になっていた。
     //   ユーザー判断:「これはcobolエンジニアやって。pm補佐くらいならできるのかもね」
     //   ＝ PMO は副役割としては残してよいが、先頭に来てはいけない。
+    // 並記されているときは、間に挟まった他の役割を飛ばして「として」を見る（2026-09-16）。
+    // それまでは「PM/PMOとして」で**最後の PMO だけ**が +5 を得ていた。
+    // 区切り記号で並べただけで順位が決まるのは根拠ではない（同点の決着と同じ問題）。
     const asRoleRE = new RegExp(
-      `(?:${re.source})(?:として|を担当|の経歴|がメイン)`
+      `(?:${re.source})(?:[／/・､、,][^\\s。\\n]{1,12}){0,3}(?:として|を担当|の経歴|がメイン)`
       + `(?![^\\n。]{0,15}(?:対応可|も可))`
       + `(?![^\\n。]{0,30}(?:経験も|なども|等も|もあり|もある))`,
     )
@@ -3548,15 +3605,31 @@ function scoreProseRoles(
     const level = judgeRoleLevel(label)
     if (level) roleLevels[label] = level
   }
-  // スコア降順（同点は辞書定義順を維持 = sort の安定性に依拠）
+  // スコア降順。**同点は「本人が先に書いた方」を主役割にする**（2026-09-16）。
   //
-  // ⚠ 2026-09-03 に「同点なら到達レベルが '-' の役割を後ろへ」という決着を入れかけたが
-  //   取り下げた。レベル判定の対象外な役割（システムエンジニア等）は '-' にならないため、
-  //   「裏付けで決める」ではなく「判定していない方を優遇する」になってしまう。
-  //   実際に Q3（件名【PMO要員】）で システムエンジニア が主役割に化けた。
-  //   冒頭200字ボーナスが 199字目か 201字目かで付き外れする脆さは残っているが、
-  //   別の直し方（例: 冒頭ボーナスを距離に応じて減衰させる）で扱うべき。
-  roles.sort((a, b) => roleScores[b] - roleScores[a])
+  // それまでは sort の安定性に任せており、同点なら ROLE_DEFS の宣言順
+  // （PMO → PM → PL → TL → SE → PG …）で決まっていた。これは実装の都合であって
+  // 根拠ではない。実測（ローカル控えの人材メール3,463通）:
+  //     主役割が同点で決まっている            589通 (17.0%)
+  //     うち PMO が PM に勝った                86通
+  //        PM が PL に勝った                  42通
+  //        PMO が PL に勝った                 23通
+  //        PMO = PM = PL の三つ巴             10通
+  // PMO は権限L1（決裁権なし）、PM は L4。宣言順のせいで**最も弱い解釈を機械的に選んで**
+  // いた。PM案件に対する role_affinity は PM なら 1.0、PMO なら 0.2 で、差が大きい。
+  //
+  // 「本文で先に出た順」にした理由:
+  //   ・経歴書・PR文は重要な順に書かれる。**本人の並べ方**を尊重する
+  //   ・権限の高い方／低い方を優先すると、体系的に盛る／削ることになる
+  //   ・営業に説明できる（「ご本人がこの順で書いています」）
+  //
+  // ⚠ 2026-09-03 に「同点なら到達レベルが '-' の役割を後ろへ」を入れかけて取り下げた件は
+  //   この決着とは別。レベル判定の対象外な役割（システムエンジニア等）は '-' にならないため、
+  //   あれは「裏付けで決める」ではなく「判定していない方を優遇する」になっていた。
+  //   出現位置は全役割に等しく存在するので、その偏りが無い。
+  roles.sort((a, b) =>
+    (roleScores[b] - roleScores[a])
+    || ((firstAt[a] ?? Number.MAX_SAFE_INTEGER) - (firstAt[b] ?? Number.MAX_SAFE_INTEGER)))
   return { roles, roleScores, roleLevels, roleEvidence }
 }
 

@@ -93,6 +93,10 @@ describe('readRoleEvidence（工程・作業の記載だけが根拠の印）', 
     expect(readRoleEvidence(null, '運用保守')).toBeNull()
     expect(readRoleEvidence({ _roleEvidence: 'こわれた値' }, '運用保守')).toBeNull()
   })
+  it('希望欄だけが根拠の印も読む（2026-09-16）', () => {
+    expect(readRoleEvidence({ _roleEvidence: { プロジェクトマネージャー: '希望' } },
+      'プロジェクトマネージャー')).toBe('希望')
+  })
   it('知らない値は採らない', () => {
     expect(readRoleEvidence({ _roleEvidence: { 運用保守: '?' } }, '運用保守')).toBeNull()
   })
