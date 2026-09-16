@@ -1523,6 +1523,37 @@ let _ownEmailDomain: string | null | undefined = undefined
 let _ownEmailDomainLoadedAt = 0
 const OWN_DOMAIN_CACHE_MS = 5 * 60 * 1000
 
+/**
+ * 1送信元あたりの1日の取り込み上限（app_config `sender_daily_limit`・既定 200）。
+ *
+ * 2026-05-19 に「AIコスト急騰対策」として 50 で入れたが、その翌日に inbound-email から
+ * AI解析を除去しており、守る対象が消えていた（詳細は使用箇所のコメント）。
+ * 今の制約は Storage（Free 1GB）だが、保持7日で自動的に頭打ちになるため上限は緩めてよい。
+ *
+ * 0 以下にすると無制限。設定で変えられるようにしてあるのは、
+ * 一斉配信で溢れたときにデプロイ無しで絞れるようにするため。
+ */
+let _senderDailyLimit: number | undefined
+let _senderDailyLimitAt = 0
+const SENDER_DAILY_LIMIT_DEFAULT = 200
+
+async function getSenderDailyLimit(supabase: SupabaseClientLike): Promise<number> {
+  const now = Date.now()
+  if (_senderDailyLimit !== undefined && now - _senderDailyLimitAt < OWN_DOMAIN_CACHE_MS) {
+    return _senderDailyLimit
+  }
+  try {
+    const { data } = await supabase.from('app_config').select('value')
+      .eq('key', 'sender_daily_limit').maybeSingle()
+    const n = Number(data?.value)
+    _senderDailyLimit = Number.isFinite(n) ? n : SENDER_DAILY_LIMIT_DEFAULT
+  } catch {
+    _senderDailyLimit = SENDER_DAILY_LIMIT_DEFAULT
+  }
+  _senderDailyLimitAt = Date.now()
+  return _senderDailyLimit
+}
+
 /** app_config から own_email_domain を取得（5分キャッシュ） */
 async function loadOwnEmailDomain(supabaseUrl: string, serviceKey: string): Promise<string | null> {
   const now = Date.now()
@@ -10866,10 +10897,25 @@ Deno.serve(async (req: Request) => {
     }
     // 重複なし → ハッシュをまだ記録しない（処理成功後に記録する）
 
-    // ④ 送信者の1日上限チェック（一斉配信業者によるAIコスト急騰対策）
-    // 1送信者から1日50件超はスキップ（Bedrock費用急増を防ぐ）
-    const SENDER_DAILY_LIMIT = 50
-    if (from && type === 'candidate' && !forceProcess) {
+    // ④ 送信者の1日上限チェック
+    //
+    // ⚠ 2026-09-16 見直し。**入れた理由がすでに消えていた。**
+    //   2026-05-19 に「一斉配信業者によるAIコスト急騰対策（Bedrock費用）」として 50 を設定。
+    //   その **翌日 2026-05-20 に inbound-email から AI解析を完全除去**している（139a4f2）。
+    //   現在このFunctionのAI呼び出しは0か所（ai_logs も model='no-ai' 平均0ms）。
+    //   守るべきコストが無いまま4か月、人材メールを捨て続けていた。
+    //
+    //   実測（直近7日・2026-09-16）: 上限で打ち切った人材メール 458件
+    //     i-standard.jp 332件（5日間・66件/日）… 50件登録した上でさらに66件捨てていた
+    //     dearism.co.jp  71件 / free-brain.co.jp 32件 / dream-v.co.jp 15件
+    //
+    //   今の本当の制約は **Storage**（Free 1GB）。ただし保持7日で自動的に頭打ちになる
+    //   （実測: attachments 1,993ファイル 305MB、最古がちょうど7日前＝掃除は効いている）。
+    //   上限を 200 にしても 7日窓で +70MB 程度の見込みで、1GB には十分収まる。
+    //
+    // 値は app_config で変えられる（デプロイ不要）。0 以下にすると無制限。
+    const SENDER_DAILY_LIMIT = await getSenderDailyLimit(supabase)
+    if (from && type === 'candidate' && !forceProcess && SENDER_DAILY_LIMIT > 0) {
       const todayStart = new Date()
       todayStart.setHours(0, 0, 0, 0)
       const { count: senderCount } = await supabase

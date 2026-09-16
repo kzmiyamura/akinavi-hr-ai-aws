@@ -99,17 +99,39 @@ select * from (
          count(*)::text, ''
     from ai_logs, period where type = 'candidate' and created_at > period.since
   union all
-  select '03 取りこぼし', '登録されなかった数',
-         count(*) filter (where linked_id is null)::text,
-         case when 100.0 * count(*) filter (where linked_id is null) / nullif(count(*),0) > 10
-              then '⚠ 10%超' else 'ok' end
+  -- ⚠ 「登録されなかった＝取りこぼし」ではない（2026-09-16 に実測して判明）。
+  --   直近7日の2,594件を理由別に数えたところ、**全件が意図的なスキップ**だった:
+  --     COMMERCIAL_SOLICITATION 968 / DUPLICATE_EMAIL 803 /
+  --     SENDER_DAILY_LIMIT 458 / PROJECT_SOLICITATION 365
+  --   抽出の失敗は1件も無い。それまでは 21.5% を「⚠ 10%超」と出し続けており、
+  --   何週間も誤った警告を鳴らしていた。**理由で分けて出す。**
+  --   内訳を見るときは scripts/sql/miss_reasons.sql
+  select '03 取りこぼし', '意図的スキップ（売り込み・重複・案件・上限）',
+         count(*) filter (where linked_id is null
+                            and ai_result->>'reason' in ('COMMERCIAL_SOLICITATION',
+                                'DUPLICATE_EMAIL', 'PROJECT_SOLICITATION', 'SENDER_DAILY_LIMIT'))::text,
+         'ok（仕様どおり）'
     from ai_logs, period where type = 'candidate' and created_at > period.since
   union all
-  select '03 取りこぼし', '未登録が多い送信元 上位5',
-         string_agg(x.dom || '(' || x.n || ')', ' / ' order by x.n desc), ''
+  select '03 取りこぼし', '★理由不明で登録されなかった数',
+         count(*) filter (where linked_id is null
+                            and coalesce(ai_result->>'reason','') not in ('COMMERCIAL_SOLICITATION',
+                                'DUPLICATE_EMAIL', 'PROJECT_SOLICITATION', 'SENDER_DAILY_LIMIT'))::text,
+         case when count(*) filter (where linked_id is null
+                            and coalesce(ai_result->>'reason','') not in ('COMMERCIAL_SOLICITATION',
+                                'DUPLICATE_EMAIL', 'PROJECT_SOLICITATION', 'SENDER_DAILY_LIMIT')) > 0
+              then '⚠ 要調査' else 'ok' end
+    from ai_logs, period where type = 'candidate' and created_at > period.since
+  union all
+  -- 上限による打ち切りだけは「本当は取れたはずのもの」。送信元を名指しで出す
+  select '03 取りこぼし', '1日上限で打ち切った送信元 上位5',
+         coalesce(string_agg(x.dom || '(' || x.n || ')', ' / ' order by x.n desc), '(なし)'),
+         ''
     from (select lower(split_part(from_address,'@',2)) as dom, count(*) as n
           from ai_logs, period
-          where type = 'candidate' and linked_id is null and created_at > period.since
+          where type = 'candidate' and linked_id is null
+            and ai_result->>'reason' = 'SENDER_DAILY_LIMIT'
+            and created_at > period.since
           group by 1 order by 2 desc limit 5) x
 
   ---- スキル辞書 ----
