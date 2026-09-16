@@ -5,7 +5,61 @@ import assert from 'node:assert/strict'
 import {
   experienceYearsFromProjects, pickBodyFieldsFor, buildPatch, mergeSkills, techsFromProjects, unionMonths,
   isUsableName, genderMeaning, pickExperienceYears, sanitizeClaimedYears, normEmploymentType, normCommercialFlow, bodySkillYearsToMonths,
+  normAiRoles, regexRolesAreWeak,
 } from './apply.mjs'
+
+// ── 役割のAI校正（2026-09-16）──────────────────────────────────────────────
+test('normAiRoles: 一覧外のラベルは捨てる（role_axis に無いと順位が静かに狂う）', () => {
+  assert.deepEqual(normAiRoles('インフラエンジニア', ['運用保守']), ['インフラエンジニア', '運用保守'])
+  assert.deepEqual(normAiRoles('クラウドアーキテクト', []), [])       // 一覧に無い
+  assert.deepEqual(normAiRoles('SRE', ['DevOpsエンジニア']), ['SRE']) // 副の一覧外だけ落ちる
+  assert.deepEqual(normAiRoles(null, ['PMO']), ['PMO'])
+  assert.deepEqual(normAiRoles(null, null), [])
+  assert.deepEqual(normAiRoles('PMO', ['PMO']), ['PMO'])              // 重複は畳む
+})
+
+test('normAiRoles: 副役割は3つまで（主とあわせて4つ）', () => {
+  const got = normAiRoles('PMO',
+    ['プロジェクトマネージャー', 'プロジェクトリーダー', 'システムエンジニア', 'プログラマー'])
+  assert.equal(got.length, 4)
+  assert.equal(got[0], 'PMO')
+})
+
+test('regexRolesAreWeak: 空 or 弱い印つきのときだけ AI に譲る', () => {
+  assert.equal(regexRolesAreWeak({ roles: [] }), true)
+  assert.equal(regexRolesAreWeak({}), true)
+  assert.equal(regexRolesAreWeak({ roles: ['PMO'] }), false)
+  // 主役割に印が付いている＝「職種としては名乗っていない」と regex 自身が判定した
+  assert.equal(regexRolesAreWeak(
+    { roles: ['運用保守'], _roleEvidence: { 運用保守: '工程' } }), true)
+  assert.equal(regexRolesAreWeak(
+    { roles: ['ヘルプデスク'], _roleEvidence: { ヘルプデスク: '作業' } }), true)
+  // 印が付いているのが副役割なら、主役割は強いので譲らない
+  assert.equal(regexRolesAreWeak(
+    { roles: ['PMO', '運用保守'], _roleEvidence: { 運用保守: '工程' } }), false)
+})
+
+test('buildPatch: regex が空なら AI の役割で埋める / 埋まっていれば触らない', () => {
+  const ai = { mainRole: 'クラウドエンジニア', subRoles: ['インフラエンジニア'] }
+  const filled = buildPatch({ raw_profile: { roles: [] } }, { bodyFields: ai })
+  assert.ok(filled.changes.includes('roles'))
+  assert.deepEqual(filled.patch.raw_profile.roles, ['クラウドエンジニア', 'インフラエンジニア'])
+  assert.equal(filled.patch.raw_profile._rolesBy, 'ai')
+
+  const kept = buildPatch({ raw_profile: { roles: ['PMO'] } }, { bodyFields: ai })
+  assert.ok(!kept.changes.includes('roles'))
+})
+
+test('buildPatch: AI で入れ替えたら regex の印とスコアを残さない', () => {
+  const r = buildPatch(
+    { raw_profile: { roles: ['運用保守'], _roleEvidence: { 運用保守: '工程' }, _roleScores: { 運用保守: 0.5 } } },
+    { bodyFields: { mainRole: 'インフラエンジニア', subRoles: [] } })
+  assert.deepEqual(r.patch.raw_profile.roles, ['インフラエンジニア'])
+  assert.equal(r.patch.raw_profile._roleEvidence, undefined)
+  assert.equal(r.patch.raw_profile._roleScores, undefined)
+  // 退避してあるので戻せる
+  assert.deepEqual(r.patch.raw_profile._regex_backup.roles, ['運用保守'])
+})
 
 test('isUsableName: 年齢・駅名を巻き込んだ氏名を弾く', () => {
   assert.equal(isUsableName('M.Y'), true)

@@ -11,6 +11,7 @@ import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { normTech } from './lib.mjs'
 import { isOwnCompany } from './own_company.mjs'
+import { ROLE_LABEL_LIST } from './prompts.mjs'
 
 /**
  * AI が返した所属会社の後始末。
@@ -107,9 +108,57 @@ export const FIELD_POLICY = {
   employmentType: 'fill',
   // 商流は regex 専任だった項目。regex が取れているものを AI で崩さないよう fill から始める
   commercialFlow: 'fill',
+  /**
+   * 役割（2026-09-16 追加。ユーザー指摘「フリーフォーマットはaiの校正がきくんでしょ。特に役割」）。
+   *
+   * ドライラン（role_dryrun.mjs・人材メール40通・haiku）:
+   *   一致 8 / 食い違い 27 / 両方なし 5
+   *   食い違い27件のうち **13件(48%)が「regexは何も取れず、AIは取れた」**。
+   *   regex の役割ゼロは人材メール全体の約35%あり、そこが最大の穴だった。
+   *   逆向き（regexが取れてAIがnull）は3件で、うち2件はAIの方が妥当だった
+   *   （「PdM案件希望」＝希望であって経歴ではない）。
+   *
+   * ⚠ それでも 'fill' から始める。commercialFlow と同じ理由で、
+   *   regex が明示的な職種名から取れているものを AI で崩すリスクを負わない。
+   *   overwrite への昇格は、実データで劣化が無いことを測ってから。
+   * ⚠ 「空」の判定は roles.length === 0 だけでなく、
+   *   **主役割に弱い印（_roleEvidence の 工程/作業/希望）が付いている場合も空扱い**にする。
+   *   印が付いている＝「職種としては名乗っていない」なので、AI に読ませる価値がある。
+   */
+  roles: 'fill',
 }
 
 const norm = s => String(s ?? '').replace(/[\s　・.,]/g, '').toLowerCase()
+
+/**
+ * AI が返した役割を、docs/ROLE_DEFINITION.md の一覧に収める（2026-09-16）。
+ * 一覧外のラベルは捨てる。role_axis に無いラベルは role_affinity が 0.5 を返すため、
+ * 「それらしい新語」を入れると順位が静かに狂う。
+ */
+export function normAiRoles(mainRole, subRoles) {
+  const ok = v => typeof v === 'string' && ROLE_LABEL_LIST.includes(v.trim())
+  const out = []
+  if (ok(mainRole)) out.push(mainRole.trim())
+  for (const s of Array.isArray(subRoles) ? subRoles : []) {
+    if (ok(s) && !out.includes(s.trim())) out.push(s.trim())
+    if (out.length >= 4) break
+  }
+  return out
+}
+
+/**
+ * regex 側の役割が「弱い」か。弱ければ AI の読みで置き換えてよい。
+ *   ・役割が1つも無い（人材メールの約35%）
+ *   ・主役割に _roleEvidence の印（工程/作業/希望）が付いている
+ *     ＝「職種としては名乗っていない」と regex 自身が判定している
+ */
+export function regexRolesAreWeak(rp) {
+  const roles = Array.isArray(rp?.roles) ? rp.roles : []
+  if (roles.length === 0) return true
+  const ev = rp?._roleEvidence
+  if (ev && typeof ev === 'object' && ev[roles[0]]) return true
+  return false
+}
 
 /**
  * 氏名として使えるか。使えない名前が一覧の先頭に並ぶと製品の信頼を失うため、
@@ -316,6 +365,21 @@ export function buildPatch(cand, { bodyFields, attachment }) {
     set('employmentType', normEmploymentType(bodyFields.employmentType) ?? bodyFields.employment, { raw: true })
     // 商流は今まで regex 専任だった項目。形式に合うものだけ入れる
     set('commercialFlow', normCommercialFlow(bodyFields.commercialFlow), { raw: true })
+
+    // ── 役割（2026-09-16）────────────────────────────────────────────────
+    // regex が取れていない、または主役割が「工程/作業/希望の記載だけ」の弱い印つきのとき、
+    // AI の読みで置き換える。一覧外のラベルは捨てる（役割は role_axis と対でないと
+    // role_affinity が 0.5 を返して静かに順位が狂う）。
+    const aiRoles = normAiRoles(bodyFields.mainRole, bodyFields.subRoles)
+    if (aiRoles.length && regexRolesAreWeak(rp)) {
+      stash('roles', rp.roles ?? null)
+      rp.roles = aiRoles
+      // 印とスコアは regex の産物。AI で入れ替えたら古い印を残さない
+      if (rp._roleEvidence) { stash('_roleEvidence', rp._roleEvidence); delete rp._roleEvidence }
+      if (rp._roleScores) delete rp._roleScores
+      rp._rolesBy = 'ai'
+      changes.push('roles')
+    }
   }
 
   if (attachment) {

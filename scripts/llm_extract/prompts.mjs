@@ -3,6 +3,45 @@
 
 import { OWN_COMPANY_NAMES } from './own_company.mjs'
 
+/**
+ * 人材の「役割」を読ませる指示（2026-09-16 追加）。
+ *
+ * ユーザー指摘「フリーフォーマットはaiの校正がきくんでしょ。特に役割」。
+ * それまで roles は AI校正の対象外で、プロンプトにも項目が無かった。
+ * 役割は「自由記述から立場を読む」判断そのもので、regex がいちばん苦手な領域。
+ *
+ * ドライラン（scripts/llm_extract/role_dryrun.mjs・人材メール40通・haiku）:
+ *   一致 8 / 食い違い 27 / 両方なし 5
+ *   **食い違い27件のうち13件(48%)は「regexは何も取れず、AIは取れた」**。
+ *   regex の役割ゼロは人材メール全体の約35%あり、そこが最大の穴だった。
+ *   例: 「AWS(EC2,EKS,ECS)設計構築/Azure/Terraform」regex:運用保守 → AI:クラウドエンジニア
+ *       「Linux, Windows, 設計構築」            regex:システムエンジニア → AI:インフラエンジニア
+ *
+ * ⚠ ラベルは docs/ROLE_DEFINITION.md の23種。**一覧外の言葉を作らせない**。
+ *   一覧を変えたら role_axis / ROLE_DEFS / project_apply.mjs の ROLE_LABELS も直すこと。
+ * ⚠ 除外ルールは regex 側で実測して決めたものと揃える（工程語・作業語・希望欄・補佐・否定）。
+ */
+export const ROLE_LABEL_LIST = [
+  'プロジェクトマネージャー', 'プロジェクトリーダー', 'PMO', 'スクラムマスター',
+  'プロダクトマネージャー', 'コンサルタント', 'アーキテクト', 'テックリード',
+  'システムエンジニア', 'プログラマー', 'フロントエンドエンジニア', 'バックエンドエンジニア',
+  'フルスタックエンジニア', 'モバイルアプリエンジニア', 'インフラエンジニア', 'クラウドエンジニア',
+  'データエンジニア', 'MLエンジニア', 'テストエンジニア', '社内SE', 'SRE',
+  '運用保守', 'ヘルプデスク',
+]
+
+export const ROLE_RULES = `- mainRole: その人が**実際に担ってきた立場**を、次の一覧から1つだけ。
+  一覧に無い言葉を作らない。読み取れなければ null:
+  ${ROLE_LABEL_LIST.join(' / ')}
+- subRoles: 他に担っていた役割（同じ一覧から最大3つ。無ければ []）
+- 役割の判断で**採ってはいけないもの**:
+  ・工程として関わっただけ（「要件定義から運用保守まで一連の工程を経験」＝運用保守ではない）
+  ・作業をしただけ（「問い合わせ対応を担当」＝ヘルプデスクではない）
+  ・【希望案件】欄にしか出てこない役割（やりたいことであって経歴ではない）
+  ・補佐（「PM補佐」「サブリーダー」は決裁しないので本人の役割にしない）
+  ・否定されているもの（「PMは得意ではありません」「PMポジションは希望せず」）
+  ・PL/SQL・PL/I は Oracle や IBM の**言語**であって役割ではない`
+
 export const TRANSCRIBE_RULES = `あなたはIT技術者の経歴書(Excelシート)の読み取り係です。以下のJSONはExcelシートのグリッドです（rows=[行番号,[セル値...]]、結合セルは左上セルに値が入り、mergesが結合範囲）。
 
 タスク: 経歴書に記載された「案件（プロジェクト）」を1件ずつ読み取り、忠実に転記してください。
@@ -82,9 +121,10 @@ export const BODY_FIELDS_BATCH_RULES = `あなたはSES営業メールの読み�
 - 1つのメールに複数人いる場合は candidates 配列に全員分
 - mailType: そのメールの種別。人材紹介なら "candidate"、案件紹介なら "project"、
   それ以外は "other"
+${ROLE_RULES}
 
 出力は次のJSONのみ（説明文・コードフェンス禁止）:
-{"results":[{"no":1,"mailType":"candidate","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null,"employmentType":null,"commercialFlow":null,"experienceYears":null,"skillYears":{}}]}]}
+{"results":[{"no":1,"mailType":"candidate","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null,"employmentType":null,"commercialFlow":null,"experienceYears":null,"skillYears":{},"mainRole":null,"subRoles":[]}]}]}
 
 --- 以下、番号付きのメール本文 ---
 `
@@ -273,9 +313,10 @@ export const BODY_FIELDS_RULES = `あなたはSES営業メールの読み取り�
 - mailType: このメールの種別。人材(要員・エンジニア)の紹介なら "candidate"、
   案件(仕事・プロジェクト)の紹介なら "project"、営業・お知らせ等どちらでもなければ "other"。
   案件メールには個人プロフィールが無く、案件名・必須スキル・募集人数・商流等が書かれている
+${ROLE_RULES}
 
 出力は次のJSONのみ（説明文・コードフェンス禁止）:
-{"mailType":"candidate または project または other","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null,"employmentType":null,"commercialFlow":null,"experienceYears":null,"skillYears":{}}]}
+{"mailType":"candidate または project または other","candidates":[{"name":"","age":null,"gender":null,"station":null,"rate":null,"availability":null,"company":null,"employment":null,"employmentType":null,"commercialFlow":null,"experienceYears":null,"skillYears":{},"mainRole":null,"subRoles":[]}]}
 
 --- 以下メール本文 ---
 `
