@@ -2572,6 +2572,14 @@ function stripInitialSuffix(name){
   if (!initM || name.length <= initM[1].length + 2) return name
   const remainder = name.slice(initM[1].length)
   if (/^[A-Za-zＡ-Ｚａ-ｚ]/.test(remainder)) return name          // 4文字以上の氏名 → 切らない
+  // ハイフンで続く識別子は、それ全体が営業の使う呼称（2026-09-17 実測）。
+  //   実データ:「氏名：IT-OGK　56歳　男性」→ "IT" に切っていた
+  if (/^[-‐‑–—―ー−ｰ][A-Za-zＡ-Ｚａ-ｚ0-9０-９]/.test(remainder)) return name
+  // 数字だけが続いて終わるものは管理番号つきの呼称。これも切らない。
+  //   実データ:「氏名：IC023009」→ "IC" に切っていた
+  // ⚠ 「KM29蕨」のように数字のあとに更に文字が続くものは従来どおり切る
+  //   （年齢29＋駅名"蕨"の巻き込みで、氏名ではない）。3桁以上を要求して年齢と区別する
+  if (/^[0-9０-９]{3,}$/.test(remainder)) return name
   if (/^[\s　]*[\(（]\d{2}[才歳]?[\)）]?/.test(remainder)) return name  // 年齢が続く → 切らない
   // 「K.H（男性/42歳）」のように性別が先に来る形式も構造化情報なので切らない。
   // 切ると直後の年齢・性別抽出が丸ごと失敗する（2026-08-16 フォスターネット18名は

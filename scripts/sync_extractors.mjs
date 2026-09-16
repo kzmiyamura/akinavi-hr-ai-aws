@@ -43,6 +43,12 @@ const TARGET_FUNCTIONS = [
   'isValidNationality',
   'stationNameCandidates',
   'parseNearestStation',   // 最寄駅の記載 → {路線名, 駅名}（順序を仮定せず語の形で分類）
+  // ⚠ extractFieldTwoPhase はここに足さないこと（2026-09-17 に試して戻した）。
+  //   引数に `validate?: (v: string) => boolean` という**省略可能な関数型**があり、
+  //   型除去の規則（5. パラメータ型注釈）が `?` と関数型を落とせず、
+  //   生成ファイル全体が構文エラーになる（64関数すべてが読めなくなる）。
+  //   この関数を単体で検証したいときは、nationalityGate.test.ts と同じ方式で
+  //   index.ts からテキストとして切り出すこと。
   'extractWorkStyleNote',
   'findWorkStyleIn',        // extractWorkStyleNote が呼ぶ（本文優先・添付は案件説明を弾く）
   'extractLicenseNumbers',  // 派遣・職業紹介の許可番号（旧表記 般/特・全角に対応）
