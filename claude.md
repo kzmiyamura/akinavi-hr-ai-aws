@@ -164,17 +164,42 @@ git add -A && git commit -m "fix: ..." && git push
 | `agent_companies` | 派遣・紹介会社（メール送信元ドメインが主キー）。人材画面「会社管理」で編集。`license_status` は `unknown`（社名が取れず未照合）/ `haken` / `shokai` / `both` / **`notfound`（厚労省サイトで引けなかった＝免許が無いとは限らない）** / `none`（人が免許なしと確認）。`fetch_candidates_for_project` の `p_require_haken` は `haken`/`both` だけ通すので、判定を間違えるとその会社の人材が派遣案件から丸ごと消える |
 
 ### app_config の主要キー
-| キー | 既定 | 内容 |
-|---|---|---|
-| `inbound_project_enabled` | `false` | 案件メールの解析・DB保存を有効化 |
-| `auto_match_enabled` | `true` | `auto-match` cron を有効化 |
-| `email_poll_mode` | `incremental` | `incremental`（未読のみ）/ `full`（指定日以降全件） |
-| `email_classify_enabled` | `false` | poll-email 内の Gemini メール種別分類 |
-| `matching_run_mode` | `fast` | `fast` / `full`。SettingsPage から変更可 |
-| `matching_fast_max_candidates` | `20` | 高速モード時の案件あたり候補者上限 |
-| `matching_fast_max_projects` | `10` | 高速モード時の人材あたり案件上限 |
-| `candidate_retention_days` | `7` | 人材データ保持日数 |
-| `app_memo` | — | 営業引き継ぎ用フリーテキスト |
+
+**2026-09-16 に実際の行と突き合わせて更新した。** 「現在値」は同日の prod 実測。
+未作成のキーは画面で初めて保存したときに作られ、それまではコード側の既定で動く。
+
+| キー | 既定 | 現在値 | 内容 |
+|---|---|---|---|
+| `inbound_project_enabled` | `false` | （未作成） | 案件メールの解析・DB保存を有効化 |
+| `auto_match_enabled` | `true` | **`false`** | `auto-match` cron を有効化。**今は止まっている**（直近7日の submissions は9件） |
+| `email_poll_mode` | `incremental` | `incremental` | `incremental`（未読のみ）/ `full`（指定日以降全件） |
+| `email_use_ai_classification` | `false` | **`true`** | poll-email 内の Gemini メール種別分類。**`email_classify_enabled` は誤記**（そのキーを読むコードは無い） |
+| `sender_daily_limit` | `200` | （未作成） | 1送信元あたり1日の取り込み上限。**0以下で無制限**。2026-09-16 に 50 から引き上げ（下記） |
+| `storage_retention_days` | `7` | `7` | 添付の保持日数 |
+| `storage_quota_bytes` | 1GB | `1073741824` | Storage の上限（Free プラン） |
+| `storage_alert_pct` | `70` | `70` | この割合を超えたら警告 |
+| `raw_retention_days` | `1` | `1` | `raw/` の保持日数。**`raw/` は 2026-09-15 に廃止済み**なので現在は空振り |
+| `matching` | — | `top_n:5, min_score:60` | AI採点する上位件数と足切りスコア |
+| `matching_run_mode` | `fast` | （未作成） | `fast` / `full`。SettingsPage から変更可 |
+| `matching_fast_max_candidates` | `20` | （未作成） | 高速モード時の案件あたり候補者上限 |
+| `matching_fast_max_projects` | `10` | （未作成） | 高速モード時の人材あたり案件上限 |
+| `candidate_retention_days` | `7` | （未作成） | 人材データ保持日数 |
+| `own_email_domain` | — | `i-voice.co.jp` | 自社ドメイン（送信元を所属会社にしないため） |
+| `app_memo` | — | — | 営業引き継ぎ用フリーテキスト |
+
+#### ⚠ 制限を入れるときは「何を守るためか」を書く（2026-09-16 の教訓）
+
+`SENDER_DAILY_LIMIT = 50` は 2026-05-19 に「一斉配信業者による **AIコスト急騰対策**」として
+入れたが、**その翌日 2026-05-20 に inbound-email から AI解析を完全除去**している（139a4f2）。
+守る対象が消えたまま4か月動き続け、直近7日だけで人材メール458件を捨てていた
+（i-standard.jp 332件＝1日66件）。
+
+今の本当の制約は **Storage（Free 1GB）** だが、保持7日で自動的に頭打ちになる
+（実測: attachments 1,993ファイル 305MB、最古がちょうど7日前＝掃除は効いている）。
+そこで `app_config.sender_daily_limit`（既定200）に移し、デプロイ無しで絞れるようにした。
+
+**制限値には「何を守るか」と「測った数字」をコメントに残すこと。**
+理由が書いていないと、前提が消えても誰も気付けない。
 
 ---
 
