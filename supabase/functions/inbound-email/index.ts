@@ -2185,6 +2185,28 @@ function extractCandidateCode(subject: string): string | null {
  * `looksLikeRosterName` は名簿展開の経路にしか掛からず、本文ブロックや
  * `extractNameFallback` の経路は素通りしていたので、氏名を決める2か所で共通に検閲する。
  */
+/**
+ * 氏名に混ざった「別項目の始まり」で切る（2026-09-17）。
+ *
+ * prod 実測で出ていた壊れ方（いずれも氏名のあとに別の情報が続いている）:
+ *   「S.H（男性」「M.Y（女性」「OY（40歳」 … 閉じない開き括弧
+ *   「S.R、日本人」                        … 区切り記号のあとに国籍
+ * 捨てるとその人が一覧から消えるので、**手前までを氏名として残す**。
+ *
+ * ⚠ 閉じ括弧まで揃っている「NK（長野に引っ越し予定）」は stripInitialSuffix の担当で、
+ *   ここでは触らない（括弧が閉じているものは切らない）。
+ */
+function truncateNameAtBreak(v: string): string | null {
+  let s = String(v ?? '').trim()
+  if (!s) return null
+  // 開き括弧があるのに閉じていない → 開き括弧の手前まで
+  if (/[（(]/.test(s) && !/[）)]/.test(s)) s = s.split(/[（(]/)[0]
+  // 区切り記号のあとは別項目（氏名に読点やスラッシュは入らない）
+  s = s.split(/[、,，／|｜]/)[0]
+  s = s.trim()
+  return s || null
+}
+
 function isLabelWordName(v: string | null | undefined): boolean {
   const s = String(v ?? '').replace(/[\s　:：]+/g, '')
   if (!s) return true
@@ -3229,6 +3251,12 @@ function extractCandidateFieldsRegex(
     nationality = isValidNationality(cleaned) ? cleaned : null
   }
   // 氏名も同様に、Excel の見出し語そのものが人名として残らないよう検閲する
+  // 氏名に構文の壊れが残っていたら、捨てずに**切り詰めて人を残す**（2026-09-17）。
+  // 名簿の品質チェック（quality_truth_roster.mjs）と prod 実測で出たもの:
+  //   「S.H（男性」「M.Y（女性」「OY（40歳」… 開き括弧のところで本文が途切れている
+  //   「S.R、日本人」                        … 区切り記号のあとに別項目が続いている
+  // 括弧や区切りの手前までが氏名なので、そこで切れば正しい氏名になる。
+  if (name) name = truncateNameAtBreak(name)
   if (name && isLabelWordName(name)) name = null
   // 会社名も同じ理由で検閲する（抽出経路が5つあり、それぞれで営業文を拾っていた）
   if (fromCompany && !isPlausibleCompanyName(fromCompany)) fromCompany = null

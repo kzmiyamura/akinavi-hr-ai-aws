@@ -36,6 +36,7 @@ const TARGET_FUNCTIONS = [
   'isOwnersResumeFile',
   'assignAttachmentsToBlocks', // ブロック×添付の全体最適割当（管理番号マッチ含む）
   'splitMultiCandidateBody',   // 名簿本文を人ごとのブロックに分割（分割漏れの調査に使う）
+  'truncateNameAtBreak',   // 氏名に混ざった別項目で切る（isLabelWordName の手前で使う）
   'stripInitialSuffix',
   'sanitizeFromCompany',   // 会社名の後処理（敬称・丁寧表現・NG先の除去）
   'extractNationalityMark',

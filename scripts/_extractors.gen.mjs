@@ -2566,6 +2566,18 @@ function splitMultiCandidateBody(body){
       ?? trySplit(/^[\*\-=＊＝━ーー─―—●○■□◆◇]{8,}\s*$/)
 }
 
+// ── truncateNameAtBreak ──
+function truncateNameAtBreak(v){
+  let s = String(v ?? '').trim()
+  if (!s) return null
+  // 開き括弧があるのに閉じていない → 開き括弧の手前まで
+  if (/[（(]/.test(s) && !/[）)]/.test(s)) s = s.split(/[（(]/)[0]
+  // 区切り記号のあとは別項目（氏名に読点やスラッシュは入らない）
+  s = s.split(/[、,，／|｜]/)[0]
+  s = s.trim()
+  return s || null
+}
+
 // ── stripInitialSuffix ──
 function stripInitialSuffix(name){
   const initM = name.match(/^([A-Za-zＡ-Ｚａ-ｚ][.\s　・]*[A-Za-zＡ-Ｚａ-ｚ](?:[.\s　・]*[A-Za-zＡ-Ｚａ-ｚ])?)/)
@@ -4700,6 +4712,7 @@ export {
   isOwnersResumeFile,
   assignAttachmentsToBlocks,
   splitMultiCandidateBody,
+  truncateNameAtBreak,
   stripInitialSuffix,
   sanitizeFromCompany,
   extractNationalityMark,
