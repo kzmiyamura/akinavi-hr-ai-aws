@@ -57,6 +57,26 @@ describe('1メール複数人材: 保存する本文はブロックだけ', () =
   })
 })
 
+describe('1メール複数人材: 件名の語を人名にしない', () => {
+  /** 複数人材ループの氏名解決を切り出す */
+  function blockNameResolution(): string {
+    const i = CODE.indexOf('const blockResolvedNameRaw =')
+    expect(i, 'blockResolvedNameRaw が index.ts に見つからない').toBeGreaterThan(0)
+    return CODE.slice(i, CODE.indexOf('\n', CODE.indexOf("?? '不明'", i)))
+  }
+
+  it('ブロックの氏名に extractCandidateCode(subject) を使っていない', () => {
+    // 件名は全ブロック共通なので個人を特定できない。名前の取れないブロック
+    // （署名・案内文）に件名の語が付き、中身が空の人材になる
+    //   実害: 件名「【要員情報】Java、ServiceNow、Vue、G0など」→ 氏名「G0」
+    expect(blockNameResolution()).not.toMatch(/extractCandidateCode/)
+  })
+
+  it('名前が取れなければ「不明」に落ちる（あとのガードで捨てられる）', () => {
+    expect(blockNameResolution()).toMatch(/\?\?\s*'不明'/)
+  })
+})
+
 describe('動かない分岐を残さない: rosterAttachments は削除済み', () => {
   it('inbound-email に rosterAttachments が無い', () => {
     // raw/ への保存を 2026-09-14 に廃止して以降 raw_paths は常に空で、

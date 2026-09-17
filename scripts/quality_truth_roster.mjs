@@ -58,6 +58,9 @@ function* dbRows(table) {
 /** 氏名の比較。表記ゆれ（記号・空白・全半角）を吸収する。
  *  イニシャルは「M.Y」「M・Y」「MY」「Ｍ．Ｙ」等で揺れるので、記号を全部落として比べる */
 const nameKey = (s) => String(s ?? '')
+  // 読み仮名の括弧を落とす。本文は「叢H（ソウ）」、DBは「叢H」で入るので、
+  // 残したままだと同じ人が「落ちた人」と「幽霊」に二重計上される（2026-09-17 実測3人）
+  .replace(/[（(][ぁ-んァ-ヶー\s　]{1,12}[）)]\s*$/, '')
   .replace(/[\s　.・,，、\-‐―ー_]/g, '')
   .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
   .toLowerCase()
@@ -72,19 +75,38 @@ const nameKey = (s) => String(s ?? '')
 //         残りは9/17のメールに貼り替わっているだけで全員生きている。
 // そこで「落ちた人」の判定には**送信元ごとの全氏名**を使い、
 // 「幽霊」と項目の採点にはこのメールに紐づく行だけを使う（値はこの通のものなので）。
+//
+// ⚠ さらに、その「送信元」は**ドメインで見る**こと。1社が複数の担当者アドレスから
+// 同じ人材を送ってくる（実測: j-tech.co.jp は n.yamazaki@ / m.onda@ / s.nakayama@ /
+// anken@ の4アドレス）。人材行の from は最後に書いたメールのアドレスになるので、
+// アドレス単位で照合すると「別の担当者から登録済みの人」が落ちた人に化ける。
+const domainOf = (addr) => String(addr ?? '').toLowerCase().split('@')[1] ?? ''
 const actual = new Map()
-const bySender = new Map()
+const byDomain = new Map()
 for (const c of dbRows('candidates')) {
   const sender = String(c.rp_from ?? '').toLowerCase()
   const k = `${sender}|${utcMinute(c.rp_received)}`
   if (!actual.has(k)) actual.set(k, [])
   actual.get(k).push(c)
-  if (!bySender.has(sender)) bySender.set(sender, new Set())
-  bySender.get(sender).add(nameKey(c.name))
+  const d = domainOf(sender)
+  if (!byDomain.has(d)) byDomain.set(d, new Set())
+  byDomain.get(d).add(nameKey(c.name))
 }
+
+// ⚠ DB側の控えは archive_local.mjs が1日1回取る。メール側は15分おきに増える。
+// 地平線が違うまま採点すると、控えより新しいメールの人が全員「落ちた人」に化ける
+// （2026-09-17: 控えは9/16まで、j-tech の9/17メールの27人が丸ごと未収録だった）。
+// 控えに入っている最新日より後に届いたメールは採点しない。
+const dbNewestDay = (() => {
+  const dir = join(DB_DIR, 'candidates')
+  if (!existsSync(dir)) return null
+  const days = readdirSync(dir).filter((n) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)).sort()
+  return days.length ? days[days.length - 1].slice(0, 10) : null
+})()
 
 const mailsByKey = new Map()
 for (const day of readdirSync(MAIL_DIR).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().reverse()) {
+  if (dbNewestDay && day > dbNewestDay) continue
   for (const msg of readdirSync(join(MAIL_DIR, day))) {
     const p = join(MAIL_DIR, day, msg, 'message.json')
     if (!existsSync(p)) continue
@@ -174,7 +196,7 @@ function norm(field, v) {
 
 // ── 採点 ────────────────────────────────────────────────────────────────────
 let mails = 0, cost = 0
-let countOk = 0, countNg = 0, countSkipLong = 0
+let countOk = 0, countNg = 0, countSkipLong = 0, ambiguous = 0
 let missing = 0, phantom = 0, matched = 0, dbTotal = 0, truthTotal = 0
 const stats = new Map(FIELDS.map(([f]) => [f, { ok: 0, ng: 0, dbNull: 0, truthNull: 0 }]))
 const notes = []
@@ -208,8 +230,21 @@ for (const [i, t] of targets.entries()) {
   //
   // 名前が同じ候補が複数いる場合は、年齢・駅・単価が最も多く一致する行を選ぶ。
   // 一度使った行は他の人に割り当てない（1対1を保つ）。
+  //
+  // さらに、本文に同名が2人いるのにこのメールに紐づく行が1つしか無いことがある
+  // （もう1人は後日の再送で別のメールに貼り替わっている）。このとき残った1行を
+  // どちらの人に当てるかは決められないので、**その氏名は採点しない**。
+  // 当てずっぽうで当てると「駅が違う・年齢が違う」という嘘の不一致が出る
+  // （実際 YK・MT・AK でそれが起きていた）。
+  const truthNameCount = new Map()
+  for (const p of truthPeople) truthNameCount.set(nameKey(p.name), (truthNameCount.get(nameKey(p.name)) ?? 0) + 1)
+  const rowNameCount = new Map()
+  for (const r of t.rows) rowNameCount.set(nameKey(r.name), (rowNameCount.get(nameKey(r.name)) ?? 0) + 1)
+  const ambiguousName = (k) => truthNameCount.get(k) > 1 && truthNameCount.get(k) !== rowNameCount.get(k)
+
   const usedRows = new Set()
   const pickRow = (p) => {
+    if (ambiguousName(nameKey(p.name))) { ambiguous++; return null }
     const cands = t.rows.filter((r) => !usedRows.has(r) && nameKey(r.name) === nameKey(p.name))
     if (cands.length === 0) return null
     const score = (r) => FIELDS.reduce((n, [f, get]) => {
@@ -229,8 +264,8 @@ for (const [i, t] of targets.entries()) {
 
   // 本文が上限を超えたメールは、正解側が全員を見られていないので人数の採点から外す。
   // 切り詰めた分を「落ちた人」に数えると、測り方の都合が製品の不具合に見える
-  // 落ちた人は「その送信元の人材に1人もいない」で判定する（再送で貼り替わるため）
-  const senderNames = bySender.get(String(t.mail.from ?? '').toLowerCase()) ?? new Set()
+  // 落ちた人は「その会社（ドメイン）の人材に1人もいない」で判定する（再送で貼り替わるため）
+  const senderNames = byDomain.get(domainOf(t.mail.from)) ?? new Set()
   const missedHere = bodyTruncated ? [] : truthPeople.filter((p) => !senderNames.has(nameKey(p.name)))
 
   if (bodyTruncated) {
@@ -247,8 +282,10 @@ for (const [i, t] of targets.entries()) {
       missing++
       notes.push(`  落ちた: 「${p.name}」 ← ${String(t.mail.subject).slice(0, 40)}`)
     }
-    // 幽霊はこのメールに紐づく行だけで見る（この通が最後に書いた行なので責任が言える）
+    // 幽霊はこのメールに紐づく行だけで見る（この通が最後に書いた行なので責任が言える）。
+    // 同名が複数いて対応を決められなかった氏名は、幽霊にも落ちた人にも数えない
     for (const r of t.rows) {
+      if (ambiguousName(nameKey(r.name))) continue
       if (!usedRows.has(r)) {
         phantom++
         notes.push(`  幽霊  : 「${r.name}」 ← ${String(t.mail.subject).slice(0, 40)}`)
@@ -284,7 +321,9 @@ console.log(`  本文の人が全員DBにいる  ${countOk} / ${countOk + countN
   + (countSkipLong ? `（本文が長すぎて未採点 ${countSkipLong}件は除く）` : ''))
 console.log(`  ★落ちた人（本文にいるのにDBに無い）  ${missing}`)
 console.log(`  ★幽霊  （DBにいるのに本文に無い）    ${phantom}`)
-console.log(`  名前で対応が付いた人              ${matched}\n`)
+console.log(`  名前で対応が付いた人              ${matched}`)
+if (ambiguous) console.log(`  同名が複数いて決められず未採点    ${ambiguous}`)
+console.log('')
 console.log('■ 対応が付いた人の項目')
 console.log('項目              一致  不一致  DBが空  本文に記載なし  正答率')
 for (const [f, s] of stats) {

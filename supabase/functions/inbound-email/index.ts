@@ -2524,6 +2524,14 @@ function extractCandidateFieldsRegex(
   // ただし「A.S（25）男性」のような年齢・性別の構造化情報は「余分な説明文」ではないため
   // 除去対象から除外する（除去すると直後の年齢・性別抽出が丸ごと失敗し、経験年数の
   // 年齢フォールバックも効かなくなる致命的な事故になる）
+  //
+  // ⚠ stripInitialSuffix は「：」以降を丸ごと落とすことがある。
+  //   実データ:「【名 前】TS：57才(男性)」→ "TS"。切ったあとを見ると性別が消えている。
+  //   2026-09-17 の名簿採点で、ウェブボルトの3人メールが**全員 gender が null** だった。
+  //   stripInitialSuffix 側に「年齢・性別が続くなら切らない」を足すと、今度は
+  //   氏名が "TS：57才" になってしまう（括弧の外の "：57才" は別の規則が落とさない）。
+  //   そこで **氏名は切ったあと・年齢と性別は切る前** から取る。
+  const nameBeforeStrip = cleanedName || ''
   if (cleanedName) cleanedName = stripInitialSuffix(cleanedName)
   // 名前から年齢・性別を抽出して除去
   // パターン1: (34歳/男性) (34才/女性) - スラッシュ区切り一体型
@@ -2531,6 +2539,8 @@ function extractCandidateFieldsRegex(
   let age: number | null = null
   let gender: string | null = null
   let nameStripped = cleanedName || ''
+  /** 年齢・性別を探す元テキスト（氏名の書き換えには使わない） */
+  const ageGenderSrc = nameBeforeStrip || nameStripped
   // パターンA: (26歳/男性) (26歳/男性/日本) (26歳：男性) — 年齢が先・末尾に/国籍等があっても可
   const agGenderUnified = nameStripped.match(/[\(（](\d{2})[才歳][ 　]*[/／：:・．][ 　]*(男性|女性|男|女)(?:[/／]([^)）]*))?[\)）]/)
   // パターンB: (男性/40歳) (女性/34歳) (男性：51歳) — 性別が先、/や：区切り
@@ -2575,6 +2585,19 @@ function extractCandidateFieldsRegex(
         nameStripped = nameStripped.replace(/[\s　]?[\(（]\d{2}[\)）]/, '').trim()
       }
     }
+  }
+
+  // stripInitialSuffix が落としたぶんを、切る前の文字列から拾い直す。
+  // 「TS：57才(男性)」は切ると "TS" になり、上のどの規則も性別に届かない。
+  // 氏名（nameStripped）には触らない。拾うのは年齢と性別だけ
+  if (gender === null) {
+    const g = ageGenderSrc.match(/[\(（](男性|女性)[\)）]|[ 　](男性|女性)(?:[ 　]|$)/)
+    if (g) gender = g[1] ?? g[2]
+  }
+  if (age === null) {
+    const a = ageGenderSrc.match(/(?<!\d)(\d{2})[才歳]/)
+    // 名前欄に紛れた数字を年齢にしないよう、人として有り得る範囲だけ採る
+    if (a && Number(a[1]) >= 18 && Number(a[1]) <= 80) age = parseInt(a[1], 10)
   }
 
   // ── 独立した「年齢：」「性別：」ラベルからのフォールバック ──────────
@@ -11351,13 +11374,20 @@ Deno.serve(async (req: Request) => {
             // 1. blockMetas 事前パス（添付テキストなし・ブロック本文のみ）: 兄弟ブロックの添付が混入しない
             // 2. blockRegexFields（添付テキストあり）: 添付に氏名ラベルがある場合に有効
             // 3. extractNameFallback（イニシャル検索）
-            // 4. extractCandidateCode（件名コード）
             // ※ blockMetas を優先する理由: ケースBで兄弟ブロックの Excel が blockAttachText に混入すると
             //   Phase2a が他人の名前を抽出して上書きする誤りが発生するため（例: M.M ブロックが Y.M と登録される）
+            //
+            // ⚠ 件名コード（extractCandidateCode(subject)）は**使わない**。
+            //   件名は全ブロック共通なので個人を特定できないうえ、名前の取れないブロック
+            //   （署名・案内文・末尾のURL案内）に件名の語を付けて人材として登録してしまう。
+            //   実害（2026-09-17 実測2件）:
+            //     件名「【要員情報】Java、ServiceNow、Vue、G0など」→ 氏名「G0」
+            //     もう1件は氏名「EC2」。どちらも スキル・単価・年齢・駅・役割が全部 空。
+            //   名前が取れないブロックは下のガードで落ちるのが正しい。
+            //   役割・業界・スキル年数でも同じ理由で件名を除外している。
             const blockResolvedNameRaw = blockMetas[blockIdx].name
               ?? blockRegexFields.name
               ?? extractNameFallback([blockRegexBodyText, blockAttachText].join('\n'))
-              ?? extractCandidateCode(subject)
               ?? '不明'
             // 氏名の全角英数字は半角へ正規化（「ＳＡ」と「SA」を同一人物として dedup させる。
             // 同一名簿内で同じ人が全角/半角で2ブロックに分かれ重複登録される実害があった: ai-more）
