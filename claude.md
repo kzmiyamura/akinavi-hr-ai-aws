@@ -83,7 +83,8 @@
 ### よく使うスクリプト
 - `node scripts/list_issues.mjs [--close N]` — GitHub Issue 一覧取得・クローズ
 - `node scripts/test_extraction.mjs "本文"` — regex 抽出をデプロイなしでローカル検証（変更前後に必ず使う）。**注意: index.ts と自動同期されない手書きレプリカ**のため判定が本番と食い違うことがある（会社名抽出等）。正は `supabase/functions/inbound-email/index.ts`。本番との差異検証は実データ再解析で行う
-- `node scripts/check_extraction.mjs` — 直近14日の取りこぼし調査
+- `node scripts/check_extraction.mjs` — 直近7日（＝保持期間）の取りこぼし調査。
+  **保持より長い日数を指定しない**。消えているだけなのに「取りこぼし0件」に見える
 - `bash scripts/check-and-deploy-edge.sh <function>` — deno check + deploy（Edge Function は必ずこれを使う）
 - `node scripts/test_excel_parsing.mjs --compact` — Excel/Word解析品質メトリクス（Claude読み取り用）
 - `node scripts/test_excel_parsing.mjs --compact --new` — 未分類 xlsx も含めて検証

@@ -3,8 +3,13 @@
  * check_extraction.mjs — 直近の抽出取りこぼしを Supabase から確認するスクリプト
  *
  * 使い方:
- *   node scripts/check_extraction.mjs           # 直近 14 日・全チェック
- *   node scripts/check_extraction.mjs --days 7  # 直近 7 日
+ *   node scripts/check_extraction.mjs            # 直近 7 日・全チェック
+ *   node scripts/check_extraction.mjs --days 14  # 日数を変える
+ *
+ * ⚠ 既定が 14 日だったが、参照先の保持期間より長い日数を指定しても
+ *   「取りこぼしが無い」ように見えるだけで意味が無い（2026-09-18）。
+ *   人材は7日で archive へ移り、ai_logs も7日で消える。既定は保持に合わせること。
+ *   保持を変えたらここも変える（片方だけ動かすと、静かに嘘の結果が出る）。
  *   node scripts/check_extraction.mjs --name    # 名前不明のみ
  *   node scripts/check_extraction.mjs --null    # NULL フィールドのみ
  *   node scripts/check_extraction.mjs --misreg  # 誤登録のみ
@@ -50,7 +55,15 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 // --- CLI 引数 ---
 const args = process.argv.slice(2)
 const daysIdx = args.indexOf('--days')
-const DAYS = daysIdx !== -1 ? parseInt(args[daysIdx + 1], 10) || 14 : 14
+// 既定は保持期間（7日）に合わせる。これより長くしても古い行はもう無いので、
+// 「取りこぼし 0 件」が出るだけで中身が無い
+const RETENTION_DAYS = 7
+const DAYS = daysIdx !== -1 ? parseInt(args[daysIdx + 1], 10) || RETENTION_DAYS : RETENTION_DAYS
+if (DAYS > RETENTION_DAYS) {
+  console.warn(`⚠ ${DAYS}日を指定しましたが、人材も ai_logs も保持は${RETENTION_DAYS}日です。`)
+  console.warn(`  ${RETENTION_DAYS}日より前のぶんは「無い」のではなく「消えている」だけです。`)
+  console.warn(`  過去と比べるならローカル控えを使ってください: node scripts/archive_query.mjs summary`)
+}
 const showName = args.includes('--name') || args.length === 0 || (!args.includes('--null') && !args.includes('--misreg') && !args.includes('--projects'))
 const showNull = args.includes('--null') || args.length === 0 || (!args.includes('--name') && !args.includes('--misreg') && !args.includes('--projects'))
 const showMisreg = args.includes('--misreg') || args.length === 0 || (!args.includes('--name') && !args.includes('--null') && !args.includes('--projects'))
