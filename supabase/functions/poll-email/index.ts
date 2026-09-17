@@ -656,69 +656,6 @@ interface GraphAttachment {
   contentBytes: string
 }
 
-
-/** 受信添付の実体保存の上限。これを超えるものはパスだけ記録して中身は保存しない */
-const RAW_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
-
-/**
- * 受信した添付の実体を、人への割り当て成否と無関係に Storage へ保存する（2026-08-19）。
- *
- * これまで添付のバイト列は「人に紐づけられた場合（resume_url）」しか残らず、
- * 複数人材メールで割り当てに失敗すると中身がどこにも残らなかった。
- * 台帳(ai_logs type='poll-attach')にはファイル名とサイズしか無いため、
- * 「何が添付されていたか」は分かっても「なぜそう解析されたか」を再現できない。
- * 実例: 2026-08-17 の26人のメールは添付1件に対し保存0件で、後から検証不能になった。
- *
- * 受信時点で必ず1本保存しておけば、割り当てに失敗しても後から中身を確認・再解析できる。
- * 保存の失敗は取り込み本体を止めない（握りつぶしてログのみ）。
- */
-/**
- * ⚠ 2026-09-14 から**呼ばれていない**（raw/ への保存を廃止した）。
- * 原本はこのPCが Outlook から回収している（scripts/outlook_export.ps1）。
- * 関数は消さずに残してある。戻したくなったら呼び出し側の1行を差し替えるだけでよい。
- */
-async function saveRawAttachments(
-  supabase: ReturnType<typeof createClient>,
-  messageId: string,
-  attachments: { name?: string; contentType?: string; contentBytes?: string }[],
-): Promise<string[]> {
-  const saved: string[] = []
-  // Storage キーは ASCII のみ安全。元のファイル名は台帳側に残っているのでここでは連番にする。
-  //
-  // 記号を全部消して末尾16文字だけ取ると、別のメールが同じフォルダ名になる（2026-08-29 実測）。
-  // Outlook のメールIDは Base64URL で、連番の変化が `-` と `_` に出るため、末尾1文字だけ
-  // 違うIDが日常的に発生する。記号を落とすとその違いが消え、upsert:true で先に保存された
-  // 添付が黙って上書きされていた（直近7日で 6,059通中 58通・約1%）。
-  //   例) …E8MDAD_AAAA と …E8MDAD-AAAA → どちらも …E8MDADAAAA
-  //
-  // 実データに出る記号は `=` `-` `_` の3種だけで、いずれも Storage キーに使える
-  // （同じバケットの resumes/ は `_` を含むファイル名で1,000件以上動いている）。
-  // Base64 の詰め物である `=` だけ落とし、`-` と `_` は残す。長さも 32 文字に広げる。
-  const safeMsg = messageId.replace(/=+$/g, '').replace(/[^a-zA-Z0-9_-]/g, '').slice(-32)
-  for (const [i, a] of attachments.entries()) {
-    try {
-      if (!a.contentBytes) continue
-      const bytes = Uint8Array.from(atob(a.contentBytes), (c) => c.charCodeAt(0))
-      if (bytes.length > RAW_ATTACHMENT_MAX_BYTES) {
-        console.warn(`[poll] 添付が大きすぎるため実体保存を省略: ${a.name} ${bytes.length}bytes`)
-        continue
-      }
-      const nm = a.name ?? ''
-      const ext = nm.includes('.') ? nm.split('.').pop()!.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) : 'bin'
-      const path = `raw/${safeMsg}/att${i}.${ext}`
-      const { error } = await supabase.storage.from('attachments')
-        .upload(path, bytes, { contentType: a.contentType ?? 'application/octet-stream', upsert: true })
-      if (error) { console.warn(`[poll] 添付の実体保存に失敗: ${path}: ${error.message}`); continue }
-      saved.push(path)
-    } catch (e) {
-      console.warn('[poll] 添付の実体保存で例外:', String(e).slice(0, 200))
-    }
-  }
-  if (saved.length > 0) console.log(`[poll] 添付の実体を保存: ${saved.join(', ')}`)
-  return saved
-}
-
-
 async function fetchAttachments(
   accessToken: string,
   messageId: string,
@@ -906,10 +843,6 @@ async function callInboundEmail(
   type: 'candidate' | 'project',
   dataEnv: 'prod' | 'demo',
   dedupSalt = '',
-  /** 受信添付の保存先パス（raw/<msg>/attN.xlsx）。名簿メールで本人ぶんを特定できなかった
-   *  候補者に「メールに何が付いていたか」の参照リンクを持たせるために渡す。
-   *  実体は raw/ の1日保持なので、翌日以降はリンク切れになる前提（画面側で案内する）。 */
-  rawPaths: string[] = [],
 ): Promise<void> {
   const payload = {
     type,
@@ -923,8 +856,6 @@ async function callInboundEmail(
     skip_relevance: false,
     // 添付分割時に各呼び出しを区別（inbound-email のデdup判定で使用）
     dedup_salt: dedupSalt,
-    // 受信添付の保存先（raw/<msg>/attN.ext）。名簿メールの参照リンク用
-    raw_paths: rawPaths,
     attachments: attachments.map(a => ({
       name:     a.name,
       mimeType: a.contentType,
@@ -1302,7 +1233,7 @@ async function pollAccount(
 
         console.log(`[poll] 添付: hasAttachments=${email.hasAttachments} 取得件数=${attachments.length}`, attachments.map(a => ({ name: a.name, type: a.contentType, bytesLen: a.contentBytes?.length ?? 0 })))
 
-        // ── raw/ への保存は 2026-09-14 に廃止した ──
+        // ── raw/ への保存は 2026-09-14 に廃止し、関連コードは 2026-09-17 に削除した ──
         //
         // 目的は「後から必ず再解析できるように原本を残す」ことだったが、
         // `raw_retention_days=1` で**当日しか再解析できず**、目的を果たしていなかった。
@@ -1317,8 +1248,9 @@ async function pollAccount(
         //   ・egress も Storage も消費しない
         // 保存先: D:\akinavi-archive\mail\<日付>\<messageId>\
         //
-        // 戻す場合はこの行を saveRawAttachments(...) に戻すだけでよい。
-        const savedRawPaths: string[] = []
+        // 空配列を3日間引き回していた（saveRawAttachments / raw_paths / rosterAttachments）。
+        // 実測でも raw/ のオブジェクト0件・rosterAttachments を持つ人材0件だったので消した。
+        // 戻すなら git 履歴（この行の1つ前のコミット）から saveRawAttachments を復元する。
 
         // ── 添付台帳を DB に恒久記録（Graphが返した完全な内訳・型込み） ──
         // fetchAttachments が落とす referenceAttachment（クラウド添付）も含めて記録し、
@@ -1342,8 +1274,6 @@ async function pollAccount(
               ai_result: {
                 messageId: email.id,
                 totalReturnedByGraph: manifest.length,
-                // 実体の保存先。ここから中身を取り直して再解析できる（2026-08-19）
-                savedRawPaths,
                 fileAttachment: fileCount,
                 referenceAttachment: refCount,
                 itemAttachment: itemCount,
@@ -1382,7 +1312,7 @@ async function pollAccount(
             console.log(`[poll] 添付分割: "${officeAtt.name}" 登録完了`)
           }
         } else {
-          await callInboundEmail(email, attachments, finalType, config.dataEnv, '', savedRawPaths)
+          await callInboundEmail(email, attachments, finalType, config.dataEnv)
         }
         processed++
         // 処理完了後に「削除済みアイテム」へ移す。

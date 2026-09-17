@@ -4,11 +4,14 @@
  * Supabase Storage に蓄積した古いファイルを削除して枠を回復する。
  * pg_cron から毎日 JST 1:00 に呼び出される。
  *
- * 対象: attachments バケットの resumes/ と raw/
+ * 対象: attachments バケットの resumes/
  * 削除基準: created_at が保持日数以上前のオブジェクト
  *   resumes/ … 営業が画面から開く経歴書（storage_retention_days・既定7日）
- *   raw/     … poll-email が残す受信添付の控え。アプリからは一切読まれない
- *              （raw_retention_days・既定2日）
+ *
+ * raw/（poll-email が残していた受信添付の控え）は 2026-09-14 に保存を廃止し、
+ * 掃除も 2026-09-17 に削除した。実測でオブジェクト0件。原本はこのPCが Outlook から
+ * 回収している（scripts/outlook_export.ps1 → D:\akinavi-archive\mail）。
+ * app_config.raw_retention_days も読まなくなった。
  *
  * ⚠ 削除対象は **DB（storage.objects）に聞く**。Storage API の list でフォルダを
  *   辿ってはいけない。過去2回、同じ理由で掃除が止まっている:
@@ -61,11 +64,9 @@ Deno.serve(async (req) => {
     return isNaN(v) || v < 1 ? fallback : v
   }
   const retentionDays = await getDays('storage_retention_days', 7)
-  const rawRetentionDays = await getDays('raw_retention_days', 2)
 
   const isoDaysAgo = (days: number) => new Date(Date.now() - days * 86400_000).toISOString()
   const cutoffISO = isoDaysAgo(retentionDays)
-  const rawCutoffISO = isoDaysAgo(rawRetentionDays)
 
   const BUCKET = 'attachments'
   const PAGE = 500          // 1回のRPCで引く削除対象の件数
@@ -141,9 +142,6 @@ Deno.serve(async (req) => {
     if (error) console.error('[cleanup-storage] resume_url clear error:', error.message)
   })
 
-  // raw/ — アプリから読まれない受信添付の控え。PIIを抱え続けないよう短く保つ
-  await sweep('raw', rawCutoffISO)
-
   const totalDeleted = Object.values(summary).reduce((s, v) => s + v.deleted, 0)
   const totalFreed = Object.values(summary).reduce((s, v) => s + v.freedBytes, 0)
   const incomplete = Object.values(summary).some((v) => v.remaining)
@@ -155,7 +153,7 @@ Deno.serve(async (req) => {
     // incomplete=true は「予算切れで残りがある」= 翌日の実行で続きが消える
     JSON.stringify({
       ok: true, summary, retentionDays, cutoff: cutoffISO,
-      rawRetentionDays, rawCutoff: rawCutoffISO, incomplete,
+      incomplete,
     }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
   )

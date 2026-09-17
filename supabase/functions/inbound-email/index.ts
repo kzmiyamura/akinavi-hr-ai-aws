@@ -10930,9 +10930,6 @@ Deno.serve(async (req: Request) => {
     // ③ 重複メール判定（同一メールが複数受信箱に転送された場合の二重処理防止）
     // dedup_salt: poll-email が添付分割する際に添付ファイル名を渡す（分割呼び出し間の衝突を防ぐ）
     const dedupSalt = raw.dedup_salt ?? ''
-    // poll-email が保存した受信添付のパス（raw/<msg>/attN.ext）。名簿メールで本人ぶんの
-    // 経歴書を特定できなかった候補者に、参照用のリンクとして持たせる（アップロードはしない）
-    const rawPaths: string[] = Array.isArray(raw.raw_paths) ? raw.raw_paths as string[] : []
     tracePhase = 'dedup_check'
     const { isDuplicate, configKey: _dedupConfigKey } = await checkEmailDuplicate(supabase, from, subject, body, dedupSalt)
     dedupConfigKey = _dedupConfigKey
@@ -11101,11 +11098,10 @@ Deno.serve(async (req: Request) => {
         s.replace(/\u0000/g, '').replace(/[\uD800-\uDFFF]/g, '')
       const effectiveBody = sanitizeForPgJson(decodeHtmlEntities(body.trim() ? body : subject))
       // reprocess_no_skill_years.mjs の Strategy B が body 末尾に埋め込む疑似添付テキストを
-      // DB保存用本文からは除去する（パース処理には effectiveBody をそのまま使う）
+      // DB保存用本文からは除去する（パース処理には元のテキストをそのまま使う）
       const EMBED_ATTACH_SEP = '\n\n--- 添付テキスト ---\n'
-      const storedBodyText = effectiveBody.includes(EMBED_ATTACH_SEP)
-        ? effectiveBody.slice(0, effectiveBody.indexOf(EMBED_ATTACH_SEP))
-        : effectiveBody
+      const stripEmbeddedAttach = (s: string) =>
+        s.includes(EMBED_ATTACH_SEP) ? s.slice(0, s.indexOf(EMBED_ATTACH_SEP)) : s
 
       // ── 複数人材検出（*****や-----の区切り線） ─────────────────────────────
       // earlyMultiCheck は body で事前計算済み（effectiveBody と同一の場合は再利用）
@@ -11171,10 +11167,9 @@ Deno.serve(async (req: Request) => {
         })()
         if (multiBodyCompanyName) console.log(`[multi-candidate] 送信元会社名: ${multiBodyCompanyName}`)
 
-        const attachmentNames = [
-          ...allAttachments.map(a => a.name ?? ''),
-          ...officeTextContents.map(t => t.label),
-        ].filter(Boolean).join('\n')
+        // ※ ここでメール全体の添付名を1本の文字列にまとめていたが、誰も読んでいなかった。
+        //    保存する attachmentNames は「この人に割り当たった1件」だけで、
+        //    メール全体の一覧は allParsedAttachmentLabels が持っている（2026-09-17 削除）。
 
         type BlockResult = { id: string; name: string; skills: number }
         const results: BlockResult[] = []
@@ -11254,33 +11249,12 @@ Deno.serve(async (req: Request) => {
         // undefined = まだ計算していない / null = アップロード失敗または対象外 / string = URL
         let caseBSharedResumeUrl: string | null | undefined = undefined
 
-        // ── 名簿の添付一覧（2026-08-29 追加） ───────────────────────────────────
-        // 経歴書を本人に割り当てられなかったブロックには、これまで何も残していなかった。
-        // 画面には「経歴書なし」としか出ず、営業は元メールを探しに行くしかない。
-        // 「あなたのは特定できませんでした。このメールに付いていたのはこの一覧です」と
-        // 見せられるよう、メール単位で全添付をアップロードしてURLの一覧を持たせる。
-        //
-        // resume_url には入れない。本人のものと確定していないので、マッチングや
-        // AI校正が「本人の経歴書」として読むと他人の情報で汚染される（2026-08-29 に
-        // 直したケースCと同じ事故になる）。あくまで人が目で見るための参照。
-        //
-        // 実体は poll-email が既に raw/ に保存しているので、コピーは作らない（保存量ゼロ増）。
-        // raw/ の保持は1日なので、翌日以降はリンク切れになる。当日中に「名簿を見て、
-        // 自分のぶんが無いことを確かめる」用途に限る割り切り（2026-08-29 ユーザー判断）。
-        // 画面側は登録からの経過日数を見て、切れている場合はリンクを出さず理由を表示する。
-        const hasUnassignedBlock = multiBlocks.some((_, i) => !blockAttachAssignment.has(i))
-        const storagePublicBase = `${Deno.env.get('SUPABASE_URL') ?? ''}/storage/v1/object/public/attachments/`
-        const rosterAttachments: { label: string; url: string }[] | undefined =
-          hasUnassignedBlock && rawPaths.length > 0
-            ? rawPaths.map((p, i) => ({
-              // ラベルは解析済みの添付名を優先し、無ければ保存パスの末尾を使う
-              label: allTextContents[i]?.label ?? p.split('/').pop() ?? p,
-              url: storagePublicBase + p,
-            }))
-            : undefined
-        if (rosterAttachments) {
-          console.log(`[multi] 名簿添付リンク: ${rosterAttachments.length}件（未割当ブロックあり・raw参照）`)
-        }
+        // ※ 2026-09-17: 「本人ぶんを特定できなかった人にメールの添付一覧を見せる」機能
+        //    （rosterAttachments）はここで作っていたが、実体を raw/ に置く前提だった。
+        //    raw/ への保存は 2026-09-14 に廃止しており（原本はこのPCが Outlook から回収）、
+        //    以来 raw_paths は常に空＝この機能は一度も値を持っていない。
+        //    prod 実測でも rosterAttachments を持つ人材は 0件・raw/ のオブジェクトも 0件。
+        //    動かない分岐を残すと「効いているつもり」の判断材料になるので消した。
 
         // 同一添付テキストのスキル照合結果をメモ化（ケースC等で全ブロックが同じ attachText を
         // 照合し、重い extractAndRemoveSkills をブロック数ぶん重複実行して546になるのを防ぐ）
@@ -11412,6 +11386,9 @@ Deno.serve(async (req: Request) => {
               }
             }
             const blockRemoteAvailable = deriveRemoteAvailable(null, blockProseFields.workStyle)
+            // 同じ引数で2回ずつ呼んでいた（ブロック数ぶん無駄に走る）。1回にして使い回す
+            const blockWorkStyleNote = extractWorkStyleNote(blockRegexBodyText, blockAttachText)
+            const blockEmployment = extractEmploymentType(blockRegexBodyText, blockAttachText)
             const blockBoxUrls = extractBoxUrls(block)
             if (blockBoxUrls.length > 0) allBlockBoxUrls.push(...blockBoxUrls)
 
@@ -11518,7 +11495,25 @@ Deno.serve(async (req: Request) => {
                 return toExperienceYears(expYears)
               })(),
               raw_profile: {
-                text: storedBodyText,
+                // ── 保存する本文は「この人のブロック」だけにする（2026-09-17） ──
+                //
+                // 以前はメール全文（storedBodyText）を全ブロックに入れていた。34人のメールなら
+                // 34人全員の raw_profile.text が同じ34人ぶんの全文になる。実測で
+                // 複数人材ブロック 895人の text 合計が 11MB（単独 2,327人で 6.9MB）。
+                //
+                // 容量だけの話ではなく、読み手が全員この文字列を「本人の本文」として使う:
+                //   ・AI校正（shadow_worker）は trimBodyForLlm(text) の先頭6,000字を
+                //     「この人の本文」として Haiku に渡す。全文を入れていると、
+                //     34人全員が**1人目の本文**で校正される
+                //   ・再解析（reprocess_*）は text を本文として投げ直し、
+                //     target_candidate_id を block[0] に強制適用する。全文を入れていると、
+                //     27人目を再解析したのに**1人目の内容で上書き**される
+                //   ・画面の経歴書リンクは text 内の最初の Google Drive URL を拾う。
+                //     全文だと冒頭の「全体営業中一覧」＝他人も載ったシートに繋がる
+                //
+                // ブロックだけにすれば、どの読み手も本人のテキストを見る。
+                // メール全文が要る場合はローカル控え（D:\akinavi-archive\mail）にある。
+                text: stripEmbeddedAttach(sanitizeForPgJson(block)).trim(),
                 summary: '',
                 skillsByCategory: blockDbMatchedSkills.reduce((acc, s) => {
                   if (!acc[s.category]) acc[s.category] = []
@@ -11547,8 +11542,8 @@ Deno.serve(async (req: Request) => {
                 availableRegions: null,
                 currentWorkLocation: null,
                 remoteAvailable: blockRemoteAvailable,
-                workStyleNote: extractWorkStyleNote(blockRegexBodyText, blockAttachText),
-                workStyleTag: deriveWorkStyleTag(extractWorkStyleNote(blockRegexBodyText, blockAttachText)),
+                workStyleNote: blockWorkStyleNote,
+                workStyleTag: deriveWorkStyleTag(blockWorkStyleNote),
                 from, subject,
                 emailReceivedAt,
                 attachmentCount: allAttachments.length,
@@ -11575,9 +11570,6 @@ Deno.serve(async (req: Request) => {
                 // 名前だけ全件並ぶと、画面上も「9人ぶんの経歴書を持つ1人」に見えて誤解を生む。
                 // メールに何が添付されていたかは allParsedAttachmentLabels に残る。
                 attachmentNames: matchedTextContent ? [matchedTextContent.label] : [],
-                // 本人の経歴書を特定できなかった人にだけ、メールに付いていた添付の一覧を渡す。
-                // 「名簿には自分のものが無かった」ことも含めて営業が判断できるようにする。
-                rosterAttachments: matchedTextContent ? undefined : rosterAttachments,
                 driveLinks: googleEntries.map(t => t.label),
                 // ゾーンT: この候補者に割り当てられたエントリの台帳＋メール全体サマリー
                 pipeline_trace: ledger.serializeTrace(matchedTextContent ? [(matchedTextContent as SourceEntry).entryId] : []),
@@ -11586,8 +11578,8 @@ Deno.serve(async (req: Request) => {
                 age: blockRegexFields.age,
                 gender: blockRegexFields.gender,
                 nationality: blockRegexFields.nationality,
-                employmentType: extractEmploymentType(blockRegexBodyText, blockAttachText).employmentType,
-                commercialFlow: extractEmploymentType(blockRegexBodyText, blockAttachText).commercialFlow,
+                employmentType: blockEmployment.employmentType,
+                commercialFlow: blockEmployment.commercialFlow,
                 selfPR: extractSelfPR(block, blockAttachText) ?? null,
                 agentComment: extractAgentComment(block, blockAttachText) ?? null,
                 // 添付テキスト（再解析時に skillYears を再抽出できるよう保存）
@@ -12147,7 +12139,9 @@ Deno.serve(async (req: Request) => {
         skills,
         experience_years: toExperienceYears(resolvedExperienceYears),
         raw_profile: {
-          text: effectiveBody,
+          // 疑似添付テキストは attachmentText に別途入るので本文からは落とす。
+          // 落とさないと再解析のたびに同じ添付テキストが text に積み増される
+          text: stripEmbeddedAttach(effectiveBody),
           summary: analyzed.summary ?? '',
           skillsByCategory: dbMatchedSkills.reduce((acc, s) => {
             if (!acc[s.category]) acc[s.category] = []

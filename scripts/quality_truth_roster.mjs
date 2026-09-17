@@ -63,11 +63,24 @@ const nameKey = (s) => String(s ?? '')
   .toLowerCase()
 
 // ── 突き合わせの鍵を作る ────────────────────────────────────────────────────
+//
+// ⚠ 2026-09-17: 鍵は「送信元 + emailReceivedAt（分）」だが、**これだけでは足りない**。
+// 同じ人が毎日の一斉配信で再送されると、既存行が UPDATE され emailReceivedAt が
+// 最新のメールに**貼り替わる**。つまり古いメールを採点すると、生きている人が
+// 軒並み「落ちた人」に見える。
+//   実例: j-tech の9/14メール（本文34人）は prod に4人しか紐づいていないが、
+//         残りは9/17のメールに貼り替わっているだけで全員生きている。
+// そこで「落ちた人」の判定には**送信元ごとの全氏名**を使い、
+// 「幽霊」と項目の採点にはこのメールに紐づく行だけを使う（値はこの通のものなので）。
 const actual = new Map()
+const bySender = new Map()
 for (const c of dbRows('candidates')) {
-  const k = `${String(c.rp_from ?? '').toLowerCase()}|${utcMinute(c.rp_received)}`
+  const sender = String(c.rp_from ?? '').toLowerCase()
+  const k = `${sender}|${utcMinute(c.rp_received)}`
   if (!actual.has(k)) actual.set(k, [])
   actual.get(k).push(c)
+  if (!bySender.has(sender)) bySender.set(sender, new Set())
+  bySender.get(sender).add(nameKey(c.name))
 }
 
 const mailsByKey = new Map()
@@ -122,7 +135,18 @@ JSON のみを出力し、説明文は書かないでください。
 件名: ${m.subject ?? ''}
 差出人: ${m.from ?? ''}
 本文:
-${String(m.body ?? '').slice(0, 12000)}`
+${String(m.body ?? '').slice(0, BODY_LIMIT)}`
+
+/** 正解づくりに渡す本文の上限。
+ *
+ *  ⚠ 2026-09-17: ここは 12,000 だった。1通に34人が並ぶメールの本文は約60,000字あるので、
+ *  正解側が**先頭の9人しか見えていなかった**。それを「本文9人 → DB5人」と読んで
+ *  「名簿の分割がおかしい」と報告したが、実際に splitMultiCandidateBody に通すと
+ *  34ブロックに正しく割れていた。**測り方の欠陥を製品の不具合として報告していた**。
+ *
+ *  上限を超えたメールは、人数の採点から外して「未採点」として数える。
+ *  黙って切り詰めると、切り落とした人が全員「落ちた人」に化けて数字が嘘になる。 */
+const BODY_LIMIT = 120000
 
 mkdirSync(OUT_DIR, { recursive: true })
 
@@ -150,13 +174,14 @@ function norm(field, v) {
 
 // ── 採点 ────────────────────────────────────────────────────────────────────
 let mails = 0, cost = 0
-let countOk = 0, countNg = 0
+let countOk = 0, countNg = 0, countSkipLong = 0
 let missing = 0, phantom = 0, matched = 0, dbTotal = 0, truthTotal = 0
 const stats = new Map(FIELDS.map(([f]) => [f, { ok: 0, ng: 0, dbNull: 0, truthNull: 0 }]))
 const notes = []
 
 for (const [i, t] of targets.entries()) {
   process.stdout.write(`\r採点中 ${i + 1}/${targets.length}…`)
+  const bodyTruncated = String(t.mail.body ?? '').length > BODY_LIMIT
   let truth
   try {
     const res = await callModel(MODEL, PROMPT(t.mail))
@@ -170,34 +195,70 @@ for (const [i, t] of targets.entries()) {
   mails++
 
   const truthPeople = truth.people.filter((p) => p && p.name)
-  const dbNames = new Map(t.rows.map((r) => [nameKey(r.name), r]))
-  const truthNames = new Set(truthPeople.map((p) => nameKey(p.name)))
   truthTotal += truthPeople.length
+
+  // ── 同じイニシャルの別人を潰さずに対応付ける ──────────────────────────────
+  //
+  // ⚠ 2026-09-17: ここは `new Map(rows.map(r => [nameKey(r.name), r]))` だった。
+  // 名簿には同じイニシャルの別人が普通に並ぶ（実測: j-tech の34人メールに
+  // AK・YK・TY・MT・UK・TM が各2人）。Map は後勝ちで片方を捨てるので、
+  //   ・捨てられた方が毎回「落ちた人」に化ける
+  //   ・残った方に相手の値をぶつけて「駅が違う・年齢が違う」と誤判定する
+  // （実際 AK を「一宮駅→亀戸駅、51歳→46歳」とズレとして報告したが、別人だった）
+  //
+  // 名前が同じ候補が複数いる場合は、年齢・駅・単価が最も多く一致する行を選ぶ。
+  // 一度使った行は他の人に割り当てない（1対1を保つ）。
+  const usedRows = new Set()
+  const pickRow = (p) => {
+    const cands = t.rows.filter((r) => !usedRows.has(r) && nameKey(r.name) === nameKey(p.name))
+    if (cands.length === 0) return null
+    const score = (r) => FIELDS.reduce((n, [f, get]) => {
+      const exp = norm(f, p[f]); const act = norm(f, get(r))
+      return n + (exp !== null && exp === act ? 1 : 0)
+    }, 0)
+    const best = cands.reduce((a, b) => (score(b) > score(a) ? b : a))
+    usedRows.add(best)
+    return best
+  }
+  const rowOf = new Map()
+  for (const p of truthPeople) {
+    const r = pickRow(p)
+    if (r) rowOf.set(p, r)
+  }
   dbTotal += t.rows.length
 
-  if (truthPeople.length === t.rows.length) countOk++
+  // 本文が上限を超えたメールは、正解側が全員を見られていないので人数の採点から外す。
+  // 切り詰めた分を「落ちた人」に数えると、測り方の都合が製品の不具合に見える
+  // 落ちた人は「その送信元の人材に1人もいない」で判定する（再送で貼り替わるため）
+  const senderNames = bySender.get(String(t.mail.from ?? '').toLowerCase()) ?? new Set()
+  const missedHere = bodyTruncated ? [] : truthPeople.filter((p) => !senderNames.has(nameKey(p.name)))
+
+  if (bodyTruncated) {
+    countSkipLong++
+    notes.push(`未採点: 本文が${Math.round(String(t.mail.body ?? '').length / 1000)}千字（上限${BODY_LIMIT / 1000}千字）「${String(t.mail.subject).slice(0, 40)}」`)
+  } else if (missedHere.length === 0) countOk++
   else {
     countNg++
-    notes.push(`人数: 本文${truthPeople.length}人 → DB${t.rows.length}人  「${String(t.mail.subject).slice(0, 44)}」`)
+    notes.push(`取りこぼし: 本文${truthPeople.length}人のうち${missedHere.length}人が送信元の人材に居ない  「${String(t.mail.subject).slice(0, 40)}」`)
   }
 
-  // 本文にいるのに DB に無い＝落ちた人 / DB にいるのに本文に無い＝幽霊
-  for (const p of truthPeople) {
-    if (!dbNames.has(nameKey(p.name))) {
+  if (!bodyTruncated) {
+    for (const p of missedHere) {
       missing++
       notes.push(`  落ちた: 「${p.name}」 ← ${String(t.mail.subject).slice(0, 40)}`)
     }
-  }
-  for (const r of t.rows) {
-    if (!truthNames.has(nameKey(r.name))) {
-      phantom++
-      notes.push(`  幽霊  : 「${r.name}」 ← ${String(t.mail.subject).slice(0, 40)}`)
+    // 幽霊はこのメールに紐づく行だけで見る（この通が最後に書いた行なので責任が言える）
+    for (const r of t.rows) {
+      if (!usedRows.has(r)) {
+        phantom++
+        notes.push(`  幽霊  : 「${r.name}」 ← ${String(t.mail.subject).slice(0, 40)}`)
+      }
     }
   }
 
   // 名前で対応が付いた人だけ項目を採点する
   for (const p of truthPeople) {
-    const row = dbNames.get(nameKey(p.name))
+    const row = rowOf.get(p)
     if (!row) continue
     matched++
     for (const [field, get] of FIELDS) {
@@ -219,7 +280,8 @@ for (const [i, t] of targets.entries()) {
 console.log(`\n\n採点 ${mails} 名簿（メール1通 ↔ DB2人以上で対応が付いたもの）`)
 console.log(`  本文の人数 合計 ${truthTotal} / DBの人数 合計 ${dbTotal}\n`)
 console.log('■ 名簿として正しく割れているか')
-console.log(`  人数が一致        ${countOk} / ${countOk + countNg}`)
+console.log(`  本文の人が全員DBにいる  ${countOk} / ${countOk + countNg}`
+  + (countSkipLong ? `（本文が長すぎて未採点 ${countSkipLong}件は除く）` : ''))
 console.log(`  ★落ちた人（本文にいるのにDBに無い）  ${missing}`)
 console.log(`  ★幽霊  （DBにいるのに本文に無い）    ${phantom}`)
 console.log(`  名前で対応が付いた人              ${matched}\n`)
