@@ -178,7 +178,7 @@ git add -A && git commit -m "fix: ..." && git push
 | `storage_retention_days` | `7` | `7` | 添付の保持日数 |
 | `storage_quota_bytes` | 1GB | `1073741824` | Storage の上限（Free プラン） |
 | `storage_alert_pct` | `70` | `70` | この割合を超えたら警告 |
-| `raw_retention_days` | `1` | `1` | `raw/` の保持日数。**`raw/` は 2026-09-15 に廃止済み**なので現在は空振り |
+| ~~`raw_retention_days`~~ | — | `1` | **もう読むコードが無い**（2026-09-17 削除）。`raw/` への保存は 2026-09-14 に廃止済みで、実測でもオブジェクト0件だった。行は残っているが無視してよい |
 | `matching` | — | `top_n:5, min_score:60` | AI採点する上位件数と足切りスコア |
 | `matching_run_mode` | `fast` | （未作成） | `fast` / `full`。SettingsPage から変更可 |
 | `matching_fast_max_candidates` | `20` | （未作成） | 高速モード時の案件あたり候補者上限 |
