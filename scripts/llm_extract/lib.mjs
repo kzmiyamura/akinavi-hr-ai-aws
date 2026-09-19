@@ -73,6 +73,31 @@ function monthCellRightOf(row, yearIdx) {
 
 /** xlsx → {file, sheet, rows, merges} 無損失整形JSON（経歴シートは日付セル最多で選定）。
  *  引数はパスでも Buffer でもよい（合成フィクスチャで回帰を回すため） */
+/**
+ * 行末の空セルを落とす（値は文字列化する）。
+ *
+ * グリッドは矩形なので、シートの最大幅に合わせて全行が空セルで埋められている。
+ * 実測（2026-09-19・ローカル控えの xlsx 247件）: **AIに送るセルの 92.3% が空文字**で、
+ * 1件あたり平均 37,044字。経歴書の解析は平均114秒かかる（llm_shadow 直近7日）ので、
+ * この空白がそのまま所要時間とトークンになっていた。
+ *
+ * ただし空セルは **列位置** を表すので、間の空セルを消すと桁がずれて転記が壊れる。
+ * 落としてよいのは **行末** だけ。後ろに値が無いため位置情報を持たない（完全に無損失）。
+ * 実測の削減率: 行末だけ 26.0%減 / 疎表現にすると 32.9%減。
+ * 疎表現は +6.9pt のためにプロンプトの書式を変える必要があり、転記品質の回帰risk に
+ * 見合わないので採らない（`node scripts/measure_grid_compaction.mjs` で再測できる）。
+ *
+ * 結合セルは左上に値が入り範囲は merges が持つので、行末を削っても情報は落ちない。
+ * verify.mjs はセルの**値**しか見ない（位置・長さを使わない）ため検証にも影響しない。
+ */
+export function trimTrailingEmpty(cells) {
+  let end = cells.length
+  while (end > 0 && String(cells[end - 1] ?? '').trim() === '') end--
+  const out = new Array(end)
+  for (let i = 0; i < end; i++) out[i] = String(cells[i])
+  return out
+}
+
 export function buildGridInput(xlsxSrc) {
   const wb = Buffer.isBuffer(xlsxSrc) || xlsxSrc instanceof Uint8Array
     ? XLSX.read(xlsxSrc, { cellDates: true })
@@ -92,7 +117,7 @@ export function buildGridInput(xlsxSrc) {
   if (best.n < 1) return null
   const merges = (best.ws['!merges'] || []).map(m => ({ r1: m.s.r, c1: m.s.c, r2: m.e.r, c2: m.e.c }))
   const rows = []
-  best.grid.forEach((r, i) => { if (r.some(c => String(c).trim())) rows.push([i, r.map(c => String(c))]) })
+  best.grid.forEach((r, i) => { if (r.some(c => String(c).trim())) rows.push([i, trimTrailingEmpty(r)]) })
   return { sheet: best.sn, rows, merges, dateCells: best.n }
 }
 
