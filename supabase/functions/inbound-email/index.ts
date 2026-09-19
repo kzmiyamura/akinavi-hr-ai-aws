@@ -3447,7 +3447,19 @@ function scoreProseRoles(
     { re: /(?<![A-Za-zバックエンドフロントクラウドデータML])SE(?![A-Za-z])(?![　 ]?(?:補佐|補助))|システム[　 ]?エンジニア(?!長)/, label: 'システムエンジニア' },
     // 同上。`PG` 単独だと JPG / PNG / MPG / SPG に当たっていた
     { re: /(?<![A-Za-z])PG(?![A-Za-z])|プログラマー?/,    label: 'プログラマー' },
-    { re: /インフラ[　 ]?エンジニア/,                    label: 'インフラエンジニア' },
+    // 「インフラエンジニア」と名乗っている人だけを拾っていたため、**仕事の書き方で
+    // 書いている人を丸ごと落としていた**（ユーザー指摘・2026-09-19）。
+    //   実例: 件名「インフラの玄人!【直人材】インフラ要件定義〜20年以上(AWS/Azure)/
+    //         IaC(Terraform)/ミドルウェア設計(JP1/Hulft/Zabbix)/仮想化やコンテナも!」
+    //         → 役割は PL / PM / 運用保守 だけで、インフラが付いていなかった。
+    // 裸の「インフラ」は案件文にも普通に出るので使わない。**作業を表す語が続くときだけ**拾う。
+    // 「インフラ運用」「インフラ保守」「インフラ周り」は作業の言い方であって職種の名乗りではない。
+    // 役割は付ける（消さない）が weak にして主役割から外し、営業には「作業」の印で見せる。
+    // 実測（人材メール9,687通）: 変更前568通 → 変更後1,291通。増えた723通のうち
+    // 運用236・保守13・周り20 の計269通がこの weak 側に入る。
+    { re: /インフラ[　 ]?(?:エンジニア|構築|設計|運用|保守|移行|刷新|要件定義|基盤|周り)/,
+      label: 'インフラエンジニア',
+      weak: /インフラ[　 ]?(?:運用|保守|周り)/ },
     { re: /フロントエンド[　 ]?エンジニア|フロント[　 ]?エンジニア/, label: 'フロントエンドエンジニア' },
     { re: /バックエンド[　 ]?エンジニア|バック[　 ]?エンジニア/,    label: 'バックエンドエンジニア' },
     { re: /フルスタック[　 ]?エンジニア/,                label: 'フルスタックエンジニア' },
@@ -9502,6 +9514,51 @@ async function fetchLinkedResume(url: string, ledger: Ledger, depth: number): Pr
  * 実害: 「tani（38歳・男性）」→「tan」、「Kengo」→「Ken」と全員3文字に切られた（2026-08-10 #128）。
  * 年齢・性別が続く場合も、除去すると直後の年齢・性別抽出が失敗するため対象外にする。
  */
+/**
+ * 画面に出す氏名から、氏名ではない付属物を落とす。**氏名が決まった最後の1回だけ**掛ける。
+ *
+ * ⚠ ここは抽出の後。年齢・性別・国籍は既に regex が取り終わっている（extractCandidateFieldsRegex は
+ *   切る前の文字列 ageGenderSrc から読む）。だから落としても情報は失われない。
+ *   逆に**抽出より前に掛けてはいけない**。年齢・性別が丸ごと取れなくなる。
+ *
+ * prod 実測（2026-09-19・3,008人）で、氏名に数字が混ざっているのは85人。内訳:
+ *   約75人  「KS（30歳男性）」「HS（男性・31歳）」型 … 年齢・性別が氏名欄に残っている
+ *     6人  「24_17_KS加」型                        … 名簿の行番号が前に付いている
+ *     3人  「NH640」「N57」型                      … 送信元の管理番号
+ *     数人  「OS※23年1ヶ月」「OY（40歳」          … 注記・閉じ括弧の欠け
+ *
+ * 括弧は**中身が年齢・性別・国籍だけのときにしか落とさない**。
+ * 「NK（長野に引っ越し予定）」のような但し書きは氏名の一部として扱う送信元があるため残す。
+ *
+ * 元の表記は raw_profile.text に残るので、営業が原文を確認する手段は失われない。
+ */
+function cleanDisplayName(name: string): string {
+  let s = String(name ?? '').trim()
+  if (!s || s === '不明') return s
+
+  // ① 名簿の行番号（「24_17_KS加」「25_171_KA金」）。先頭の「数字_」の連なりだけ落とす
+  s = s.replace(/^(?:[0-9０-９]{1,3}[_＿]){1,3}/, '').trim()
+
+  // ② ※ 以降の注記（「OS※23年1ヶ月」）。氏名に ※ は付かない
+  s = s.replace(/[\s　]*[※＊][\s\S]*$/, '').trim()
+
+  // ③ 末尾の括弧。中身が年齢・性別・国籍だけのものに限って落とす。
+  //    閉じ括弧が無い「OY（40歳」も同じ扱いにする（送信元の書き落とし）
+  s = s.replace(/[\s　]*[（(][^）)]{0,24}[）)]?[\s　]*$/, (m) => {
+    const inner = m.replace(/[\s　（）()]/g, '')
+    if (!inner) return ''
+    return /^(?:[0-9０-９]{2}[才歳]?|男性|女性|男|女|日本|中国|韓国|台湾|ベトナム|[^\x00-\x7F]{1,6}籍|[・･/／:：、,．.\-]){1,8}$/.test(inner)
+      ? '' : m
+  }).trim()
+
+  // ④ 送信元の管理番号（「NH640」「IC023009」）。英字1〜3文字のあとが数字だけなら落とす。
+  //    2026-09-17 は「呼称の一部だろう」と残す判断にしたが、画面で見ると氏名として読めない
+  //    （ユーザー指摘・2026-09-19）。原文は raw_profile.text に残るので追跡はできる。
+  s = s.replace(/^([A-Za-z][.\s・]?[A-Za-z]?[.\s・]?[A-Za-z]?)[\s　_＿-]*[0-9０-９]{2,}$/, '$1').trim()
+
+  return s || String(name ?? '').trim()
+}
+
 function stripInitialSuffix(name: string): string {
   const initM = name.match(/^([A-Za-zＡ-Ｚａ-ｚ][.\s　・]*[A-Za-zＡ-Ｚａ-ｚ](?:[.\s　・]*[A-Za-zＡ-Ｚａ-ｚ])?)/)
   if (!initM || name.length <= initM[1].length + 2) return name
@@ -11469,8 +11526,9 @@ Deno.serve(async (req: Request) => {
               ?? '不明'
             // 氏名の全角英数字は半角へ正規化（「ＳＡ」と「SA」を同一人物として dedup させる。
             // 同一名簿内で同じ人が全角/半角で2ブロックに分かれ重複登録される実害があった: ai-more）
-            const blockResolvedName = blockResolvedNameRaw.replace(/[Ａ-Ｚａ-ｚ０-９]/g, c =>
-              String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+            const blockResolvedName = cleanDisplayName(
+              blockResolvedNameRaw.replace(/[Ａ-Ｚａ-ｚ０-９]/g, c =>
+                String.fromCharCode(c.charCodeAt(0) - 0xFEE0)))
             // 名前が取れないブロックは署名・フッター等とみなしてスキップ
             if (blockResolvedName === '不明' && blockRegexFields.name == null) {
               continue
@@ -12077,9 +12135,11 @@ Deno.serve(async (req: Request) => {
       // 「渋谷駅」のように 駅 サフィックスが付いたまま名前として取れたケースのみ除外
       // 駅名と同じ苗字（渋谷・大宮・藤沢等）は正当な人名のため除外しない
       const _bareRawName = _rawName.replace(/駅$/, '')
+      // 氏名ではない付属物（年齢・性別の括弧、名簿の行番号、管理番号、※注記）を最後に落とす。
+      // 年齢・性別は regex が切る前の文字列から取り終わっているので、ここで落としても失われない
       const resolvedName = (_rawName !== '不明' && _bareRawName !== _rawName)
         ? '不明'
-        : _rawName
+        : cleanDisplayName(_rawName)
 
       // AI空項目にregexフォールバックを適用
       const resolvedStation = analyzed.nearestStation || regexFields.nearestStation
