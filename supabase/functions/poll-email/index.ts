@@ -281,6 +281,51 @@ function isCandidateBySubject(subject: string): boolean {
 }
 
 /**
+ * 本文に「人の履歴」が書かれているか（氏名の見出し ＋ 年齢/単価/最寄駅）。
+ *
+ * 件名だけの救済（isCandidateBySubject）では足りなかった。実測（2026-09-19・
+ * ローカル控え5日分＋本番の登録実数）で、**1人も登録できていない送信元69社から
+ * 人の履歴が書かれたメールが1,536通**出ており、その内訳は
+ *   案件と誤判定 451通 / スキップ 448通 / 取り込んだが登録ゼロ 538通。
+ * 撃っていたのは中身ではなく挨拶と署名だった:
+ *   「ご提案いただけますと」140通・「ご紹介いただけますと」124通（案件と誤判定）
+ *   本文に sales@ のアドレスがあるだけで 228通（スキップ）
+ *   「配信停止はこちら」167通（スキップ）
+ * どれも人材メールほど当たりやすい。**語を消すのではなく、人が書かれていれば
+ * 営業メール用の判定に掛けない**という順序にする。
+ *
+ * 氏名の見出しは `氏名：` だけでなく `【氏名】` `【名　前】` `要員番号` も拾う
+ * （送信元によって書式が違い、従来の `氏名[：:]` 限定では大半が漏れていた）。
+ * 案件メールの募集年齢（「45歳まで」「23歳以上」）は人の年齢ではないので除く。
+ */
+function hasCandidateProfileBody(plainBody: string): boolean {
+  const hasNameLabel =
+    /(?:氏\s*名|お名前|ご氏名|名\s*前|要員番号|技術者番号|イニシャル)\s*[：:】]/.test(plainBody) ||
+    /【\s*(?:氏\s*名|名\s*前|お名前)\s*】/.test(plainBody)
+  if (!hasNameLabel) return false
+  const hasPersonAttr =
+    /\d{2}\s*歳/.test(plainBody) ||
+    /(?:年\s*齢|単\s*価|希望単価|最寄\s*り?\s*駅|稼[働動]\s*開始)\s*[：:】]/.test(plainBody) ||
+    /【\s*(?:年\s*齢|単\s*価|最寄\s*り?\s*駅)\s*】/.test(plainBody)
+  if (!hasPersonAttr) return false
+  // 「45歳まで」等しか年齢情報が無いなら募集条件であって人の属性ではない
+  const onlyAgeRequirement =
+    /\d{2}\s*歳\s*(?:位|くらい|程度|前後)?\s*(?:まで|迄|以下|未満|以上)/.test(plainBody) &&
+    !/(?:年\s*齢|単\s*価|最寄\s*り?\s*駅)\s*[：:】]/.test(plainBody)
+  return !onlyAgeRequirement
+}
+
+/** 案件メール固有の強いしるし。人の履歴があってもこれがあれば案件側に委ねる。
+ *  preFilterEmail 内にインラインで書いていたものを、救済判定から先に使えるよう関数にした。 */
+function hasStrongProjectSignal(subject: string, plainBody500: string): boolean {
+  return /【案件|案件情報|案件のご紹介|案件ご紹介|開発案件/.test(subject) ||
+    /(案件名|必須スキル|募集人数|就業場所|勤務地|作業場所|参画時期|契約形態|商[\s　]*流|精[\s　]*算幅|清[\s　]*算幅)[　\s]*[：:]/.test(plainBody500) ||
+    /【商[\s　]*流】|【精[\s　]*算】|【人[\s　]*数】|【案件/.test(plainBody500) ||
+    // 山括弧フィールド形式（＜案件名＞等・コロンなし）も案件の強シグナル
+    /[＜<]\s*(?:案件名|案件概要|必須スキル|商流制限)\s*[＞>]/.test(plainBody500)
+}
+
+/**
  * ルールベースで案件メールか判定する
  * 件名と本文冒頭500文字を対象とする
  */
@@ -306,6 +351,26 @@ function preFilterEmail(
   const rawBody = email.body?.content ?? ''
   const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000)
   const plainBody500 = plainBody.slice(0, 500)
+  // 人の履歴は挨拶文の後ろに来るので、プロフィール検出だけは長めに見る。
+  // plainBody（1000字）のままだと、長い前置きのある送信元を取り逃す
+  const plainBodyLong = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 4000)
+
+  // ── 人材の証拠があるものは、営業メール用のスキップ判定に掛けない ──────────
+  //
+  // これまで救済は**スキップ判定より後ろ**にあり、届く前に消えていた。
+  // 実測（2026-09-19・ローカル控え5日分 × 本番の登録実数）:
+  //   1人も登録できていない送信元69社から、人の履歴が書かれたメールが1,536通。
+  //   うち448通は本文の営業パターンで skip。内訳は
+  //     sales@ のアドレスが本文にあるだけ 228通（SES各社の署名に必ず入る）
+  //     配信停止はこちら 167通（配信ツールのフッター）
+  //     弊社.*サービス.*ご紹介 39通 / 件名「ご案内」14通（【技術者のご案内】が消えていた）
+  //
+  // 語を消すと本物の営業メールが通るので消さない。**順序を変える**。
+  // 案件の強いしるし（案件名・必須スキル・商流 等）があるものは従来どおり案件側に委ねる。
+  const strongProject = hasStrongProjectSignal(subject, plainBody500)
+  if (useCandidateRescue && !strongProject && hasCandidateProfileBody(plainBodyLong)) {
+    return 'candidate'
+  }
 
   // 件名でスキップ確定
   if (SKIP_SUBJECT_PATTERNS.some(p => p.test(subject))) {
@@ -338,16 +403,12 @@ function preFilterEmail(
   // project 判定すると人材メールを案件と誤判定→スキップ→候補者0になる実害があった（alBee/1-r 要員）。
   // 「氏名：＋最寄/所属/稼働」の個人プロフィールがあり、かつ案件固有の強いシグナル（案件名・必須スキル・
   // 商流・勤務地・募集人数等）が無ければ、弱い案件パターンより候補者を優先する。
+  // 判定の中身は hasCandidateProfileBody / hasStrongProjectSignal に移した（2026-09-19）。
+  // 救済を先頭に上げたので、ここに来るのは「案件の強いしるしがある」ものだけになる
   const hasCandidateProfile =
     /(?:氏\s*名|お名前|ご氏名)[　\s]*[：:]/.test(plainBody) &&
     /(最寄[　\s]*り?駅|最寄[　\s]*[：:]|所属[　\s]*[：:]|稼[働動][　\s]*[：:])/.test(plainBody)
-  const hasStrongProjectSignal =
-    /【案件|案件情報|案件のご紹介|案件ご紹介|開発案件/.test(subject) ||
-    /(案件名|必須スキル|募集人数|就業場所|勤務地|作業場所|参画時期|契約形態|商[\s　]*流|精[\s　]*算幅|清[\s　]*算幅)[　\s]*[：:]/.test(plainBody500) ||
-    /【商[\s　]*流】|【精[\s　]*算】|【人[\s　]*数】|【案件/.test(plainBody500) ||
-    // 山括弧フィールド形式（＜案件名＞等・コロンなし）も案件の強シグナル
-    /[＜<]\s*(?:案件名|案件概要|必須スキル|商流制限)\s*[＞>]/.test(plainBody500)
-  if (hasCandidateProfile && !hasStrongProjectSignal) return 'candidate'
+  if (hasCandidateProfile && !strongProject) return 'candidate'
 
   // ルールベース案件判定（件名＋本文冒頭500文字）
   // → AI分類より前に実施し、明確な案件メールを確実に project と判定

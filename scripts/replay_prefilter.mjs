@@ -62,7 +62,9 @@ function loadPreFilter(withConstants = false) {
     .replace(/\bexport\s+/g, '')
   return new Function(`${js}\nreturn { preFilterEmail, isCandidateBySubject, isProjectByRuleBase,
     SKIP_SUBJECT_PATTERNS, SKIP_BODY_PATTERNS, PROJECT_SUBJECT_PATTERNS, PROJECT_BODY_PATTERNS,
-    HARD_PROJECT_SUBJECT, HR_SUBJECT_PATTERNS }`)()
+    HARD_PROJECT_SUBJECT, HR_SUBJECT_PATTERNS,
+    hasCandidateProfileBody: typeof hasCandidateProfileBody === 'function' ? hasCandidateProfileBody : null,
+    hasStrongProjectSignal: typeof hasStrongProjectSignal === 'function' ? hasStrongProjectSignal : null }`)()
 }
 const F = loadPreFilter()
 const { preFilterEmail } = F
@@ -169,7 +171,11 @@ for (const day of days) {
     const bodyLooksCandidate = hasNameLabel && hasPersonAttr && !isAgeRequirement
     const plain = body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000)
     const rule = whichRule(verdict, subject, plain, plain.slice(0, 500))
-    rows.push({ day, from, subject, verdict, people, isDup, cls: subjClass(subject), bodyLooksCandidate, rule })
+    // 案件メールの体裁（救済を広げたときに、これが candidate に化けていないか見る）
+    const projLike = /(案件名|必須スキル|募集人数|就業場所|作業場所|商[\s　]*流)[\s　]*[：:]/.test(plain) ||
+      /【\s*(?:案件名|必須スキル|募集人数|商[\s　]*流)\s*】/.test(plain) ||
+      /【案件|案件情報|案件のご紹介/.test(subject)
+    rows.push({ day, from, subject, verdict, people, isDup, cls: subjClass(subject), bodyLooksCandidate, rule, projLike })
   }
 }
 
@@ -209,6 +215,16 @@ if (matchRate < 90) {
   for (const s of unmatchedSample) console.log(`    見つからなかった例: ${s}`)
 }
 console.log()
+// 全メールの振り分け。変更の前後でこの1行を比べれば、救済と流入が同時に見える
+const allV = new Map()
+for (const r of rows) allV.set(r.verdict, (allV.get(r.verdict) ?? 0) + 1)
+console.log(`■ 全メール${total}通の振り分け: ` +
+  [...allV].sort((a, b) => b[1] - a[1]).map(([v, n]) => `${v}=${n}`).join(' '))
+// 案件の体裁がはっきりしているメールが人材に化けていないか（流入の監視）
+const projBody = rows.filter((r) => /(案件名|必須スキル|募集人数|就業場所|商\s*流)[\s　]*[：:]/.test(r.subject + ' ') || r.projLike)
+console.log(`  うち案件の強いしるしを持つものが candidate になった数: ` +
+  `${rows.filter((r) => r.projLike && r.verdict === 'candidate').length}通（要監視）\n`)
+
 console.log('■ poll-email の振り分け（本番の preFilterEmail をそのまま適用）')
 console.log('  判定        通数    12h重複   登録できた通数   登録人数')
 for (const [v, e] of [...verdictCount].sort((a, b) => b[1].mails - a[1].mails)) {

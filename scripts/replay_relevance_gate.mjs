@@ -84,13 +84,26 @@ function gate(subject, body) {
   return null
 }
 
-/** その本文が人材メールの体裁か（誤爆かどうかの手がかり。氏名＋年齢/単価/最寄駅） */
-const looksLikeCandidate = (b) =>
+/** 本番の門番 bodyHasCandidateProfile をそのまま切り出す。
+ *  「人の履歴があるメールには営業判定を掛けない」バイパスが、実データで
+ *  どれだけ効くかを測るため。レプリカを書くと本番とズレるので必ず切り出す。 */
+function loadProfileGate() {
+  const m = src.match(/function bodyHasCandidateProfile\(([\s\S]*?)\n\}/)
+  if (!m) return null
+  const js = `function bodyHasCandidateProfile(${m[1]}\n}\nreturn bodyHasCandidateProfile`
+    .replace(/:\s*string/g, '').replace(/:\s*boolean/g, '')
+  return new Function(js)()
+}
+const profileGate = loadProfileGate()
+
+/** その本文が人材メールの体裁か（誤爆かどうかの手がかり）。
+ *  本番に門番が入っていればそれを使い、無ければ従来の目安で数える */
+const looksLikeCandidate = profileGate ?? ((b) =>
   /(氏\s*名|お名前|【名\s*前】|【氏\s*名】|要員番号)/.test(b) &&
-  /(\d{2}\s*歳|年\s*齢|単\s*価|最寄|稼[働動])/.test(b)
+  /(\d{2}\s*歳|年\s*齢|単\s*価|最寄|稼[働動])/.test(b))
 
 const hit = new Map()   // "理由｜語" → {n, cand, senders:Set, sample}
-let scanned = 0, dropped = 0, droppedCand = 0
+let scanned = 0, dropped = 0, droppedCand = 0, bypassed = 0
 
 for (const day of days) {
   const dayDir = path.join(MAIL_ROOT, day)
@@ -108,6 +121,8 @@ for (const day of days) {
     if (!g) continue
     dropped++
     const isCand = looksLikeCandidate(body)
+    // 本番に門番が入っていれば、人の履歴があるものは実際には捨てられない
+    if (profileGate && isCand) { bypassed++; continue }
     if (isCand) droppedCand++
     const k = `${g.reason}｜${g.kw}`
     if (!hit.has(k)) hit.set(k, { n: 0, cand: 0, senders: new Set(), sample: '' })
@@ -119,9 +134,15 @@ for (const day of days) {
 }
 
 console.log(`対象: ${days.length}日 / 走査 ${scanned}通`)
-console.log(`関連性フィルターで捨てられる: ${dropped}通`)
-console.log(`  うち **人材メールの体裁**（氏名＋年齢/単価/最寄駅）: ${droppedCand}通 ← 誤爆の疑い\n`)
-console.log(`■ どの語に当たっているか（誤爆数の多い順・上位${TOP}）`)
+console.log(`関連性フィルターの語に当たる: ${dropped}通`)
+if (profileGate) {
+  console.log(`  うち人の履歴があり門番でバイパスされる: ${bypassed}通 ← 救済される`)
+  console.log(`  実際に捨てられる: ${dropped - bypassed}通（うち人材の体裁 ${droppedCand}通）\n`)
+} else {
+  console.log(`  うち **人材メールの体裁**（氏名＋年齢/単価/最寄駅）: ${droppedCand}通 ← 誤爆の疑い`)
+  console.log(`  ※本番に bodyHasCandidateProfile が無いため、バイパス前の数字\n`)
+}
+console.log(`■ 実際に捨てられるものの内訳（上位${TOP}）`)
 console.log('   捨てた  うち人材  送信元数  理由 / 語')
 for (const [k, e] of [...hit].sort((a, b) => b[1].cand - a[1].cand).slice(0, TOP)) {
   console.log(`   ${String(e.n).padStart(6)}  ${String(e.cand).padStart(8)}  ${String(e.senders.size).padStart(8)}  ${k}`)

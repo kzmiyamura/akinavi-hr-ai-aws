@@ -10166,6 +10166,34 @@ async function appendToBoxSpreadsheet(boxUrls: string[]): Promise<void> {
   }
 }
 
+/**
+ * 本文に「人の履歴」が書かれているか（氏名の見出し ＋ 年齢/単価/最寄駅）。
+ *
+ * 営業メール用のスキップ判定（研修報告・案件勧誘・商用勧誘・件名キーワード）を
+ * 掛けてよいかの門番。**poll-email の hasCandidateProfileBody と同じ判定**で、
+ * 片方だけ直すと段で落ちるので必ず両方そろえること。
+ *
+ * 氏名の見出しは `氏名：` だけでなく `【氏名】` `【名　前】` `要員番号` も拾う。
+ * 送信元ごとに書式が違い、コロン限定では大半が漏れていた。
+ * 案件メールの募集年齢（「45歳まで」「23歳以上」）は人の年齢ではないので除く。
+ */
+function bodyHasCandidateProfile(text: string): boolean {
+  const s = String(text ?? '').slice(0, 4000)
+  const hasNameLabel =
+    /(?:氏\s*名|お名前|ご氏名|名\s*前|要員番号|技術者番号|イニシャル)\s*[：:】]/.test(s) ||
+    /【\s*(?:氏\s*名|名\s*前|お名前)\s*】/.test(s)
+  if (!hasNameLabel) return false
+  const hasPersonAttr =
+    /\d{2}\s*歳/.test(s) ||
+    /(?:年\s*齢|単\s*価|希望単価|最寄\s*り?\s*駅|稼[働動]\s*開始)\s*[：:】]/.test(s) ||
+    /【\s*(?:年\s*齢|単\s*価|最寄\s*り?\s*駅)\s*】/.test(s)
+  if (!hasPersonAttr) return false
+  const onlyAgeRequirement =
+    /\d{2}\s*歳\s*(?:位|くらい|程度|前後)?\s*(?:まで|迄|以下|未満|以上)/.test(s) &&
+    !/(?:年\s*齢|単\s*価|最寄\s*り?\s*駅)\s*[：:】]/.test(s)
+  return !onlyAgeRequirement
+}
+
 /** SHA-256 を16進文字列で返す */
 async function sha256Hex(input: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input))
@@ -10817,7 +10845,20 @@ Deno.serve(async (req: Request) => {
     // 複数人材メール（区切り線2本以上）は前置きテキストに案件紹介フレーズを含む場合があるため
     // splitMultiCandidateBody で先に構造を確認し、2人以上いればスキップをバイパスする
     const earlyMultiCheck = type === 'candidate' ? splitMultiCandidateBody(body) : null
-    if (type === 'candidate' && !forceProcess && !earlyMultiCheck) {
+    // 1人分でも「人の履歴」が書かれていれば営業メール用の判定に掛けない。
+    //
+    // 複数人材（区切り線2本以上）はすでにバイパスしていたが、1人のメールは素通りできず、
+    // 挨拶とフッターで捨てられていた。実測（2026-09-19・ai_logs の実記録・直近7日）:
+    //   COMMERCIAL_SOLICITATION 928件 / PROJECT_SOLICITATION 280件
+    //   語ごとの内訳（捨てた数 → うち人の履歴があったもの）
+    //     配信停止はこちら 531→360 / 支払いサイト 331→259（SESの標準記載項目）
+    //     スキルマッチする案件がございましたら 83→83（100%）
+    //     表記の件について、ご紹介いたします 59→57 / ご提案いただければ 17→17（100%）
+    //     【案件名】 132→0 ← これは正しく効いているので語は消さない
+    // 語を消すと本物の営業メールが通る。**人が書かれていれば掛けない**という順序にする。
+    // 判定は poll-email の hasCandidateProfileBody と対。片方だけ直すと段で落ちる。
+    const earlyProfileCheck = type === 'candidate' && bodyHasCandidateProfile(body)
+    if (type === 'candidate' && !forceProcess && !earlyMultiCheck && !earlyProfileCheck) {
       const TRAINING_KEYWORDS = [
         '研修内容について報告します',
         '【本日の作業進捗】',
