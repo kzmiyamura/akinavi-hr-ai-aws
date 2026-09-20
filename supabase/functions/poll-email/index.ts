@@ -851,7 +851,26 @@ async function classifyEmailsBatch(
       usedModel = 'gemini-2.5-flash-lite'
       console.log(`[poll] バッチ分類 Gemini成功 ${emails.length}件 durationMs=${Date.now() - start}`)
     } catch (e) {
+      // ⚠ ここで早期 return していたため、**分類が落ちていることが誰にも見えなかった**。
+      //   実害（2026-09-20）: ai_logs の batch_classify が直近7日で0件だったので
+      //   「AI分類は動いていない」と分かったが、Edge のログが失効すれば追えなくなる。
+      //   失敗そのものを ai_logs に残してから返す。
       console.error(`[poll] バッチAI分類失敗: ${String(e)}。candidate にフォールバック`)
+      supabaseForLog.from('ai_logs').insert({
+        type: 'batch_classify',
+        model: 'fallback',
+        status: 'error',
+        prompt_length: prompt.length,
+        duration_ms: Date.now() - start,
+        ai_result: {
+          count: emails.length,
+          error: String(e).slice(0, 300),
+          note: '分類できなかったので全件 candidate として通した。人材かどうかは inbound-email 側の NO_PERSON_FOUND で止まる',
+          subjects: emails.slice(0, 20).map((m) => (m.subject ?? '').slice(0, 80)),
+        },
+      }).then(({ error }) => {
+        if (error) console.error('[poll] ai_logs insert失敗(分類エラー)', error.message)
+      })
       return emails.map(() => 'candidate')
     }
   }

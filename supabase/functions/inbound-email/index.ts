@@ -12203,6 +12203,39 @@ Deno.serve(async (req: Request) => {
       const resolvedDesiredRate = analyzed.desiredRate || regexFields.desiredRate
       const resolvedAvailableFrom = analyzed.availableFrom || regexFields.availableFrom
 
+      // ── 人が1人も取れていない行は人材ではない ──────────────────────────
+      //
+      // 氏名が取れず、年齢・性別・単価・最寄駅・経験年数が**1つも無い**なら、
+      // それは人材メールではなく迷い込んだメール。登録しても
+      // 「氏名未取得 / メールなし / 経験?年」の空行が増えるだけで、営業の邪魔になる。
+      //
+      // 実害（2026-09-20 ユーザー報告）: JCB を騙るフィッシングメールが人材として登録され、
+      // 会社名「株式会社セブン・カードサービス発行」、スキル Windows / F5 BIG-IP / Word、
+      // 業界「金融」まで付いていた。本文の規約文から拾ったもので、人は1人もいない。
+      // 実測: prod 3,007人中51人がこの形（直近7日＝保持期間内の全部）。
+      //
+      // なぜ入口で止まらなかったか:
+      //   preFilterEmail の判定は unknown → Gemini 分類へ。
+      //   ところが classifyEmailsBatch は失敗すると **全件を candidate にして返す**
+      //   （しかも ai_logs への記録より前に return するので失敗が見えない）。
+      //   分類の直し方は別途だが、**分類が何を言おうと人がいなければ登録しない**の方が堅い。
+      //
+      // この判定は本物の人材を落とさない。人材メールなら氏名・年齢・単価・最寄駅の
+      // どれか1つは必ず取れる（1つも取れないなら、そもそも登録する価値が無い）。
+      if (type === 'candidate' && !forceProcess) {
+        const nameUsable = resolvedName !== '不明' && resolvedName !== '氏名未取得' && !!resolvedName.trim()
+        const hasAnyPersonAttr = (analyzed.age ?? regexFields.age) != null ||
+          !!(analyzed.gender ?? regexFields.gender) ||
+          !!resolvedDesiredRate ||
+          !!resolvedStation ||
+          resolvedExperienceYears != null
+        if (!nameUsable && !hasAnyPersonAttr) {
+          return await respondSkipped('NO_PERSON_FOUND',
+            { rid: traceRid, type, from, subject, attachments, body },
+            { note: '氏名も年齢・性別・単価・最寄駅・経験年数も取れないため人材ではないと判断' })
+        }
+      }
+
       // 文章スキャンフェーズ: roles / industries / workStyle を文章から補完
       const proseFields = extractFromProse(regexBodyText, attachText)
       const resolvedRoles = (analyzed.roles?.length ?? 0) > 0
