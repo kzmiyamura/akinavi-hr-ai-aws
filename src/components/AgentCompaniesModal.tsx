@@ -1,8 +1,8 @@
 import { useState, useCallback, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Building2, ChevronDown, Loader2, X } from 'lucide-react'
-import { fetchAllAgentCompanies, updateAgentCompanyStatus } from '../lib/db/agentCompanies'
-import type { AgentCompany, LicenseStatus } from '../lib/db/agentCompanies'
+import { fetchAllAgentCompanies, updateAgentCompanyStatus, fetchAgentCompanyStats } from '../lib/db/agentCompanies'
+import type { AgentCompany, AgentCompanyStats, LicenseStatus } from '../lib/db/agentCompanies'
 import { sortAgentCompanies, sortMetaLabel, AGENT_SORT_OPTIONS } from '../lib/agentCompanySort'
 import type { AgentSortKey } from '../lib/agentCompanySort'
 
@@ -16,12 +16,42 @@ const LICENSE_STATUS_OPTIONS: { value: LicenseStatus; label: string; color: stri
   { value: 'none', label: '免許なし', color: 'text-red-600' },
 ]
 
+/**
+ * 取引先の傾向を1行に畳んで出す。
+ *
+ * 出す順は「何人来たか → いくらの人か → どんな人か → 手間がかかるか」。
+ * **経歴書添付率が低い会社は毎回こちらから催促が要る**ので、低いときだけ色を変える
+ * （実測: j-tech.co.jp は99人中6%しか経歴書が付いてこない・2026-09-20）。
+ */
+function StatsLine({ s }: { s: AgentCompanyStats }) {
+  const cell = (label: string, value: string, cls = 'text-gray-600') => (
+    <span className="shrink-0">
+      <span className="text-gray-400">{label}</span>
+      <span className={`ml-0.5 font-medium ${cls}`}>{value}</span>
+    </span>
+  )
+  return (
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] mt-0.5">
+      {cell('', `${s.people}人`, 'text-gray-700')}
+      {s.people_7d > 0 && cell('直近7日', `${s.people_7d}人`, 'text-emerald-700')}
+      {s.rate_median != null && cell('単価', `${Math.round(s.rate_median)}万`)}
+      {s.exp_median != null && cell('経験', `${Math.round(s.exp_median)}年`)}
+      {s.age_median != null && cell('年齢', `${Math.round(s.age_median)}歳`)}
+      {cell('経歴書', `${s.attach_pct}%`, s.attach_pct < 30 ? 'text-red-600' : 'text-gray-600')}
+      {cell('自社', `${s.own_pct}%`, s.own_pct < 20 ? 'text-amber-700' : 'text-gray-600')}
+    </div>
+  )
+}
+
 function AgentCompanyRow({
   company,
+  stats,
   metaLabel,
   onUpdate,
 }: {
   company: AgentCompany
+  /** 取引先の傾向。まだ人材が1人も来ていない会社では undefined */
+  stats?: AgentCompanyStats
   /** 並び替えの基準になっている値（日付順のときだけ入る） */
   metaLabel?: string | null
   onUpdate: (status: LicenseStatus, hakenNum?: string, shokaiNum?: string) => void
@@ -59,6 +89,7 @@ function AgentCompanyRow({
             {company.domain}
             {metaLabel && <span className="ml-1.5 text-gray-300">{metaLabel}</span>}
           </span>
+          {stats && <StatsLine s={stats} />}
         </div>
         {company.haken_number && (
           <span className="text-[10px] text-blue-600 shrink-0 hidden sm:block">{company.haken_number}</span>
@@ -133,6 +164,14 @@ function AgentCompaniesContent() {
   const { data: companies = [], isLoading } = useQuery({
     queryKey: ['agent-companies'],
     queryFn: fetchAllAgentCompanies,
+  })
+
+  // 取引先ごとの傾向。集計済みビューなので1社1行（約300行）しか返らない。
+  // 取れなくても会社一覧は出す（傾向が消えるだけ）ので、失敗を画面全体の失敗にしない
+  const { data: statsMap } = useQuery({
+    queryKey: ['agent-company-stats'],
+    queryFn: fetchAgentCompanyStats,
+    staleTime: 5 * 60 * 1000,
   })
 
   const updateMutation = useMutation({
@@ -221,6 +260,7 @@ function AgentCompaniesContent() {
             <AgentCompanyRow
               key={company.domain}
               company={company}
+              stats={statsMap?.get(company.domain)}
               metaLabel={sortMetaLabel(company, sortKey)}
               onUpdate={(status, hakenNum, shokaiNum) =>
                 updateMutation.mutate({ domain: company.domain, status, hakenNum, shokaiNum })

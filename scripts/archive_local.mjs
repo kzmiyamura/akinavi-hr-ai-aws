@@ -117,6 +117,16 @@ const TARGETS = [
       'rp_remoteAvailable:raw_profile->remoteAvailable',
       'rp_hakenOk:raw_profile->hakenOk',
       'rp_roleLevels:raw_profile->_roleLevels',
+      // 案件表。経歴書をAIが転記した結果で、**経歴の見抜きに一番効く材料**
+      // （案件間の空白＝待機/離職、1案件の在籍期間、役割の推移）。
+      // 転送量は実測で全3,005人ぶん 541kB・1人あたり184バイトしかない
+      // （持っているのが309人＝10.3%しかいないため。AI校正を通った人だけ案件表がある）。
+      // 重いのは attachmentText であって projects ではないので、丸ごと持って構わない。
+      'rp_projects:raw_profile->projects',
+      // AI校正がいつ・何を直したか。品質の追跡に使う（2026-09-19 にこれで
+      // 「AIは projects 64.2% / name 13.7% しか変えていない」を測った）
+      'rp_llmCheckedAt:raw_profile->>_llm_checked_at',
+      'rp_llmApplied:raw_profile->_llm_applied',
     ].join(','),
   },
   {

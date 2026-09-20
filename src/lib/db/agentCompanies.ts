@@ -29,6 +29,46 @@ export interface AgentCompany {
   updated_at: string
 }
 
+/**
+ * 取引先ごとの人材の傾向（agent_company_stats ビュー）。
+ *
+ * 取引先によって送ってくる人材の性格がはっきり違うことが実測で分かったので
+ * 会社管理画面に出す（2026-09-20）。実測例:
+ *   i-standard.jp  214人 単価80万 経験26年 53歳 添付41%  自社100% … ベテラン専門
+ *   ai-more.co.jp  140人 単価55万 経験 8年 32歳 添付64%  自社14%  … 若手・又聞き
+ *   j-tech.co.jp    99人 単価70万 経験24年 47歳 **添付6%** 自社97% … 経歴書が来ない
+ *
+ * 「経歴書添付率6%」は毎回こちらから催促が要るという運用コストそのもの。
+ * 取引先に改善を依頼する根拠になる。
+ *
+ * ⚠ 集計はビュー側で閉じている。**画面から candidates を引かないこと**（egress）。
+ */
+export interface AgentCompanyStats {
+  domain: string
+  people: number
+  rate_median: number | null
+  rate_p25: number | null
+  rate_p75: number | null
+  exp_median: number | null
+  age_median: number | null
+  /** 経歴書（解析可能な添付）が付いていた割合 % */
+  attach_pct: number
+  /** 自社要員の割合 %。低いほど又聞き（間に会社が挟まる） */
+  own_pct: number
+  last_seen_at: string | null
+  /** 直近7日の人数。今も動いている取引先かどうか */
+  people_7d: number
+}
+
+/** ドメイン → 傾向 のマップ。1社1行なので全件取っても軽い（約300行） */
+export async function fetchAgentCompanyStats(): Promise<Map<string, AgentCompanyStats>> {
+  const { data, error } = await supabase.from('agent_company_stats').select('*')
+  if (error) throw new Error(`agent_company_stats取得失敗: ${error.message}`)
+  const map = new Map<string, AgentCompanyStats>()
+  for (const row of data ?? []) map.set(row.domain, row as AgentCompanyStats)
+  return map
+}
+
 /** 全社取得（設定画面用）*/
 export async function fetchAllAgentCompanies(): Promise<AgentCompany[]> {
   const { data, error } = await supabase
