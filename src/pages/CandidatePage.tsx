@@ -77,6 +77,40 @@ function formatDate(iso: string) {
   return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
+/**
+ * 長い文章を3行で畳んで、押すと開く。自己PR・エージェントコメント用。
+ *
+ * 実測（2026-09-21・自己PRを持つ368人）: 中央値189字・p90は上限の500字に張り付いている。
+ * 畳まずに出していたため、1人の詳細が自己PRで埋まって他の項目が押し出されていた
+ * （ユーザー指摘「自己prが長い」）。
+ *
+ * 短いものにボタンを出しても邪魔なので、**閾値を超えたときだけ**畳む。
+ * 行数で切るので、文字数ではなく見た目の高さで判断できる（line-clamp-3）。
+ */
+function ClampedText({ text, className = '', threshold = 120 }: {
+  text: string
+  className?: string
+  /** これ以下の長さなら畳まない。3行におおよそ収まる文字数 */
+  threshold?: number
+}) {
+  const [open, setOpen] = useState(false)
+  if (text.length <= threshold) {
+    return <p className={`whitespace-pre-wrap leading-relaxed ${className}`}>{text}</p>
+  }
+  return (
+    <div>
+      <p className={`whitespace-pre-wrap leading-relaxed ${open ? '' : 'line-clamp-3'} ${className}`}>{text}</p>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="mt-0.5 text-[10px] text-gray-500 hover:text-gray-700 underline"
+      >
+        {open ? '閉じる' : `続きを読む（${text.length}字）`}
+      </button>
+    </div>
+  )
+}
+
 /** 常駐AIが処理対象にする登録からの日数。ワーカーの SHADOW_LOOKBACK_DAYS と同じ値。
  *  これより古い人材はキューに入らないため「待ち」ではなく「ルールベースのみで確定」。
  *  ワーカー側を変えたらここも合わせること */
@@ -543,13 +577,13 @@ export function CandidateProfileFields({
         {selfPR && (
           <div className="mt-1.5 rounded-md bg-blue-50 border border-blue-100 px-3 py-2">
             <p className="text-xs font-medium text-blue-700 mb-0.5">自己PR</p>
-            <p className="text-xs text-blue-900 whitespace-pre-wrap leading-relaxed">{selfPR as string}</p>
+            <ClampedText text={selfPR as string} className="text-xs text-blue-900" />
           </div>
         )}
         {agentComment && (
           <div className="mt-1.5 rounded-md bg-amber-50 border border-amber-100 px-3 py-2">
             <p className="text-xs font-medium text-amber-700 mb-0.5">エージェントコメント</p>
-            <p className="text-xs text-amber-900 whitespace-pre-wrap leading-relaxed">{agentComment}</p>
+            <ClampedText text={agentComment} className="text-xs text-amber-900" />
           </div>
         )}
 

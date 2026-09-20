@@ -69,8 +69,8 @@ function affinity(
 }
 
 describe('match-batch の定義表が読めていること', () => {
-  it('23ラベルすべてに作用対象と権限がある', () => {
-    expect(Object.keys(AXIS)).toHaveLength(23)
+  it('25ラベルすべてに作用対象と権限がある', () => {
+    expect(Object.keys(AXIS)).toHaveLength(25)
     expect(AXIS['PMO']).toEqual({ object: '仕組み', authority: 1 })
     expect(AXIS['プロジェクトマネージャー']).toEqual({ object: '成果', authority: 4 })
     // 2026-09-15 追加。フロントエンド・バックエンドと同列であること
@@ -79,6 +79,18 @@ describe('match-batch の定義表が読めていること', () => {
     expect(AXIS['プロダクトマネージャー']).toEqual({ object: '製品', authority: 4 })
     expect(AXIS['SRE']).toEqual({ object: 'サービス', authority: 3 })
     expect(AXIS['社内SE']).toEqual({ object: '事業', authority: 2 })
+    // 2026-09-21 追加。Web制作・コンテンツ側。エンジニア職しか無く、
+    // 制作ディレクターに役割が1つも付いていなかった（ユーザー指摘）。
+    // 実測で希望単価が分かれた2つだけ足した（ディレクター78.5万 / マーケター90万 /
+    // 役割持ち全体70万）。デザイナーは70万で分かれないため足していない。
+    expect(AXIS['ディレクター']).toEqual({ object: '成果', authority: 3 })
+    expect(AXIS['マーケター']).toEqual({ object: '事業', authority: 2 })
+  })
+
+  it('ディレクターはデザイナーを含めていない（分かれない役割を足さない）', () => {
+    // 実測: デザイナー45人・単価中央値70万＝役割持ち全体と同じ。
+    // 印を付けても営業の判断が変わらないので足さない（CLAUDE.md の方針）
+    expect(AXIS['デザイナー']).toBeUndefined()
   })
 
   it('PM と PdM は対象が違う（同じマスに置かない）', () => {
