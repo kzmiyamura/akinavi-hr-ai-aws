@@ -12064,7 +12064,16 @@ Deno.serve(async (req: Request) => {
         if (allBlockBoxUrls.length > 0) await appendToBoxSpreadsheet(allBlockBoxUrls)
 
         // agent_companies に会社名・ドメイン・許可番号を upsert（fire and forget）
-        {
+        //
+        // ⚠ 人材を1人も登録できなかったメールでは作らない。
+        //   agent_companies は **入口だけあって出口が無い表**で、人材は7日で消えるのに
+        //   会社は永久に残る。スパムの送信元が「派遣・紹介会社」として居座る。
+        //   実害（2026-09-21 ユーザー指摘）: 画面に「Amazon.com, Inc.」が3社並んでいた。
+        //   送信元は mail17.hytjy.com / mail08.hytjy.com / mail03.wxyysb.com という
+        //   フィッシングのドメインで、いずれも 1人・経歴書0%・自社0%。
+        //   実測: 242社のうち16社がこの型（今いる人材が全員「人ではない」11社＋
+        //   有名企業名を騙るもの5社）。
+        if (results.length > 0) {
           const emailDomain = from ? from.split('@')[1]?.toLowerCase().trim() : null
           // 送信元会社名を末尾2000字から抽出（候補者名でなくエージェント会社名）(#96)
           const sigAreaMulti = body.slice(-2000)
