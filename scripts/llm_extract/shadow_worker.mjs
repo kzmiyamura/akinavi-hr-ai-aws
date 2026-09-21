@@ -53,7 +53,10 @@ const BODY_BATCH_SIZE = Number(process.env.SHADOW_BODY_BATCH ?? 5)
 // この上限が実質的な支出コントロールになる。2026-08-10 に 400→100。
 // 根拠: 同日 regex 側の skillYears を修正（回帰 2Pass→8Pass）して素の品質が上がり、
 // AI補正の限界効用が下がった。新しい順に処理するので少数でも価値は落ちにくい
-const MAX_PER_DAY = Number(process.env.SHADOW_MAX_PER_DAY ?? 100)
+const MAX_PER_DAY_DEFAULT = Number(process.env.SHADOW_MAX_PER_DAY ?? 100)
+/** 実際に使う日次上限。毎サイクル app_config.shadow_max_per_day から読み直す。
+ *  DB が読めないときは上の既定にそのまま落ちる */
+let effectiveMaxPerDay = MAX_PER_DAY_DEFAULT
 // 提案所見の日次上限。プロフィール解析とは別枠にする。
 // 同じ枠を共有していたとき、到着750件/日の解析が先に100枠を食い切り、
 // 所見は毎日の余り（実測: 8/13 は11件、8/14 は0件）しか作れなかった。
@@ -401,12 +404,44 @@ async function skillFilterClause() {
   return { clause: buildSkillFilterClause(list), list }
 }
 
+/**
+ * 日次上限を app_config から読む（env の SHADOW_MAX_PER_DAY より優先）。
+ *
+ * env で持っていると、値を変えるたびに pm2 を触って再起動することになる。
+ * 常駐ワーカーを止めるのは事故のもとなので DB から読む。
+ * `sender_daily_limit` を同じ理由で app_config に移した前例がある（CLAUDE.md §6）。
+ *
+ * 実測（2026-09-21）: 到着が1日約1,500人に増えたのに上限100のままで、
+ * 直近3日の876人中 待ち277人・絞込対象外308人が積み上がっていた。
+ * **上げるときは少しずつ**。Max枠の消費が増えるので、1日回して所要時間と
+ * 失敗率を見てから次の段に上げること。
+ *
+ * 5分ごとに読むが、app_config は1行なので負荷は無視できる。
+ * 読めない・不正な値なら env / 既定にそのまま落ちる（安全側）。
+ */
+async function maxPerDay() {
+  try {
+    const rows = await rest('app_config?select=value&key=eq.shadow_max_per_day')
+    let v = rows?.[0]?.value
+    for (let i = 0; i < 2 && typeof v === 'string'; i++) { try { v = JSON.parse(v) } catch { break } }
+    const n = Number(v)
+    if (Number.isFinite(n) && n > 0 && n <= 5000) return Math.floor(n)
+  } catch { /* 読めないときは env / 既定を使う */ }
+  return MAX_PER_DAY_DEFAULT
+}
+
 async function cycle() {
   rollDay()
-  if (state.dayCount >= MAX_PER_DAY) { log(`日次上限${MAX_PER_DAY}到達、スキップ`); return }
+  // 日次上限を DB から読み直す。pm2 を止めずに増減できるようにするため
+  const nextMax = await maxPerDay()
+  if (nextMax !== effectiveMaxPerDay) {
+    log(`日次上限を変更: ${effectiveMaxPerDay} → ${nextMax}（app_config.shadow_max_per_day）`)
+    effectiveMaxPerDay = nextMax
+  }
+  if (state.dayCount >= effectiveMaxPerDay) { log(`日次上限${effectiveMaxPerDay}到達、スキップ`); return }
   // 上限を24時間に均す。均さないと能力いっぱいで走って朝の数時間で使い切り、
   // 営業時間中に届いた人材が当日処理されない（新しい順にした意味が消える）
-  const allowed = pacedAllowance(MAX_PER_DAY)
+  const allowed = pacedAllowance(effectiveMaxPerDay)
   if (state.dayCount >= allowed) {
     log(`ペース配分により待機（この時刻の上限${allowed}件・処理済${state.dayCount}件）`)
     return
@@ -429,7 +464,7 @@ async function cycle() {
   // 多く取ると本文の一括抽出（有料）をその人数分行った上で、ペース配分で途中中断し、
   // 使わなかった抽出結果を捨てて次サイクルで同じ人を再抽出する＝払い直しになる
   // （ペース配分を入れた際に作り込んでしまった。15件抽出して1件処理という状態・2026-08-11）
-  const room = Math.max(0, Math.min(MAX_PER_DAY, allowed) - state.dayCount)
+  const room = Math.max(0, Math.min(effectiveMaxPerDay, allowed) - state.dayCount)
   const take = Math.min(MAX_PER_CYCLE, room)
   if (take <= 0) { log('ペース配分により待機（今サイクルの処理枠なし）'); return }
   const { clause: skillClause, list: skillList } = await skillFilterClause()
@@ -468,9 +503,9 @@ async function cycle() {
   }
 
   for (const c of rows) {
-    if (state.dayCount >= MAX_PER_DAY) { log(`日次上限${MAX_PER_DAY}到達、以降は次回`); break }
+    if (state.dayCount >= effectiveMaxPerDay) { log(`日次上限${effectiveMaxPerDay}到達、以降は次回`); break }
     // サイクル内でもペース上限を超えたら止める（1サイクル15件で使い切らないため）
-    if (state.dayCount >= pacedAllowance(MAX_PER_DAY)) { log('ペース配分により中断、以降は次回'); break }
+    if (state.dayCount >= pacedAllowance(effectiveMaxPerDay)) { log('ペース配分により中断、以降は次回'); break }
     if (givenUp(c)) {
       log(`打ち切り（${MAX_ATTEMPTS}回失敗）: ${c.name}`)
       await markLlmChecked(c, 'failed').catch(() => {})
@@ -500,7 +535,7 @@ const PROJ_SELECT = 'id,title,client,required_skills,budget_min,budget_max,start
   'remote_policy,contract_type,headcount,workload,settlement_min,settlement_max,role_summary,industry,raw_data,created_at'
 
 async function projectCycle() {
-  if (state.dayCount >= MAX_PER_DAY) return
+  if (state.dayCount >= effectiveMaxPerDay) return
   if (!state.projWatermark) { state.projWatermark = new Date().toISOString(); saveState() }
   const rows = await rest(
     `projects?select=${PROJ_SELECT}&data_env=eq.${DATA_ENV}&created_at=gt.${encodeURIComponent(state.projWatermark)}` +
@@ -544,7 +579,7 @@ async function projectCycle() {
 const INTERPRET_MAX_PER_CYCLE = 3
 
 async function projectInterpretCycle() {
-  if (state.dayCount >= MAX_PER_DAY) return
+  if (state.dayCount >= effectiveMaxPerDay) return
   const rows = await rest(
     `projects?select=${PROJ_SELECT}&data_env=eq.${DATA_ENV}&status=eq.open` +
     `&raw_data->>aiInterpretation=is.null&order=created_at.desc&limit=${INTERPRET_MAX_PER_CYCLE}`)
@@ -739,7 +774,7 @@ function isPermanentBoxFailure(reason) {
 }
 
 async function boxQueue() {
-  if (state.dayCount >= MAX_PER_DAY) return
+  if (state.dayCount >= effectiveMaxPerDay) return
   // ① 手動依頼（UIボタン）を最優先
   const manual = await rest(
     `candidates?select=${BOX_SELECT}&box_status=eq.fetch_requested&box_attempts=lt.${BOX_MAX_ATTEMPTS}` +
@@ -776,13 +811,13 @@ async function boxQueue() {
     `&created_at=gte.${encodeURIComponent(since)}` +
     `&order=created_at.desc&limit=${AUTO_BOX_PER_POLL}`)) ?? []
   for (const c of [...manual, ...auto]) {
-    if (state.dayCount >= MAX_PER_DAY) return
+    if (state.dayCount >= effectiveMaxPerDay) return
     await processBoxCandidate(c)
   }
 }
 
 log(`ワーカー起動 mode=${APPLY ? '本番上書き' : 'シャドー記録のみ'} env=${DATA_ENV} ` +
-  `方式=キュー(新しい順・直近${LOOKBACK_DAYS}日) 上限=${MAX_PER_CYCLE}/cycle, ${MAX_PER_DAY}/day`)
+  `方式=キュー(新しい順・直近${LOOKBACK_DAYS}日) 上限=${MAX_PER_CYCLE}/cycle, ${effectiveMaxPerDay}/day`)
 // 前回クラッシュで 'fetching' のまま残った依頼を復帰させる
 await rest(`candidates?box_status=eq.fetching`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ box_status: 'fetch_requested' }) }).catch(() => {})
 // 停止・クラッシュで進行中のまま残った _llm_stage を掃除する。

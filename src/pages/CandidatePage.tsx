@@ -127,7 +127,8 @@ const AI_LOOKBACK_DAYS = 3
  * | ワーカーが書く印                      | 意味                    | 表示          |
  * |---|---|---|
  * | 印なし・キュー対象                     | 未処理・順番待ち          | AI校正待ち     |
- * | 印なし・キュー対象外（3日超/絞込外/demo） | 校正しない（正常）        | 表示なし       |
+ * | 印なし・スキル絞込の対象外              | AIが最初から見ていない     | AI対象外       |
+ * | 印なし・3日超 / demo                   | 校正しない（正常）        | 表示なし       |
  * | `_llm_attempts>=1` かつ未完            | 失敗・次サイクルで再試行   | AI校正エラー   |
  * | `_llm_stage='body'`                   | 本文済み・添付解析中       | AI校正中       |
  * | `_llm_checked_at` + `'done'`          | 完了                     | 表示なし       |
@@ -178,9 +179,17 @@ function aiCorrectionStage(c: {
   // スキル絞込が有効な場合、対象外の人材はキューに入らないので「待ち」を出さない。
   // 判定はワーカーの二本立て（skills列の一致 or 本文の語一致）に合わせるが、
   // 一覧行は本文（raw_profile.text）を持たないため skills 列だけで近似する
+  // スキル絞込が有効な場合、対象外の人材はキューに入らない。
+  // **以前はここで何も出していなかった**が、それだと営業から見て
+  // 「AIが見た結果ルールベースで確定した人」と「AIが最初から見ていない人」が区別できない。
+  // 実測（2026-09-21）: 直近3日の876人のうち、絞込の対象外が308人。
+  // 待ち（277人）より多い。消さずに印を付けて営業に見せる（CLAUDE.md の方針）。
   if (filterSkills?.length) {
     const text = typeof c.raw_profile?.text === 'string' ? (c.raw_profile.text as string) : null
-    if (!matchesSkillFilter(filterSkills, c.skills, text)) return null
+    if (!matchesSkillFilter(filterSkills, c.skills, text)) {
+      return { label: 'AI対象外', cls: 'bg-slate-50 text-slate-500 border-slate-200',
+        title: `常駐AIの対象スキル（${filterSkills.join('・')}）に当たらないため、AIは見ていません。ルールベース解析のみです` }
+    }
   }
   return { label: 'AI校正待ち', cls: 'bg-gray-100 text-gray-500 border-gray-200',
     title: 'ルールベース解析のみ。常駐AIの順番待ちです' }
