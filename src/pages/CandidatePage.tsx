@@ -12,6 +12,7 @@ import { displayCandidateName, isUsableCandidateName } from '../lib/candidateNam
 import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills, fetchCandidateById } from '../lib/db/candidates'
 import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
+import { COMMERCIAL_FLOW_OPTIONS, EMPLOYMENT_TYPE_OPTIONS } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -225,12 +226,21 @@ interface FilterDraft {
   skillYearFilters: SkillYearFilter[]
   prefecture: string
   expMin: string
+  // ── 取引条件（2026-09-21 追加）。データは前からあったのに絞れなかった ──
+  rateMax: string
+  rateMin: string
+  commercialFlow: string
+  employmentType: string
   /** 表示優先スキル（この端末だけの上書き）。null = 設定画面の既定に従う */
   prioritySkills: string[] | null
   prioritySkillInput: string
 }
 
-const EMPTY_DRAFT: FilterDraft = { name: '', skillInput: '', skills: [], skillYearFilters: [], prefecture: '', expMin: '', prioritySkills: null, prioritySkillInput: '' }
+const EMPTY_DRAFT: FilterDraft = {
+  name: '', skillInput: '', skills: [], skillYearFilters: [], prefecture: '', expMin: '',
+  rateMax: '', rateMin: '', commercialFlow: '', employmentType: '',
+  prioritySkills: null, prioritySkillInput: '',
+}
 
 /** "Java 10年" / "Java10年以上" → {skill:"Java", minYears:10} に変換。マッチしなければ null */
 function parseSkillYear(input: string): SkillYearFilter | null {
@@ -1625,6 +1635,64 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                 </div>
               </div>
 
+              {/* 取引条件（2026-09-21 追加）。
+                  単価・商流・雇用形態はデータとして前から持っていたのに絞り込めず、
+                  営業が一番使う条件が抜けていた。
+                  ⚠ 単価は「55～60万」のような自由記述なので、数値化できない人がいる。
+                     **その人たちは単価で絞っても消さない**（消すと取りこぼしになる）。
+                     商流・雇用形態は逆で、読み取れない人は通さない（曖昧だと意味が無いため）。 */}
+              <div className="pt-4 border-t border-gray-200 space-y-3">
+                <p className="text-xs font-medium text-gray-600">取引条件</p>
+
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">希望単価（万円）</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number" min={20} max={300}
+                      value={filterDraft.rateMin}
+                      onChange={e => setFilterDraft(prev => ({ ...prev, rateMin: e.target.value }))}
+                      placeholder="下限"
+                      className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-500">〜</span>
+                    <input
+                      type="number" min={20} max={300}
+                      value={filterDraft.rateMax}
+                      onChange={e => setFilterDraft(prev => ({ ...prev, rateMax: e.target.value }))}
+                      placeholder="上限"
+                      className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-600">万</span>
+                  </div>
+                  <p className="mt-1 text-[10px] text-gray-400">単価が書かれていない人も残します</p>
+                </div>
+
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <label className="block text-xs text-gray-500 mb-1">商流</label>
+                    <select
+                      value={filterDraft.commercialFlow}
+                      onChange={e => setFilterDraft(prev => ({ ...prev, commercialFlow: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">指定なし</option>
+                      {COMMERCIAL_FLOW_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs text-gray-500 mb-1">雇用形態</label>
+                    <select
+                      value={filterDraft.employmentType}
+                      onChange={e => setFilterDraft(prev => ({ ...prev, employmentType: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">指定なし</option>
+                      {EMPLOYMENT_TYPE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
               {/* 表示優先スキル（この端末だけの設定・2026-08-21 ユーザー要望）。
                   上の検索条件と違い、一覧を「まず誰を読み込むか」に効く常設の設定なので
                   区切って置く。未設定なら設定画面（AI校正の優先スキル）の値をそのまま使う。 */}
@@ -1745,6 +1813,10 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     if (skillYearFilters.length > 0) filter.skillYearFilters = skillYearFilters
                     if (filterDraft.prefecture) filter.prefecture = filterDraft.prefecture
                     if (filterDraft.expMin.trim() !== '') filter.expMin = parseInt(filterDraft.expMin, 10)
+                    if (filterDraft.rateMax.trim() !== '') filter.rateMax = parseInt(filterDraft.rateMax, 10)
+                    if (filterDraft.rateMin.trim() !== '') filter.rateMin = parseInt(filterDraft.rateMin, 10)
+                    if (filterDraft.commercialFlow) filter.commercialFlow = filterDraft.commercialFlow
+                    if (filterDraft.employmentType) filter.employmentType = filterDraft.employmentType
                     // 表示優先スキルも入力途中の語を取り込んで確定し、端末に保存する
                     // 入力欄に打ちっぱなし（Enter未押下）の語も拾う。
                     // 既定のまま何も打っていないときだけ null（＝設定画面に従う）を保つ

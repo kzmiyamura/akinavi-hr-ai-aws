@@ -524,7 +524,26 @@ export interface CandidateFilter {
   skillYearFilters?: SkillYearFilter[]
   prefecture?: string
   expMin?: number
+  // ── 取引条件（2026-09-21 追加）────────────────────────────────────────
+  // データは前から持っていたのに絞り込めなかった。営業が一番使う条件がこれ。
+  /** 希望単価の上限（万円）。「55～60万」のような自由記述は下限で判定する。
+   *  **単価が読み取れない人は除外しない**（自由記述で数値化できない人が一定数いるため、
+   *  絞った瞬間に全員消えると取りこぼしになる） */
+  rateMax?: number
+  /** 希望単価の下限（万円）。同上 */
+  rateMin?: number
+  /** 商流。'自社' / '1社先' 等の完全一致。こちらは読み取れない人を通さない
+   *  （派遣の適法性・中抜きの話なので、曖昧なものを混ぜると意味が無い） */
+  commercialFlow?: string
+  /** 雇用形態。'正社員' / 'フリーランス' 等の完全一致 */
+  employmentType?: string
 }
+
+/** 商流の選択肢。inbound-email が入れる値に合わせる（'自社' または 'N社先'） */
+export const COMMERCIAL_FLOW_OPTIONS = ['自社', '1社先', '2社先', '3社先'] as const
+
+/** 雇用形態の選択肢。prompts.mjs の employmentType と同じ集合 */
+export const EMPLOYMENT_TYPE_OPTIONS = ['正社員', '契約社員', '派遣社員', '業務委託', 'フリーランス'] as const
 
 /** RPC に渡すスキル一覧（通常スキル + 年数付きスキルのスキル名） */
 function rpcSkills(filter: CandidateFilter): string[] | null {
@@ -549,6 +568,10 @@ export async function filterCandidates(
     p_exp_min:    filter.expMin     ?? null,
     p_limit:      limit,
     p_offset:     offset,
+    p_rate_max:         filter.rateMax         ?? null,
+    p_rate_min:         filter.rateMin         ?? null,
+    p_commercial_flow:  filter.commercialFlow  ?? null,
+    p_employment_type:  filter.employmentType  ?? null,
   })
   if (error) throw new Error(`人材のフィルタリングに失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
@@ -559,12 +582,18 @@ export async function filterCandidateCount(
   dataEnv: DataEnv,
   filter: CandidateFilter,
 ): Promise<number> {
+  // ⚠ 一覧（filter_candidates）と**同じ条件**を渡すこと。
+  //   片方だけ直すと「該当3件」と出ているのに一覧に30件並ぶ状態になる
   const { data, error } = await supabase.rpc('count_filter_candidates', {
     p_data_env:   dataEnv,
     p_name:       filter.name       ?? null,
     p_skills:     rpcSkills(filter),
     p_prefecture: filter.prefecture ?? null,
     p_exp_min:    filter.expMin     ?? null,
+    p_rate_max:         filter.rateMax         ?? null,
+    p_rate_min:         filter.rateMin         ?? null,
+    p_commercial_flow:  filter.commercialFlow  ?? null,
+    p_employment_type:  filter.employmentType  ?? null,
   })
   if (error) throw new Error(`候補者数の取得に失敗しました: ${error.message}`)
   return (data as number) ?? 0
