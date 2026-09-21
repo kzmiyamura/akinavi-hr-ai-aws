@@ -14,6 +14,7 @@ import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandid
 import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
 import { COMMERCIAL_FLOW_OPTIONS, EMPLOYMENT_TYPE_OPTIONS, WORK_STYLE_OPTIONS } from '../lib/db/candidates'
 import { fetchSubmissionBadges } from '../lib/db/submissions'
+import { fetchSkillRateMarket, compareToMarket } from '../lib/db/skillRateMarket'
 import type { SubmissionBadge } from '../lib/db/submissions'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
@@ -1239,6 +1240,14 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     refetchInterval: 30_000,
   })
 
+  // スキル別の単価相場。424スキル・数十バイト/行なので丸ごと持って使い回す
+  // （スキルごとに問い合わせると人材1人あたり何十回も往復する）
+  const { data: skillRateMarket } = useQuery({
+    queryKey: ['skill-rate-market'],
+    queryFn: fetchSkillRateMarket,
+    staleTime: 30 * 60_000,
+  })
+
   const { data: agentDomainMap } = useQuery({
     queryKey: ['agentDomainMap'],
     queryFn: fetchAgentDomainMap,
@@ -2369,6 +2378,31 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                             {(selectedCandidate as unknown as { desired_rate?: string }).desired_rate}
                           </span>
                         )}
+                        {/* 相場との比較。単価交渉の根拠をその場に出す。
+                            今までは希望単価だけが出ていて、高いのか安いのかは営業の感覚任せだった。
+                            基準は**持っているスキルのうち一番相場が高いもの**（営業が持ち出す武器） */}
+                        {(() => {
+                          const cmp = compareToMarket(
+                            (selectedCandidate as unknown as { desired_rate?: string }).desired_rate,
+                            selectedCandidate.skills as string[] | null,
+                            skillRateMarket,
+                          )
+                          if (!cmp) return null
+                          const high = cmp.diff > 5
+                          const low = cmp.diff < -5
+                          return (
+                            <span
+                              className={`text-[10px] rounded px-1.5 py-0.5 ${
+                                high ? 'bg-orange-50 text-orange-700'
+                                  : low ? 'bg-sky-50 text-sky-700'
+                                  : 'bg-gray-100 text-gray-500'}`}
+                              title={`${cmp.skill} の相場は中央値${cmp.median}万。この人の希望は${cmp.rate}万`}
+                            >
+                              相場{cmp.median}万（{cmp.skill}）
+                              {high ? ` +${cmp.diff}` : low ? ` ${cmp.diff}` : ' 並'}
+                            </span>
+                          )
+                        })()}
                       </div>
                     </div>
                     {/* 携帯で横スクロールになっていた（2026-09-03 指摘）。
