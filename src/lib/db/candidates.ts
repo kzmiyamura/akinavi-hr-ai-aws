@@ -537,7 +537,18 @@ export interface CandidateFilter {
   commercialFlow?: string
   /** 雇用形態。'正社員' / 'フリーランス' 等の完全一致 */
   employmentType?: string
+  /** この日までに稼働できる人（YYYY-MM-DD）。営業が案件を受けて最初に確認する条件。
+   *  「即日」は今日として扱う。稼働時期が読み取れない人は**残す**
+   *  （87%は埋まっているが「週5日」のように時期でない値の行もあるため） */
+  availableBy?: string
+  /** 常駐・リモート。'常駐可' / '併用可' / 'リモート希望'。読み取れない人は通さない */
+  workStyle?: string
+  /** 派遣可否。派遣案件に出せるかどうか */
+  hakenOk?: boolean
 }
+
+/** 常駐・リモートの選択肢。deriveWorkStyleTag が入れる値に合わせる */
+export const WORK_STYLE_OPTIONS = ['常駐可', '併用可', 'リモート希望'] as const
 
 /** 商流の選択肢。inbound-email が入れる値に合わせる（'自社' または 'N社先'） */
 export const COMMERCIAL_FLOW_OPTIONS = ['自社', '1社先', '2社先', '3社先'] as const
@@ -572,6 +583,9 @@ export async function filterCandidates(
     p_rate_min:         filter.rateMin         ?? null,
     p_commercial_flow:  filter.commercialFlow  ?? null,
     p_employment_type:  filter.employmentType  ?? null,
+    p_available_by:     filter.availableBy     ?? null,
+    p_work_style:       filter.workStyle       ?? null,
+    p_haken_ok:         filter.hakenOk         ?? null,
   })
   if (error) throw new Error(`人材のフィルタリングに失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
@@ -594,6 +608,9 @@ export async function filterCandidateCount(
     p_rate_min:         filter.rateMin         ?? null,
     p_commercial_flow:  filter.commercialFlow  ?? null,
     p_employment_type:  filter.employmentType  ?? null,
+    p_available_by:     filter.availableBy     ?? null,
+    p_work_style:       filter.workStyle       ?? null,
+    p_haken_ok:         filter.hakenOk         ?? null,
   })
   if (error) throw new Error(`候補者数の取得に失敗しました: ${error.message}`)
   return (data as number) ?? 0

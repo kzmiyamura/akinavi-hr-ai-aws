@@ -12,7 +12,7 @@ import { displayCandidateName, isUsableCandidateName } from '../lib/candidateNam
 import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills, fetchCandidateById } from '../lib/db/candidates'
 import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
-import { COMMERCIAL_FLOW_OPTIONS, EMPLOYMENT_TYPE_OPTIONS } from '../lib/db/candidates'
+import { COMMERCIAL_FLOW_OPTIONS, EMPLOYMENT_TYPE_OPTIONS, WORK_STYLE_OPTIONS } from '../lib/db/candidates'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -240,6 +240,11 @@ interface FilterDraft {
   rateMin: string
   commercialFlow: string
   employmentType: string
+  /** この日までに稼働できる人（YYYY-MM-DD）。営業が案件を受けて最初に確認する条件 */
+  availableBy: string
+  workStyle: string
+  /** '' = 指定なし / 'true' = 派遣可のみ */
+  hakenOk: string
   /** 表示優先スキル（この端末だけの上書き）。null = 設定画面の既定に従う */
   prioritySkills: string[] | null
   prioritySkillInput: string
@@ -248,6 +253,7 @@ interface FilterDraft {
 const EMPTY_DRAFT: FilterDraft = {
   name: '', skillInput: '', skills: [], skillYearFilters: [], prefecture: '', expMin: '',
   rateMax: '', rateMin: '', commercialFlow: '', employmentType: '',
+  availableBy: '', workStyle: '', hakenOk: '',
   prioritySkills: null, prioritySkillInput: '',
 }
 
@@ -1700,6 +1706,63 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     </select>
                   </div>
                 </div>
+
+                {/* 稼働可能時期。営業が案件を受けて最初に確認する条件。
+                    データは87%埋まっている（3,076人中2,674人・即日871人）のに絞れなかった。
+                    「即日」は今日として扱う。「週5日」のように時期でない値の人は残す */}
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">稼働可能時期</label>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setFilterDraft(prev => ({
+                        ...prev,
+                        availableBy: prev.availableBy === new Date().toISOString().slice(0, 10)
+                          ? '' : new Date().toISOString().slice(0, 10),
+                      }))}
+                      className={`px-2.5 py-1.5 rounded-lg border text-xs ${
+                        filterDraft.availableBy === new Date().toISOString().slice(0, 10)
+                          ? 'bg-blue-50 border-blue-300 text-blue-700'
+                          : 'bg-white border-gray-300 text-gray-600'}`}
+                    >
+                      即日のみ
+                    </button>
+                    <input
+                      type="date"
+                      value={filterDraft.availableBy}
+                      onChange={e => setFilterDraft(prev => ({ ...prev, availableBy: e.target.value }))}
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-600">までに稼働可</span>
+                  </div>
+                  <p className="mt-1 text-[10px] text-gray-400">時期が書かれていない人も残します</p>
+                </div>
+
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <label className="block text-xs text-gray-500 mb-1">常駐・リモート</label>
+                    <select
+                      value={filterDraft.workStyle}
+                      onChange={e => setFilterDraft(prev => ({ ...prev, workStyle: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">指定なし</option>
+                      {WORK_STYLE_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs text-gray-500 mb-1">派遣</label>
+                    <select
+                      value={filterDraft.hakenOk}
+                      onChange={e => setFilterDraft(prev => ({ ...prev, hakenOk: e.target.value }))}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">指定なし</option>
+                      <option value="true">派遣可のみ</option>
+                      <option value="false">派遣不可のみ</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
               {/* 表示優先スキル（この端末だけの設定・2026-08-21 ユーザー要望）。
@@ -1826,6 +1889,9 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                     if (filterDraft.rateMin.trim() !== '') filter.rateMin = parseInt(filterDraft.rateMin, 10)
                     if (filterDraft.commercialFlow) filter.commercialFlow = filterDraft.commercialFlow
                     if (filterDraft.employmentType) filter.employmentType = filterDraft.employmentType
+                    if (filterDraft.availableBy) filter.availableBy = filterDraft.availableBy
+                    if (filterDraft.workStyle) filter.workStyle = filterDraft.workStyle
+                    if (filterDraft.hakenOk) filter.hakenOk = filterDraft.hakenOk === 'true'
                     // 表示優先スキルも入力途中の語を取り込んで確定し、端末に保存する
                     // 入力欄に打ちっぱなし（Enter未押下）の語も拾う。
                     // 既定のまま何も打っていないときだけ null（＝設定画面に従う）を保つ
