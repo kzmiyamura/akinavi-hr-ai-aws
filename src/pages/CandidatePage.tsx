@@ -13,6 +13,8 @@ import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidat
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills, fetchCandidateById } from '../lib/db/candidates'
 import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
 import { COMMERCIAL_FLOW_OPTIONS, EMPLOYMENT_TYPE_OPTIONS, WORK_STYLE_OPTIONS } from '../lib/db/candidates'
+import { fetchSubmissionBadges } from '../lib/db/submissions'
+import type { SubmissionBadge } from '../lib/db/submissions'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -366,6 +368,7 @@ export function CandidateProfileFields({
   onToggleExpand,
   detailMode = false,
   agentDomainMap,
+  submissionBadges,
 }: {
   c: Candidate
   isExpanded: boolean
@@ -373,6 +376,8 @@ export function CandidateProfileFields({
   /** true のとき常に全表示（詳細画面） */
   detailMode?: boolean
   agentDomainMap?: Map<string, AgentCompany>
+  /** 人材ID → 提案の件数と状態。一覧の親がまとめて引いて渡す（行ごとに問い合わせない） */
+  submissionBadges?: Map<string, SubmissionBadge>
 }) {
   const raw = getRaw(c)
   // 「AI校正待ち」バッジの表示判定に使う（ワーカーの絞込対象外なら待ちを出さない）。
@@ -429,6 +434,24 @@ export function CandidateProfileFields({
         {c.duplicate_flag && (
           <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
         )}
+        {/* 提案済みの印。営業が「この人もう出したっけ」を毎回思い出していた。
+            一番進んでいる状態で色を変える（決定＞送付済＞下書き＞見送り） */}
+        {(() => {
+          const sb = submissionBadges?.get(c.id)
+          if (!sb) return null
+          const style = sb.best === 'accepted' ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+            : sb.best === 'sent' ? 'bg-blue-100 text-blue-700 border-blue-200'
+            : sb.best === 'rejected' ? 'bg-gray-100 text-gray-500 border-gray-200'
+            : 'bg-violet-50 text-violet-700 border-violet-200'
+          const label = sb.best === 'accepted' ? '決定' : sb.best === 'sent' ? '提案済'
+            : sb.best === 'rejected' ? '見送り' : '提案候補'
+          return (
+            <span className={`text-xs border rounded px-2 py-0.5 ${style}`}
+              title={`この人材への提案 ${sb.count}件（一番進んでいる状態: ${label}）`}>
+              {label}{sb.count > 1 ? ` ${sb.count}` : ''}
+            </span>
+          )
+        })()}
         {(() => {
           const st = aiCorrectionStage(c, badgeFilterSkills ?? null)
           return st && (
@@ -1314,6 +1337,17 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     [isFiltered, filterInfiniteQuery.data, browseInfiniteQuery.data],
   )
 
+  // 表示中の人材について、提案済みかどうかをまとめて引く。
+  // 列は candidate_id と status だけ（ai_raw まで引くと100人ぶんで転送量が跳ねる）。
+  // queryKey に件数を入れているので、スクロールで読み込むたびに引き直す。
+  const visibleCandidateIds = useMemo(() => candidates.map((c: Candidate) => c.id), [candidates])
+  const { data: submissionBadges } = useQuery({
+    queryKey: ['submission-badges', dataEnv, visibleCandidateIds.length],
+    queryFn: () => fetchSubmissionBadges(visibleCandidateIds, dataEnv),
+    enabled: visibleCandidateIds.length > 0,
+    staleTime: 60_000,
+  })
+
   // 全件数: offset=0 の初回ページ取得と同時に返ってくる totalCount を優先利用（HTTPラウンドトリップ削減）
   const countFromPages = browseInfiniteQuery.data?.pages[0]?.totalCount ?? null
   const { data: fetchedCount = 0 } = useQuery({
@@ -2196,6 +2230,24 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         {c.duplicate_flag && (
                           <span className="text-[10px] bg-yellow-100 text-yellow-700 rounded px-1 shrink-0">重複</span>
                         )}
+                        {/* 提案済みの印。営業が「この人もう出したっけ」を毎回思い出していた。
+                            親でまとめて引いた Map から引く（行ごとに問い合わせない） */}
+                        {(() => {
+                          const sb = submissionBadges?.get(c.id)
+                          if (!sb) return null
+                          const style = sb.best === 'accepted' ? 'bg-emerald-100 text-emerald-700'
+                            : sb.best === 'sent' ? 'bg-blue-100 text-blue-700'
+                            : sb.best === 'rejected' ? 'bg-gray-100 text-gray-500'
+                            : 'bg-violet-50 text-violet-700'
+                          const label = sb.best === 'accepted' ? '決定' : sb.best === 'sent' ? '提案済'
+                            : sb.best === 'rejected' ? '見送り' : '提案候補'
+                          return (
+                            <span className={`text-[10px] rounded px-1 shrink-0 ${style}`}
+                              title={`提案 ${sb.count}件`}>
+                              {label}{sb.count > 1 ? sb.count : ''}
+                            </span>
+                          )
+                        })()}
                         {(() => {
                           const st = aiCorrectionStage(c, prioritySkills ?? null)
                           return st && (
@@ -2495,7 +2547,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       {boxUploadMsg.text}
                     </p>
                   )}
-                  <CandidateProfileFields c={selectedCandidate} isExpanded detailMode agentDomainMap={agentDomainMap} />
+                  <CandidateProfileFields c={selectedCandidate} isExpanded detailMode agentDomainMap={agentDomainMap} submissionBadges={submissionBadges} />
                   {/* 同一人物候補（別の紹介会社から来ている人を含む）。
                       duplicate_flag の条件は外した（全員 false で表示されていなかった・2026-08-20）。
                       レコードは統合しない方針なので、ここで並べて単価を比較できるようにする */}

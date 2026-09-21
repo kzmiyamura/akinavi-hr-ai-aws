@@ -187,6 +187,41 @@ export async function fetchSubmissionsByCandidateIds(candidateIds: string[], dat
   return (data ?? []) as Submission[]
 }
 
+/** 人材ID → 提案の件数と状態。**一覧のバッジ用に列を絞った軽い版**。
+ *
+ *  fetchSubmissionsByCandidateIds は ai_raw（AI の生出力）まで引くので、
+ *  100人ぶん取ると転送量が跳ねる。バッジに要るのは件数と状態だけ。
+ *  営業が「この人もう提案したっけ」を毎回思い出していたのを画面で解決する。 */
+export interface SubmissionBadge {
+  /** 提案の総数 */
+  count: number
+  /** 一番進んでいる状態。accepted > sent > pending > rejected の順で採る */
+  best: Submission['status']
+}
+export async function fetchSubmissionBadges(
+  candidateIds: string[],
+  dataEnv: DataEnv,
+): Promise<Map<string, SubmissionBadge>> {
+  const out = new Map<string, SubmissionBadge>()
+  if (candidateIds.length === 0) return out
+  const { data, error } = await supabase
+    .from('submissions')
+    .select('candidate_id,status')
+    .eq('data_env', dataEnv)
+    .in('candidate_id', candidateIds)
+  if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
+  const RANK: Record<Submission['status'], number> = { accepted: 3, sent: 2, pending: 1, rejected: 0 }
+  for (const row of (data ?? []) as Array<{ candidate_id: string; status: Submission['status'] }>) {
+    const cur = out.get(row.candidate_id)
+    if (!cur) out.set(row.candidate_id, { count: 1, best: row.status })
+    else {
+      cur.count++
+      if (RANK[row.status] > RANK[cur.best]) cur.best = row.status
+    }
+  }
+  return out
+}
+
 /** 人材に対するマッチング履歴を取得（スコア降順） */
 export async function fetchSubmissionsByCandidate(candidateId: string, dataEnv: DataEnv): Promise<Submission[]> {
   const { data, error } = await supabase
