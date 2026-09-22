@@ -65,11 +65,20 @@ let effectiveMaxPerDay = MAX_PER_DAY_DEFAULT
 // 所見は「各案件の上位10人」しか対象にしないので母数が小さく、
 // 一度埋まればあとは新規案件と再マッチング分の維持だけで済む
 const REC_MAX_PER_DAY = Number(process.env.SHADOW_REC_MAX_PER_DAY ?? 100)
-// 何日前までを処理対象にするか。7日で archive-candidates がアーカイブへ移すため、
-// それより手前で切る。古いものを掘り返して予算を使い切らないための足切り
-const LOOKBACK_DAYS = Number(process.env.SHADOW_LOOKBACK_DAYS ?? 3)
+// 何日前までを処理対象にするか。7日で archive-candidates がアーカイブへ移す。
+//
+// 3日 → 7日 に広げた（2026-09-22）。元の足切りは「古いものを掘り返して**予算**を
+// 使い切らないため」だったが、ワーカーは claude -p（Max枠）で動いており予算は無い。
+// 実測では、3日を過ぎて未校正のまま二度と拾われない人が1,498人いて、
+// **うち668人は経歴書をStorageに持ったまま一度も読まれずに消えていた**。
+// 経歴書が読まれない人は案件履歴もスキル年数も空のまま営業の前に出る。
+//
+// 新着を圧迫しない理由: 取得は created_at.desc（新しい順）なので、
+// 古い人が枠を取るのは**新着を全部さらった後の余り枠だけ**。
+// 7日より先は archive-candidates が candidates から外すので、ここが自然な上限。
+const LOOKBACK_DAYS = Number(process.env.SHADOW_LOOKBACK_DAYS ?? 7)
 // 失敗を繰り返すレコードの打ち切り回数。キュー方式は「未処理のもの」を拾い続けるため、
-// 失敗を記録しないと同じレコードを永久に再処理して費用が出続ける
+// 失敗を記録しないと同じレコードを永久に再処理し、枠を食い続ける
 const MAX_ATTEMPTS = 3
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'akinavi-shadow-'))
 // 本番 candidates への上書き。SHADOW_APPLY=0 で記録のみ（シャドー運転）に戻せる
