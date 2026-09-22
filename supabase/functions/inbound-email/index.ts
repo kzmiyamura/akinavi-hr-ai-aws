@@ -10163,7 +10163,10 @@ async function uploadToStorage(
       .from('attachments')
       // cacheControl: ファイル名に内容ハッシュが入っている（= 同じパスなら同じ中身）ので
       // 長期キャッシュしてよい。既定のままだと CDN・ブラウザとも保持せず、
-      // 経歴書を開くたびに実体（平均約315KB・最大1.8MB）が egress として出ていく。
+      // 経歴書を開くたびに実体が egress として出ていく。
+      // サイズ実測（2026-09-22・AI校正対象634ファイルに HEAD）:
+      //   平均 180KB / 中央 63KB / 最大 5.9MB
+      //   （それ以前に書いてあった「平均315KB・最大1.8MB」は母集団も時期も違う古い値）
       .upload(path, fileBytes, { contentType: mimeType, upsert: true, cacheControl: '31536000' })
     if (error) {
       console.error(`[Storage Upload] アップロード失敗: ${error.message}`)
