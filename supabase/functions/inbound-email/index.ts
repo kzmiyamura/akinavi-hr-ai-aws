@@ -929,7 +929,22 @@ function extractSkillYearsFromBodyText(text: string): Record<string, number> {
 
   // パターン3b: 「スキル（Nヶ月）」（月数のみ・年なし）
   // 例: Java(2年2ヶ月) は pattern3 で捕捉済み、Springboot(6ヶ月) はこちら
-  const patternMonthsOnly = /([A-Za-z][A-Za-z0-9+#. _/-]{0,19}|[ァ-ヶー]{2,15})\s*[（(]\s*([0-9０-９]+)[ヶかカヵｶ]月\s*[）)]/g
+  //
+  // ⚠ 「約」を許すこと（2026-09-22 実害）。グラントホープの要員メールは
+  //   「C#・C#.NET(約122ヶ月) / VB.NET(約79ヶ月) / Windows(約199ヶ月)」の形で、
+  //   **「約」が付く10件が1つも取れていなかった**。「約」無しの PL/SQL(4ヶ月) や
+  //   Android(4ヶ月) は取れていたので、経験19年の人が「Java 経験なし」に見えていた。
+  //   パターン3（年表記）は 約? を許していたのに、こちらだけ漏れていた。
+  //
+  // ⚠ スキル名の先頭を切らないこと。以前は `[A-Za-z]` で始めていたため
+  //   「Salesforce Marketing Cloud」が「orce Marketing Cloud」、
+  //   「Windowsタブレット」が「タブレット」になっていた。
+  //   語の先頭から拾うため、直前が英数字**またはカナ**でないことを要求する。
+  //   カナだけを除かないと「Windowsタブレット」が「ブレット」になる
+  //   （`タ` の直前が `s` で弾かれ、次の `ブ` から始まってしまう）。
+  //   あわせて英字側の名前にカナを含められるようにし、
+  //   「Windowsタブレット」を1語として拾う。
+  const patternMonthsOnly = /(?<![A-Za-z0-9ァ-ヶー])([A-Za-z][A-Za-z0-9+#.ァ-ヶー _/-]{0,29}|[ァ-ヶー][ァ-ヶーA-Za-z0-9 ]{1,29})\s*[（(]\s*約?\s*([0-9０-９]+)[ヶかカヵｶ]月\s*[）)]/g
   while ((m = patternMonthsOnly.exec(text)) !== null) {
     const name = cleanSkillName(m[1])
     const mo = parseInt(m[2].replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30)), 10)
