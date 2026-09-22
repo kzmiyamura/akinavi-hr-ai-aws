@@ -22,6 +22,7 @@ import {
   looksLikeCandidateSubject,
   shouldSkipBodyLlm,
   jstDayKey,
+  shouldReuseAttachment,
 } from './shadow_worker_lib.mjs'
 
 // 環境変数が無ければ ~/.akinavi_shadow.env から読む。
@@ -122,6 +123,38 @@ async function saveShadow(row) {
   await rest('llm_shadow?on_conflict=candidate_id,source', {
     method: 'POST', body: JSON.stringify(row),
   })
+}
+
+/**
+ * 添付解析の抽出器バージョン。
+ * **抽出のしかたを変えたら必ず上げること。** 上げないと、同じ経歴書に対して
+ * 古い結果が使い回され、改善が既存の人材に反映されない。
+ * 上げると次回その人が再入したときに解析し直される（全件の再解析は走らない）。
+ */
+const EXTRACTOR_VERSION = '2026-09-22'
+
+/**
+ * 前回と同じ経歴書ならその解析結果を返す（無ければ null）。
+ *
+ * 安全性の根拠: Storage のファイル名は `stableResumeName()` が内容の SHA-256 先頭20桁を
+ * 埋め込んでいるため、**URL が同じならファイルの中身はバイト単位で同じ**。
+ * 中身が1バイトでも変われば別パスになるので、古い結果を誤って使い回すことはない。
+ *
+ * status='error' の行は source_url を書いていないので、失敗は必ず再試行される。
+ */
+async function cachedAttachment(candidateId, url) {
+  if (!url) return null
+  try {
+    const rows = await rest(
+      `llm_shadow?candidate_id=eq.${candidateId}&source=eq.attachment` +
+      `&select=status,model,projects,skill_years,source_url,extractor_version&limit=1`,
+    )
+    const r = rows?.[0]
+    if (!shouldReuseAttachment(r, url, EXTRACTOR_VERSION)) return null
+    return { projects: r.projects, skill_years: r.skill_years, model: r.model, status: r.status, cached: true }
+  } catch {
+    return null   // 参照に失敗したら普通に解析する（キャッシュは高速化であって正ではない）
+  }
 }
 
 /** skill_master 全件を正規化キー集合として1度だけ読み込む（skills 追加判定用） */
@@ -345,7 +378,19 @@ async function processCandidate(c, preBody = null) {
   // 経歴書（Haiku→検証→Sonnet）。xlsx系はグリッド、docx/pdfはテキスト行で抽出
   const url = c.resume_url
   const extMatch = url ? url.toLowerCase().match(/\.(xlsx?|xlsm|docx|pdf)$/) : null
-  if (extMatch) {
+  // 同じファイルを二度解析しない（2026-09-22）。
+  // 取引先が同じ人材を再送すると inbound-email が raw_profile を差し替えて印が消え、
+  // ワーカーに再入する（設計どおり）。しかし経歴書は**同じファイル**なので、
+  // 一番重い添付解析（Haiku・1〜3分）をやり直して得る情報はゼロだった。
+  // 実測（ログ5,093サイクル）: 添付解析2,974回のうち1,236回(41.6%)が2回目以降で、
+  // うち602回は前回と1文字も違わない結果（実例 H.K は27回処理・毎回 proj=18）。
+  // Storage のファイル名には内容のSHA-256が入るため「同じURL＝同じ中身」が保証される。
+  const cachedAttach = extMatch ? await cachedAttachment(c.id, url) : null
+  if (cachedAttach) {
+    attachment = cachedAttach
+    log(`  [${c.name}] 経歴書は解析済みの同一ファイル → 再解析せず結果を再利用（proj=${cachedAttach.projects?.length ?? 0}）`)
+  }
+  if (extMatch && !cachedAttach) {
     const ext = extMatch[1]
     const fp = path.join(TMP, `${c.id}.${ext}`)
     try {
@@ -368,11 +413,13 @@ async function processCandidate(c, preBody = null) {
         candidate_id: c.id, source: 'attachment', model: r.model, status: r.status,
         reasons: r.reasons, quality: r.quality, projects: r.projects, skill_years: r.skillYears,
         cost_usd: r.costUsd, ms: r.ms,
+        source_url: url, extractor_version: EXTRACTOR_VERSION,
       })
       state.dayCost += r.costUsd || 0
       attachment = { projects: r.projects, skill_years: r.skillYears, model: r.model, status: r.status }
     } catch (e) {
-      await saveShadow({ candidate_id: c.id, source: 'attachment', status: 'error', reasons: [String(e).slice(0, 200)] })
+      // 失敗は source_url を書かない。書くと「解析済み」に見えて永久に再試行されなくなる
+      await saveShadow({ candidate_id: c.id, source: 'attachment', status: 'error', reasons: [String(e).slice(0, 200)], source_url: null })
     } finally {
       fs.rmSync(fp, { force: true })
     }

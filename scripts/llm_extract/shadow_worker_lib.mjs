@@ -187,3 +187,39 @@ export function projectLooksComplete(p, defaultTitle = '案件') {
     p.budget_min && p.budget_max && p.work_location && p.contract_type &&
     p.required_skills?.length)
 }
+
+/**
+ * 保存済みの添付解析結果を、再解析せずそのまま使ってよいか（2026-09-22）。
+ *
+ * なぜ必要か:
+ *   取引先が同じ人材を再送すると inbound-email が raw_profile を差し替え、
+ *   `_llm_checked_at` の印が消えてワーカーに再入する（設計どおり・取りこぼし回収のため）。
+ *   ところが経歴書は**同じファイル**なので、一番重い添付解析（Haiku・1〜3分）を
+ *   やり直しても得られる情報はゼロだった。
+ *   ログ実測（5,093サイクル）: 添付解析2,974回のうち1,236回(41.6%)が2回目以降、
+ *   うち602回は前回と1文字も違わない結果。実例 H.K は27回処理され毎回 proj=18。
+ *
+ * なぜ URL で判定してよいか:
+ *   Storage のファイル名は inbound-email の `stableResumeName()` が
+ *   **内容の SHA-256 先頭20桁**を埋め込んで作る。したがって
+ *   「同じ URL ＝ 中身がバイト単位で同じ」。1バイトでも違えば別パスになるので、
+ *   別人・改訂版の経歴書に古い結果を当ててしまうことはない。
+ *
+ * 使い回さない場合（すべて「解析し直す」側に倒す）:
+ *   - URL が違う / どちらかが空      … 別のファイル。当然やり直す
+ *   - 抽出器のバージョンが違う        … 改善が既存人材に届かなくなるのでやり直す
+ *   - 前回が error                    … 失敗を固定しない
+ *   - 案件が1件も取れていない         … 空の結果を焼き付けない
+ *
+ * @param row llm_shadow の (candidate_id, source='attachment') 行。無ければ null
+ * @param url 今回の resume_url
+ * @param version 現在の抽出器バージョン
+ */
+export function shouldReuseAttachment(row, url, version) {
+  if (!row || !url) return false
+  if (row.source_url !== url) return false
+  if (row.extractor_version !== version) return false
+  if (row.status === 'error') return false
+  if (!Array.isArray(row.projects) || row.projects.length === 0) return false
+  return true
+}
