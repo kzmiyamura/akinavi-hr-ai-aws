@@ -547,7 +547,11 @@ async function cycle() {
       if (!b.results) { log(`本文一括: ${b.reason} のため個別処理にフォールバック`); continue }
       const per = (b.costUsd ?? 0) / chunk.length
       chunk.forEach((c, j) => bodyOf.set(c.id, { ...b.results[j], model: b.model, costUsd: per }))
-      log(`本文一括: ${chunk.length}人を1回で抽出（${((Date.now() - t0) / 1000).toFixed(0)}秒・$${(b.costUsd ?? 0).toFixed(3)}）`)
+      // ログに金額を書かない（2026-09-22）。ワーカーは claude -p（Max枠）で動いており
+      // costUsd は API 換算の参考値でしかない。ログに残ると引用のたびに
+      // 「払っていない金額」を報告することになる。DB(llm_shadow.cost_usd)には引き続き入れる。
+      // 消費を見たいときは node scripts/llm_extract/usage_split.mjs（トークンと実処理時間）
+      log(`本文一括: ${chunk.length}人を1回で抽出（${((Date.now() - t0) / 1000).toFixed(0)}秒）`)
     } catch (e) {
       log('本文一括に失敗、個別処理にフォールバック:', String(e).slice(0, 120))
     }
@@ -573,7 +577,8 @@ async function cycle() {
     saveState()
   }
   flushQuarantineNotice()
-  log(`サイクル完了 day=${state.dayCount}件 cost=$${state.dayCost.toFixed(2)}`)
+  // 金額は出さない（上のコメント参照）。進捗は件数で足りる
+  log(`サイクル完了 day=${state.dayCount}件/${effectiveMaxPerDay}件`)
 }
 
 // ── 案件のLLM補正サイクル ──

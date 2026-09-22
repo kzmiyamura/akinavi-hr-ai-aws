@@ -21,7 +21,9 @@ const state = JSON.parse(readFileSync(FILE, 'utf8'))
 
 const arg = process.argv[2]
 if (arg === undefined) {
-  console.log(`day=${state.day} dayCount=${state.dayCount} dayCost=$${(state.dayCost ?? 0).toFixed(2)}`)
+  // 金額は出さない（claude -p は Max枠で動いており実課金ではない）。
+  // 消費を見るなら node scripts/llm_extract/usage_split.mjs（トークンと実処理時間）
+  console.log(`day=${state.day} dayCount=${state.dayCount}`)
   process.exit(0)
 }
 const n = Number(arg)
