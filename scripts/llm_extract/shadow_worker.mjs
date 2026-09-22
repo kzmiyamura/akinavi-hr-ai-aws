@@ -21,6 +21,7 @@ import {
   trimBodyForLlm, projectLooksComplete, parseSkillFilterValue, buildSkillFilterClause, pacedAllowance,
   looksLikeCandidateSubject,
   shouldSkipBodyLlm,
+  jstDayKey,
 } from './shadow_worker_lib.mjs'
 
 // 環境変数が無ければ ~/.akinavi_shadow.env から読む。
@@ -91,7 +92,10 @@ const saveState = () => fs.writeFileSync(STATE_FILE, JSON.stringify(state))
 /** 日付が変わったら各カウンタを戻す。cycle() と recommendCycle() の両方から呼ぶ
  *  （cycle() が例外で落ちた日に所見側のカウンタが繰り越されないように） */
 function rollDay() {
-  const today = new Date().toISOString().slice(0, 10)
+  // ⚠ 日境界は pacedAllowance と**必ず同じ**にすること（日本時間の0時）。
+  //   以前は UTC 0時で、営業が出社する朝9時にカウンタがリセットされていた。
+  //   片方だけ変えると、カウンタが残ったまま配分だけ0に戻って半日止まる。
+  const today = jstDayKey()
   if (state.day === today) return
   state.day = today
   state.dayCount = 0

@@ -71,12 +71,34 @@ export function shouldSkipBodyLlm(resumeUrl, bodyComplete) {
  * （実測 1件あたり約123秒＝100件で約3.4時間）。すると営業時間中に届いた人材が
  * 当日中に処理されず、「新しい順に処理して価値を上げる」という設計の利点が消える。
  *
- * 日境界は state.day と同じ UTC 0時。経過割合に比例した上限を返す。
- * ワーカーが停止していた場合は経過時間ぶんの余裕が自然に溜まるので、再開後に追いつける。
+ * ⚠ 日境界は **日本時間の0時**。以前は UTC 0時だった（＝日本時間の朝9時）。
+ *   それだと営業が出社した瞬間にカウンタがリセットされ、**一番データが欲しい午前中に
+ *   枠がほぼ空になる**。実測（2026-09-22 14:16 JST）で「この時刻の上限33件/150」しか
+ *   使えておらず、営業時間（9〜19時）がちょうど配分の最初の42%に当たっていた。
+ *   日本時間の0時起点にすると、朝9時の時点で既に37.5%（150なら56件）使える。
+ *   夜間の静かな時間に溜まった分を朝までに消化できるという効果もある。
+ *
+ * 経過割合に比例した上限を返す。ワーカーが停止していた場合は経過時間ぶんの余裕が
+ * 自然に溜まるので、再開後に追いつける。
  */
+/** 日本時間のオフセット（ミリ秒）。サーバーの TZ 設定に依存させないため定数で持つ */
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000
+
+/** その時刻が属する「日本時間の日」の始まり（epoch ms） */
+export function jstDayStart(now = new Date()) {
+  const shifted = now.getTime() + JST_OFFSET_MS
+  return Math.floor(shifted / 86_400_000) * 86_400_000 - JST_OFFSET_MS
+}
+
+/** 日次カウンタのキーに使う「日本時間の日付」（YYYY-MM-DD）。
+ *  pacedAllowance と同じ境界にすること。ズレるとカウンタが残ったまま配分だけ
+ *  0に戻り、半日ワーカーが動かなくなる */
+export function jstDayKey(now = new Date()) {
+  return new Date(now.getTime() + JST_OFFSET_MS).toISOString().slice(0, 10)
+}
+
 export function pacedAllowance(maxPerDay, now = new Date()) {
-  const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  const ratio = (now.getTime() - dayStart) / 86_400_000
+  const ratio = (now.getTime() - jstDayStart(now)) / 86_400_000
   const clamped = Math.min(1, Math.max(0, ratio))
   // 起動直後（ratio≒0）でも1件は動かす。完全に止まっていると障害と区別できないため
   return Math.max(1, Math.min(maxPerDay, Math.ceil(maxPerDay * clamped)))
