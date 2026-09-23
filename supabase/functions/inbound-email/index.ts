@@ -9421,9 +9421,161 @@ async function extractEntry(entry: SourceEntry, ledger: Ledger): Promise<SourceE
   return entry
 }
 
+/**
+ * 経歴書を指していそうな文脈か（URLの前後にスキルシート等の語があるか）。
+ * 短縮URL・配信サービスの追跡URLを辿ってよいかの唯一の判断材料。
+ */
+// ⚠ 1行で書くこと。sync_extractors.mjs の extractConst は**単一行の const しか拾えない**ため、
+//    改行して書くと生成JSが `const X =` で終わって構文エラーになる（2026-09-23 に踏んだ）
+const RESUME_LINK_CONTEXT_RE = /スキルシート|スキル\s*シート|経歴書|技術経歴|職務経歴|レジュメ|skill\s*sheet|プロフィールシート|要員情報|人材情報/i
+
+/**
+ * **絶対に辿ってはいけない**URL。押した時点で相手側に副作用が出る。
+ *
+ * 配信サービスの追跡ドメインは、経歴書リンクと配信停止リンクが**同じドメイン**で同居する。
+ * 文脈だけに頼ると、経歴書のつもりで配信停止を踏んで**取引先からのメールが止まる**。
+ * URL自体と、その前後の文言の両方で弾く。
+ */
+// ⚠ 1行で書くこと（RESUME_LINK_CONTEXT_RE のコメント参照）
+// ⚠ 日本語は助詞が入る。「配信停止」だけを見ていると「配信**を**停止」を素通りする
+//    （テストで実際に捕まえた）。語の間に数文字の隙間を許すこと。
+//    取りこぼす側（辿らない）に倒れるのは構わない。踏む側に倒れると取引先のメールが止まる。
+const NEVER_FOLLOW_RE = /(unsubscribe|opt[-_]?out|optout|remove|cancel|delete|withdraw|reject|deny|approve|confirm|配信[^。\n]{0,8}(停止|解除|中止|不要)|(購読|受信|メール)[^。\n]{0,6}(解除|停止|拒否)|退会|解約)/i
+
+/** 既に Google のリンクか（既存経路がそのまま拾うので辿る必要がない） */
+const GOOGLE_LINK_RE = /^https:\/\/(?:docs|drive)\.google\.com\//i
+
+// 経歴書が置かれることのないサービス。営業の署名で経歴書の近くに並ぶため文脈判定をすり抜ける。
+// 実測（控え7日）で line.me だけで249件拾っており、1通3件までの枠を食い潰していた。
+// ⚠ 1行で書くこと（RESUME_LINK_CONTEXT_RE のコメント参照）
+const NEVER_RESUME_HOST_RE = /^https?:\/\/(?:[a-z0-9-]+\.)*(?:line\.me|lin\.ee|twitter\.com|x\.com|facebook\.com|fb\.com|instagram\.com|youtube\.com|youtu\.be|wantedly\.com|note\.com|linkedin\.com)\//i
+
+/**
+ * この短縮URL・追跡URLを辿ってよいか（2026-09-23）。
+ *
+ * **ここが配信停止を踏まないための門番。** 判断を1か所の純関数に閉じてテストで固定する。
+ *
+ * 辿ってよい条件（すべて満たすこと）:
+ *   ① Google のリンクではない（Googleなら既存経路が拾う）
+ *   ② URL自体に副作用の匂いが無い（unsubscribe / 配信停止 / approve / delete …）
+ *   ③ 経歴書が置かれないサービスではない（LINE・SNS。署名で経歴書の近くに並ぶ）
+ *   ④ 周辺の文言に経歴書の手がかりがある（スキルシート・経歴書・レジュメ …）
+ *   ⑤ 周辺の文言に副作用の匂いが無い
+ *
+ * ③④を両方見るのは、配信サービスの追跡ドメインでは
+ * **経歴書リンクと配信停止リンクが同じドメインに同居する**ため。
+ * URLの形だけでは見分けられず、踏むと取引先からのメールが止まる。
+ *
+ * @param url    候補のURL
+ * @param around URLの前後（±120文字程度）の本文
+ */
+function shouldFollowResumeLink(url: string, around: string): boolean {
+  if (!url || GOOGLE_LINK_RE.test(url)) return false
+  if (NEVER_FOLLOW_RE.test(url)) return false
+  if (NEVER_RESUME_HOST_RE.test(url)) return false
+  if (!RESUME_LINK_CONTEXT_RE.test(around)) return false
+  if (NEVER_FOLLOW_RE.test(around)) return false
+  return true
+}
+
+/**
+ * 短縮URL・配信サービスの追跡URLを辿って、その先の Google リンクを取り出す（2026-09-23）。
+ *
+ * ■ なぜ要るか（実測・直近7日 7,862通）
+ *   「経歴書の文脈」のURL 2,920件のうち **1,079件(37%) が未対応ドメイン**だった。
+ *   最大は bit.ly 365件、次いで配信サービスのクリック追跡（cuenote・awstrack・hm-f.jp 等）。
+ *
+ *   未対応URLを39件実際に辿ったところ、**34件(87%) が docs/drive.google.com に着いた**。
+ *     bit.ly              → docs.google.com
+ *     f.bmb.jp            → drive.google.com
+ *     cuenote クリック追跡  → docs.google.com
+ *     awstrack(SES追跡)    → docs.google.com
+ *   つまり **1回リダイレクトを追うだけで既存の Google 取得経路にそのまま乗る**。
+ *   新しいダウンローダは要らない。
+ *
+ * ■ 安全側に倒していること
+ *   ・経歴書の文脈があるURLしか辿らない（本文中の全URLを踏みに行かない）
+ *   ・配信停止・承認・削除の匂いがするURL／文言は**辿らない**（NEVER_FOLLOW_RE）
+ *   ・辿った先が Google 以外なら捨てる（実体は取りに行かない）
+ *   ・1通あたり MAX_FOLLOW 件まで。edge の時間予算（deadline）も見る
+ *   ・実体は受け取らない（Range: bytes=0-0）。欲しいのは Location ヘッダだけ
+ *
+ * @returns 見つかった Google URL の配列（本文に追記して detectGoogleLinks に渡す）
+ */
+async function resolveResumeShortLinks(
+  body: string,
+  ledger: Ledger,
+  deadline = 0,
+): Promise<string[]> {
+  const MAX_FOLLOW = 3
+  const MAX_HOPS = 4
+  const HOP_TIMEOUT_MS = 1500
+  const GOOGLE_HOST_RE = GOOGLE_LINK_RE
+
+  const targets: string[] = []
+  const seen = new Set<string>()
+  for (const m of body.matchAll(/https?:\/\/[^\s"'<>）」】、,]+/g)) {
+    const url = m[0]
+    if (seen.has(url)) continue
+    const around = body.slice(Math.max(0, (m.index ?? 0) - 120), (m.index ?? 0) + 120)
+    if (!shouldFollowResumeLink(url, around)) continue
+    seen.add(url)
+    targets.push(url)
+    if (targets.length >= MAX_FOLLOW) break
+  }
+  if (targets.length === 0) return []
+
+  const found: string[] = []
+  for (const start of targets) {
+    if (deadline > 0 && Date.now() > deadline) {
+      ledger.log(null, 'A-REDIR-BUDGET', '時間予算で打ち切り')
+      break
+    }
+    let cur = start
+    let landed: string | null = null
+    for (let hop = 0; hop < MAX_HOPS; hop++) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), HOP_TIMEOUT_MS)
+      let res: Response
+      try {
+        res = await fetch(cur, {
+          method: 'GET',
+          redirect: 'manual',
+          signal: controller.signal,
+          // 実体は要らない。Location ヘッダだけが欲しい
+          headers: { Range: 'bytes=0-0' },
+        })
+      } catch (e) {
+        ledger.log(null, 'A-REDIR-FAIL', `${start.slice(0, 40)} ${e instanceof Error ? e.message : ''}`)
+        break
+      } finally {
+        clearTimeout(timer)
+      }
+      const loc = res.headers.get('location')
+      if (res.status >= 300 && res.status < 400 && loc) {
+        let next: string
+        try { next = new URL(loc, cur).toString() } catch { break }
+        if (NEVER_FOLLOW_RE.test(next)) break       // 転送先が配信停止なら追わない
+        if (GOOGLE_HOST_RE.test(next)) { landed = next; break }
+        cur = next
+        continue
+      }
+      break                                          // リダイレクトで終わらなければ対象外
+    }
+    if (landed) {
+      found.push(landed)
+      ledger.log(null, 'A-REDIR-OK', `${start.slice(0, 32)} → ${landed.slice(0, 48)}`)
+    }
+  }
+  return found
+}
+
 /** ゾーンA+B: 本文中のGoogle系リンクを統一エントリとして取得・抽出するオーケストレータ */
 async function collectGoogleEntries(body: string, ledger: Ledger, deadline = 0): Promise<SourceEntry[]> {
-  const links = detectGoogleLinks(body)
+  // 短縮URL・配信サービスの追跡URLの先にある Google リンクを本文に足してから解析する。
+  // 実測で未対応URLの87%がここで拾える（resolveResumeShortLinks のコメント参照）
+  const viaRedirect = await resolveResumeShortLinks(body, ledger, deadline)
+  const links = detectGoogleLinks(viaRedirect.length > 0 ? `${body}\n${viaRedirect.join('\n')}` : body)
   const out: SourceEntry[] = []
   // リンク先取得は外部への同期HTTP。edge の実質制限(~6秒)内に収めるため deadline を超えたら
   // 残りのリンクは取りに行かず打ち切る（リンクは本文に残るので後段/再解析で拾える）。

@@ -33,6 +33,8 @@ const TARGET_FUNCTIONS = [
   // 保有スキル詳細テーブル型（2026-09-23・方式8）
   'splitSkillNameCell',
   'extractSkillYearsFromNamedTable',
+  // 短縮URL・追跡URLを辿ってよいかの判断（2026-09-23）。配信停止を踏まないための門番
+  'shouldFollowResumeLink',
   // 名簿行の素のテキストURL拾い（2026-09-23）。ハイパーリンクでないURLを落としていた
   'colLettersFromIndex',
   'bareResumeUrlsInRow',
@@ -388,6 +390,11 @@ function extractFunction(src, name) {
 // 1行で完結する宣言だけを対象にする。関数だけを移すと gen 側で ReferenceError になる
 // （実例: projParsePeriod は PROJ_MON、_cachedSkillRegex は _skillRegexCache を参照する）。
 const TARGET_CONSTS = [
+  // shouldFollowResumeLink が参照する判定regex（配信停止を踏まないための門番）
+  'GOOGLE_LINK_RE',
+  'NEVER_FOLLOW_RE',
+  'NEVER_RESUME_HOST_RE',
+  'RESUME_LINK_CONTEXT_RE',
   'PROJ_MON',          // projParsePeriod が使う英語3文字月名
   '_skillRegexCache',  // _cachedSkillRegex のキャッシュ
   // extractSkillYearsVisualProject（案件ブロックunion）が参照する判定regex群

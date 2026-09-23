@@ -3,6 +3,10 @@
 // 再生成: node scripts/sync_extractors.mjs
 
 // ── 対象関数が参照する定数 ──
+const GOOGLE_LINK_RE = /^https:\/\/(?:docs|drive)\.google\.com\//i
+const NEVER_FOLLOW_RE = /(unsubscribe|opt[-_]?out|optout|remove|cancel|delete|withdraw|reject|deny|approve|confirm|配信[^。\n]{0,8}(停止|解除|中止|不要)|(購読|受信|メール)[^。\n]{0,6}(解除|停止|拒否)|退会|解約)/i
+const NEVER_RESUME_HOST_RE = /^https?:\/\/(?:[a-z0-9-]+\.)*(?:line\.me|lin\.ee|twitter\.com|x\.com|facebook\.com|fb\.com|instagram\.com|youtube\.com|youtu\.be|wantedly\.com|note\.com|linkedin\.com)\//i
+const RESUME_LINK_CONTEXT_RE = /スキルシート|スキル\s*シート|経歴書|技術経歴|職務経歴|レジュメ|skill\s*sheet|プロフィールシート|要員情報|人材情報/i
 const PROJ_MON= { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 }
 const _skillRegexCache = new Map()
 const PROJ_TECHCOL = /(使用言語|開発言語|^言語|ＯＳ|^OS|サーバ|データベース|^DB|フレームワーク|ミドル|ツール|機種|開発環境|環境・言語|環境\/言語|得意技術|利用技術|^技術$|技術・環境|環境等|ＤＢ|使用ＤＢ|使用DB|DB関連|FW\/Tool|FW\/ツール)/
@@ -1256,6 +1260,16 @@ function extractSkillYearsFromNamedTable(grid){
     if (Object.keys(out).length > 0) break   // 最初に見つかった表だけを使う
   }
   return out
+}
+
+// ── shouldFollowResumeLink ──
+function shouldFollowResumeLink(url, around){
+  if (!url || GOOGLE_LINK_RE.test(url)) return false
+  if (NEVER_FOLLOW_RE.test(url)) return false
+  if (NEVER_RESUME_HOST_RE.test(url)) return false
+  if (!RESUME_LINK_CONTEXT_RE.test(around)) return false
+  if (NEVER_FOLLOW_RE.test(around)) return false
+  return true
 }
 
 // ── colLettersFromIndex ──
@@ -4894,6 +4908,7 @@ export {
   extractSkillYearsFromBodyText,
   splitSkillNameCell,
   extractSkillYearsFromNamedTable,
+  shouldFollowResumeLink,
   colLettersFromIndex,
   bareResumeUrlsInRow,
   extractSkillYearsFromSheetData,
@@ -4947,6 +4962,10 @@ export {
   inferPrefectureFromStation,
   isZipAttachment,
   planZipEntries,
+  GOOGLE_LINK_RE,
+  NEVER_FOLLOW_RE,
+  NEVER_RESUME_HOST_RE,
+  RESUME_LINK_CONTEXT_RE,
   PROJ_MON,
   _skillRegexCache,
   PROJ_TECHCOL,
