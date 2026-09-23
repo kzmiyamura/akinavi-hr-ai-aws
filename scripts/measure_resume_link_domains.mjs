@@ -38,7 +38,7 @@ const RESUME_HINT = /スキルシート|経歴書|技術経歴|職務経歴|レ�
 const URL_RE = /https?:\/\/[^\s"'<>）」】、,]+/g
 
 const byDomain = new Map()   // domain -> { total, resume }
-let mails = 0, withAnyUrl = 0
+let mails = 0, withAnyUrl = 0, parseErrors = 0
 
 for (const day of dayDirs) {
   const dayPath = path.join(ROOT, day)
@@ -48,7 +48,12 @@ for (const day of dayDirs) {
     const mj = path.join(dayPath, e, 'message.json')
     if (!fs.existsSync(mj)) continue
     let msg
-    try { msg = JSON.parse(fs.readFileSync(mj, 'utf8')) } catch { continue }
+    try {
+      // 控えの message.json は **BOM付き** で書かれている。
+      // 剥がさずに JSON.parse すると必ず例外になり、全件スキップして
+      // 「メール0通」という嘘の結果になる（2026-09-23 に踏んだ）。
+      msg = JSON.parse(fs.readFileSync(mj, 'utf8').replace(/^﻿/, ''))
+    } catch { parseErrors++; continue }
     const body = String(msg.body ?? '')
     if (!body) continue
     mails++
