@@ -9437,7 +9437,12 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
           const m = l.cell.match(/(\d+)$/)
           return m ? Number(m[1]) === r + 1 : false
         })
-        dataRows.push({ name, rowText, links: rowLinks })
+        // ハイパーリンクになっていない素のURLも拾う。Googleスプレッドシートを
+        // xlsx 出力すると、文字列として入れたURLはハイパーリンクにならないため
+        // （実測: D-code名簿はハイパーリンク0件・素のURL133件）
+        const bare = bareResumeUrlsInRow(row, r).filter(
+          b => !rowLinks.some(l => l.url === b.url))
+        dataRows.push({ name, rowText, links: [...rowLinks, ...bare] })
       }
       // 氏名列の過半数が駅名 = 最寄駅列を誤って掴んでいる → この見出し行は名簿ではない
       if (dataRows.length >= 2 && isMostlyStationNames(dataRows.map((x) => x.name))) continue
@@ -9486,7 +9491,14 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
             const m = l.cell.match(/(\d+)$/)
             return m ? Number(m[1]) === r + 1 : false
           })
-          dataRows.push({ name, rowText: [otherFields, summaryCell].filter(Boolean).join('\n'), links: rowLinks })
+          // グリッド型①と同じ理由で、素のテキストURLも行リンクとして拾う
+          const bare = bareResumeUrlsInRow(grid[r], r).filter(
+            b => !rowLinks.some(l => l.url === b.url))
+          dataRows.push({
+            name,
+            rowText: [otherFields, summaryCell].filter(Boolean).join('\n'),
+            links: [...rowLinks, ...bare],
+          })
         }
         if (isMostlyStationNames(dataRows.map((x) => x.name))) return null
         const distinct = new Set(dataRows.map(x => x.name.replace(/[.\s　・]/g, '').toLowerCase()))
@@ -9539,6 +9551,69 @@ function detectRoster(entry: SourceEntry): { isRoster: boolean; rows: { name: st
     if (rows.length >= 2 && distinctNames.size >= 2) return { isRoster: true, rows }
   }
   return { isRoster: false, rows: [] }
+}
+
+/**
+ * 名簿の行に紐づくリンク1件（セル参照とURL）。
+ *
+ * ⚠ 戻り値の型を `{ cell: string; url: string }[]` のようなオブジェクトリテラルで書くと、
+ *    `scripts/sync_extractors.mjs` の型剥がしが `{` を関数本体の開始と誤認して
+ *    生成JSを壊す（2026-09-23 に踏んだ）。**名前付きの型にしておくこと。**
+ */
+interface RosterRowLink { cell: string; url: string }
+
+/**
+ * 名簿の行セルに **素のテキストとして書かれた** 経歴書URLを拾う（2026-09-23）。
+ *
+ * ■ なぜ必要か（実測）
+ *   名簿の経歴書リンクは `entry.links`（セルのハイパーリンク）からしか拾っていなかった。
+ *   ところが Google スプレッドシートを xlsx としてエクスポートすると、
+ *   **URLを文字列として入力したセルはハイパーリンクにならない**。
+ *
+ *   実例: 株式会社D-code の名簿（2026-09-23 13:15 のメールから56人が登録された）
+ *     D列の見出しは「経歴書」
+ *     ハイパーリンク付きセル     0件
+ *     素のテキストURL          133件（140人中・95%）
+ *   取引先はきちんとURLを載せているのに、こちらが1件も拾えていなかった。
+ *   その結果「名簿から登録された人は全員、経歴書リンクなし」になっていた。
+ *
+ * ■ 拾う範囲を絞る理由
+ *   行には会社HP・LINE・配信停止など経歴書でないURLも混ざる。
+ *   **Google ドライブ / ドキュメント / スプレッドシートだけ**に限定する。
+ *   `fetchLinkedResume` が扱えるのもこの3種類なので、ここで絞っても取りこぼさない。
+ *
+ * @param row      名簿1行ぶんのセル
+ * @param rowIndex グリッド上の行index（0始まり）。セル参照の組み立てに使う
+ */
+function bareResumeUrlsInRow(row: string[], rowIndex: number): RosterRowLink[] {
+  const out: RosterRowLink[] = []
+  const seen = new Set<string>()
+  // 末尾の `)` `」` 等はURLに含めない。全角スペース・改行でも切る
+  const URL_RE = /https:\/\/(?:drive|docs)\.google\.com\/[^\s"'<>）」】,、]+/g
+  for (let c = 0; c < row.length; c++) {
+    const v = (row[c] ?? '').trim()
+    if (!v || !v.includes('google.com')) continue
+    for (const m of v.matchAll(URL_RE)) {
+      const url = m[0]
+      if (seen.has(url)) continue
+      seen.add(url)
+      // セル参照は既存のリンクと同じ形（"D14"）にする。行番号は1始まり
+      out.push({ cell: `${colLettersFromIndex(c)}${rowIndex + 1}`, url })
+    }
+  }
+  return out
+}
+
+/** 0始まりの列index → 列文字（0→A, 25→Z, 26→AA）。colIndexFromCellRef の逆 */
+function colLettersFromIndex(index: number): string {
+  let n = index + 1
+  let s = ''
+  while (n > 0) {
+    const r = (n - 1) % 26
+    s = String.fromCharCode(65 + r) + s
+    n = Math.floor((n - 1) / 26)
+  }
+  return s
 }
 
 /** セル参照 "G14" / "AA3" の列文字を0始まりの列indexへ変換（転置名簿のリンク対応付け用） */

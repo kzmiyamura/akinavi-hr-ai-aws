@@ -30,6 +30,9 @@ const TARGET_FUNCTIONS = [
   'calcMonthsFromDates',
   'filterSkillYears',
   'extractSkillYearsFromBodyText',
+  // 名簿行の素のテキストURL拾い（2026-09-23）。ハイパーリンクでないURLを落としていた
+  'colLettersFromIndex',
+  'bareResumeUrlsInRow',
   'extractSkillYearsFromSheetData',
   'looksLikeRosterName',
   'personAttrScore',
