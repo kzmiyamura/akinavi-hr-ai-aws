@@ -30,6 +30,9 @@ const TARGET_FUNCTIONS = [
   'calcMonthsFromDates',
   'filterSkillYears',
   'extractSkillYearsFromBodyText',
+  // 保有スキル詳細テーブル型（2026-09-23・方式8）
+  'splitSkillNameCell',
+  'extractSkillYearsFromNamedTable',
   // 名簿行の素のテキストURL拾い（2026-09-23）。ハイパーリンクでないURLを落としていた
   'colLettersFromIndex',
   'bareResumeUrlsInRow',

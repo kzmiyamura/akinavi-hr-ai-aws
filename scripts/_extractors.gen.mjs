@@ -649,6 +649,22 @@ function extractSkillYearsUnified(grid, extraTexts = []){
     }
   }
 
+  // 方式8: 保有スキル詳細テーブル型（2026-09-23）。
+  //
+  //   カテゴリ | 名称                                   | 経験年数 | レベル
+  //   言語・FW | Python（業務自動化、API連携…）          | 2年以上  | ○
+  //   言語・FW | Java（Spring、SpringBoot…）、PHP（…）   | 3年以上  | ○
+  //   クラウド | AWS（VPC、EC2、RDS、S3、Lambda 等）     | 2年以上  | ○
+  //
+  // 実害（ユーザー報告・株式会社Tech Lab KY・2026-09-23）:
+  //   この表がそのまま載っているのに1件も取れず、代わりに職務経歴の行ラベル
+  //   「環境」をスキル名と誤認して `{"環境":30}` だけが入っていた。
+  //
+  // 既存方式が効かない理由:
+  //   方式1(列名)は「経験年数」列を見るが、**1セルに複数スキルが入る**形を想定していない。
+  //   方式3(テキスト)は「スキル名 N年」の並びを見るが、ここは年数が別セルにある。
+  const sy8 = extractSkillYearsFromNamedTable(grid)
+
   // 勝者選択（2026-07-20変更）: 「件数の多い方式」→「フィルタ後の品質スコアが最高の方式」。
   // 旧実装は (a)ゴミを多く出す方式が正確な方式に勝てる (b)方式2だけフィルタ後件数・他はフィルタ前
   // という不公平があった。全方式をフィルタしてから skill_master 照合の重み付きスコアで比較する
@@ -656,6 +672,7 @@ function extractSkillYearsUnified(grid, extraTexts = []){
   // typeof 判定は sync_extractors で切り出したローカルテスト実行時（モジュール変数なし）への配慮
   const masterSet = typeof _skillNameSet === 'undefined' ? null : _skillNameSet
   const candidates= [
+    { sy: sy8, method: 'named-table' },
     { sy: sy1, method: 'column' },
     { sy: sy2, method: 'array' },
     { sy: sy5, method: 'career-sheet' },
@@ -1172,6 +1189,73 @@ function extractSkillYearsFromBodyText(text){
     console.log(`[skillYears-body] count=${Object.keys(result).length} keys=${Object.keys(result).join(',')}`)
   }
   return filterSkillYears(result)
+}
+
+// ── splitSkillNameCell ──
+function splitSkillNameCell(cell){
+  const out = []
+  const push = (s) => {
+    const t = s.replace(/\s*(等|など|ほか|その他)\s*$/, '').replace(/^[・･\-—\s]+/, '').trim()
+    // 1文字・長すぎ・数字だけ・説明文（読点が残る＝区切れていない）は名前ではない
+    if (!t || t.length < 2 || t.length > 40) return
+    if (/^[0-9０-９.\s]+$/.test(t)) return
+    if (/[。]/.test(t)) return
+    out.push(t)
+  }
+  // 括弧の外側だけで区切る。深さを数えるので入れ子でも壊れない
+  let depth = 0
+  let buf = ''
+  const flushTop = () => {
+    const seg = buf.trim()
+    buf = ''
+    if (!seg) return
+    // 「親（子、子、子）」を親と子に分ける
+    const m = seg.match(/^([^（(]+)[（(](.+)[）)]\s*$/)
+    if (m) {
+      push(m[1])
+      for (const child of m[2].split(/[、,，/／・]/)) push(child)
+    } else {
+      push(seg)
+    }
+  }
+  for (const ch of cell) {
+    if (ch === '（' || ch === '(') { depth++; buf += ch; continue }
+    if (ch === '）' || ch === ')') { depth = Math.max(0, depth - 1); buf += ch; continue }
+    if (depth === 0 && /[、,，/／\n]/.test(ch)) { flushTop(); continue }
+    buf += ch
+  }
+  flushTop()
+  return [...new Set(out)]
+}
+
+// ── extractSkillYearsFromNamedTable ──
+function extractSkillYearsFromNamedTable(grid){
+  const out= {}
+  const NAME_H = /^(名\s*称|スキル(名|名称)?|技術(名|要素)?|言語・?FW|ツール名)$/
+  const YEAR_H = /(経験年数|経験月数|年\s*数|経験期間)/
+  for (let h = 0; h < grid.length; h++) {
+    const head = grid[h] ?? []
+    const nameCol = head.findIndex((c) => NAME_H.test((c ?? '').trim()))
+    const yearCol = head.findIndex((c) => YEAR_H.test((c ?? '').trim()))
+    if (nameCol < 0 || yearCol < 0 || nameCol === yearCol) continue
+    let gap = 0
+    for (let r = h + 1; r < grid.length && gap < 4; r++) {
+      const row = grid[r] ?? []
+      const nameCell = (row[nameCol] ?? '').trim()
+      const yearCell = (row[yearCol] ?? '').trim()
+      if (!nameCell || !yearCell) { gap++; continue }
+      // 「2年以上」「3年」「6ヶ月」「1年6ヶ月」。全角数字も受ける
+      const months = parseDurationToMonths(yearCell)
+      if (!months || months <= 0 || months > 600) { gap++; continue }
+      gap = 0
+      for (const skill of splitSkillNameCell(nameCell)) {
+        // 同じスキルが複数行に出たら長い方を採る
+        out[skill] = Math.max(out[skill] ?? 0, months)
+      }
+    }
+    if (Object.keys(out).length > 0) break   // 最初に見つかった表だけを使う
+  }
+  return out
 }
 
 // ── colLettersFromIndex ──
@@ -4808,6 +4892,8 @@ export {
   calcMonthsFromDates,
   filterSkillYears,
   extractSkillYearsFromBodyText,
+  splitSkillNameCell,
+  extractSkillYearsFromNamedTable,
   colLettersFromIndex,
   bareResumeUrlsInRow,
   extractSkillYearsFromSheetData,
