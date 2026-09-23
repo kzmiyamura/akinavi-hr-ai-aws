@@ -545,6 +545,17 @@ export interface CandidateFilter {
   workStyle?: string
   /** 派遣可否。派遣案件に出せるかどうか */
   hakenOk?: boolean
+  /** 経歴書があるか（2026-09-23 追加）。
+   *
+   *  名簿メール（1通の本文に何十人も書かれる形式）では、添付が1人分しか付かない。
+   *  実例: 9/23 13:15 の1通で56人が登録され、添付は MK 1人分のスキルシートのみ。
+   *  残り55人には**そもそも経歴書が送られていない**（取り込みの不具合ではない）。
+   *  一覧は新着順なので、その人たちが画面の先頭を占めて「リンクが無い人ばかり」に見える。
+   *
+   *  在りかは resume_url だけではない（Box・Drive 運用もある）ので、
+   *  判定は3つの列のいずれかがあるかで行う。
+   *  実測 2026-09-23: あり1,023人 / なし1,568人 */
+  hasResume?: boolean
 }
 
 /** 常駐・リモートの選択肢。deriveWorkStyleTag が入れる値に合わせる */
@@ -586,6 +597,7 @@ export async function filterCandidates(
     p_available_by:     filter.availableBy     ?? null,
     p_work_style:       filter.workStyle       ?? null,
     p_haken_ok:         filter.hakenOk         ?? null,
+    p_has_resume:       filter.hasResume       ?? null,
   })
   if (error) throw new Error(`人材のフィルタリングに失敗しました: ${error.message}`)
   return (data ?? []) as Candidate[]
@@ -611,6 +623,7 @@ export async function filterCandidateCount(
     p_available_by:     filter.availableBy     ?? null,
     p_work_style:       filter.workStyle       ?? null,
     p_haken_ok:         filter.hakenOk         ?? null,
+    p_has_resume:       filter.hasResume       ?? null,
   })
   if (error) throw new Error(`候補者数の取得に失敗しました: ${error.message}`)
   return (data as number) ?? 0
