@@ -26,6 +26,12 @@ import {
   saveMatchingSettings,
   MATCHING_DEFAULTS,
 } from '../lib/db/matchingSettings'
+import {
+  getShadowWorkerSettings,
+  saveShadowWorkerSettings,
+  SHADOW_WORKER_DEFAULTS,
+  SHADOW_MAX_PER_DAY_LIMIT,
+} from '../lib/db/shadowWorkerSettings'
 import { writeStoredDemoUnlock } from '../lib/dataEnv'
 
 interface SettingsPageProps {
@@ -122,6 +128,20 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
       queryClient.invalidateQueries({ queryKey: ['priority-skills'] })
       queryClient.invalidateQueries({ queryKey: ['candidates-paged'] })
     },
+  })
+
+  // AI校正の1日上限。ワーカーは毎サイクル（約5分）読み直すので、保存すれば再起動なしで効く
+  const { data: shadowSettings } = useQuery({
+    queryKey: ['shadowWorkerSettings'],
+    queryFn: getShadowWorkerSettings,
+  })
+  const [shadowMaxPerDay, setShadowMaxPerDay] = useState(SHADOW_WORKER_DEFAULTS.maxPerDay)
+  useEffect(() => {
+    if (shadowSettings) setShadowMaxPerDay(shadowSettings.maxPerDay)
+  }, [shadowSettings])
+  const shadowMaxMutation = useMutation({
+    mutationFn: (n: number) => saveShadowWorkerSettings({ maxPerDay: n }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['shadowWorkerSettings'] }),
   })
 
   // マッチング設定
@@ -818,6 +838,56 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
           </div>
           <p className="text-xs text-gray-400 mt-3">
             現在: {prioritySkills?.length ? prioritySkills.join('・') : '絞り込みなし（全員が対象）'}
+          </p>
+        </section>
+
+        {/* ---- AI校正の1日上限 ----
+             これまで SQL を流さないと変えられなかった。ワーカーは毎サイクル（約5分）
+             この値を読み直すので、保存すれば pm2 の再起動なしでその場で効く。 */}
+        <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+          <h2 className="text-base font-semibold text-gray-800 mb-1">AI校正の1日上限</h2>
+          <p className="text-xs text-gray-400 mb-1">
+            常駐AIが1日に校正する人数の上限です。<strong className="text-gray-500">保存するとすぐ反映されます</strong>（再起動不要）。
+          </p>
+          <p className="text-xs text-gray-400 mb-4">
+            上限は24時間に均して消化されます。朝いちに使い切って日中に届いた人材が
+            当日中に処理されない、という状態を避けるためです。
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <input
+              type="number"
+              min={1}
+              max={SHADOW_MAX_PER_DAY_LIMIT}
+              value={shadowMaxPerDay}
+              onChange={e => setShadowMaxPerDay(Number(e.target.value))}
+              className="w-32 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-sm text-gray-500">件 / 日</span>
+            <button
+              type="button"
+              onClick={() => shadowMaxMutation.mutate(shadowMaxPerDay)}
+              disabled={
+                shadowMaxMutation.isPending ||
+                !Number.isFinite(shadowMaxPerDay) ||
+                shadowMaxPerDay < 1 ||
+                shadowMaxPerDay > SHADOW_MAX_PER_DAY_LIMIT
+              }
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 transition-colors"
+            >
+              {shadowMaxMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              保存
+            </button>
+            {shadowMaxMutation.isSuccess && <span className="text-sm text-green-600">保存しました</span>}
+            {shadowMaxMutation.isError && (
+              <span className="text-sm text-red-600">{String(shadowMaxMutation.error)}</span>
+            )}
+          </div>
+          <p className="text-xs text-gray-400 mt-3">
+            現在: {shadowSettings?.maxPerDay ?? '—'} 件 / 日（指定できるのは 1〜{SHADOW_MAX_PER_DAY_LIMIT.toLocaleString()}）
+          </p>
+          <p className="text-xs text-gray-400 mt-1">
+            上げるときは経歴書のダウンロード量（Supabase の Egress）を見てください。
+            1件あたり平均180KB・中央63KBで、そこが実際の制約です。
           </p>
         </section>
 
