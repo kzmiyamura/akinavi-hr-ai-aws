@@ -82,6 +82,26 @@ console.log(`ローカルに無い   : ${miss} 件 (${pct(miss, hit + miss)})`)
 console.log(`名前が想定外     : ${noHash} 件`)
 console.log(`実ファイル数     : ${uniq.size} 件（うちローカルにある ${uniqHit.size} 件）`)
 console.log(`無いうちDrive/Box由来: ${missWithLink} 件（メール添付ではないので控えに無くて当然）`)
+// 控えは15分おき、ワーカーは新しい順に処理する。
+// 「控える前に処理してしまう」競合が起きていれば、新しい人ほど命中率が落ちるはず。
+console.log('')
+console.log('登録からの経過時間ごとの命中率（控えとの競合を見る）:')
+const AGE_BUCKETS = [
+  ['0〜30分', 0, 0.5], ['30分〜1時間', 0.5, 1], ['1〜2時間', 1, 2],
+  ['2〜6時間', 2, 6], ['6〜24時間', 6, 24], ['1日以上', 24, Infinity],
+]
+for (const [label, lo, hi] of AGE_BUCKETS) {
+  let h = 0, t = 0
+  for (const r of urls) {
+    const ageH = (Date.now() - new Date(r.created_at).getTime()) / 3600000
+    if (ageH < lo || ageH >= hi) continue
+    const m = decodeURIComponent(r.resume_url || '').match(HASH_RE)
+    if (!m) continue
+    t++; if (index[m[1]]) h++
+  }
+  if (t) console.log(`  ${label.padEnd(12)} ${String(h).padStart(4)}/${String(t).padStart(4)}  ${pct(h, t).padStart(6)}`)
+}
+
 console.log('')
 console.log('登録日ごとの命中率:')
 for (const [day, d] of [...byDay].sort()) {

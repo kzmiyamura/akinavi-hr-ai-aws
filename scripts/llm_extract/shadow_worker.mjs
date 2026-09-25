@@ -86,6 +86,11 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'akinavi-shadow-'))
 // 経歴書をローカル控えから読めた回数／落とすしかなかった回数。
 // 「効いている」と言い切るために数える。1件あたり実測156KB。
 let localHits = 0, localMisses = 0
+
+// 経歴書つきの人を何分寝かせてから校正するか。
+// メールの控え（AkiNavi-MailExport）は15分おきなので、それを確実に跨ぐ値にする。
+// 短いと控える前に処理して Storage から落とす羽目になり、長いと校正が遅れる。
+const ARCHIVE_GRACE_MIN = Number(process.env.SHADOW_ARCHIVE_GRACE_MIN ?? 20)
 // 本番 candidates への上書き。SHADOW_APPLY=0 で記録のみ（シャドー運転）に戻せる
 const APPLY = process.env.SHADOW_APPLY !== '0'
 // 処理対象のデータ環境。既定は prod（従来どおり）。
@@ -555,10 +560,19 @@ async function cycle() {
   const take = Math.min(MAX_PER_CYCLE, room)
   if (take <= 0) { log('ペース配分により待機（今サイクルの処理枠なし）'); return }
   const { clause: skillClause, list: skillList } = await skillFilterClause()
+  // 経歴書を持つ人だけ、控えが追いつくまで待つ（2026-09-26）。
+  // ローカル控えから読めば Storage のダウンロード（156KB/件）が要らないが、
+  // **控えの取得は15分おきなのに、校正は登録から中央値6分で走っていた**
+  // （実測: 直近3日286人のうち62%が15分以内）。つまり控える前に処理してしまい、
+  // せっかくの控えがほぼ使われない。数十分ずらすだけで命中する。
+  // 人材は7日で消えるので、この程度の遅れは実害にならない。
+  // 経歴書を持たない人は控えを待つ意味がないので、今までどおり即処理する。
+  const graceAt = new Date(Date.now() - ARCHIVE_GRACE_MIN * 60000).toISOString()
   const q = `candidates?select=id,name,resume_url,raw_profile,created_at,desired_rate,from_company,experience_years,skills` +
     `&data_env=eq.${DATA_ENV}&merged_into=is.null` +
     `&raw_profile->>_llm_checked_at=is.null` +
     `&created_at=gte.${encodeURIComponent(since)}` +
+    `&or=(resume_url.is.null,created_at.lte.${encodeURIComponent(`"${graceAt}"`)})` +
     skillClause +
     `&order=created_at.desc&limit=${take}`
   const rows = await rest(q)
