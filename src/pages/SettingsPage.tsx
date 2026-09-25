@@ -886,8 +886,9 @@ export function SettingsPage({ demoUiEnabled, onToggleDemoUi }: SettingsPageProp
             現在: {shadowSettings?.maxPerDay ?? '—'} 件 / 日（指定できるのは 1〜{SHADOW_MAX_PER_DAY_LIMIT.toLocaleString()}）
           </p>
           <p className="text-xs text-gray-400 mt-1">
-            上げるときは経歴書のダウンロード量（Supabase の Egress）を見てください。
-            1件あたり平均180KB・中央63KBで、そこが実際の制約です。
+            上げても課金は増えません。経歴書のダウンロード（Supabase の Egress）は
+            2026-09-26 時点で月間 2.39GB / 250GB＝枠の1%です。
+            効いてくるのは処理時間で、1人あたり約1.3分かかります。
           </p>
         </section>
 
