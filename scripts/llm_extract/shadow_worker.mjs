@@ -17,6 +17,7 @@ import { projectText, candidateText, buildRecommendationRecord } from './recomme
 import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE, isUsableName } from './apply.mjs'
 import { buildProjectPatch, buildInterpretationPatch, DEFAULT_TITLE } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
+import { resolveLocalResume, refreshLocalResumeIndex } from './local_resume.mjs'
 import {
   trimBodyForLlm, projectLooksComplete, parseSkillFilterValue, buildSkillFilterClause, pacedAllowance,
   looksLikeCandidateSubject,
@@ -81,6 +82,10 @@ const LOOKBACK_DAYS = Number(process.env.SHADOW_LOOKBACK_DAYS ?? 7)
 // 失敗を記録しないと同じレコードを永久に再処理し、枠を食い続ける
 const MAX_ATTEMPTS = 3
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'akinavi-shadow-'))
+
+// 経歴書をローカル控えから読めた回数／落とすしかなかった回数。
+// 「効いている」と言い切るために数える。1件あたり実測156KB。
+let localHits = 0, localMisses = 0
 // 本番 candidates への上書き。SHADOW_APPLY=0 で記録のみ（シャドー運転）に戻せる
 const APPLY = process.env.SHADOW_APPLY !== '0'
 // 処理対象のデータ環境。既定は prod（従来どおり）。
@@ -401,12 +406,25 @@ async function processCandidate(c, preBody = null) {
   }
   if (extMatch && !cachedAttach) {
     const ext = extMatch[1]
-    const fp = path.join(TMP, `${c.id}.${ext}`)
+    let fp = path.join(TMP, `${c.id}.${ext}`)
     try {
-      let res = await fetch(url).catch(() => null)
-      if (!res || !res.ok) { await new Promise(r => setTimeout(r, 3000)); res = await fetch(url) }
-      if (!res.ok) throw new Error(`resume DL ${res.status}`)
-      fs.writeFileSync(fp, Buffer.from(await res.arrayBuffer()))
+      // ローカル控えを先に見る（2026-09-26）。
+      // egress の84%がこのダウンロードだった（実測 156KB/件・約29MB/日＝月1GB）。
+      // 同じファイルは D:\akinavi-archive\mail に原本ごと控えてあり、
+      // Storage のファイル名は内容のSHA-256なので確実に突き合わせられる。
+      // 当たらないのは主にリンク（Google Drive 等）由来で、その分は今までどおり落とす。
+      const localFp = resolveLocalResume(url)
+      if (localFp) {
+        fp = localFp
+        localHits++
+        log(`  [${c.name}] 経歴書はローカル控えから読む（Storageから落とさない）`)
+      } else {
+        localMisses++
+        let res = await fetch(url).catch(() => null)
+        if (!res || !res.ok) { await new Promise(r => setTimeout(r, 3000)); res = await fetch(url) }
+        if (!res.ok) throw new Error(`resume DL ${res.status}`)
+        fs.writeFileSync(fp, Buffer.from(await res.arrayBuffer()))
+      }
       let grid, kind = 'grid'
       if (ext === 'docx' || ext === 'pdf') {
         const { extractResumeText } = await import('./textract.mjs')
@@ -430,7 +448,10 @@ async function processCandidate(c, preBody = null) {
       // 失敗は source_url を書かない。書くと「解析済み」に見えて永久に再試行されなくなる
       await saveShadow({ candidate_id: c.id, source: 'attachment', status: 'error', reasons: [String(e).slice(0, 200)], source_url: null })
     } finally {
-      fs.rmSync(fp, { force: true })
+      // ⚠ 消してよいのは自分が TMP に落としたものだけ。
+      //    ローカル控えを読んだ場合 fp は D:\akinavi-archive\mail の**原本**を指しており、
+      //    ここで消すとメールの控えそのものを壊す（しかも Outlook 側は掃除済みで戻せない）。
+      if (fp.startsWith(TMP)) fs.rmSync(fp, { force: true })
     }
   }
 
@@ -492,6 +513,12 @@ async function maxPerDay() {
 
 async function cycle() {
   rollDay()
+  // ローカル控えの索引を増分で更新する。一度ハッシュしたファイルは読み直さないので、
+  // 2回目以降は新着ぶん（数十件）だけで済む。控えが無い環境では null が返り何もしない。
+  try {
+    const r = refreshLocalResumeIndex()
+    if (r && r.added > 0) log(`ローカル控えの索引に${r.added}件追加（計${r.indexed}件・${r.ms}ms）`)
+  } catch (e) { log(`ローカル索引の更新に失敗（Storageから落とす動作に退避）: ${e}`) }
   // 日次上限を DB から読み直す。pm2 を止めずに増減できるようにするため
   const nextMax = await maxPerDay()
   if (nextMax !== effectiveMaxPerDay) {
@@ -587,7 +614,9 @@ async function cycle() {
   }
   flushQuarantineNotice()
   // 金額は出さない（上のコメント参照）。進捗は件数で足りる
-  log(`サイクル完了 day=${state.dayCount}件/${effectiveMaxPerDay}件`)
+  const dl = localHits + localMisses
+  const saved = dl ? `・経歴書 ローカル${localHits}/${dl}件（Storage節約 約${Math.round(localHits * 156 / 1024)}MB）` : ''
+  log(`サイクル完了 day=${state.dayCount}件/${effectiveMaxPerDay}件${saved}`)
 }
 
 // ── 案件のLLM補正サイクル ──
