@@ -284,6 +284,19 @@ function dirSize(dir) {
   try { walk(dir) } catch { /* ignore */ }
   return total
 }
+// 「作り直せない表」のスナップショットも一緒に撮る（2026-09-28）。
+// Free プランにはバックアップが無いので、これがそのまま唯一の控えになる。
+// 増える表と違って毎回まるごと撮り直す（行が編集・削除されるため）。
+// 専用のスケジュール登録を増やさずに済むよう、日次の AkiNavi-ArchiveLocal に相乗りする。
+console.log('\n■ 作り直せない表のスナップショット')
+try {
+  const { run: archiveMasters } = await import('./archive_masters.mjs')
+  await archiveMasters({ dir: ARCHIVE_DIR, dryRun })
+} catch (e) {
+  // ここが落ちても人材の控えは取れている。全体を失敗にはしない
+  console.error(`スナップショットに失敗: ${String(e).slice(0, 200)}`)
+}
+
 if (!dryRun) {
   console.log(`控えの合計: ${(dirSize(ARCHIVE_DIR) / 1024 / 1024).toFixed(1)} MB`)
 }
