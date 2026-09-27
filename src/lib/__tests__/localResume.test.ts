@@ -18,8 +18,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 
-const { extractStorageHash, hashFileBytes, refreshLocalResumeIndex, resolveLocalResume, _resetCache } =
-  await import('../../../scripts/llm_extract/local_resume.mjs')
+// @ts-expect-error — 常駐ワーカーが使う JS モジュール（型定義なし）
+import { extractStorageHash, hashFileBytes, refreshLocalResumeIndex, resolveLocalResume, _resetCache } from '../../../scripts/llm_extract/local_resume.mjs'
 
 let root: string
 

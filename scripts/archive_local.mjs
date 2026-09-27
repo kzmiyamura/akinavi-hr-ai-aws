@@ -147,6 +147,23 @@ const TARGETS = [
     key: 'domain', // この表だけ主キーが id ではない
     select: '*',
   },
+  {
+    // 7日を過ぎた人材の行き先。**消えた人はここにしか残っていない**。
+    //
+    // 2026-09-28 に archive_masters.mjs（毎回まるごと撮り直す方）から移した。
+    // 19,871行＝13.9MB あり、日次で撮り直すと **それだけで月417MB** かかる。
+    // Free の egress は月5GB なので、控えを取るためだけに枠の8%を使うことになっていた。
+    // この表は増えるだけで書き換わらないので、増分で足せば済む。
+    name: 'candidates_archive_light',
+    table: 'candidates_archive_light',
+    // ⚠ created_at ではなく archived_at。
+    //   created_at は**人材が登録された日**で、この表に入るのはその7日後。
+    //   つまり後から「古い created_at の行」が足されるので、
+    //   created_at をカーソルにすると水位より古い行を**黙って取りこぼす**。
+    //   archived_at は DEFAULT now() で入るので、挿入順に単調に増える。
+    order: 'archived_at',
+    select: '*',
+  },
 ]
 
 function readJson(path, fallback) {

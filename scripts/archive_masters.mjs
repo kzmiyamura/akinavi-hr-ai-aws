@@ -41,17 +41,21 @@ export const MASTER_TABLES = [
   // 別名では表せない包含関係（MySQL→SQL 等）。これも手作り。
   // この表に id 列は無い（child, parent, note, created_at）
   { table: 'skill_implications', order: 'child' },
-  // ekidata.jp 由来。作り直せるが手間が大きい
-  { table: 'station_master', order: 'id' },
+  // ── ここには入れないもの ────────────────────────────────
+  // station_master（12,666行・1.7MB）
+  //   git に2重に入っている: 20260527_add_station_master.sql ほかのマイグレーションと、
+  //   Edge Function に同梱している station_data.json（861KB・全件）。
+  //   毎日1.7MB引く価値がない（月51MB）。2026-09-28 に外した。
+  // candidates_archive_light（19,871行・13.9MB）
+  //   増えるだけの表なので archive_local.mjs の増分取得に移した（月417MB→ほぼゼロ）。
   // 営業が画面で作ったもの。どこにも他に無い
   { table: 'notification_rules', order: 'id' },
   // 設定一式。トークンは既定で伏せる（下の maskSecrets 参照）
   { table: 'app_config', order: 'key' },
   // 派遣・紹介会社の免許情報。厚労省サイトを引き直すのは重い
   { table: 'agent_companies', order: 'domain' },
-  // 7か月ぶんの人材サマリー。candidates から消えた人はここにしか残っていない
-  { table: 'candidates_archive_light', order: 'id' },
-  // 提案履歴
+  // 提案履歴。261行・300KB と小さく、しかも **status が後から書き換わる**
+  // （pending → sent → accepted）。増分では状態変化を追えないので毎回撮り直す。
   { table: 'submissions', order: 'id' },
 ]
 
