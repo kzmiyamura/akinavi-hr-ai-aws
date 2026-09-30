@@ -20,6 +20,25 @@ description: AkiNavi HR-AIの品質チェック。skill_masterメンテ・駅名
 
 ---
 
+## ⓪ Free プラン枠の監視（最初に実行する）
+
+2026-09-30 に Pro → **Free** へ戻した。壁は **DB 500MB / Storage 1GB / egress 5GB・月**。
+超えると本番が読み取り専用になったりリクエストを返せなくなる＝営業が使えなくなる。
+
+```bash
+node scripts/free_plan_watch.mjs
+```
+
+- 終了コード 0=余裕 / 1=警告(70%超) / 2=危険(85%超)
+- **egress だけはこのスクリプトでは測れない。** 課金値はダッシュボードが正:
+  https://supabase.com/dashboard/org/fsodoektqqtvccdwnygv/usage
+  （品質チェックのたびに開いて、その回の残量を報告に含める）
+- 70% を超えたら **掃除の間隔**から詰める。保持日数を削るのは業務影響があるので独断で決めない
+  （経歴書の保持を人材リストより短くすると、リストに人がいるのにリンクだけ切れる）
+- 報告には**必ず実測値**を書く（「異常なし」だけにしない）
+
+---
+
 ## ① skill_master メンテ
 
 1. `python3 scripts/skill_master_review.py` を実行する
