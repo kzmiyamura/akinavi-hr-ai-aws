@@ -29,6 +29,7 @@ import { readPrioritySkillPref, writePrioritySkillPref, resolvePrioritySkills, n
 import type { PrioritySkillPref } from '../lib/prioritySkillPref'
 import { DemoSeedPanel } from '../components/DemoSeedPanel'
 import { DemoMatchingTestPanel } from '../components/DemoMatchingTestPanel'
+import { splitRoles, leadershipLabel } from '../lib/roleDisplay'
 import { extractTextFromExcel, extractTextFromWord, getFileCategory } from '../lib/fileParser'
 import { findSkillMonths } from '../lib/skillYearsMatch'
 import { SameAsOtherAgencyBadge, readSameAsOtherAgency } from '../components/SameAsOtherAgencyBadge'
@@ -593,24 +594,53 @@ export function CandidateProfileFields({
       </div>
 
       <div className="space-y-1 mt-1.5">
-        {(roles ?? []).length > 0 && (
-          <div className="flex flex-wrap gap-1 items-center">
-            <span className="text-xs text-gray-400 w-12 shrink-0">役割</span>
-            {/* roles はスコア降順（inbound-email の scoreProseRoles）: 先頭=主役割を強調表示 */}
-            {(roles ?? []).map((r, idx) => (
-              <span
-                key={r}
-                // 先頭がスコア最上位＝主役割。役割が1個だけの人材もその1個が主役割なので強調する
-                // （#131: 1個のときだけ強調が外れて分かりにくかった）
-                className={idx === 0
-                  ? 'text-xs bg-indigo-600 text-white font-medium rounded px-1.5 py-0.5'
-                  : 'text-xs bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5'}
-              >
-                {r}
-              </span>
-            ))}
-          </div>
-        )}
+        {/* 役割を「職種（何の人か）」と「経験（どの立場をやったか）」の2行に分ける。
+            PM・PL・PMO は立場であって職種ではないので、同じ行に混ぜると
+            「主に何の人か」が読めなくなる（2026-10-01 ユーザー指摘）。
+            roles の中身と並び順は触っていない＝マッチングの採点は変わらない。 */}
+        {(() => {
+          const { jobs, leadership } = splitRoles(roles)
+          if (jobs.length === 0 && leadership.length === 0) return null
+          return (
+            <>
+              <div className="flex flex-wrap gap-1 items-center">
+                <span className="text-xs text-gray-400 w-12 shrink-0">職種</span>
+                {/* jobs はスコア降順のまま: 先頭=主職種を強調表示 */}
+                {jobs.map((r, idx) => (
+                  <span
+                    key={r}
+                    // 先頭がスコア最上位＝主職種。1個だけの人材もその1個が主職種なので強調する
+                    // （#131: 1個のときだけ強調が外れて分かりにくかった）
+                    className={idx === 0
+                      ? 'text-xs bg-indigo-600 text-white font-medium rounded px-1.5 py-0.5'
+                      : 'text-xs bg-indigo-50 text-indigo-700 rounded px-1.5 py-0.5'}
+                  >
+                    {r}
+                  </span>
+                ))}
+                {/* 立場だけ書いてあって職種が読み取れない人が実測309人いる。
+                    行ごと消すと「取れなかった」のか「無い」のか分からなくなるので明示する */}
+                {jobs.length === 0 && (
+                  <span className="text-xs text-gray-400" title="経歴に職種の記載が見当たらない。下のスキル欄で判断してください">
+                    記載なし
+                  </span>
+                )}
+              </div>
+              {leadership.length > 0 && (
+                <div className="flex flex-wrap gap-1 items-center">
+                  <span className="text-xs text-gray-400 w-12 shrink-0">経験</span>
+                  {leadership.map(r => (
+                    <span key={r}
+                      className="text-xs bg-amber-50 text-amber-800 border border-amber-200 rounded px-1.5 py-0.5"
+                      title={`経歴に「${r}」の記載がある`}>
+                      {leadershipLabel(r)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
+          )
+        })()}
         {(industries ?? []).length > 0 && (
           <div className="flex flex-wrap gap-1 items-center">
             <span className="text-xs text-gray-400 w-12 shrink-0">業界</span>
