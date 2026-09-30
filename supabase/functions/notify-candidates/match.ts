@@ -36,7 +36,10 @@ export interface CandidateLite {
   age?: number | null
   /** 経験年数（candidates.experience_years）。取れていなければ null */
   experienceYears?: number | null
-  /** 技術ごとの年数（raw_profile.skillYears）。`_` 始まりの内部キーは含めない */
+  /**
+   * 技術ごとの経験**月数**（raw_profile.skillYears）。`_` 始まりの内部キーは含めない。
+   * キー名は skillYears だが中身は月数（例: Visual Basic 84 ＝ 7年）
+   */
   skillYears?: Record<string, number> | null
   /** 役割ごとの到達レベル（raw_profile._roleLevels）。実測で6役割にしか付かない */
   roleLevels?: Record<string, string> | null
@@ -98,8 +101,15 @@ function passUnknown(rule: NotifyRule): boolean {
   return rule.include_unknown !== false
 }
 
-/** その技術の年数。skillYears のキーは表記ゆれがあるので正規化して引く */
-function yearsFor(cand: CandidateLite, keyword: string): number | null {
+/**
+ * その技術の経験**月数**。キーは表記ゆれがあるので正規化して引く。
+ *
+ * ⚠ `raw_profile.skillYears` は名前に反して**月数**が入っている
+ * （`src/lib/skillYearsMatch.ts` の findSkillMonths / 画面は `Math.floor(months/12)年` と表示）。
+ * 実データ例: `{ "Visual Basic": 84, "Python": 39 }` ＝ 7年 / 3年3か月。
+ * ルール側（`skill_years_min`）は営業が入れる値なので**年**で持ち、ここで換算する。
+ */
+function monthsFor(cand: CandidateLite, keyword: string): number | null {
   const sy = cand.skillYears
   if (!sy) return null
   const want = norm(keyword)
@@ -196,15 +206,17 @@ export function matchesRule(rule: NotifyRule, cand: CandidateLite): boolean {
     }
   }
 
-  // 指定スキルでの年数（skill_keywords のいずれか1つが満たせばよい＝スキル条件と同じ OR）
+  // 指定スキルでの年数（skill_keywords のいずれか1つが満たせばよい＝スキル条件と同じ OR）。
+  // ルールは「年」、データは「月」なので 12 倍して比べる
   if (rule.skill_years_min != null && kws.length > 0) {
+    const needMonths = rule.skill_years_min * 12
     let decided = false
     let ok = false
     for (const kw of kws) {
-      const y = yearsFor(cand, kw)
-      if (y == null) continue // その技術の年数が取れていない
+      const m = monthsFor(cand, kw)
+      if (m == null) continue // その技術の年数が取れていない
       decided = true
-      if (y >= rule.skill_years_min) { ok = true; break }
+      if (m >= needMonths) { ok = true; break }
     }
     if (decided) {
       if (!ok) return false

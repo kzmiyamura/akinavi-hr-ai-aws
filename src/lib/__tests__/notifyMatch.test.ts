@@ -35,9 +35,11 @@ describe('年齢・経験・レベル・本文の条件（2026-10-01 追加）',
     text_keywords: ['共通部品', '共通基盤'],
   })
 
+  // ⚠ skillYears は名前に反して**月数**（実データ: Visual Basic 84 ＝ 7年）。
+  //   ルールの skill_years_min は「年」なので、判定側で12倍して比べている
   it('現場の要求を1本のルールで表現できる', () => {
     const 合う = cand({
-      age: 34, skillYears: { Java: 8, AWS: 3 },
+      age: 34, skillYears: { Java: 96, AWS: 36 }, // 8年 / 3年
       roleLevels: { 'テックリード': 'B' },
       text: '共通部品の設計・実装を担当',
     })
@@ -45,21 +47,23 @@ describe('年齢・経験・レベル・本文の条件（2026-10-01 追加）',
   })
 
   it('年齢の範囲外は落ちる', () => {
-    const base = { skillYears: { Java: 8 }, roleLevels: { 'テックリード': 'B' }, text: '共通部品' }
+    const base = { skillYears: { Java: 96 }, roleLevels: { 'テックリード': 'B' }, text: '共通部品' }
     expect(matchesRule(基盤チーム, cand({ ...base, age: 22 }))).toBe(false)
     expect(matchesRule(基盤チーム, cand({ ...base, age: 55 }))).toBe(false)
     expect(matchesRule(基盤チーム, cand({ ...base, age: 25 }))).toBe(true) // 境界は含む
     expect(matchesRule(基盤チーム, cand({ ...base, age: 49 }))).toBe(true)
   })
 
-  it('指定スキルの年数が足りなければ落ちる', () => {
+  it('指定スキルの年数が足りなければ落ちる（データは月数・ルールは年）', () => {
     const base = { age: 34, roleLevels: { 'テックリード': 'B' }, text: '共通部品' }
-    expect(matchesRule(基盤チーム, cand({ ...base, skillYears: { Java: 2 } }))).toBe(false)
-    expect(matchesRule(基盤チーム, cand({ ...base, skillYears: { Java: 3 } }))).toBe(true)
+    expect(matchesRule(基盤チーム, cand({ ...base, skillYears: { Java: 35 } }))).toBe(false) // 2年11か月
+    expect(matchesRule(基盤チーム, cand({ ...base, skillYears: { Java: 36 } }))).toBe(true)  // ちょうど3年
+    // 月数を年数と取り違えると「3」で通ってしまう。3か月では落ちること
+    expect(matchesRule(基盤チーム, cand({ ...base, skillYears: { Java: 3 } }))).toBe(false)
   })
 
   it('到達レベルは「Cしか無い人」だけ外す（AやBが1つでもあれば残す）', () => {
-    const base = { age: 34, skillYears: { Java: 8 }, text: '共通部品' }
+    const base = { age: 34, skillYears: { Java: 96 }, text: '共通部品' }
     // C だけ＝従事どまり。教育が必要な人に一番近い印なので外す
     expect(matchesRule(基盤チーム, cand({ ...base, roleLevels: { 'PMO': 'C' } }))).toBe(false)
     // 役割ごとに別々に判定されるので A と C が同居する。これは外さない
@@ -69,14 +73,14 @@ describe('年齢・経験・レベル・本文の条件（2026-10-01 追加）',
   })
 
   it('本文キーワードは OR。1つでも当たれば通る', () => {
-    const base = { age: 34, skillYears: { Java: 8 }, roleLevels: { 'テックリード': 'B' } }
+    const base = { age: 34, skillYears: { Java: 96 }, roleLevels: { 'テックリード': 'B' } }
     expect(matchesRule(基盤チーム, cand({ ...base, text: '共通基盤の刷新を担当' }))).toBe(true)
     expect(matchesRule(基盤チーム, cand({ ...base, text: '画面の改修のみ' }))).toBe(false)
   })
 
   it('本文が渡されていない（未取得）ときは本文条件を判定しない', () => {
     // 本文は重いので後段で引く。この段階では落とさず、matchesText で見る
-    const c = cand({ age: 34, skillYears: { Java: 8 }, roleLevels: { 'テックリード': 'B' }, text: undefined })
+    const c = cand({ age: 34, skillYears: { Java: 96 }, roleLevels: { 'テックリード': 'B' }, text: undefined })
     expect(matchesRule(基盤チーム, c)).toBe(true)
     expect(ruleNeedsText(基盤チーム)).toBe(true)
     expect(matchesText(基盤チーム, '共通部品を作った')).toBe(true)
