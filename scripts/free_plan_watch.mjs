@@ -40,13 +40,58 @@ const CRIT = 0.85
 const args = process.argv.slice(2)
 const AS_JSON = args.includes('--json')
 const QUIET = args.includes('--quiet')
+const WANT_MAIL = args.includes('--mail')        // 警告以上のときだけ送る
+const MAIL_ALWAYS = args.includes('--mail-always') // 状態にかかわらず送る（疎通確認・週次まとめ用）
+
+// 送り先。環境変数 FREE_PLAN_ALERT_TO で上書きできる。
+//
+// ⚠ 既定が gmail ではなく yahoo なのには理由がある。
+// Resend に独自ドメインを1つも登録していない（2026-09-30 実測: /domains は空）ため、
+// 差出人は Resend の共有アドレス onboarding@resend.dev しか使えず、共有アドレスは
+// **Resend アカウント本人のアドレス宛にしか送れない**（それ以外は 403 validation_error）。
+// kzmiyamura@gmail.com に送りたい場合は Resend にドメインを登録して DNS を通し、
+// MAIL_FROM をそのドメインのアドレスに変えること。そうすれば宛先の制限は外れる。
+const MAIL_TO = process.env.FREE_PLAN_ALERT_TO || 'kzk_mymr@yahoo.co.jp'
+const MAIL_FROM = process.env.FREE_PLAN_ALERT_FROM || 'AkiNavi 枠監視 <onboarding@resend.dev>'
+
+/** .env.local を読む（RESEND_API_KEY はここにある） */
+function envLocal(key) {
+  if (process.env[key]) return process.env[key]
+  const p = resolve(ROOT, '.env.local')
+  if (!existsSync(p)) return undefined
+  for (const raw of readFileSync(p, 'utf-8').split('\n')) {
+    const t = raw.trim()
+    if (!t || t.startsWith('#')) continue
+    const eq = t.indexOf('=')
+    if (eq !== -1 && t.slice(0, eq).trim() === key) return t.slice(eq + 1).trim()
+  }
+  return undefined
+}
+
+async function sendMail(subject, text) {
+  const key = envLocal('RESEND_API_KEY')
+  if (!key) return { ok: false, reason: 'RESEND_API_KEY が .env.local に無い' }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: MAIL_FROM, to: [MAIL_TO], subject, text }),
+    })
+    if (!res.ok) return { ok: false, reason: `Resend ${res.status} ${(await res.text()).slice(0, 200)}` }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: String(e) }
+  }
+}
 
 // ---------------------------------------------------------------- 取得
 function fetchSnapshot() {
-  // Node 24 は .cmd シムを execFile で直接叩けない（EINVAL）ので shell 経由にする
+  // Node 24 は .cmd シムを execFile で直接叩けない（EINVAL）ので shell 経由にする。
+  // --output-format json は必須。端末から離れて（タスクスケジューラ等で）走ると
+  // 既定が罫線つきの表になり、JSON として読めなくなる（2026-09-30 に実際に踏んだ）。
   const out = execFileSync(
     'npx',
-    ['supabase', 'db', 'query', '--linked', '-f', `"${SQL}"`],
+    ['supabase', 'db', 'query', '--linked', '--output-format', 'json', '-f', `"${SQL}"`],
     { cwd: ROOT, encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024, shell: true },
   )
   const start = out.indexOf('{')
@@ -139,35 +184,53 @@ if (QUIET && code === 0) process.exit(0)
 const gDb = growthPerDay(history, 'db_bytes')
 const gSt = growthPerDay(history, 'storage_bytes')
 
-console.log(`Free プラン枠の現在地  ${new Date(snap.at).toLocaleString('ja-JP')}`)
-console.log('─'.repeat(78))
-console.log(line('DB', snap.db_bytes, LIMIT.db, gDb))
-console.log(line('Storage', snap.storage_bytes, LIMIT.storage, gSt))
-console.log(`egress   ${'·'.repeat(20)}   ?%  ここでは測れない / 5.0 GB  [要ダッシュボード]`)
-console.log(`         ${USAGE_URL}`)
-console.log('─'.repeat(78))
+const out = []
+out.push(`Free プラン枠の現在地  ${new Date(snap.at).toLocaleString('ja-JP')}`)
+out.push('─'.repeat(78))
+out.push(line('DB', snap.db_bytes, LIMIT.db, gDb))
+out.push(line('Storage', snap.storage_bytes, LIMIT.storage, gSt))
+out.push(`egress   ${'·'.repeat(20)}   ?%  ここでは測れない / 5.0 GB  [要ダッシュボード]`)
+out.push(`         ${USAGE_URL}`)
+out.push('─'.repeat(78))
 
-console.log('Storage の内訳:')
+out.push('Storage の内訳:')
 for (const b of snap.buckets) {
-  console.log(`  ${b.bucket.padEnd(14)} ${mb(b.bytes).padStart(9)}  ${String(b.files).padStart(6)}件  最古 ${b.oldest}`)
+  out.push(`  ${b.bucket.padEnd(14)} ${mb(b.bytes).padStart(9)}  ${String(b.files).padStart(6)}件  最古 ${b.oldest}`)
 }
-console.log(`  直近24時間の流入 ${mb(snap.storage_in_24h)}`)
+out.push(`  直近24時間の流入 ${mb(snap.storage_in_24h)}`)
 
-console.log('DB の大きい表:')
-console.log('  ' + snap.top_tables.map(t => `${t.name} ${mb(t.bytes)}`).join(' / '))
+out.push('DB の大きい表:')
+out.push('  ' + snap.top_tables.map(t => `${t.name} ${mb(t.bytes)}`).join(' / '))
 
-console.log('保持の実績（最古の行）:')
-console.log('  ' + Object.entries(snap.oldest).map(([k, v]) => `${k} ${v ?? '-'}`).join(' / '))
+out.push('保持の実績（最古の行）:')
+out.push('  ' + Object.entries(snap.oldest).map(([k, v]) => `${k} ${v ?? '-'}`).join(' / '))
 
 if (snap.dead_tuples > 50000) {
-  console.log(`注意: 削除済みで未回収の行が ${snap.dead_tuples.toLocaleString()} 行ある（VACUUM 待ち。DB サイズが実態より大きく出る）`)
+  out.push(`注意: 削除済みで未回収の行が ${snap.dead_tuples.toLocaleString()} 行ある（VACUUM 待ち。DB サイズが実態より大きく出る）`)
 }
 
 if (code > 0) {
-  console.log('')
-  console.log(code === 2
+  out.push('')
+  out.push(code === 2
     ? '危険: 85% を超えた。掃除の間隔を縮めるか保持日数を見直すこと（保持日数を削るのは業務影響があるので独断で決めない）'
     : '警告: 70% を超えた。増え方を見て、掃除間隔（保持日数ではなく）から先に詰める')
 }
 
-process.exit(code)
+const report = out.join('\n')
+console.log(report)
+
+// ---------------------------------------------------------------- メール
+// --mail は「警告以上」＋「月曜の週次まとめ」だけ送る。
+// 毎日届くと読まれなくなるが、まったく届かないと監視が死んでいても気付けない。
+const isWeeklyDigest = new Date().getDay() === 1
+if (MAIL_ALWAYS || (WANT_MAIL && (code > 0 || isWeeklyDigest))) {
+  const label = code === 2 ? '【危険】' : code === 1 ? '【警告】' : '【定期】'
+  const subject = `${label}AkiNavi Supabase Free 枠 — DB ${pct(snap.db_bytes, LIMIT.db)}% / Storage ${pct(snap.storage_bytes, LIMIT.storage)}%`
+  const res = await sendMail(subject, `${report}\n\n---\nこのメールは ${ROOT} の scripts/free_plan_watch.mjs が送っています。\n止めるときはタスクスケジューラの AkinaviFreePlanWatch を無効にしてください。`)
+  console.log(res.ok ? `メール送信: ${MAIL_TO}` : `メール送信できず: ${res.reason}`)
+}
+
+// fetch 直後に process.exit() すると Windows の libuv が
+// 「Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)」で落ち、
+// 終了コードが 127 に化ける（タスクスケジューラ側の判定が壊れる）。
+process.exitCode = code
