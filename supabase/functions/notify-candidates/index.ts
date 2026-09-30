@@ -40,6 +40,38 @@ function json(status: number, body: Record<string, unknown>): Response {
   })
 }
 
+/** 数値として読む。`"32歳"` のような表記も拾う。読めなければ null（0 にしない） */
+function toInt(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : null
+  if (typeof v !== 'string') return null
+  const m = v.match(/-?\d+/)
+  if (!m) return null
+  const n = Number(m[0])
+  return Number.isFinite(n) ? n : null
+}
+
+/** `{スキル名: 年数}` として読む。`_` 始まりの内部キーは落とす */
+function toNumberMap(v: unknown): Record<string, number> | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const out: Record<string, number> = {}
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (k.startsWith('_')) continue
+    const n = typeof raw === 'number' ? raw : Number(raw)
+    if (Number.isFinite(n)) out[k] = n
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/** `{役割: 'A'|'B'|'C'|'-'}` として読む */
+function toStringMap(v: unknown): Record<string, string> | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const out: Record<string, string> = {}
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof raw === 'string' && raw !== '') out[k] = raw
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
 // deno-lint-ignore no-explicit-any
 type Sb = any
 
@@ -266,7 +298,10 @@ Deno.serve(async (req) => {
     // ルール取得（テーブル未作成=マイグレーション前は静かにスキップ）
     const { data: ruleRows, error: ruleErr } = await sb
       .from('notification_rules')
-      .select('id, label, name_keyword, skill_keywords, station_keyword, notify_email, enabled, data_env')
+      // 2026-10-01 追加の条件列も読む。ルール行は数十件しかないので列を足しても軽い。
+      // ⚠ 文字列を連結して渡さないこと。supabase-js は select の**文字列リテラル**から
+      //   戻り値の型を組み立てるので、連結すると GenericStringError[] に化けて deno check が落ちる
+      .select('id, label, name_keyword, skill_keywords, station_keyword, notify_email, enabled, data_env, age_min, age_max, experience_years_min, skill_years_min, exclude_level_c, text_keywords, include_unknown')
       .eq('enabled', true)
     if (ruleErr) {
       if (/notification_rules/.test(ruleErr.message)) {
@@ -320,7 +355,7 @@ Deno.serve(async (req) => {
     for (const env of envs) {
       const { data, error } = await sb
         .from('candidates')
-        .select('id, name, skills, raw_profile, data_env, created_at, updated_at')
+        .select('id, name, skills, raw_profile, data_env, created_at, updated_at, experience_years')
         .eq('data_env', env)
         .is('merged_into', null)
         .or(`created_at.gt.${sinceIso},updated_at.gt.${sinceIso}`)
@@ -342,6 +377,14 @@ Deno.serve(async (req) => {
           skills: Array.isArray(row.skills) ? (row.skills as string[]) : [],
           station: `${rp.nearestStation ?? ''} ${rp.prefecture ?? ''}`,
           data_env: String(row.data_env),
+          // ── 2026-10-01 追加の条件で使う値。取れていなければ null のまま渡す ──────
+          // 「取れていない＝条件を満たさない」ではないので、扱いは include_unknown に任せる
+          age: toInt(rp.age),
+          experienceYears: toInt(row.experience_years),
+          skillYears: toNumberMap(rp.skillYears),
+          roleLevels: toStringMap(rp._roleLevels),
+          // 経歴本文。添付テキストと自己PRを連結する（実測 12MB/日 のうち大半が添付側）
+          text: `${rp.attachmentText ?? ''}\n${rp.selfPR ?? ''}`,
         })
       }
     }

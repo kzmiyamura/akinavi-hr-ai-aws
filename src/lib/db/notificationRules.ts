@@ -1,7 +1,28 @@
 import { supabase } from '../supabase'
 import type { DataEnv } from '../dataEnv'
 
-export interface NotificationRule {
+/**
+ * 2026-10-01 に足した絞り込み条件。
+ * 判定の本体は `supabase/functions/notify-candidates/match.ts`（そちらが正）。
+ * 追加前に prod 4,204人で埋まり具合を実測している（migration のコメント参照）。
+ */
+export interface NotificationRuleFilters {
+  /** 年齢の範囲（null = 指定なし）。「20代後半〜40代」は 25〜49 */
+  age_min: number | null
+  age_max: number | null
+  /** 経験年数の下限。実測で5年以上が88%なので**単独では絞りにならない** */
+  experience_years_min: number | null
+  /** skill_keywords のいずれかでこの年数以上あること */
+  skill_years_min: number | null
+  /** 到達レベルCの印しか無い人を外す（「教育が必要な人」に一番近い印） */
+  exclude_level_c: boolean
+  /** 経歴本文のキーワード（OR）。共通部品・共通基盤など */
+  text_keywords: string[]
+  /** 値が取れていない人材を通すか（既定 true） */
+  include_unknown: boolean
+}
+
+export interface NotificationRule extends NotificationRuleFilters {
   id: string
   label: string
   name_keyword: string
@@ -15,7 +36,7 @@ export interface NotificationRule {
   updated_at: string
 }
 
-export interface NotificationRuleInput {
+export interface NotificationRuleInput extends NotificationRuleFilters {
   label: string
   name_keyword: string
   skill_keywords: string[]
@@ -39,9 +60,17 @@ export async function listNotificationRules(dataEnv: DataEnv): Promise<Notificat
     .eq('data_env', dataEnv)
     .order('created_at', { ascending: false })
   if (error) throw new Error(`通知ルールの取得に失敗しました: ${error.message}`)
+  // マイグレーション適用前の行は新しい列を持たない。画面が undefined を踏まないよう既定を入れる
   return (data ?? []).map((row) => ({
     ...row,
     skill_keywords: Array.isArray(row.skill_keywords) ? row.skill_keywords : [],
+    text_keywords: Array.isArray(row.text_keywords) ? row.text_keywords : [],
+    age_min: row.age_min ?? null,
+    age_max: row.age_max ?? null,
+    experience_years_min: row.experience_years_min ?? null,
+    skill_years_min: row.skill_years_min ?? null,
+    exclude_level_c: row.exclude_level_c ?? false,
+    include_unknown: row.include_unknown ?? true,
   })) as NotificationRule[]
 }
 
