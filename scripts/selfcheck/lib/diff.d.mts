@@ -30,6 +30,10 @@ export type Baseline = Record<string, BaselineEntry>
 export function fingerprint(detectorId: string, key: string): string
 export const SEVERITY_ORDER: Record<string, number>
 export function withFingerprints(detector: { id: string }, raw: RawFinding[]): Finding[]
+export function withFingerprintsChecked(
+  detector: { id: string },
+  raw: RawFinding[],
+): { findings: Finding[]; dupes: string[] }
 export function diffAgainstBaseline(
   findings: Finding[],
   baseline: Baseline | null | undefined,

@@ -9,7 +9,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  fingerprint, withFingerprints, diffAgainstBaseline, exitCodeFor, acceptInto,
+  fingerprint, withFingerprints, withFingerprintsChecked,
+  diffAgainstBaseline, exitCodeFor, acceptInto,
 } from '../../../scripts/selfcheck/lib/diff.mjs'
 import { normalizeMessage } from '../../../scripts/selfcheck/detectors/error_visibility.mjs'
 
@@ -25,6 +26,19 @@ describe('指紋', () => {
   it('severity 省略時は warn', () => {
     const [f] = withFingerprints(det, [{ key: 'a', title: 't' } as never])
     expect(f.severity).toBe('warn')
+  })
+})
+
+describe('指紋の重複', () => {
+  it('同じ指紋は落とし、落としたことを隠さない', () => {
+    // ⚠ 黙って残すと「1件 accept したら残りも黙る」＝2件目が永久に鳴らない。
+    //    reference_errors が初回にこれをやった（同じ型エラーの2か所が同じ指紋）
+    const { findings, dupes } = withFingerprintsChecked(det, [mk('same'), mk('same'), mk('other')])
+    expect(findings.map((f) => f.fp)).toEqual(['demo/same', 'demo/other'])
+    expect(dupes).toEqual(['demo/same'])
+  })
+  it('重複が無ければ dupes は空', () => {
+    expect(withFingerprintsChecked(det, [mk('a'), mk('b')]).dupes).toEqual([])
   })
 })
 

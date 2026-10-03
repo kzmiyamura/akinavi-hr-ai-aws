@@ -17,14 +17,37 @@ export const SEVERITY_ORDER = { error: 0, warn: 1, info: 2 }
  * @param {{id: string}} detector
  * @param {{key: string, severity?: string, title: string, detail?: string}[]} raw
  */
+/**
+ * 指紋を付ける。**同じ指紋が2件来たら落とし、落とした数を返す。**
+ *
+ * ⚠ 黙って残すと「1件を accept したら残りも黙る」ことになり、
+ *    2件目以降が永久に鳴らない。検出器側の作りの間違いなので見えるようにする
+ *    （reference_errors が初回にこれをやった: 同じ型エラーの2か所が同じ指紋だった）。
+ *
+ * @returns {{findings: object[], dupes: string[]}}
+ */
+export function withFingerprintsChecked(detector, raw) {
+  const seen = new Set()
+  const findings = []
+  const dupes = []
+  for (const f of raw ?? []) {
+    const fp = fingerprint(detector.id, f.key)
+    if (seen.has(fp)) { dupes.push(fp); continue }
+    seen.add(fp)
+    findings.push({
+      fp,
+      detector: detector.id,
+      severity: f.severity ?? 'warn',
+      title: f.title,
+      detail: f.detail ?? '',
+    })
+  }
+  return { findings, dupes }
+}
+
+/** 重複を気にしない呼び出し口（テストと既存の呼び出し用） */
 export function withFingerprints(detector, raw) {
-  return (raw ?? []).map((f) => ({
-    fp: fingerprint(detector.id, f.key),
-    detector: detector.id,
-    severity: f.severity ?? 'warn',
-    title: f.title,
-    detail: f.detail ?? '',
-  }))
+  return withFingerprintsChecked(detector, raw).findings
 }
 
 /**

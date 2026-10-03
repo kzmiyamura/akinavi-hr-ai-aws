@@ -29,14 +29,15 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { withFingerprints, diffAgainstBaseline, exitCodeFor, acceptInto } from './lib/diff.mjs'
+import { withFingerprintsChecked, diffAgainstBaseline, exitCodeFor, acceptInto } from './lib/diff.mjs'
 import { archiveDir } from './lib/archive.mjs'
 
 import deadMachinery from './detectors/dead_machinery.mjs'
 import promisedFlags from './detectors/promised_flags.mjs'
 import errorVisibility from './detectors/error_visibility.mjs'
+import referenceErrors from './detectors/reference_errors.mjs'
 
-const DETECTORS = [deadMachinery, promisedFlags, errorVisibility]
+const DETECTORS = [deadMachinery, promisedFlags, errorVisibility, referenceErrors]
 
 const HERE = import.meta.dirname
 const BASELINE = join(HERE, 'baseline.json')
@@ -56,9 +57,12 @@ function loadBaseline() {
 
 const findings = []
 const crashed = []
+const dupes = []
 for (const d of DETECTORS) {
   try {
-    findings.push(...withFingerprints(d, d.run()))
+    const r = withFingerprintsChecked(d, d.run())
+    findings.push(...r.findings)
+    dupes.push(...r.dupes)
   } catch (e) {
     // 検出器が落ちたのを静かに飲むと「所見ゼロ＝健康」に見える。一番やってはいけない
     crashed.push({ id: d.id, error: `${e?.message ?? e}`.slice(0, 300) })
@@ -89,6 +93,12 @@ if (ACCEPT_WHY) {
     console.log('')
     console.log('⚠ 検出器が落ちた（所見ゼロを健康と読まないこと）')
     for (const c of crashed) console.log(`  ${c.id}: ${c.error}`)
+  }
+
+  if (dupes.length) {
+    console.log('')
+    console.log(`⚠ 指紋が重複した所見を ${dupes.length} 件落とした（検出器側で束ねること）`)
+    for (const fp of [...new Set(dupes)].slice(0, 5)) console.log(`  ${fp}`)
   }
 
   if (SHOW_STALE) {
