@@ -69,10 +69,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const CEREBRAS_MODEL = 'llama3.1-8b'
-const GROQ_MODEL = 'llama-3.3-70b-versatile'
-const GEMINI_MODEL = 'gemini-2.5-flash'
-
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
 interface ScoringWeights {
@@ -783,93 +779,25 @@ ${pList}
 出力形式（配列のみ・改行なし）: [{"id":"...","summary":"50字以内"},...]`
 }
 
-async function callGroq(key: string, prompt: string): Promise<string> {
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 8000,
-    }),
-    signal: AbortSignal.timeout(25_000),
-  })
-  if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`)
-  const data = await res.json()
-  return data.choices[0].message.content as string
-}
+/**
+ * 外部AI（Cerebras / Groq / Gemini）による採点は **2026-10-02 に廃止した**。
+ *
+ * 理由は2つ。
+ *  1. **情報が社外に出る。** 採点プロンプトには経歴・スキル・単価が入る。
+ *     オンプレ版の売り文句が「情報漏洩対策」である以上、ここは成立しない
+ *  2. **AIは claude -p（Max サブスク）に一本化する**（ユーザー方針・2026-10-02）。
+ *     ただし `claude -p` は CLI なので **Edge Function の中では動かせない**
+ *     （API に替えると課金が発生し「費用ゼロ」の前提が崩れる）。
+ *     したがってAI採点を戻すときは、人材校正と同じく**ローカルの常駐ワーカー側**に置く。
+ *
+ * プロンプト生成（buildBatchProjectToCandidatesPrompt 等）と応答パーサは
+ * **ワーカー側で再利用するため残してある**。消さないこと。
+ *
+ * 今の挙動: AI採点を行わず、全件を SQL と同じルールスコアで採点する。
+ * 元々 AI 失敗時はルールスコアへ代替する作りだったので、経路そのものは従来どおり。
+ */
 
-async function callCerebras(prompt: string): Promise<string> {
-  const key = Deno.env.get('CEREBRAS_API_KEY')
-  if (!key) throw new Error('CEREBRAS_API_KEY not set')
-  const res = await fetch('https://api.cerebras.ai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: CEREBRAS_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-      max_tokens: 4096,
-    }),
-    signal: AbortSignal.timeout(20_000),
-  })
-  if (!res.ok) throw new Error(`Cerebras ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`)
-  const data = await res.json()
-  return data.choices[0].message.content as string
-}
-
-async function callGemini(prompt: string): Promise<string> {
-  const key = Deno.env.get('GEMINI_API_KEY')
-  if (!key) throw new Error('GEMINI_API_KEY not set')
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${key}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 8000 },
-      }),
-      signal: AbortSignal.timeout(30_000),
-    },
-  )
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`)
-  const data = await res.json()
-  return data.candidates[0].content.parts[0].text as string
-}
-
-/** AI を呼び出して JSON テキストを返す（Cerebras → Groq → Gemini フォールバック） */
-async function callAI(prompt: string): Promise<{ text: string; model: string }> {
-  const groqKey = Deno.env.get('GROQ_API_KEY')
-  const cerebrasKey = Deno.env.get('CEREBRAS_API_KEY')
-
-  // Cerebras の上限は 8192 トークン（1トークン≒3文字で概算）
-  // 7500 トークン相当（22500 文字）を超える場合はスキップして Groq へ
-  const CEREBRAS_CHAR_LIMIT = 22500
-  if (cerebrasKey && prompt.length <= CEREBRAS_CHAR_LIMIT) {
-    try {
-      const text = await callCerebras(prompt)
-      return { text, model: CEREBRAS_MODEL }
-    } catch (e) {
-      console.warn(`[match-batch] Cerebras失敗: ${e}`)
-    }
-  } else if (cerebrasKey && prompt.length > CEREBRAS_CHAR_LIMIT) {
-    console.log(`[match-batch] Cerebrasスキップ: プロンプト${prompt.length}文字 > 上限${CEREBRAS_CHAR_LIMIT}文字`)
-  }
-  if (groqKey) {
-    try {
-      const text = await callGroq(groqKey, prompt)
-      return { text, model: GROQ_MODEL }
-    } catch (e) {
-      console.warn(`[match-batch] Groq失敗: ${e}`)
-    }
-  }
-  const text = await callGemini(prompt)
-  return { text, model: GEMINI_MODEL }
-}
-
-/** AI 応答テキストから JSON 配列を抽出 */
+/** AI 応答テキストから JSON 配列を抽出（ワーカー側で再利用するので残す） */
 function parseArrayResponse(text: string): Array<{ id: string; score: number | null; summary: string }> {
   const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
   const m = cleaned.match(/\[[\s\S]*\]/)
@@ -940,21 +868,10 @@ Deno.serve(async (req) => {
       const aiTargets = scored.slice(0, topN)
       const ruleRest = scored.slice(topN)
 
-      let usedModel = 'rule'
-      let aiResults: Array<{ id: string; score: number | null; summary: string }> = []
-
-      if (aiTargets.length > 0) {
-        const prompt = buildBatchProjectToCandidatesPrompt(projectRequirements, aiTargets)
-        try {
-          const { text, model } = await callAI(prompt)
-          usedModel = model
-          aiResults = parseArrayResponse(text)
-        } catch (e) {
-          console.warn(`[match-batch] AI失敗、ルールスコアで代替: ${e}`)
-          aiResults = []
-          usedModel = 'rule'
-        }
-      }
+      // AI採点は廃止（上の「外部AIによる採点は廃止した」参照）。
+      // 全件をルールスコアで採点する。AI を戻すときはローカルワーカー側に置く
+      const usedModel = 'rule'
+      const aiResults: Array<{ id: string; score: number | null; summary: string }> = []
 
       // AI結果をidでマップ
       const aiMap = new Map(aiResults.map(r => [r.id, r]))
@@ -1017,21 +934,9 @@ Deno.serve(async (req) => {
       const aiTargets = scored.slice(0, topN)
       const ruleRest = scored.slice(topN)
 
-      let usedModel = 'rule'
-      let aiResults: Array<{ id: string; score: number | null; summary: string }> = []
-
-      if (aiTargets.length > 0) {
-        const prompt = buildBatchCandidateToProjectsPrompt(candidateProfile, aiTargets)
-        try {
-          const { text, model } = await callAI(prompt)
-          usedModel = model
-          aiResults = parseArrayResponse(text)
-        } catch (e) {
-          console.warn(`[match-batch] AI失敗、ルールスコアで代替: ${e}`)
-          aiResults = []
-          usedModel = 'rule'
-        }
-      }
+      // AI採点は廃止（上の「外部AIによる採点は廃止した」参照）
+      const usedModel = 'rule'
+      const aiResults: Array<{ id: string; score: number | null; summary: string }> = []
 
       const aiMap = new Map(aiResults.map(r => [r.id, r]))
 

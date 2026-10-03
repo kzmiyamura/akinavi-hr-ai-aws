@@ -14,14 +14,12 @@
 //   SUPABASE_SERVICE_ROLE_KEY  （自動設定）
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.1'
 
 const CLIENT_ID = Deno.env.get('GRAPH_CLIENT_ID') ?? ''
 const CLIENT_SECRET = Deno.env.get('GRAPH_CLIENT_SECRET') ?? ''
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 const INBOUND_URL = `${SUPABASE_URL}/functions/v1/inbound-email`
-const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? ''
 const GROQ_API_KEY = Deno.env.get('GROQ_API_KEY') ?? ''
 const GROQ_MODEL = 'llama-3.1-8b-instant'
 
@@ -757,140 +755,6 @@ async function fetchAttachmentManifest(
   }))
 }
 
-// ---- AI 種別判断（Gemini）バッチ版 ----
-// 複数メールをまとめて1回のGeminiコールで分類（コスト削減）
-
-const BATCH_CLASSIFY_SIZE = 20 // 1回のAIコールで分類するメール数上限
-
-/** バッチ分類プロンプトの解析（Groq・Gemini共通） */
-function parseBatchClassifyResponse(text: string, emailCount: number): Array<'candidate' | 'project' | 'other'> {
-  const jsonMatch = text.match(/\[[\s\S]*\]/)
-  if (!jsonMatch) throw new Error(`AI応答がJSON配列でない: ${text.slice(0, 100)}`)
-  const parsed = JSON.parse(jsonMatch[0]) as Array<{ i: number; t: string }>
-  const typeMap = new Map<number, 'candidate' | 'project' | 'other'>()
-  for (const item of parsed) {
-    const t = item.t === 'project' ? 'project' : item.t === 'other' ? 'other' : 'candidate'
-    typeMap.set(item.i, t)
-  }
-  return Array.from({ length: emailCount }, (_, i) => typeMap.get(i) ?? 'candidate')
-}
-
-async function classifyEmailsBatch(
-  emails: GraphMessage[],
-): Promise<Array<'candidate' | 'project' | 'other'>> {
-  if (emails.length === 0) return []
-
-  // メール一覧をテキスト化（本文は先頭200文字のみ・コスト削減）
-  const emailList = emails.map((email, i) => {
-    const rawBody = email.body?.content ?? ''
-    const plainBody = rawBody.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
-    return `[${i}] 件名: ${email.subject ?? '（なし）'}\n    本文: ${plainBody.slice(0, 200) || '（本文なし）'}`
-  }).join('\n\n')
-
-  const prompt = [
-    `以下の${emails.length}件のメールを分類してください。`,
-    '各メールを candidate / project / other の3種別で判断し、JSON配列だけを返してください。',
-    '説明文・コードブロックは不要です。',
-    '',
-    '種別の定義:',
-    '',
-    '【candidate】送り主が「うちの人材を使ってください」と紹介するメール',
-    '  ・人材会社・SES会社・フリーランス本人が、特定の人材を売り込んでいる',
-    '  ・スキルシート・経歴書・自己紹介・稼働確認・要員ご紹介など',
-    '  ・「直要員」「ご要員」「即日参画可」「弊社エンジニア」「スキルシート添付」',
-    '  ・件名にスキル名が並んでいても、人材を売り込む内容なら candidate',
-    '  ※ 人名・連絡先があるだけでは candidate にしない',
-    '',
-    '【project】送り主が「あなたの人材を紹介してください」と依頼するメール',
-    '  ・案件紹介会社・エンド企業が、受け取り側に候補者の提案を求めている',
-    '  ・「ご提案をお待ちしております」「合う人材がいればご紹介ください」',
-    '  ・「人材を募集しております」「見合う方がいれば」',
-    '  ・必須スキル/尚可スキル・金額・清算・面談回数などの案件条件が記載されている',
-    '  ・「管理ID」「エンド直」「商流」「清算幅」などの案件管理用語がある',
-    '  ・件名に【エンド直】【急募】【直案件】などがあれば project の可能性が高い',
-    '',
-    '【other】上記以外。以下は必ず other:',
-    '  ・営業メール・BtoBサービス案内（テレアポ代行・集客支援・マーケ支援・営業代行など）',
-    '  ・ホームページ・フォームからの問い合わせ通知',
-    '  ・配信停止リンクのみ含む広告・メルマガ（ただし案件紹介メールにも配信停止リンクが付く場合があるので注意）',
-    '  ・サービス通知・システム通知・請求書・領収書',
-    '  ・日程調整や資料請求への誘導が目的のメール',
-    '',
-    '返却形式: [{"i":0,"t":"candidate"},{"i":1,"t":"project"},...]',
-    '',
-    'メール一覧:',
-    emailList,
-  ].join('\n')
-
-  const supabaseForLog = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
-  const start = Date.now()
-  let usedModel = 'gemini-2.5-flash-lite'
-  let classifications: Array<'candidate' | 'project' | 'other'>
-
-  // ---- Gemini で分類（精度重視・分類プロンプトは短いので低コスト）----
-  if (true) {
-    if (!GEMINI_API_KEY) {
-      console.warn('[poll] GEMINI_API_KEY 未設定のため AI 分類をスキップ。candidate にフォールバック')
-      return emails.map(() => 'candidate')
-    }
-    try {
-      const genAI = new GoogleGenerativeAI(GEMINI_API_KEY)
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' })
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 20_000)
-      const resultPromise = model.generateContent(prompt)
-      const result = await Promise.race([
-        resultPromise,
-        new Promise<never>((_, reject) =>
-          controller.signal.addEventListener('abort', () => reject(new Error('timeout')))
-        ),
-      ])
-      clearTimeout(timer)
-      const text = (result as Awaited<typeof resultPromise>).response.text().trim()
-      classifications = parseBatchClassifyResponse(text, emails.length)
-      usedModel = 'gemini-2.5-flash-lite'
-      console.log(`[poll] バッチ分類 Gemini成功 ${emails.length}件 durationMs=${Date.now() - start}`)
-    } catch (e) {
-      // ⚠ ここで早期 return していたため、**分類が落ちていることが誰にも見えなかった**。
-      //   実害（2026-09-20）: ai_logs の batch_classify が直近7日で0件だったので
-      //   「AI分類は動いていない」と分かったが、Edge のログが失効すれば追えなくなる。
-      //   失敗そのものを ai_logs に残してから返す。
-      console.error(`[poll] バッチAI分類失敗: ${String(e)}。candidate にフォールバック`)
-      supabaseForLog.from('ai_logs').insert({
-        type: 'batch_classify',
-        model: 'fallback',
-        status: 'error',
-        prompt_length: prompt.length,
-        duration_ms: Date.now() - start,
-        ai_result: {
-          count: emails.length,
-          error: String(e).slice(0, 300),
-          note: '分類できなかったので全件 candidate として通した。人材かどうかは inbound-email 側の NO_PERSON_FOUND で止まる',
-          subjects: emails.slice(0, 20).map((m) => (m.subject ?? '').slice(0, 80)),
-        },
-      }).then(({ error }) => {
-        if (error) console.error('[poll] ai_logs insert失敗(分類エラー)', error.message)
-      })
-      return emails.map(() => 'candidate')
-    }
-  }
-
-  // ---- ai_logs に記録 ----
-  const durationMs = Date.now() - start
-  supabaseForLog.from('ai_logs').insert({
-    type: 'batch_classify',
-    model: usedModel,
-    ai_result: { count: emails.length, classifications },
-    prompt_length: prompt.length,
-    status: 'success',
-    duration_ms: durationMs,
-  }).then(({ error }) => {
-    if (error) console.error('[poll] ai_logs insert失敗', error.message)
-  })
-
-  return classifications
-}
-
 // ---- Officeファイル添付判定 ----
 
 const OFFICE_MIME_TYPES = new Set([
@@ -1253,17 +1117,11 @@ async function pollAccount(
 
     console.log(`[poll] ${config.configKey}: 事前フィルター結果 skip=${ruleSkipped.length} resolved=${ruleResolved.length} needAi=${needAi.length}`)
 
-    // ---- バッチ AI 分類 ----
-    // ルールで判定できなかったメールをまとめて1回のGeminiコールで分類
+    // ---- バッチ AI 分類（2026-10-02 廃止）----
+    // 外部AI（Gemini）での種別分類はやめた。ルールで判定できなかったメールは
+    // 下の既定（config.type）に倒す。従来も AI は100%失敗して全件 candidate に
+    // 倒れていたので、実質の挙動は変わらない。
     const aiTypeMap = new Map<string, 'candidate' | 'project' | 'other'>()
-    if (useAiClassification && needAi.length > 0) {
-      for (let offset = 0; offset < needAi.length; offset += BATCH_CLASSIFY_SIZE) {
-        const batch = needAi.slice(offset, offset + BATCH_CLASSIFY_SIZE)
-        const types = await classifyEmailsBatch(batch.map(r => r.email))
-        batch.forEach((r, i) => aiTypeMap.set(r.email.id, types[i]))
-        console.log(`[poll] バッチ分類 ${offset}〜${offset + batch.length - 1}件完了`)
-      }
-    }
 
     // ---- メール処理 ----
     // ルール確定 + AI分類済みをまとめて処理
@@ -1556,8 +1414,22 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    const useAiClassificationProd = (await getAppConfigValue(supabase, 'email_use_ai_classification')) === 'true'
-    const useAiClassificationDev  = (await getAppConfigValue(supabase, 'email_use_ai_classification_dev')) === 'true'
+    // 外部AI（Gemini）によるメール種別分類は **2026-10-02 に廃止した**。
+    //
+    // ① 方針として AI は claude -p に一本化する。claude -p は CLI なので
+    //    Edge Function の中では動かせない（API に替えると課金が発生する）
+    // ② そもそも**動いていなかった**。成功時は実モデル名を ai_logs に書く作りだが、
+    //    直近30日のログは `no-ai` と `fallback` だけで、モデル名の行が1件も無い
+    //    （= 185回試して185回とも失敗し、全件 candidate に倒していた）
+    //
+    // 種別判定はルールベースに一本化する。これは今より**良くなる**:
+    //   旧: AI失敗 → 全件 candidate（案件メールも人材として通る）
+    //   新: ルールベース案件判定 → config.type の既定（下の「優先度」コメント参照）
+    //
+    // app_config の `email_use_ai_classification` はもう読まない（prod では true のまま
+    // 残っているが無視される）。設定行の掃除は別途。
+    const useAiClassificationProd = false
+    const useAiClassificationDev = false
 
     const since = (await getAppConfigValue(supabase, 'email_full_import_since')) ?? ''
 
