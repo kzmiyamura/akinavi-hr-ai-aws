@@ -132,7 +132,16 @@ async function rest(pathq, opts = {}) {
       ...(opts.headers || {}),
     },
   })
-  if (!res.ok) throw new Error(`${pathq} -> ${res.status}: ${(await res.text()).slice(0, 200)}`)
+  // ⚠ **ステータスと本文を先に書く。** 呼び出し元は String(e).slice(0, 300) で
+  //    保存・記録するので、長いクエリを先頭に置くと**原因が切り落とされる**。
+  //    実害（2026-10-03）: Box 取込の失敗理由が
+  //      `Error: candidates?select=id&raw_profile->>from=eq.…&raw_profile->>subject=eq.%E3%80%90GFD… ->`
+  //    で終わっていた。URLエンコードした日本語の件名だけで300文字を使い切り、
+  //    ステータスも本文も残っていなかったため**4日間原因が分からなかった**。
+  if (!res.ok) {
+    const bodyText = (await res.text()).slice(0, 200)
+    throw new Error(`${res.status} ${bodyText} <- ${pathq}`)
+  }
   // PostgREST のPOST(upsert)は 201 + 空ボディを返す。空はnull扱いにする
   const text = await res.text()
   return text.trim() ? JSON.parse(text) : null
@@ -911,8 +920,17 @@ async function boxQueue() {
   //    そもそもこのワーカーは cycle() → boxQueue() を順に回す単一スレッドで、
   //    LLM 処理と Box 取込が同時に走ることはない（上のコメントに既出）。
   //    進行中(body/sonnet)の印は起動時の掃除で消える。
+  //    2026-10-03: 対象に `failed` を足した。
+  //    それまでの条件は `box_status=eq.pending` だけで、**一度 failed に落ちた人材は
+  //    二度と拾われなかった**。つまり BOX_MAX_ATTEMPTS / BOX_RETRY_AFTER_MIN /
+  //    box_tried_at / isPermanentBoxFailure の再試行の仕掛けが**丸ごと死んでいた**
+  //    （上のコメントは「上限まで再試行する」前提で書かれていたのに、引き金が無かった）。
+  //    実測: TA が 9/29 に失敗して 10/3 時点でも box_attempts=1 のまま4日間放置。
+  //    営業が画面の「AI取込 再試行」を押す以外に復帰する道が無かった。
+  //    恒久的な失敗（404・共有リンク切れ）は isPermanentBoxFailure が
+  //    box_attempts を上限まで飛ばすので、ここに足しても引き直さない。
   const auto = manual.length >= 3 ? [] : (await rest(
-    `candidates?select=${BOX_SELECT}&box_status=eq.pending&box_url=not.is.null` +
+    `candidates?select=${BOX_SELECT}&box_status=in.(pending,failed)&box_url=not.is.null` +
     `&data_env=eq.${DATA_ENV}` +
     `&box_attempts=lt.${BOX_MAX_ATTEMPTS}` +
     `&or=(box_tried_at.is.null,box_tried_at.lt.${encodeURIComponent(retryBefore)})` +
