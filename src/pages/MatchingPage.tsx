@@ -41,6 +41,7 @@ import type { SkillMatcher } from '../lib/db/skillMatch'
 import { BookmarkStar } from '../components/BookmarkStar'
 import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
 import { readRoleLevel, roleLevelNote, rateMismatch, ROLE_LEVEL_STYLE, readRoleEvidence, ROLE_EVIDENCE_STYLE } from '../lib/roleLevel'
+import { isLeadershipRole, mainJob } from '../lib/roleDisplay'
 import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
 import type { Candidate, DuplicateCandidate } from '../lib/db/candidates'
 import type { Project } from '../lib/db/projects'
@@ -815,6 +816,13 @@ function ProjectModeRankCard({
                   // 工程・作業の記載だけが根拠のとき、消さずに理由を見せる（2026-09-16）
                   const evidence = readRoleEvidence(rp2 as Record<string, unknown> | null, mainRole)
                   const mismatch = rateMismatch(level, s.candidate.desired_rate)
+                  // 主役割が「立場」（PM / PL / PMO 等）のときは、それだけでは何の人か
+                  // 分からない。職種を隣に出す（2026-10-01 ユーザー指摘）。
+                  // 加減点に使う mainRole は触らない＝表示スコアとの整合は崩れない。
+                  const jobLabel = mainRole && isLeadershipRole(mainRole)
+                    ? mainJob(Array.isArray(rp2?.roles) ? (rp2.roles as string[]) : null)
+                    : null
+                  const showJob = mainRole !== null && isLeadershipRole(mainRole)
                   if (!mainRole && !requiredRole) return null
                   return (
                     <div className="mt-1 flex flex-wrap items-center gap-1">
@@ -831,6 +839,18 @@ function ProjectModeRankCard({
                         <span className="text-[10px] bg-gray-100 text-gray-500 rounded px-1.5 py-0.5"
                           title={`経歴から役割を読み取れなかったため加減点なし（案件は ${requiredRole} を求めています）`}>
                           役割: 判定不可
+                        </span>
+                      )}
+                      {showJob && (
+                        <span
+                          className={jobLabel
+                            ? 'text-[10px] rounded px-1.5 py-0.5 font-medium bg-indigo-50 text-indigo-700'
+                            : 'text-[10px] rounded px-1.5 py-0.5 bg-gray-100 text-gray-500'}
+                          title={jobLabel
+                            ? `この人の職種: ${jobLabel}（「${mainRole}」は立場なので、何の人かは職種で見る）`
+                            : `経歴に職種の記載が見当たらない（「${mainRole}」は立場なので、何の人かは読み取れていない）。スキル欄で判断してください`}
+                        >
+                          職種: {jobLabel ?? '記載なし'}
                         </span>
                       )}
                       {mainRole && level && (
