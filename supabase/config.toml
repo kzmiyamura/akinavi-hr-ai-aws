@@ -32,3 +32,18 @@ entrypoint = "./functions/inbound-email/index.ts"
 # Specifies static files to be bundled with the function. Supports glob patterns.
 # For example, if you want to serve static HTML pages in your function:
 # static_files = [ "./functions/inbound-email/*.html" ]
+
+# 受信メールサービスの Webhook 受け口（オンプレ版の「転送で取り込む」経路）。
+#
+# verify_jwt = false にしているのは、SendGrid / Mailgun 等の外部サービスが
+# Supabase の JWT を付けられないため。**代わりに共有シークレットで守っている**
+# （ヘッダ X-Webhook-Secret、Secret 名 INBOUND_WEBHOOK_SECRET）。
+# シークレットが未設定なら全リクエストを 503 で拒否する作りなので、
+# 設定漏れで誰でも投稿できる状態にはならない。
+#
+# ⚠ inbound-email 側の verify_jwt = true は変えていない。
+#    この関数が service role key を付けて内部的に呼ぶ。
+[functions.inbound-mail-webhook]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/inbound-mail-webhook/index.ts"
