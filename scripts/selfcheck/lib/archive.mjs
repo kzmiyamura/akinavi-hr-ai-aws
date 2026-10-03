@@ -93,6 +93,38 @@ export function loadTable(table, opt = {}) {
   return rows
 }
 
+/**
+ * 「今の姿」のスナップショットを読む（`snapshot/<名前>.jsonl`）。
+ *
+ * ⚠ `loadTable` が読む日付別 JSONL は `created_at` の水位で撮っているので、
+ *   **作成後に変わる列は初期値しか入っていない**。状態列（`box_status` など）を
+ *   判定したいときはこちらを使う。archive_local.mjs の SNAPSHOTS が毎回上書きする。
+ *
+ * @returns {object[] | null} 無ければ null（**「0件」と区別すること**）
+ */
+export function loadSnapshot(name) {
+  const ck = `snapshot:${name}`
+  if (_cache.has(ck)) return _cache.get(ck)
+
+  const root = archiveDir()
+  if (!root) { _cache.set(ck, null); return null }
+
+  const rows = []
+  for (const p of [join(root, 'snapshot', `${name}.jsonl`), join(root, 'db', 'snapshot', `${name}.jsonl`)]) {
+    if (!existsSync(p)) continue
+    let text
+    try { text = readFileSync(p, 'utf8') } catch { continue }
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue
+      try { rows.push(JSON.parse(line)) } catch { /* 壊れた行は飛ばす */ }
+    }
+    _cache.set(ck, rows)
+    return rows
+  }
+  _cache.set(ck, null)
+  return null
+}
+
 /** prod だけに絞る（demo は検証用の作り物なので品質判定に混ぜない） */
 export function prodOnly(rows) {
   return (rows ?? []).filter((r) => r.data_env == null || r.data_env === 'prod')

@@ -3,5 +3,51 @@
     "why": "意図的に立てていない。true にすると fetch_candidates_for_project が duplicate_flag=false で絞るため、その人材がマッチング候補から完全に外れる（2026-08-20 ユーザー判断「別で見れる方がいい」）。inbound-email は常に false を書き、別会社の同一人物は raw_profile.sameAsOtherAgency に記録する。true を書くのは手動登録UI（src/lib/db/candidates.ts:103）だけ。根拠: supabase/functions/inbound-email/index.ts:13048-13049",
     "at": "2026-10-03",
     "was": "重複の旗（duplicate_flag）が prod 8222 行で1件も立っていない"
+  },
+  "error-visibility/ai-log-error:Cannot access 'attachments' before initialization": {
+    "why": "fix/attachments-tdz（84fed46）で宣言をスキップ判定より前に移し、2026-10-03 に inbound-email v762 として本番へデプロイ済み。控えの ai_logs は過去の行が残り続けるので0件には戻らない。**再発したら seenAt 比較でまた鳴る**（最終発生 2026-10-01T06:46 より新しい発生があれば新規に戻る）",
+    "at": "2026-10-03",
+    "was": "ai_logs にエラーが 36 件溜まっている: Cannot access 'attachments' before initialization",
+    "seenAt": "2026-10-01T06:46:13.295286+00:00"
+  },
+  "error-visibility/ai-log-error:候補者保存エラー: unsupported Unicode escape sequence": {
+    "why": "fix/pg-json-sanitize（bd3c34d）で INSERT/UPDATE の直前に payload をまるごと歩き、NUL と孤立サロゲートを落とすようにした（対のサロゲートは壊さない。𠮷 のような姓が消えるため）。2026-10-03 に inbound-email v762 として本番へデプロイ済み",
+    "at": "2026-10-03",
+    "was": "ai_logs にエラーが 64 件溜まっている: 候補者保存エラー: unsupported Unicode escape sequence",
+    "seenAt": "2026-10-02T05:30:34.718449+00:00"
+  },
+  "error-visibility/ai-log-error:候補者更新エラー: unsupported Unicode escape sequence": {
+    "why": "同じ原因（JSONB が弾く文字）。fix/pg-json-sanitize で保存と更新の両方の経路を直し、2026-10-03 にデプロイ済み",
+    "at": "2026-10-03",
+    "was": "ai_logs にエラーが 1 件溜まっている: 候補者更新エラー: unsupported Unicode escape sequence",
+    "seenAt": "2026-09-25T01:10:22.239798+00:00"
+  },
+  "error-visibility/ai-log-error:候補者保存エラー: Empty or invalid json": {
+    "why": "各1件のみ・最後は 2026-08-31 / 2026-09-01 で、その後1か月以上再発していない。原因は未特定（JSONB に空文字か壊れた JSON を渡した形）。2026-10-03 の sanitizer で NUL と孤立サロゲートは落ちるので、同じ入力なら通る見込み。**再発したら seenAt 比較でまた鳴るので、そのとき調べる**",
+    "at": "2026-10-03",
+    "was": "ai_logs にエラーが 1 件溜まっている: 候補者保存エラー: Empty or invalid json",
+    "seenAt": "2026-08-31T04:10:54.373102+00:00"
+  },
+  "error-visibility/ai-log-error:候補者更新エラー: Empty or invalid json": {
+    "why": "保存側と同じ（1件・最後は 2026-09-01・以後再発なし）。原因未特定。再発したら鳴る",
+    "at": "2026-10-03",
+    "was": "ai_logs にエラーが 1 件溜まっている: 候補者更新エラー: Empty or invalid json",
+    "seenAt": "2026-09-01T00:06:30.014018+00:00"
+  },
+  "error-visibility/ai-log-error:Graph添付<n>件中<n>件をinboundに渡せず（ref/item等）": {
+    "why": "Graph の referenceAttachment / itemAttachment（OneDrive 共有リンクやメール添付そのもの）はファイル本体を持たないので inbound-email に渡せない。仕様上の制約で、1件・2026-09-24 の1回だけ。経歴書が添付されていればそちらで取り込める",
+    "at": "2026-10-03",
+    "was": "ai_logs にエラーが 1 件溜まっている: Graph添付<n>件中<n>件をinboundに渡せず（ref/item等）",
+    "seenAt": "2026-09-24T04:15:15.222386+00:00"
+  },
+  "dead-machinery/absent-in-data:agent_companies.license_status=none": {
+    "why": "正しい状態名だが、まだ誰も使っていない。'none' は「人が免許なしと確認した」印で、人手でしか付かない（厚労省サイトで引けなかっただけなら 'notfound'）。2026-10-03 実測の prod 268社は haken 139 / notfound 117 / both 11 / shokai 1 で、none は0件。混同すると**免許なしと断定して会社ごと派遣案件から外す**ので、安易に付けないのが正しい",
+    "at": "2026-10-03",
+    "was": "license_status='none' は prod 268 行に1件も無い"
+  },
+  "dead-machinery/absent-in-data:agent_companies.license_status=unknown": {
+    "why": "'unknown' は「社名が取れず未照合」の初期値。2026-10-03 実測で prod 268社すべて照合済み（haken 139 / notfound 117 / both 11 / shokai 1）なので0件で正しい。新しい会社が社名不明で入ってくれば再び現れる",
+    "at": "2026-10-03",
+    "was": "license_status='unknown' は prod 268 行に1件も無い"
   }
 }

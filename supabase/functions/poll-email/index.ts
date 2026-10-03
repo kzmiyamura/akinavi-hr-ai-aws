@@ -9,9 +9,12 @@
 //   GRAPH_REFRESH_TOKEN_PROJECT    project@outlook.jp (prod)
 //   GRAPH_REFRESH_TOKEN_HUMAN_DEV  human dev account (demo)
 //   GRAPH_REFRESH_TOKEN_PROJECT_DEV project dev account (demo)
-//   GEMINI_API_KEY             Gemini API キー（AI種別判断で使用）
 //   SUPABASE_URL               （自動設定）
 //   SUPABASE_SERVICE_ROLE_KEY  （自動設定）
+//
+// ⚠ 外部AI（Gemini / Groq）によるメール種別分類は **2026-10-02 に廃止した**。
+//   ここに AI 用のキーを挙げていたが、**もう1つも読んでいない**。
+//   種別はルール（件名・送信元・本文）だけで決める。
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
@@ -20,17 +23,24 @@ const CLIENT_SECRET = Deno.env.get('GRAPH_CLIENT_SECRET') ?? ''
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 const INBOUND_URL = `${SUPABASE_URL}/functions/v1/inbound-email`
-const GROQ_API_KEY = Deno.env.get('GROQ_API_KEY') ?? ''
-const GROQ_MODEL = 'llama-3.1-8b-instant'
+// GROQ の API キーとモデル名は 2026-10-02 の外部AI全廃で**どこからも読まれなく
+// なった**ので消した（宣言だけが残っていた）。
 
 /**
- * SUPABASE_SECRET_KEYS（新形式・JSON辞書）または
- * SUPABASE_SERVICE_ROLE_KEY（旧形式・DEPRECATED）から
- * inbound-email 呼び出し用の JWT を取得する
+ * inbound-email を呼ぶための JWT を取得する。
+ *
+ * ⚠ **JWT 形式（`eyJ…`）のものだけを使う。**
+ *   以前ここには「`SUPABASE_SECRET_KEYS`（新形式・JSON辞書）または
+ *   `SUPABASE_SERVICE_ROLE_KEY`（旧形式）から取る」と書いてあったが、
+ *   実装は前者を**意図的に読んでいない**。新形式は `sb_secret_…` で JWT ではなく、
+ *   Edge Function の Authorization ヘッダに入れても通らないため。
+ *   コメントが実装と逆のことを言っていた（2026-10-03 に夜間健診が検出）。
+ *
+ * selfcheck:no-promise — 上の名前は「読んでいない」と書くために挙げている
  */
 function resolveCallKey(): string {
   // JWT形式（eyJ...）のキーを優先して使う
-  // SUPABASE_SECRET_KEYS は sb_secret_ 形式でJWTではないためスキップ
+  // 新形式のキーは sb_secret_ 形式でJWTではないためスキップ（詳細は上）
   for (const key of ['INBOUND_CALL_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_ANON_KEY']) {
     const val = Deno.env.get(key) ?? ''
     if (val.startsWith('eyJ')) return val
@@ -48,9 +58,10 @@ const MAX_EMAILS_PER_ACCOUNT = 50
 const MAX_EMAILS_PER_ACCOUNT_FULL = 50
 
 // ---- ルールベース事前フィルター ----
-// Gemini を呼ぶ前に件名・送信元で明らかなスパム/広告を除外（コスト削減）
+// 件名・送信元で明らかなスパム/広告を除外する。以前は「Gemini を呼ぶ前に落として
+// コスト削減」が目的だったが、外部AI廃止（2026-10-02）後は**これが判定の本体**。
 
-/** これらのパターンを件名に含むメールは AI 判定なしでスキップ */
+/** これらのパターンを件名に含むメールは、以降の判定に進めずスキップする */
 const SKIP_SUBJECT_PATTERNS = [
   /unsubscribe/i,
   /newsletter/i,
@@ -336,7 +347,7 @@ function isProjectByRuleBase(subject: string, plainBody500: string): boolean {
 }
 
 /**
- * ルールベースで事前フィルタリング（Gemini 不要）
+ * ルールベースで事前フィルタリングする（AI は使わない）
  * 件名と本文（先頭1000文字）の両方を確認する
  * @returns 'skip' | 'candidate' | 'project' | 'unknown'
  */
@@ -1091,7 +1102,7 @@ async function pollAccount(
     console.log(`[poll] ${config.configKey}: ${emails.length}件取得 (mode=${mode})`)
 
     // ---- ルールベース事前フィルター ----
-    // Gemini を呼ぶ前に件名で明らかなスパムを除外
+    // 件名で明らかなスパムを除外（AI は使わない）
     // 件名による人材救済は app_config で即時に切れる（デプロイなしで元の挙動へ戻せる）
     const rescueOff = (await getAppConfigValue(supabase, 'subject_candidate_rescue')) === 'false'
     if (rescueOff) console.log('[poll] 件名による人材救済は無効（subject_candidate_rescue=false）')
@@ -1241,7 +1252,11 @@ async function pollAccount(
           const nonOfficeAtts = attachments.filter(a => !isOfficeAttachment(a))
           for (let si = 0; si < officeAtts.length; si++) {
             const officeAtt = officeAtts[si]
-            // 2件目以降は Groq/Gemini のレート制限を避けるため 5 秒待機
+            // 2件目以降は 5 秒待つ。
+            // ⚠ **守る対象が変わっている。** 元の理由は Groq/Gemini のレート制限だったが、
+            //   外部AIは 2026-10-02 に全廃した。今これが効いているのは
+            //   inbound-email を連打しない（Excel 解析が重い・1呼び出しで数秒）ことだけ。
+            //   消すかどうかは実行時間を測ってから決める（未測定）。
             if (si > 0) await new Promise(r => setTimeout(r, 5000))
             // 本文(email body) + 非Officeファイル（画像等）は全件に共通して渡す
             // dedup_salt に "メッセージID_添付ファイル名" を使用

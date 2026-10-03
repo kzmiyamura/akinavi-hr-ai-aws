@@ -24,7 +24,7 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}` }
 
 async function get(pathq, extra = {}) {
   const res = await fetch(`${URL}/rest/v1/${pathq}`, { headers: { ...H, ...extra } })
-  if (!res.ok) throw new Error(`${pathq} -> ${res.status}: ${(await res.text()).slice(0, 160)}`)
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${pathq}: ${(await res.text()).slice(0, 160)}`)
   return res
 }
 

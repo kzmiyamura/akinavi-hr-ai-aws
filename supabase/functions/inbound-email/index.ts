@@ -9,8 +9,14 @@
 //   attachmentsJson: JSON 配列文字列 [{data,mimeType,name?} | Pipedream: content_base64,content_type,name]
 //   attachments: 上記と同じ配列を JSON.stringify したトップレベルキー（application/json ボディ時）
 //   本文・添付とも空: HTTP 200 + skipped（Make 継続）。DB は書かない。
-//   INBOUND_RELEVANCE_CHECK: false で事前の無関係メール判定を無効化（既定は true）
-//   ※ 全体の壁時計は Edge の上限もあり（関連度・Drive取得・Gemini の合計。プランにより概ね150〜400秒程度）
+//   ※ 全体の壁時計は Edge の上限もあり（関連度判定・Drive取得・解析の合計。
+//      プランにより概ね150〜400秒程度）
+//
+// 切り替え（**環境変数ではなく app_config**。デプロイ無しで変えられる）:
+//   inbound_relevance_check  false で事前の無関係メール判定を止める（既定 true）
+//   inbound_project_enabled  true で案件メールの解析・保存を有効にする（既定 false）
+//   sender_daily_limit       1送信元あたり1日の取り込み上限（既定 200・0以下で無制限）
+//   own_email_domain         自社ドメイン。送信元が一致したらスキップする
 //   INBOUND_MAKE_SOFT_FAIL=true: 例外時も HTTP 200 + ok:false（Make がエラーでシナリオ停止しにくくする）
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -1764,6 +1770,54 @@ async function getSenderDailyLimit(supabase: SupabaseClientLike): Promise<number
   }
   _senderDailyLimitAt = Date.now()
   return _senderDailyLimit
+}
+
+/**
+ * 無関係メール判定（`irrelevantMailReason`）を使うか（app_config
+ * `inbound_relevance_check`・既定 true）。
+ *
+ * ⚠ **ファイル先頭のコメントが「`INBOUND_RELEVANCE_CHECK: false` で無効化できる」と
+ *   書いていたのに、その実装は存在しなかった**（2026-10-03 に夜間健診が検出）。
+ *   約束を消すのではなく実装側を合わせた。理由は、この種の門は**実際に誤爆した
+ *   実績がある**こと（非人材検知が本物の人材を隔離していた）。誤爆したときに
+ *   デプロイを待たずに止められる口が要る。
+ *
+ * 環境変数ではなく app_config にしたのは、`sender_daily_limit` と同じ理由＝
+ * **デプロイ無しで切れるようにするため**。5分キャッシュ。
+ *
+ * ⚠ **supabase クライアントを受け取らない。** 呼ぶのはスキップ判定の段で、
+ *   そこは `const supabase = createClient(...)` より**前**にある。
+ *   クライアントを引数に取る形にすると
+ *   `Cannot access 'supabase' before initialization` になる
+ *   （`attachments` で同じ事故を起こしている）。`loadOwnEmailDomain` と同じ
+ *   fetch 方式にそろえる。
+ */
+let _relevanceCheckEnabled: boolean | undefined
+let _relevanceCheckAt = 0
+
+async function isRelevanceCheckEnabled(supabaseUrl: string, serviceKey: string): Promise<boolean> {
+  const now = Date.now()
+  if (_relevanceCheckEnabled !== undefined && now - _relevanceCheckAt < OWN_DOMAIN_CACHE_MS) {
+    return _relevanceCheckEnabled
+  }
+  // 既定は有効。読めなかったときも**判定を落とす方向に倒さない**
+  let enabled = true
+  try {
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/app_config?select=value&key=eq.inbound_relevance_check&limit=1`,
+      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+    )
+    if (res.ok) {
+      const rows = await res.json() as { value: string }[]
+      // 行が無ければ既定 true。`'false'` と明示されたときだけ止める
+      enabled = String(rows[0]?.value ?? 'true').trim().toLowerCase() !== 'false'
+    }
+  } catch {
+    enabled = true
+  }
+  _relevanceCheckEnabled = enabled
+  _relevanceCheckAt = Date.now()
+  return enabled
 }
 
 /** app_config から own_email_domain を取得（5分キャッシュ） */
@@ -6400,19 +6454,31 @@ function worksheetToCells(sheet: Record<string, unknown>): SpanCell[] {
 
 // ─── Excel ステートマシン ─────────────────────────────────────────────────
 // 設計書: docs/ExcelStateMachine.md
-// 状態: KEY_H / KEY_V / READ_COL_HEADERS / CONTAINER / KV_DONE / NEW_ROW / END
+// 状態は4つ: `const enum Sm { START, KEY_H, KEY_V, END }`（下の方で定義）
+//
+// ⚠ ここには長いあいだ
+//     `状態: KEY_H / KEY_V / READ_COL_HEADERS / CONTAINER / KV_DONE / NEW_ROW / END`  selfcheck:no-promise
+//   と書いてあったが、**これらは実装に存在しない**（初期の設計案の名残。
+//   設計書の方は4状態で正しい）。
+//   コンテナや列見出しは状態ではなく、KEY_H / KEY_V の中の分岐
+//   （colSpan / rowSpan の大小比較 + 下の2辞書）で扱っている。
+//   2026-10-03 に夜間健診の検出器②が「コメントにしか無い名前」として拾った。
 
 /**
  * 辞書A: 構造キー辞書（A ⊂ B）。常にキーとして出現し、値にはならない語。
- * KEY_H 条件3a の兄弟キー判定で使用。
+ * 兄弟キー判定に使う（`colSpan` / `rowSpan` が key と同じなら兄弟 → KEY_V へ）。
  */
 const STRUCTURE_KEY_DICT =
   /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|規模|開発人数|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|業務経験|知識有り)$/
 
 /**
  * 辞書B: タグ辞書（B ⊃ A）。構造キー＋スキル深掘り語＋サブラベルの全部入り。
- * 条件1（READ_COL_HEADERS）/ _isColTag（CONTAINER vs VALUE_COLLECT）で使用。
  * B \ A = スキル深掘り語（PM/TL 等）。キーにも値にもなる。
+ *
+ * 使うのは2か所:
+ *   - 兄弟キー判定（`inSkillDeepDive` のときだけ A の代わりに B で見る）
+ *   - コンテナ昇格（B に一致し、かつ span が key より小さいなら子として下げる）
+ * 以前ここに書いていた `_isColTag` という補助関数は存在しない（上の ⚠ を参照）。
  */
 const TAG_DICT =
   /^(No\.?|計画立案|要件定義|基本設計|詳細設計|外部設計|内部設計|製造|コーディング|単体試験|結合試験|総合試験|運用保守|期間|プロジェクト期間|PJ期間|参画期間|在籍期間|開始|終了|業務内容|内容|案件名|使用言語|使用技術|技術スタック|担当工程|役割|規模|開発人数|ITコンサル|PM|PMO|TL|SE|PL|PG|マネージャー|リーダー|メンバー|備考|ポジション|チーム規模|担当業務|氏名|ふりがな|フリガナ|年齢|性別|住所|最寄駅?|学歴|最終学歴|卒業|生年月日?|連絡先|電話番号?|メールアドレス?|経験年数?|資格|保有資格|国籍|在住|所属|会社名|企業名|スキルサマリ[ー]?|自己PR|PR|アピールポイント|強み|希望勤務|希望単価|参画時期|稼働|補足|メモ|コメント|環境|言語|OS|DB|ツール|開発環境|フレームワーク|クラウド|インフラ|ミドルウェア|その他|立場|開発規模|人数|スキル|コンピュータ言語|サーバ[ー]?OS|業務経験|知識有り)$/
@@ -11476,7 +11542,14 @@ Deno.serve(async (req: Request) => {
     // irrelevantMailReason の定義を参照。
     //
     // ⚠ 添付があるときは判定しない（本文が空で経歴書だけ付いたメールが実在する）。
-    const irrelevant = irrelevantMailReason(subject, body, supportedAttachments.length > 0)
+    //
+    // app_config `inbound_relevance_check` に `false` を入れると門を開けられる
+    // （既定は有効）。誤爆したときにデプロイを待たないための口。
+    const relevanceOn = await isRelevanceCheckEnabled(
+      Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
+    const irrelevant = relevanceOn
+      ? irrelevantMailReason(subject, body, supportedAttachments.length > 0)
+      : null
     if (irrelevant) {
       tracePhase = 'skip_irrelevant'
       return await respondSkipped('IRRELEVANT_MAIL',

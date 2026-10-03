@@ -26,6 +26,30 @@ import { allFiles, commentsOf, stripComments, lineOf } from '../lib/sources.mjs'
 const TOKEN_RE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g
 
 /**
+ * 健診自身のソース。**ここは走査しない。**
+ *
+ * この検出器の先頭コメントは「こういう名前が捕れた」という実例として
+ * `INBOUND_RELEVANCE_CHECK` などを挙げている。実装が入った後は、その名前が
+ * 残っているのは**この説明文だけ**になるため、自分の例示を「約束だけのフラグ」
+ * として報告してしまう（2026-10-03 に実際に2件出た）。
+ * 本物の所見が薄まるので外す。
+ */
+const SELF_DIR_RE = /^scripts[\\/]selfcheck[\\/]/
+
+/**
+ * 「この名前は実装に無い」と**明記するために**名前を書いているコメント。
+ *
+ * 所見を直すと、直した証跡として「以前ここには `XXX_YYY` と書いてあったが
+ * 実装には無い」と書き残すことになる。素朴に走査すると**その説明文が
+ * また同じ所見になる**（2026-10-03 に3件そうなった）。
+ *
+ * 日本語の否定表現を推測するのは当たらないので、**印を明示する**ことにした。
+ * コメントの中にこの印があれば、そのコメント内のトークンは約束と見なさない。
+ * 印は grep で引けるので、後から「どこで免除したか」を数えられる。
+ */
+const NO_PROMISE_MARK = 'selfcheck:no-promise'
+
+/**
  * フラグではないと分かっているもの。
  * **ここに足すのは「そういう名前の概念が外にある」場合だけ。**
  * 「実装が無いけど今は直せない」は baseline.json 側に理由付きで入れる。
@@ -36,6 +60,9 @@ const NOT_A_FLAG = new Set([
   'IF_EXISTS', 'IF_NOT_EXISTS', 'CREATE_TABLE', 'ALTER_TABLE', 'ON_DELETE',
   'NO_COLOR', 'TO_DO', 'AS_OF', 'README_MD', 'CLAUDE_MD', 'HANDOFF_MD',
   'AS_400', 'OS_390', 'SJIS_WIN', 'UTF_8', 'ISO_8859',
+  // Supabase Edge Function が 546 を返すときのエラー名。
+  // こちらが切り替えるフラグではなく、**向こうから返ってくる名前**
+  'WORKER_RESOURCE_LIMIT', 'WORKER_LIMIT',
 ])
 
 /**
@@ -117,10 +144,12 @@ export default {
     // --- コメント／ドキュメントにしか無いトークン ---
     const promised = new Map()   // token -> {rel, line, kind}
     for (const f of files) {
+      if (SELF_DIR_RE.test(f.rel)) continue   // 自分の説明文を所見にしない
       const chunks = f.kind === 'doc'
         ? [{ s: f.text, at: 0 }]
         : commentsOf(f.text, f.ext).map((c) => ({ s: c, at: f.text.indexOf(c) }))
       for (const ch of chunks) {
+        if (ch.s.includes(NO_PROMISE_MARK)) continue
         for (const m of ch.s.matchAll(TOKEN_RE)) {
           const tok = m[0]
           if (NOT_A_FLAG.has(tok) || implemented.has(tok)) continue
@@ -150,14 +179,26 @@ export default {
     }
 
     // --- CLAUDE.md が挙げている app_config キーを読むコードがあるか ---
+    //
+    // ⚠ **キーが「丸ごと1つの文字列」として書かれているとは限らない。**
+    //   `.eq('key', 'own_email_domain')` のように独立した文字列で渡す書き方と、
+    //   `?key=eq.inbound_relevance_check&limit=1` のように**URL の中に埋める**
+    //   書き方の両方がある。前者だけを見ていたため、実装したばかりの
+    //   `inbound_relevance_check` を「読むコードが無い」と報告した（2026-10-03）。
+    //   文字列リテラルの**中身に含まれていれば読んでいる**と見なす。
     const literals = new Set()
+    const stringBodies = []
     for (const f of files) {
       if (f.kind !== 'code') continue
-      for (const m of stripComments(f.text, f.ext).matchAll(/['"`]([a-z][a-z0-9_]{3,})['"`]/g)) literals.add(m[1])
+      const body = stripComments(f.text, f.ext)
+      for (const m of body.matchAll(/['"`]([a-z][a-z0-9_]{3,})['"`]/g)) literals.add(m[1])
+      for (const m of body.matchAll(/['"`]([^'"`\n]{4,400})['"`]/g)) stringBodies.push(m[1])
     }
+    /** 文字列のどこかにそのキーが現れるか（URL のクエリに埋め込む書き方を拾う） */
+    const inSomeString = (key) => stringBodies.some((s) => s.includes(key))
     for (const { key, struck } of documentedConfigKeys()) {
       if (struck) continue            // 取り消し線＝もう読まないと明記済み
-      if (literals.has(key)) continue
+      if (literals.has(key) || inSomeString(key)) continue
       findings.push({
         key: `config-key-unread:${key}`,
         severity: 'warn',

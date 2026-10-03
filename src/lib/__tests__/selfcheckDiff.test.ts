@@ -69,6 +69,47 @@ describe('baseline との差分', () => {
   })
 })
 
+describe('「直したから黙らせた」の解除', () => {
+  /**
+   * ⚠ ここが無いと、**直した証として baseline に入れた所見が永久に黙る**。
+   *    ai_logs のエラー行は控えに残り続けるので指紋は毎晩一致する。
+   *    受け入れ時点の最終発生時刻より新しい発生があれば、また鳴らさないといけない。
+   */
+  const withAt = (key: string, at: string) =>
+    withFingerprints(det, [{ ...mk(key), at } as never])
+
+  it('受け入れ後に再発したら、また新規として出す', () => {
+    const base = {
+      'demo/boom': { why: '直してデプロイ済み', at: '2026-10-03', seenAt: '2026-10-01T06:46:13Z' },
+    }
+    const { fresh, known } = diffAgainstBaseline(withAt('boom', '2026-10-05T01:00:00Z'), base)
+    expect(fresh.map((f) => f.fp)).toEqual(['demo/boom'])
+    expect(known).toEqual([])
+    expect(fresh[0].recurredSince).toBe('2026-10-01T06:46:13Z')
+  })
+
+  it('最終発生が受け入れ時点から進んでいなければ黙ったまま', () => {
+    const base = {
+      'demo/boom': { why: '直してデプロイ済み', at: '2026-10-03', seenAt: '2026-10-01T06:46:13Z' },
+    }
+    const { fresh, known } = diffAgainstBaseline(withAt('boom', '2026-10-01T06:46:13Z'), base)
+    expect(fresh).toEqual([])
+    expect(known.map((f) => f.fp)).toEqual(['demo/boom'])
+  })
+
+  it('seenAt を持たない既存の baseline は今までどおり黙る（互換）', () => {
+    const base = { 'demo/boom': { why: '意図的', at: '2026-10-03' } }
+    const { fresh, known } = diffAgainstBaseline(withAt('boom', '2026-10-09T00:00:00Z'), base)
+    expect(fresh).toEqual([])
+    expect(known.map((f) => f.fp)).toEqual(['demo/boom'])
+  })
+
+  it('受け入れ時に最終発生時刻を seenAt として残す', () => {
+    const next = acceptInto({}, withAt('boom', '2026-10-02T05:30:34Z'), '直した', '2026-10-03')
+    expect(next['demo/boom'].seenAt).toBe('2026-10-02T05:30:34Z')
+  })
+})
+
 describe('終了コード', () => {
   it('新規なしは 0', () => expect(exitCodeFor({ fresh: [], crashed: [] })).toBe(0))
   it('新規ありは 1', () => expect(exitCodeFor({ fresh: [mk('a')], crashed: [] })).toBe(1))

@@ -110,13 +110,16 @@
 | `hf-proxy` | Hugging Face Spaces | 品質チェック用。オンプレでは外せる |
 | `create-github-issue` | GitHub API | 開発用。製品には不要 |
 
-必要な Secret は13種:
+必要な Secret は10種:
 `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` /
-`GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` / `CEREBRAS_API_KEY` / `GROQ_API_KEY` /
-`GEMINI_API_KEY` / `GOOGLE_SERVICE_ACCOUNT_JSON` / `BOX_SPREADSHEET_ID` /
-`HF_API_SECRET` / `GITHUB_TOKEN` / `INBOUND_MAKE_SOFT_FAIL`
+`GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` / `GOOGLE_SERVICE_ACCOUNT_JSON` /
+`BOX_SPREADSHEET_ID` / `HF_API_SECRET` / `GITHUB_TOKEN` / `INBOUND_MAKE_SOFT_FAIL`
 
-**AI と Google と HF と GitHub を外すと、残るのは Supabase 3つと Graph 2つだけ**になる。
+棚卸し時点では13種あった。**外部AI の3つは 2026-10-02 に全廃したので、もう要らない。**
+情報漏洩対策を売り文句にするなら成立しない経路だったので先に外した
+（詳細は CLAUDE.md「技術スタック」）。
+
+**Google と HF と GitHub も外すと、残るのは Supabase 3つと Graph 2つだけ**になる。
 最小構成のオンプレ版はここを目指すのが素直。
 
 ## 7. 今すぐ動かすのに足りないもの

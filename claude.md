@@ -7,10 +7,24 @@
 - **Frontend**: React 19 (Vite 8), TypeScript, Tailwind CSS v4, TanStack Query v5
 - **Backend/DB**: Supabase (PostgreSQL, Edge Functions, pg_cron, pg_net)
 - **ファイルパース（ブラウザ）**: `xlsx`（Excel）・`mammoth`（Word）— `src/lib/fileParser.ts`。PDF・画像は未対応
-- **AI（ブラウザ）**: Gemini `gemini-2.5-flash-lite`（`VITE_GEMINI_MODEL` で上書き可）。人材・案件登録 UI からは呼ばない
-- **AI（サーバー・マッチング）**: Cerebras `llama3.1-8b` → Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.5-flash`（3段フォールバック）。`match-batch` / `match-score` / `auto-match` が使用
+- **AI（外部API）**: **2026-10-02 に全廃した。** Cerebras / Groq / Gemini はもう1つも呼ばない。
+  理由は2つ。①採点プロンプトに経歴・スキル・単価が入っており**情報が社外に出る**
+  （オンプレ版の売り文句を「情報漏洩対策」にする以上成立しない）。②AI は `claude -p`
+  （Max サブスク）に一本化する。外す前に実測したら**ほぼ動いていなかった**
+  （poll-email の種別分類は直近30日で185回試して185回とも失敗。`match-score` は
+  呼び出し元がどこにも無い死んだ関数）。`match-score` / `enrich-candidate` は
+  **2026-10-03 に本番の Edge Function ごと削除**した
 - **AI（サーバー・メール解析）**: AI 不使用。regex + `skill_master` DB照合のみ（`inbound-email` Edge Function）
-- **メール自動取り込み**: Microsoft Graph API ポーリング + pg_cron（5分間隔）
+- **AI（ローカル・人材校正）**: `claude -p` を常駐ワーカー（pm2 `akinavi-shadow`）から呼ぶ。
+  **`claude -p` は CLI なので Edge Function の中では動かせない**（API に替えると課金が発生する）。
+  AI を足したくなったら必ずワーカー側に置く
+- **マッチングの採点**: ルールスコアのみ（`fetch_candidates_for_project` RPC と
+  `match-batch` の `calcRuleScore`）。`match-batch` は元から AI 失敗時にルールへ
+  代替する作りだったので、経路そのものは従来どおり
+- **メール自動取り込み**: Microsoft Graph API ポーリング + pg_cron（5分間隔）。
+  第2経路として転送 + Webhook（`inbound-mail-webhook`）も用意した（既存の Graph 経路は無改造）。
+  **`INBOUND_WEBHOOK_SECRET` が未設定なら全リクエストを 503 で拒否する**＝
+  デプロイしてあっても secret を入れるまで何も起きない
 - **Testing**: Vitest, React Testing Library, MSW
 - **Deployment**: Vercel (Frontend), Supabase (Backend)
 
@@ -181,6 +195,7 @@ git add -A && git commit -m "fix: ..." && git push
 | キー | 既定 | 現在値 | 内容 |
 |---|---|---|---|
 | `inbound_project_enabled` | `false` | （未作成） | 案件メールの解析・DB保存を有効化 |
+| `inbound_relevance_check` | `true` | （未作成） | 無関係メール（フィッシング・広告）の事前判定。**`false` で止められる**。2026-10-03 に実装（それまでコメントだけ存在し、実装が無かった）。読めなかったときは有効のまま＝判定を落とす方向に倒さない |
 | `auto_match_enabled` | `true` | **`false`** | `auto-match` cron を有効化。**今は止まっている**（直近7日の submissions は9件） |
 | `email_poll_mode` | `incremental` | `incremental` | `incremental`（未読のみ）/ `full`（指定日以降全件） |
 | `email_use_ai_classification` | `false` | **`true`** | poll-email 内の Gemini メール種別分類。**`email_classify_enabled` は誤記**（そのキーを読むコードは無い） |
@@ -224,7 +239,15 @@ git add -A && git commit -m "fix: ..." && git push
 - **inbound-email 処理フロー**: `supabase/functions/inbound-email/index.ts` を参照
 - **論理データ環境**: `prod` / `demo` を `data_env` カラムで分離。SettingsPage の「デモモード」スイッチで切替
 - **画面構成**: ナビは5タブ（マッチング/人材/案件/通知/設定）。`src/components/Layout.tsx` の `NAV_ITEMS` を正とする
-- **通知機能**: `notification_rules`（条件: 名前/スキル/駅のAND）に合致する人材が登録・更新されたら `notify-candidates` Edge Function（pg_cron 5分）が Graph sendMail でメール通知。二重通知は `notification_log` で防止。送信には Mail.Send スコープ（Microsoft再連携）が必要
+- **通知機能**: `notification_rules` に合致する人材が登録・更新されたら `notify-candidates`
+  Edge Function が Graph sendMail でメール通知。二重通知は `notification_log` で防止。
+  送信には Mail.Send スコープ（Microsoft再連携）が必要。
+  **cron は毎時（`notify-candidates-hourly` / `0 * * * *`）。5分間隔ではない**
+  （2026-10-03 に `cron.job` を実測。CLAUDE.md は「5分」と書いていた）。
+  絞り込み条件は 2026-10-01 に拡張した（`20261001_notification_rule_filters.sql`）:
+  年齢の上下限・経験年数の下限・スキル年数の下限・到達レベルCの除外・本文キーワード（OR）・
+  値が取れていない人材を通すか（`include_unknown`・既定 true）。
+  **`include_unknown` を false にすると取りこぼす**（skillYears は31%、到達レベルは49%が未取得）
 - **認証なし**: ニックネームを `localStorage` に保存
 - **表示優先スキル**: 既定は `app_config.llm_filter_skills`（設定画面「AI校正の優先スキル」＝常駐AIの解析対象と共有）。
   人材画面の絞り込みポップアップから**端末ごとに上書き**でき、ON/OFF と中身を `localStorage`

@@ -27,7 +27,7 @@ async function rest(pathq, opts = {}) {
     ...opts,
     headers: { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json', ...(opts.headers || {}) },
   })
-  if (!res.ok) throw new Error(`${pathq} -> ${res.status}: ${(await res.text()).slice(0, 200)}`)
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${pathq}: ${(await res.text()).slice(0, 200)}`)
   const text = await res.text()
   return text.trim() ? JSON.parse(text) : null
 }

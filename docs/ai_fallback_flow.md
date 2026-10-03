@@ -1,6 +1,26 @@
-# AI モデルフォールバックフロー
+# AI モデルフォールバックフロー（**2026-10-02 に全廃。以下は記録**）
 
-`supabase/functions/inbound-email/`, `match-batch/`, `match-score/`, `auto-match/`, `poll-email/` の実装に基づく。
+> ## ⚠ この文書が説明している仕組みは、もう存在しない
+>
+> **2026-10-02 に外部AI（Cerebras / Groq / Gemini）を全廃した。** 以下のフォールバック
+> 段数・モデル名・API キーは**どれも今の挙動ではない**。`match-score` と
+> `enrich-candidate` は Edge Function ごと削除し、2026-10-03 に本番からも消した。
+>
+> 廃止の理由と、外す前に測った数字（poll-email の種別分類は直近30日で185回試して
+> 185回とも失敗していた等）は CLAUDE.md「技術スタック」を正とする。
+>
+> 今 AI を使っているのは**ローカルの常駐ワーカー（pm2 `akinavi-shadow`）の
+> `claude -p` だけ**。Edge Function の中では CLI が動かないので、AI を足すときは
+> 必ずワーカー側に置く。
+>
+> 残してあるのは「どう段を組んでいたか」「どこで落ちていたか」を後から辿れるように
+> するため。**設計の参照先として読まないこと。**
+>
+> `selfcheck:no-promise` — 夜間健診の「約束だけのフラグ」検出器は、この印がある
+> 文書のフラグ名を所見にしない（ここに出てくる API キー名は全部もう読んでいない）。
+
+以下は廃止時点までの記録。`supabase/functions/inbound-email/`, `match-batch/`,
+`match-score/`, `auto-match/`, `poll-email/` の当時の実装に基づく。
 
 > **歴史的注意（2026-05-19 / コミット `139a4f2` で AI 廃止 + `a4dc3b4` でデッドコード全削除）**
 > `inbound-email` の AI 解析パス（STEP1 関連性チェック + STEP5 人材情報抽出）は**完全に廃止**された。

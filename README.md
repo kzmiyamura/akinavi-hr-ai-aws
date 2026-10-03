@@ -214,8 +214,10 @@ Vercel Dashboard → Environment Variables に以下を設定してから `main`
 |---|---|
 | `VITE_SUPABASE_URL` | Supabase の URL |
 | `VITE_SUPABASE_ANON_KEY` | Supabase の anon キー |
-| `VITE_AI_PROVIDER` | `gemini` |
 | `VITE_DEMO_KEY` | デモ解除キー（任意） |
+
+外部AI（Cerebras / Groq / Gemini）は **2026-10-02 に全廃**したので、
+AI プロバイダーを選ぶ環境変数は無くなった（以前はここに1つ載っていた）。
 
 ### Supabase Edge Functions
 
@@ -238,9 +240,6 @@ supabase functions deploy skill-master-cleanup
 
 | Secret 名 | 用途 | 必須 |
 |---|---|---|
-| `GROQ_API_KEY` | `match-batch` / `match-score` の 2 段目・`poll-email` 種別分類 | ◎ |
-| `CEREBRAS_API_KEY` | `match-batch` / `match-score` の 1 段目（軽量・無料） | 推奨 |
-| `GEMINI_API_KEY` | `match-batch` / `match-score` の最終フォールバック・`poll-email` 補助 | ◎ |
 | `GRAPH_CLIENT_ID` | Azure AD アプリのクライアント ID | ◎ |
 | `GRAPH_CLIENT_SECRET` | Azure AD アプリのクライアントシークレット | ◎ |
 | `GRAPH_REFRESH_TOKEN_HUMAN` | 人材用メール（prod）のリフレッシュトークン | ◎ |
@@ -251,8 +250,14 @@ supabase functions deploy skill-master-cleanup
 | `GITHUB_TOKEN` | `create-github-issue` 用の GitHub Personal Access Token（`repo` スコープ） | Issue 機能利用時 |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Google Sheets/Drive（Box 連携キュー）アクセス用 | Box 連携時 |
 | `BOX_SPREADSHEET_ID` | Box 連携キュー用スプレッドシート ID | Box 連携時 |
+| `INBOUND_WEBHOOK_SECRET` | `inbound-mail-webhook`（転送メール経路）の認証。**未設定なら全リクエストを 503 で拒否する** | Webhook 経路利用時 |
 
-> `inbound-email` 自体は AI を使わないので、メール取り込みだけ動かしたいなら `GROQ_API_KEY` 等は不要。マッチング系を使うときに必須になる。GitHub Issue 連携を使う場合は `GITHUB_TOKEN` を別途登録（`supabase/functions/create-github-issue/index.ts` の `REPO` 定数で対象リポジトリを指定）。
+> **外部AI の Secret（Cerebras / Groq / Gemini）は 2026-10-02 に不要になった。**
+> 以前この表に3つ載せていたが、外部AI は全廃した（理由と実測は CLAUDE.md
+> 「技術スタック」）。マッチングはルールスコアだけで動く。
+>
+> GitHub Issue 連携を使う場合は `GITHUB_TOKEN` を別途登録
+> （`supabase/functions/create-github-issue/index.ts` の `REPO` 定数で対象リポジトリを指定）。
 
 **pg_cron スケジュール登録**
 

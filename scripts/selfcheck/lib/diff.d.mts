@@ -9,6 +9,8 @@ export interface RawFinding {
   severity?: 'error' | 'warn' | 'info'
   title: string
   detail?: string
+  /** その所見の最終発生時刻（持てる検出器だけ）。再発の判定に使う */
+  at?: string | null
 }
 
 export interface Finding {
@@ -17,12 +19,23 @@ export interface Finding {
   severity: 'error' | 'warn' | 'info'
   title: string
   detail: string
+  at?: string
+  /**
+   * baseline で黙らせた時点（`seenAt`）より新しい発生があった場合、その時点。
+   * **「直したから黙らせた」を永久の黙秘にしないための印。**
+   */
+  recurredSince?: string
 }
 
 export interface BaselineEntry {
   why: string
   at: string
   was?: string
+  /**
+   * 黙らせた時点での最終発生時刻。これより新しい発生があれば再び新規として出す。
+   * 古い baseline には無い（無ければ従来どおり黙る＝互換）。
+   */
+  seenAt?: string
 }
 
 export type Baseline = Record<string, BaselineEntry>

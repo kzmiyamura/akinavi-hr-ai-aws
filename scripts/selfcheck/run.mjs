@@ -6,6 +6,8 @@
  *   node scripts/selfcheck/run.mjs --all        # baseline を無視して全部出す
  *   node scripts/selfcheck/run.mjs --json       # 機械向け（claude -p に渡す形）
  *   node scripts/selfcheck/run.mjs --accept "理由"  # 今出ている新規を baseline に入れる
+ *   node scripts/selfcheck/run.mjs --accept "理由" --fp <指紋の一部>
+ *                                               # **その所見だけ**を理由付きで入れる
  *   node scripts/selfcheck/run.mjs --stale      # 直ったので消せる baseline を出す
  *
  * 終了コード: 0=新規なし / 1=新規あり / 2=検出器が落ちた
@@ -49,6 +51,15 @@ const AS_JSON = has('--json')
 const SHOW_STALE = has('--stale')
 const acceptAt = argv.indexOf('--accept')
 const ACCEPT_WHY = acceptAt >= 0 ? argv[acceptAt + 1] : null
+/**
+ * `--fp <指紋の一部>` で、受け入れる所見を1つに絞る。
+ *
+ * ⚠ **理由は所見ごとに違う。** 絞れないと「全部まとめて同じ理由」になり、
+ *   後から読んだ人がどの所見にどの根拠が付いていたのか分からなくなる
+ *   （baseline の値は `why` しか無い）。
+ */
+const fpAt = argv.indexOf('--fp')
+const ACCEPT_FP = fpAt >= 0 ? argv[fpAt + 1] : null
 
 function loadBaseline() {
   if (!existsSync(BASELINE)) return {}
@@ -73,13 +84,21 @@ const baseline = loadBaseline()
 const { fresh, known, stale } = diffAgainstBaseline(findings, SHOW_ALL ? {} : baseline)
 
 if (ACCEPT_WHY) {
-  if (!fresh.length) { console.log('新規の所見が無いので baseline は変えない') }
-  else {
-    const next = acceptInto(baseline, fresh, ACCEPT_WHY, new Date().toISOString().slice(0, 10))
+  const target = ACCEPT_FP ? fresh.filter((f) => f.fp.includes(ACCEPT_FP)) : fresh
+  if (!fresh.length) {
+    console.log('新規の所見が無いので baseline は変えない')
+  } else if (!target.length) {
+    // 指紋の打ち間違いで「何も入らなかったのに成功」に見せない
+    console.error(`⚠ --fp "${ACCEPT_FP}" に当たる新規の所見が無い。今出ているのは:`)
+    for (const f of fresh) console.error(`   ${f.fp}`)
+    process.exitCode = 2
+  } else {
+    const next = acceptInto(baseline, target, ACCEPT_WHY, new Date().toISOString().slice(0, 10))
     writeFileSync(BASELINE, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-    console.log(`baseline に ${fresh.length} 件入れた: ${ACCEPT_WHY}`)
+    console.log(`baseline に ${target.length} 件入れた: ${ACCEPT_WHY}`)
+    for (const f of target) console.log(`   ${f.fp}`)
   }
-  process.exitCode = 0
+  if (process.exitCode === undefined) process.exitCode = 0
 } else if (AS_JSON) {
   console.log(JSON.stringify({ fresh, crashed, counts: { fresh: fresh.length, known: known.length, stale: stale.length } }, null, 2))
   process.exitCode = exitCodeFor({ fresh, crashed })
@@ -112,6 +131,12 @@ if (ACCEPT_WHY) {
     console.log('')
     console.log(`${mark[f.severity] ?? '⚪'} [${f.detector}] ${f.title}`)
     console.log(`   ${f.detail}`)
+    // 一度「直した」として黙らせたものが再発した＝直っていなかった、か別の経路。
+    // 新規と同じ扱いで埋もれさせないよう、再発であることを明記する
+    if (f.recurredSince) {
+      console.log(`   ⚠ **再発**。${f.recurredSince} までで黙らせたが、それより新しい発生がある。`)
+      console.log(`      黙らせた理由: ${baseline[f.fp]?.why ?? '-'}`)
+    }
     console.log(`   指紋: ${f.fp}`)
   }
   if (!fresh.length && !crashed.length) console.log('\n新規の所見なし。')

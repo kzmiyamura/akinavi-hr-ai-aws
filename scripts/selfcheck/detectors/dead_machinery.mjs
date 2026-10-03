@@ -24,7 +24,7 @@
  */
 
 import { allFiles, esc, lineOf } from '../lib/sources.mjs'
-import { loadTable, prodOnly, distribution, hasField } from '../lib/archive.mjs'
+import { loadTable, loadSnapshot, prodOnly, distribution, hasField } from '../lib/archive.mjs'
 
 /**
  * 見張る列。**ここに足すのが検出器を増やす一番安い方法。**
@@ -50,6 +50,8 @@ const TRACKED = [
     label: 'Box 取り込みの状態',
     table: 'candidates',
     queue: true,
+    // 状態は作成後に変わる。日付別の控えでは判定できないのでスナップショットを使う
+    snapshot: 'candidates_box_state',
     // 空振りを避けるため、その列を触るファイルだけに絞る
     scope: ['scripts/llm_extract/', 'supabase/functions/', 'src/'],
   },
@@ -58,6 +60,8 @@ const TRACKED = [
     label: '派遣・紹介免許の判定',
     table: 'agent_companies',
     queue: true,   // 判定を間違えるとその会社の人材が派遣案件から丸ごと消える
+    // 免許の判定も後から変わる。控えの日付別 JSONL は古い判定を持ったままになる
+    snapshot: 'agent_companies_license',
     scope: ['scripts/', 'supabase/', 'src/'],
   },
   {
@@ -66,6 +70,11 @@ const TRACKED = [
     table: 'ai_logs',
     // 記録専用。拾い直す経路は要らない
     scope: ['scripts/llm_extract/', 'supabase/functions/'],
+    // ⚠ `status` は**どの表にもある名前**。表名を書いていないファイルで拾うと
+    //   別の表の状態を混ぜる。実際に `llm_shadow.status = 'ok'` を
+    //   `ai_logs.status` の値として報告していた
+    //   （shadow_worker.mjs は ai_logs を1度も触っていない・2026-10-03）。
+    requireTable: true,
   },
   {
     column: 'duplicate_flag',
@@ -93,8 +102,29 @@ function inScope(rel, scope) {
   return !scope || scope.some((p) => rel.startsWith(p))
 }
 
+/**
+ * `requireTable` が立っている列は、**表名を書いていないファイルを見ない**。
+ * `status` のような名前は複数の表にあり、表名が無いと持ち主を特定できない。
+ */
+function tableOk(f, t) {
+  return !t.requireTable || f.text.includes(t.table)
+}
+
+/**
+ * テストは「本番がその値を書く」証拠にならない。
+ *
+ * テストが `box_status: 'x'` という**作り物の値**を使っていたため、
+ * 「`x` を書くのに誰も拾わない」という所見が出ていた（2026-10-03）。
+ * 本番に `x` を書く経路は無い。
+ *
+ * ⚠ 拾う側（`collectConsumed`）からは外さない。テストしか見ていない値を
+ *   「拾われている」と数えるのは逆に危ないが、**本番が書かない値を
+ *   候補に入れない**方が先に効く。
+ */
+const IS_TEST_RE = /(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?[jt]sx?$/
+
 /** コードがその列に入れうる値 */
-function collectKnown(column, scope) {
+function collectKnown(column, scope, t) {
   const hits = new Map()   // 値 -> [{rel, line}]
   const c = esc(column)
   const pats = [
@@ -106,7 +136,8 @@ function collectKnown(column, scope) {
     new RegExp(`\\b${c}\\b[^\\n;]{0,80}?\\bDEFAULT\\s+'([^']{1,40})'`, 'gi'),
   ]
   for (const f of allFiles()) {
-    if (f.kind !== 'code' || !inScope(f.rel, scope)) continue
+    if (f.kind !== 'code' || !inScope(f.rel, scope) || !tableOk(f, t)) continue
+    if (IS_TEST_RE.test(f.rel)) continue   // テストの作り物の値を本番の値にしない
     if (!f.text.includes(column)) continue
     for (const re of pats) {
       for (const m of f.text.matchAll(re)) {
@@ -123,7 +154,7 @@ function collectKnown(column, scope) {
 }
 
 /** コードがその列で絞り込んでいる値 */
-function collectConsumed(column, scope) {
+function collectConsumed(column, scope, t) {
   const out = new Set()
   const c = esc(column)
   const pats = [
@@ -143,7 +174,7 @@ function collectConsumed(column, scope) {
     new RegExp(`\\b${c}\\s*=\\s*'([^']{1,40})'`, 'g'),
   ]
   for (const f of allFiles()) {
-    if (f.kind !== 'code' || !inScope(f.rel, scope)) continue
+    if (f.kind !== 'code' || !inScope(f.rel, scope) || !tableOk(f, t)) continue
     if (!f.text.includes(column)) continue
     for (const re of pats) {
       for (const m of f.text.matchAll(re)) {
@@ -166,7 +197,10 @@ export default {
     const findings = []
 
     for (const t of TRACKED) {
-      const rows = loadTable(t.table)
+      // 状態列は**現状スナップショット**を正とする。日付別 JSONL は作成時の姿しか
+      // 持たないので、`box_status` のように後から変わる列はそこでは判定できない
+      const snap = t.snapshot ? loadSnapshot(t.snapshot) : null
+      const rows = snap ?? loadTable(t.table)
       const prod = rows ? prodOnly(rows) : null
       const observable = rows ? hasField(rows, t.column) : false
       const dist = observable ? distribution(prod, t.column) : null
@@ -177,8 +211,13 @@ export default {
           key: `unobservable:${t.table}.${t.column}`,
           severity: 'info',
           title: `控えに ${t.table}.${t.column} が無く、死んでいるか確かめられない`,
-          detail: `${t.label}。archive_local.mjs の select に ${t.column} を足せば、`
-            + `以後この列は egress ゼロで検査できる。`,
+          detail: t.snapshot
+            // スナップショットを指定しているのに列が無い＝撮れていない。select の足し漏れ
+            ? `${t.label}。snapshot/${t.snapshot}.jsonl に ${t.column} が入っていない。`
+              + `archive_local.mjs の SNAPSHOTS の select を見直す。`
+            : `${t.label}。archive_local.mjs の SNAPSHOTS に「状態が付いた行だけ」の`
+              + `スナップショットを足せば、以後この列は egress ゼロで検査できる`
+              + `（日付別 JSONL は作成時の姿しか持たないので、列を足すだけでは直らない）。`,
         })
       }
 
@@ -203,8 +242,8 @@ export default {
         continue
       }
 
-      const known = collectKnown(t.column, t.scope)
-      const consumed = collectConsumed(t.column, t.scope)
+      const known = collectKnown(t.column, t.scope, t)
+      const consumed = collectConsumed(t.column, t.scope, t)
       if (known.size === 0) continue
 
       // --- ① 書くが誰も拾わない状態（拾う前提の列だけ） ---

@@ -166,8 +166,58 @@ const TARGETS = [
   },
 ]
 
+/**
+ * 「今の姿」を毎回撮り直すもの（**増分ではない**）。
+ *
+ * ⚠ 上の TARGETS は `created_at` の水位で**1行を1回しか撮らない**。
+ *   そのため**作成後に変わる列は、控えでは永久に初期値のまま**になる。
+ *   実際に夜間健診が「控えに `candidates.box_status` が無く、死んでいるか
+ *   確かめられない」と言い続けていた。列を足しても作成時の null しか入らないので、
+ *   足すだけでは直らない。
+ *
+ * そこで、**状態列だけ・状態が付いている行だけ**を毎回撮り直す。
+ * フィルタで絞るので量は出ない（2026-10-03 実測: enriched 17 + failed 1 = 18行）。
+ * 出力は日付別ではなく**上書き**（`snapshot/<名前>.jsonl`）。履歴ではなく現状だから。
+ */
+const SNAPSHOTS = [
+  {
+    name: 'candidates_box_state',
+    table: 'candidates',
+    // box_status が付いている行だけ。null（＝Box URL が無い大多数）は撮らない
+    filter: 'box_status=not.is.null',
+    select: ['id', 'data_env', 'box_status', 'box_attempts', 'box_tried_at', 'box_error', 'updated_at'].join(','),
+  },
+  {
+    // 免許の判定も**後から変わる**。控え（updated_at 水位）は古い判定を持ったままで、
+    // 2026-10-03 時点で「控えでは shokai が0件・prod には1件」とズレていた。
+    // 268社しかないので毎回撮って構わない（実測で約10KB）。
+    name: 'agent_companies_license',
+    table: 'agent_companies',
+    filter: 'domain=not.is.null',
+    select: ['domain', 'company_name', 'license_status', 'haken_number', 'shokai_number',
+      'verified_at', 'updated_at'].join(','),
+  },
+]
+
 function readJson(path, fallback) {
   try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return fallback }
+}
+
+/** スナップショットを1回で引く（1000行を超える想定が無いものだけ載せる） */
+async function fetchSnapshot(s) {
+  const url = `${SUPABASE_URL}/rest/v1/${s.table}?select=${encodeURIComponent(s.select)}`
+    + `&${s.filter}&limit=1000`
+  const res = await fetch(url, {
+    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+  })
+  const text = await res.text()
+  if (!res.ok) throw new Error(`${s.name} ${res.status}: ${text.slice(0, 200)}`)
+  const rows = JSON.parse(text)
+  // ⚠ PostgREST は上限で黙って切る。切れていたら「これで全部」と思わせない
+  if (rows.length >= 1000) {
+    console.error(`⚠ ${s.name} が 1000 行に達した。切られている可能性がある（絞り込みを見直す）`)
+  }
+  return { rows, bytes: Buffer.byteLength(text) }
 }
 
 /**
@@ -278,6 +328,29 @@ for (const t of TARGETS) {
   if (newest) watermark[t.name] = newest
   totalRows += wrote
   console.log(`\r${t.name.padEnd(16)} ${wrote} 件を追記（次回は ${newest} より後）`)
+}
+
+// ── 「今の姿」を撮り直す（増分では取れない状態列） ────────────────────────
+for (const s of SNAPSHOTS) {
+  if (dryRun) {
+    console.log(`${s.name.padEnd(16)} 現状スナップショット（毎回上書き・${s.filter} で絞る）`)
+    continue
+  }
+  try {
+    const { rows, bytes } = await fetchSnapshot(s)
+    totalBytes += bytes
+    mkdirSync(join(ARCHIVE_DIR, 'snapshot'), { recursive: true })
+    writeFileSync(
+      join(ARCHIVE_DIR, 'snapshot', `${s.name}.jsonl`),
+      rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''),
+      'utf8',
+    )
+    console.log(`${s.name.padEnd(16)} ${rows.length} 件で上書き（現状）`)
+  } catch (e) {
+    // ⚠ ここで黙ると「状態が付いた行は0件」と読まれる。失敗は失敗と出す
+    console.error(`⚠ ${s.name} のスナップショットに失敗: ${e.message}`)
+    process.exitCode = 2
+  }
 }
 
 if (!dryRun) {

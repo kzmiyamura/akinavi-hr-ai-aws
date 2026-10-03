@@ -29,7 +29,7 @@ async function fetchAll(pathq) {
   for (let from = 0; ; from += 1000) {
     const res = await fetch(`${URL}/rest/v1/${pathq}&limit=1000&offset=${from}`,
       { headers: { apikey: KEY, Authorization: `Bearer ${KEY}` } })
-    if (!res.ok) throw new Error(`${pathq} -> ${res.status}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${pathq}`)
     const rows = await res.json()
     out.push(...rows)
     if (rows.length < 1000) break

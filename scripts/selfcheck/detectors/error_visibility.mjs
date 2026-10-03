@@ -82,6 +82,11 @@ export default {
           key: `ai-log-error:${kind}`,
           // 保存に失敗している＝人材がそのまま消えている。他のエラーより重い
           severity: /保存エラー|before initialization|null|undefined is not/i.test(kind) ? 'error' : 'warn',
+          // ⚠ **最終発生時刻を所見に持たせる。**
+          //   「直したので baseline に入れた」あとで**同じエラーが再発したら
+          //   もう一度鳴らす**ために使う（lib/diff.mjs の seenAt 比較）。
+          //   これが無いと、直した証として黙らせた指紋が永久に黙る。
+          at: e.last ?? null,
           title: `ai_logs にエラーが ${e.n} 件溜まっている: ${kind.slice(0, 70)}`,
           detail: `最後に出たのは ${e.last ?? '不明'}（type=${e.type ?? '?'}）。`
             + `実物: ${JSON.stringify(e.sample.slice(0, 120))}。`

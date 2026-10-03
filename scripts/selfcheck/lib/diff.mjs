@@ -40,6 +40,9 @@ export function withFingerprintsChecked(detector, raw) {
       severity: f.severity ?? 'warn',
       title: f.title,
       detail: f.detail ?? '',
+      // 最終発生時刻。**再発したら黙らせを解除する**ために baseline へ持ち越す
+      // （持っていない検出器は undefined のままでよい）
+      ...(f.at ? { at: String(f.at) } : {}),
     })
   }
   return { findings, dupes }
@@ -68,8 +71,17 @@ export function diffAgainstBaseline(findings, baseline) {
   const seen = new Set()
   for (const f of findings) {
     seen.add(f.fp)
-    if (Object.prototype.hasOwnProperty.call(accepted, f.fp)) known.push(f)
-    else fresh.push(f)
+    const acc = Object.prototype.hasOwnProperty.call(accepted, f.fp) ? accepted[f.fp] : null
+    if (!acc) { fresh.push(f); continue }
+    // ⚠ **「直したから黙らせた」を永久の黙秘にしないこと。**
+    //   ai_logs のエラーは控えに残り続けるので、直して受け入れると指紋がずっと既知になる。
+    //   そのままだと**同じバグが再発しても二度と鳴らない**（一番やってはいけない形）。
+    //   受け入れたときの最終発生時刻（`seenAt`）より新しい発生があれば、再び新規として出す。
+    if (acc.seenAt && f.at && String(f.at) > String(acc.seenAt)) {
+      fresh.push({ ...f, recurredSince: acc.seenAt })
+      continue
+    }
+    known.push(f)
   }
   fresh.sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9) || a.fp.localeCompare(b.fp))
   const stale = Object.keys(accepted).filter((fp) => !seen.has(fp)).sort()
@@ -87,12 +99,19 @@ export function exitCodeFor({ fresh, crashed }) {
   return fresh.length ? 1 : 0
 }
 
-/** baseline へ追記する形を作る（上書きはしない。既存の why を消さないため） */
+/**
+ * baseline へ追記する形を作る（上書きはしない。既存の why を消さないため）。
+ *
+ * 所見が最終発生時刻（`at`）を持っているなら `seenAt` として一緒に残す。
+ * これが無いと「直したから黙らせた」が**再発しても黙ったまま**になる
+ * （`diffAgainstBaseline` を参照）。
+ */
 export function acceptInto(baseline, findings, why, today) {
   const next = { ...(baseline ?? {}) }
   for (const f of findings) {
     if (next[f.fp]) continue
     next[f.fp] = { why, at: today, was: f.title.slice(0, 120) }
+    if (f.at) next[f.fp].seenAt = String(f.at)
   }
   return next
 }
