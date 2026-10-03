@@ -16,7 +16,7 @@
 //
 // 環境変数: GRAPH_CLIENT_ID / GRAPH_CLIENT_SECRET / GRAPH_REFRESH_TOKEN_HUMAN(初期値)
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { matchesRule, matchedSkills, type CandidateLite, type NotifyRule } from './match.ts'
+import { matchesRule, matchedSkills, matchesText, ruleNeedsText, type CandidateLite, type NotifyRule } from './match.ts'
 
 const CLIENT_ID = Deno.env.get('GRAPH_CLIENT_ID') ?? ''
 const CLIENT_SECRET = Deno.env.get('GRAPH_CLIENT_SECRET') ?? ''
@@ -40,8 +40,65 @@ function json(status: number, body: Record<string, unknown>): Response {
   })
 }
 
+/** 数値として読む。`"32歳"` のような表記も拾う。読めなければ null（0 にしない） */
+function toInt(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : null
+  if (typeof v !== 'string') return null
+  const m = v.match(/-?\d+/)
+  if (!m) return null
+  const n = Number(m[0])
+  return Number.isFinite(n) ? n : null
+}
+
+/** `{スキル名: 年数}` として読む。`_` 始まりの内部キーは落とす */
+function toNumberMap(v: unknown): Record<string, number> | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const out: Record<string, number> = {}
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (k.startsWith('_')) continue
+    const n = typeof raw === 'number' ? raw : Number(raw)
+    if (Number.isFinite(n)) out[k] = n
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/** `{役割: 'A'|'B'|'C'|'-'}` として読む */
+function toStringMap(v: unknown): Record<string, string> | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const out: Record<string, string> = {}
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof raw === 'string' && raw !== '') out[k] = raw
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
 // deno-lint-ignore no-explicit-any
 type Sb = any
+
+/**
+ * 経歴本文（添付テキスト＋自己PR）を、指定した人材ぶんだけ引く。
+ *
+ * ⚠ **他の条件を全部通った人にだけ呼ぶこと。** 本文は1人あたり12KBあり、
+ * 5分ごとの全対象（実測 2,207行/日）ぶん引くと月1.3GB になる。
+ * 本文キーワード条件を持つルールが1本も無ければ、この関数は呼ばれない。
+ */
+async function fetchTexts(sb: Sb, ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  if (ids.length === 0) return out
+  const { data, error } = await sb
+    .from('candidates')
+    .select('id, at:raw_profile->>attachmentText, pr:raw_profile->>selfPR')
+    .in('id', ids)
+  if (error) {
+    // 本文が引けないことで通知全体を止めない。条件は満たせなかった扱いになる
+    console.log('[notify] 経歴本文の取得に失敗:', error.message)
+    return out
+  }
+  for (const row of data ?? []) {
+    out.set(String(row.id), `${row.at ?? ''}\n${row.pr ?? ''}`)
+  }
+  return out
+}
 
 async function getConfig(sb: Sb, key: string): Promise<string> {
   const { data } = await sb.from('app_config').select('value').eq('key', key).maybeSingle()
@@ -266,7 +323,10 @@ Deno.serve(async (req) => {
     // ルール取得（テーブル未作成=マイグレーション前は静かにスキップ）
     const { data: ruleRows, error: ruleErr } = await sb
       .from('notification_rules')
-      .select('id, label, name_keyword, skill_keywords, station_keyword, notify_email, enabled, data_env')
+      // 2026-10-01 追加の条件列も読む。ルール行は数十件しかないので列を足しても軽い。
+      // ⚠ 文字列を連結して渡さないこと。supabase-js は select の**文字列リテラル**から
+      //   戻り値の型を組み立てるので、連結すると GenericStringError[] に化けて deno check が落ちる
+      .select('id, label, name_keyword, skill_keywords, station_keyword, notify_email, enabled, data_env, age_min, age_max, experience_years_min, skill_years_min, exclude_level_c, text_keywords, include_unknown')
       .eq('enabled', true)
     if (ruleErr) {
       if (/notification_rules/.test(ruleErr.message)) {
@@ -320,7 +380,12 @@ Deno.serve(async (req) => {
     for (const env of envs) {
       const { data, error } = await sb
         .from('candidates')
-        .select('id, name, skills, raw_profile, data_env, created_at, updated_at')
+        // ⚠ raw_profile を丸ごと引かない（2026-10-01）。1行20KBあり、実測で
+        //   対象2,207行/日 × 20KB ＝ **44MB/日（月1.3GB＝Freeの5GB枠の26%）** だった。
+        //   内訳は jsonRows 18MB / attachmentText 12MB / text 6MB で、**どれも通知判定に
+        //   使っていない**。必要な項目だけを JSON パスで取ると 1.97MB/日 になる。
+        //   経歴本文は他の条件を全部通った人にだけ後段で引く（下の fetchTexts）。
+        .select('id, name, skills, data_env, created_at, updated_at, experience_years, st:raw_profile->>nearestStation, pf:raw_profile->>prefecture, ag:raw_profile->>age, sy:raw_profile->skillYears, lv:raw_profile->_roleLevels')
         .eq('data_env', env)
         .is('merged_into', null)
         .or(`created_at.gt.${sinceIso},updated_at.gt.${sinceIso}`)
@@ -335,13 +400,21 @@ Deno.serve(async (req) => {
         if (lastSeen && (processedUpTo === null || lastSeen < processedUpTo)) processedUpTo = lastSeen
       }
       for (const row of rows) {
-        const rp = (row.raw_profile ?? {}) as Record<string, unknown>
         cands.push({
           id: String(row.id),
           name: String(row.name ?? ''),
           skills: Array.isArray(row.skills) ? (row.skills as string[]) : [],
-          station: `${rp.nearestStation ?? ''} ${rp.prefecture ?? ''}`,
+          station: `${row.st ?? ''} ${row.pf ?? ''}`,
           data_env: String(row.data_env),
+          // ── 2026-10-01 追加の条件で使う値。取れていなければ null のまま渡す ──────
+          // 「取れていない＝条件を満たさない」ではないので、扱いは include_unknown に任せる
+          age: toInt(row.ag),
+          experienceYears: toInt(row.experience_years),
+          skillYears: toNumberMap(row.sy),
+          roleLevels: toStringMap(row.lv),
+          // 経歴本文はここでは引かない（重い）。text は undefined のままにしておき、
+          // 他の条件を全部通った人にだけ後段で引く。matchesRule は undefined を
+          // 「未取得」として扱い、本文条件をこの時点では判定しない
         })
       }
     }
@@ -359,7 +432,13 @@ Deno.serve(async (req) => {
     // ルールごとのマッチ（通知済みは除外）
     const perRule = new Map<string, { rule: NotifyRule; hits: CandidateLite[] }>()
     for (const rule of rules) {
-      const hits = cands.filter((c) => matchesRule(rule, c))
+      let hits = cands.filter((c) => matchesRule(rule, c))
+      // 本文キーワードは最後に見る。本文は1人12KBあるので、他の条件を全部通った
+      // 人にだけ引く（全員ぶん引くと月1.3GB になる）
+      if (hits.length > 0 && ruleNeedsText(rule)) {
+        const texts = await fetchTexts(sb, hits.map((h) => h.id))
+        hits = hits.filter((h) => matchesText(rule, texts.get(h.id) ?? ''))
+      }
       if (hits.length === 0) continue
       const { data: logged } = await sb
         .from('notification_log')

@@ -8,6 +8,8 @@ import { describe, it, expect } from 'vitest'
 import {
   matchesRule,
   matchedSkills,
+  matchesText,
+  ruleNeedsText,
   ruleHasCondition,
   type CandidateLite,
   type NotifyRule,
@@ -20,6 +22,92 @@ const rule = (over: Partial<NotifyRule>): NotifyRule => ({
 const cand = (over: Partial<CandidateLite>): CandidateLite => ({
   id: 'c1', name: 'T.K', skills: ['Java', 'Spring Boot', 'AWS'],
   station: '西船橋駅 千葉県', data_env: 'prod', ...over,
+})
+
+describe('年齢・経験・レベル・本文の条件（2026-10-01 追加）', () => {
+  // 現場の要求: 「共通部品を作ったことがある経験と Java開発経験が必要、
+  //   20代後半〜40代まで、教育が必要な人は難しい」
+  const 基盤チーム = rule({
+    skill_keywords: ['Java'],
+    skill_years_min: 3,
+    age_min: 25, age_max: 49,
+    exclude_level_c: true,
+    text_keywords: ['共通部品', '共通基盤'],
+  })
+
+  // ⚠ skillYears は名前に反して**月数**（実データ: Visual Basic 84 ＝ 7年）。
+  //   ルールの skill_years_min は「年」なので、判定側で12倍して比べている
+  it('現場の要求を1本のルールで表現できる', () => {
+    const 合う = cand({
+      age: 34, skillYears: { Java: 96, AWS: 36 }, // 8年 / 3年
+      roleLevels: { 'テックリード': 'B' },
+      text: '共通部品の設計・実装を担当',
+    })
+    expect(matchesRule(基盤チーム, 合う)).toBe(true)
+  })
+
+  it('年齢の範囲外は落ちる', () => {
+    const base = { skillYears: { Java: 96 }, roleLevels: { 'テックリード': 'B' }, text: '共通部品' }
+    expect(matchesRule(基盤チーム, cand({ ...base, age: 22 }))).toBe(false)
+    expect(matchesRule(基盤チーム, cand({ ...base, age: 55 }))).toBe(false)
+    expect(matchesRule(基盤チーム, cand({ ...base, age: 25 }))).toBe(true) // 境界は含む
+    expect(matchesRule(基盤チーム, cand({ ...base, age: 49 }))).toBe(true)
+  })
+
+  it('指定スキルの年数が足りなければ落ちる（データは月数・ルールは年）', () => {
+    const base = { age: 34, roleLevels: { 'テックリード': 'B' }, text: '共通部品' }
+    expect(matchesRule(基盤チーム, cand({ ...base, skillYears: { Java: 35 } }))).toBe(false) // 2年11か月
+    expect(matchesRule(基盤チーム, cand({ ...base, skillYears: { Java: 36 } }))).toBe(true)  // ちょうど3年
+    // 月数を年数と取り違えると「3」で通ってしまう。3か月では落ちること
+    expect(matchesRule(基盤チーム, cand({ ...base, skillYears: { Java: 3 } }))).toBe(false)
+  })
+
+  it('到達レベルは「Cしか無い人」だけ外す（AやBが1つでもあれば残す）', () => {
+    const base = { age: 34, skillYears: { Java: 96 }, text: '共通部品' }
+    // C だけ＝従事どまり。教育が必要な人に一番近い印なので外す
+    expect(matchesRule(基盤チーム, cand({ ...base, roleLevels: { 'PMO': 'C' } }))).toBe(false)
+    // 役割ごとに別々に判定されるので A と C が同居する。これは外さない
+    expect(matchesRule(基盤チーム, cand({ ...base, roleLevels: { 'PMO': 'C', 'アーキテクト': 'A' } }))).toBe(true)
+    // 印が1つも無い人（実測49%）は「Cである」ではないので既定では残す
+    expect(matchesRule(基盤チーム, cand({ ...base, roleLevels: null }))).toBe(true)
+  })
+
+  it('本文キーワードは OR。1つでも当たれば通る', () => {
+    const base = { age: 34, skillYears: { Java: 96 }, roleLevels: { 'テックリード': 'B' } }
+    expect(matchesRule(基盤チーム, cand({ ...base, text: '共通基盤の刷新を担当' }))).toBe(true)
+    expect(matchesRule(基盤チーム, cand({ ...base, text: '画面の改修のみ' }))).toBe(false)
+  })
+
+  it('本文が渡されていない（未取得）ときは本文条件を判定しない', () => {
+    // 本文は重いので後段で引く。この段階では落とさず、matchesText で見る
+    const c = cand({ age: 34, skillYears: { Java: 96 }, roleLevels: { 'テックリード': 'B' }, text: undefined })
+    expect(matchesRule(基盤チーム, c)).toBe(true)
+    expect(ruleNeedsText(基盤チーム)).toBe(true)
+    expect(matchesText(基盤チーム, '共通部品を作った')).toBe(true)
+    expect(matchesText(基盤チーム, '画面の改修のみ')).toBe(false)
+  })
+
+  it('include_unknown=false にすると、値が取れていない人を落とす', () => {
+    const 厳しめ = rule({ age_min: 25, age_max: 49, include_unknown: false })
+    expect(matchesRule(厳しめ, cand({ age: null }))).toBe(false)
+    expect(matchesRule(厳しめ, cand({ age: 34 }))).toBe(true)
+    // 既定（true）なら取れていない人は通す
+    const 既定 = rule({ age_min: 25, age_max: 49 })
+    expect(matchesRule(既定, cand({ age: null }))).toBe(true)
+  })
+
+  it('新しい条件だけでもルールとして成立する（暴発防止の判定に含まれる）', () => {
+    expect(ruleHasCondition(rule({ age_min: 25 }))).toBe(true)
+    expect(ruleHasCondition(rule({ exclude_level_c: true }))).toBe(true)
+    expect(ruleHasCondition(rule({ text_keywords: ['共通部品'] }))).toBe(true)
+    expect(ruleHasCondition(rule({ text_keywords: ['  '] }))).toBe(false)
+    expect(ruleHasCondition(rule({ exclude_level_c: false }))).toBe(false)
+  })
+
+  it('移行前に作られたルール（新列が未定義）でも従来どおり動く', () => {
+    const 旧 = rule({ skill_keywords: ['Java'] })
+    expect(matchesRule(旧, cand({ age: null, skillYears: null, roleLevels: null }))).toBe(true)
+  })
 })
 
 describe('matchesRule', () => {
