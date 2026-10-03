@@ -242,6 +242,50 @@ async function respondSkipped(
   )
 }
 
+/**
+ * PostgreSQL の JSONB が受け取れない文字を落とす。
+ *
+ * 落とすのは2種類だけ:
+ *   - null byte `\u0000` … JSONB が仕様として受け付けない
+ *   - **孤立した**サロゲート … 対になっていない半分は正しい文字にならない
+ *
+ * ⚠ **対になっているサロゲートは絶対に落とさない。**
+ *    以前の実装は `/[\uD800-\uDFFF]/g` で**全サロゲートを消していた**ので、
+ *    U+20BB7（「つちよし」の異体字）のような基本多言語面の外の漢字や絵文字が
+ *    丸ごと消えていた。氏名に使われる字なので、取り込めても別人の名前になる。
+ */
+const PG_JSON_LONE_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g
+
+function sanitizeForPgJson(s: string): string {
+  return String(s ?? '').replace(/\u0000/g, '').replace(PG_JSON_LONE_SURROGATE_RE, '')
+}
+
+/**
+ * 保存する値を**まるごと**歩いて PostgreSQL が弾く文字を落とす。
+ *
+ * ⚠ **項目ごとに落とす書き方にしない。** 2026-10-03 まで `sanitizeForPgJson` は
+ *    本文（effectiveBody）とブロック本文の2か所にしか効いておらず、
+ *    `name` / `attachmentText` / `selfPR` / `agentComment` / `skillSummary` は素通りだった。
+ *    その結果 `候補者保存エラー: unsupported Unicode escape sequence` が**64件**出て、
+ *    **その人材は保存されずに消えていた**（メールも7日で消えるので取り返せない）。
+ *    raw_profile は項目が増え続けるので、落とす側を列挙で追いかけると必ず置いていかれる。
+ *    **INSERT / UPDATE の直前で payload を1回歩く**のが唯一追従する形。
+ */
+function sanitizeDeepForPgJson<T>(value: T): T {
+  if (typeof value === 'string') return sanitizeForPgJson(value) as unknown as T
+  if (Array.isArray(value)) return value.map((v) => sanitizeDeepForPgJson(v)) as unknown as T
+  // Date や null を壊さないよう、素のオブジェクトだけを歩く
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[sanitizeForPgJson(k)] = sanitizeDeepForPgJson(v)
+    }
+    return out as unknown as T
+  }
+  return value
+}
+
 /** Microsoft Graph API の from フィールド（JSON文字列の場合も）からメールアドレスを取り出す */
 function parseFrom(from: string): string {
   try {
@@ -11658,8 +11702,10 @@ Deno.serve(async (req: Request) => {
       // body が空の場合はsubjectを本文代わりに使う（cy-tech等の件名のみメール対策）
       // HTMLエンティティをデコードして保存（&#26684; → 格 等）
       // PostgreSQL JSONB は null byte (\u0000) と lone surrogate を許容しないため除去
-      const sanitizeForPgJson = (s: string) =>
-        s.replace(/\u0000/g, '').replace(/[\uD800-\uDFFF]/g, '')
+      // ここにあったローカル定義はモジュール先頭の sanitizeForPgJson に移した。
+      // 旧実装は対になったサロゲートまで消していたので正規表現も直してある。
+      // 保存時は INSERT / UPDATE の直前で payload 全体を歩くので、
+      // ここは「解析に渡す本文」を揃えるためだけに通す。
       const effectiveBody = sanitizeForPgJson(decodeHtmlEntities(body.trim() ? body : subject))
       // reprocess_no_skill_years.mjs の Strategy B が body 末尾に埋め込む疑似添付テキストを
       // DB保存用本文からは除去する（パース処理には元のテキストをそのまま使う）
@@ -13110,9 +13156,11 @@ Deno.serve(async (req: Request) => {
             updatePayload.box_status = 'pending'
           }
         }
+        // ⚠ 保存する直前に payload 全体を歩く。項目を列挙して落とす形にしないこと
+        //    （raw_profile は項目が増え続けるので、列挙は必ず置いていかれる）
         const { error: updateError } = await supabase
           .from('candidates')
-          .update(updatePayload)
+          .update(sanitizeDeepForPgJson(updatePayload))
           .eq('id', existingCandidateId)
           .eq('data_env', inboundDataEnv)
         if (updateError) throw new Error(`候補者更新エラー: ${updateError.message}`)
@@ -13130,7 +13178,9 @@ Deno.serve(async (req: Request) => {
             },
           }
           : dbPayload
-        const { data, error } = await supabase.from('candidates').insert(insertPayload).select('id').single()
+        const { data, error } = await supabase.from('candidates')
+          // ⚠ 保存する直前に payload 全体を歩く（上の UPDATE と同じ理由）
+          .insert(sanitizeDeepForPgJson(insertPayload)).select('id').single()
         if (error) throw new Error(`候補者保存エラー: ${error.message}`)
         savedCandidateId = data.id
 
