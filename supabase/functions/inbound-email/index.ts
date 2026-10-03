@@ -11063,6 +11063,32 @@ Deno.serve(async (req: Request) => {
     const from: string = parseFrom(raw.from ?? '')
     const subject: string = raw.subject ?? ''
 
+    // 添付ファイルの解決（attachment[data] 形式 → Attachment オブジェクト）
+    //
+    // ⚠ **スキップ判定より前に置くこと。** ここは `raw` を読むだけの純粋な解釈で副作用が無い。
+    //    下の MAILER_DAEMON / OWN_DOMAIN スキップが `attachments` を渡しており、
+    //    宣言がスキップより後ろにあった間、両経路が
+    //    `Cannot access 'attachments' before initialization` で例外になっていた
+    //    （ai_logs に36件。2026-10-03 に夜間健診が検出）。
+    //    スキップでも添付の件数は必ず残す決まりなので、渡さない形では直さない。
+    let attachments: Attachment[] = []
+    if (raw['attachment[data]']) {
+      attachments = [{
+        data: raw['attachment[data]'],
+        mimeType: raw['attachment[mimeType]'] ?? '',
+        name: raw['attachment[name]'] ?? undefined,
+      }]
+    } else if (raw.attachmentsJson) {
+      try {
+        const parsed = JSON.parse(raw.attachmentsJson) as unknown
+        if (Array.isArray(parsed)) attachments = attachmentsFromParsedArray(parsed)
+      } catch { /* ignore */ }
+    } else if (Array.isArray(raw.attachments)) {
+      attachments = attachmentsFromParsedArray(raw.attachments)
+    } else if (typeof raw.attachments === 'string' && raw.attachments.trim()) {
+      attachments = attachmentsFromJsonArrayString(raw.attachments)
+    }
+
     // ── MAILER-DAEMON: 配信失敗通知は無条件スキップ ──────────────────────
     if (/^mailer-daemon/i.test(from) || /^mailer-daemon/i.test(subject)) {
       return await respondSkipped('MAILER_DAEMON', { rid: traceRid, from, subject, attachments })
@@ -11135,24 +11161,7 @@ Deno.serve(async (req: Request) => {
       if (m > 200) { body = body.slice(0, m).trim(); break }
     }
 
-    // 添付ファイルの解決（attachment[data] 形式 → Attachment オブジェクト）
-    let attachments: Attachment[] = []
-    if (raw['attachment[data]']) {
-      attachments = [{
-        data: raw['attachment[data]'],
-        mimeType: raw['attachment[mimeType]'] ?? '',
-        name: raw['attachment[name]'] ?? undefined,
-      }]
-    } else if (raw.attachmentsJson) {
-      try {
-        const parsed = JSON.parse(raw.attachmentsJson) as unknown
-        if (Array.isArray(parsed)) attachments = attachmentsFromParsedArray(parsed)
-      } catch { /* ignore */ }
-    } else if (Array.isArray(raw.attachments)) {
-      attachments = attachmentsFromParsedArray(raw.attachments)
-    } else if (typeof raw.attachments === 'string' && raw.attachments.trim()) {
-      attachments = attachmentsFromJsonArrayString(raw.attachments)
-    }
+    // 添付の解決は MAILER_DAEMON / OWN_DOMAIN スキップより前へ移した（上を参照）。
 
     const t0 = Date.now()
     const elapsed = () => `${Date.now() - t0}ms`
