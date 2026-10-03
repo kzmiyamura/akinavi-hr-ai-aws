@@ -4640,6 +4640,15 @@ function stripUrlsForSkillMatching(text){
   return text.replace(/https?:\/\/[^\s\u3000<>"'\(\)\[\]｝】、，。]+/gi, ' ')
 }
 
+// ── skillTermPattern ──
+function skillTermPattern(term){
+  const escaped = term.replace(/[.+*?()[\]{}\\|^$]/g, '\\$&')
+  const isShortLowerAscii = /^[a-z]{2,3}$/.test(term)
+  return isShortLowerAscii
+    ? `(?<![a-zA-Z0-9_#])${escaped}(?=[\\s\\u3000-\\u9FFF、。！？）」』]|$)`
+    : `(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9.]|_[a-zA-Z_])`
+}
+
 // ── inferRoleFamilyHint ──
 function inferRoleFamilyHint(
   roles,
@@ -4950,6 +4959,7 @@ export {
   extractFromProse,
   isPhaseTableHeader,
   stripUrlsForSkillMatching,
+  skillTermPattern,
   inferRoleFamilyHint,
   stripAgentSolicitation,
   sameMailConflicts,

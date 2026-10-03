@@ -125,6 +125,48 @@ export function loadSnapshot(name) {
   return null
 }
 
+/**
+ * マスタ系の控えを読む（`masters/<名前>.jsonl`）。
+ *
+ * `db/` 配下と違い**毎回まるごと撮り直している**ので、現在の値が入っている
+ * （`skill_master` 955行・`app_config`・`station_master` など）。
+ *
+ * @returns {object[] | null} 無ければ null（**「0件」と区別すること**）
+ */
+export function loadMaster(name) {
+  const ck = `master:${name}`
+  if (_cache.has(ck)) return _cache.get(ck)
+
+  const root = archiveDir()
+  if (!root) { _cache.set(ck, null); return null }
+
+  const p = join(root, 'masters', `${name}.jsonl`)
+  if (!existsSync(p)) { _cache.set(ck, null); return null }
+  let text
+  try { text = readFileSync(p, 'utf8') } catch { _cache.set(ck, null); return null }
+
+  const rows = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    try { rows.push(JSON.parse(line)) } catch { /* 壊れた行は飛ばす */ }
+  }
+  _cache.set(ck, rows)
+  return rows
+}
+
+/**
+ * `app_config` の値を控えから引く。無ければ `null`。
+ *
+ * ⚠ **未作成のキーは `null`。** 「その機能が無効」ではなく
+ *   「コード側の既定で動いている」の意味（[[verify-dont-guess-db-keys]] と同じ罠）。
+ */
+export function appConfig(key) {
+  const rows = loadMaster('app_config')
+  if (!rows) return null
+  const hit = rows.find((r) => r?.key === key)
+  return hit ? hit.value ?? null : null
+}
+
 /** prod だけに絞る（demo は検証用の作り物なので品質判定に混ぜない） */
 export function prodOnly(rows) {
   return (rows ?? []).filter((r) => r.data_env == null || r.data_env === 'prod')

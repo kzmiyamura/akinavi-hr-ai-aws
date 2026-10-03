@@ -88,6 +88,27 @@ const cmd = process.argv[2] ?? 'summary'
 //    控えを見つけられないまま 0 件・終了コード 0 を返しており、読んだ人が
 //    「控えにデータが無い」と誤解して prod に SQL を投げていた。同じ事故を
 //    サブコマンド名の打ち間違いで起こさないため、ここで止める。
+/**
+ * 位置引数（サブコマンドの後ろ）。**フラグとその値を食わない。**
+ *
+ * ⚠ 2026-10-04: `skillfilter --sample 6` が `--sample` を**スキル名のリスト**として
+ *    読み、全員が「どのスキルにも該当しない」＝**8,225人中0人**という静かな嘘を返した。
+ *    このスクリプトは「prod に SQL を投げないため」の道具なので、
+ *    黙ってゼロを返すのが一番やってはいけない壊れ方（同じ病気で3度目）。
+ */
+const FLAGS_WITH_VALUE = new Set(['--sample', '--dir', '--since'])
+const POSITIONAL = []
+for (let i = 3; i < process.argv.length; i++) {
+  const a = process.argv[i]
+  if (a.startsWith('-')) {
+    if (FLAGS_WITH_VALUE.has(a)) i++
+    continue
+  }
+  POSITIONAL.push(a)
+}
+/** n 番目の位置引数（0 始まり）。無ければ null */
+const posArg = (n) => POSITIONAL[n] ?? null
+
 const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed']
 if (!COMMANDS.includes(cmd)) {
   console.error(`⚠ 知らないサブコマンド: ${cmd}`)
@@ -142,7 +163,7 @@ if (cmd === 'daily') {
 }
 
 if (cmd === 'company') {
-  const top = Number(process.argv[3] ?? 15)
+  const top = Number(posArg(0) ?? 15)
   const byCo = new Map()
   for (const r of rows('candidates')) {
     const c = (r.from_company ?? '(不明)').trim()
@@ -169,7 +190,7 @@ if (cmd === 'rate') {
   //
   //   node scripts/archive_query.mjs rate            # 経験年数帯ごとの相場
   //   node scripts/archive_query.mjs rate <スキル>    # そのスキルを帯で割ったときの人数
-  const skillFilter = process.argv[3] ?? null
+  const skillFilter = posArg(0)
 
   // SQL 側の parse_rate_man / 画面側の parseRateMan と同じ規則（範囲は下限・全角も拾う）
   const parseRate = (src) => {
@@ -263,14 +284,30 @@ if (cmd === 'skillfilter') {
   //   本文側が実際に何人を足しているのかが分からないと、外していいか判断できない。
   //
   //   node scripts/archive_query.mjs skillfilter [スキル,スキル,...]
-  const skills = (process.argv[3] ?? 'Java,C#,Python,JavaScript,PHP').split(',').map((s) => s.trim())
+  const skills = (posArg(0) ?? 'Java,C#,Python,JavaScript,PHP').split(',').map((s) => s.trim())
 
   // 画面・ワーカーと同じ語境界（src/lib/skillWordMatch.ts の skillWordRegex と同じ規則）
-  const WORD = 'A-Za-z0-9#+._'
+  // ⚠ 画面の `src/lib/skillWordMatch.ts` の WORD_CHARS と**同じ集合でなければ測れない**。
+  //    2026-10-04 まで `._` を語扱いしており、`PHP。` のような本文を取り逃がして
+  //    実際より少なく（PHP 312人→100人）出ていた。「同じ規則」とコメントだけ書いて
+  //    中身が違うのが一番危ない。
+  const WORD = 'a-zA-Z0-9#+'
   const reOf = (s) => new RegExp(
     `(^|[^${WORD}])${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^${WORD}]|$)`, 'i',
   )
-  const res = skills.map((s) => ({ s, re: reOf(s) }))
+  /**
+   * `--no-dot` で「直前が `.` のとき」を除いて測る。
+   *
+   * ⚠ 本番の語境界は `.` を語の一部と見ないので、**URL の拡張子に当たる**。
+   *   2026-10-04 実測で、9/18 以降の「本文だけ該当」56人の大半が
+   *   `https://a23.hm-f.jp/cc.php?t=…`（配信停止・スキルシートのリンク）だった。
+   *   PHP 経験者として一覧に出ている＝営業が見る誤ヒット。
+   */
+  const reNoDotOf = (s) => new RegExp(
+    `(^|[^${WORD}.])${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^${WORD}]|$)`, 'i',
+  )
+  const NO_DOT = process.argv.includes('--no-dot')
+  const res = skills.map((s) => ({ s, re: (NO_DOT ? reNoDotOf : reOf)(s) }))
 
   // `--sample N` で「本文だけ該当」の実物を前後文脈つきで出す。
   //
@@ -281,10 +318,42 @@ if (cmd === 'skillfilter') {
   const SAMPLE_N = sampleAt >= 0 ? Number(process.argv[sampleAt + 1] ?? 10) : 0
   const samples = []
 
+  /**
+   * 本文を何人で共有しているか（＝1通に複数人が載っていたメール）。
+   *
+   * ⚠ **ここを見ないと結論が逆になる。** 複数人メールでは1人ぶんのブロックから
+   *   スキルを採るが、`body` は**メール全体**が各人に入る。すると
+   *   「本文に Java があるのに skills 列に無い」が、取りこぼしではなく
+   *   **同僚の Java に当たっているだけ**（＝本来外すべき誤ヒット）になる。
+   *   2026-10-04 に `--sample` で同じ本文の2人（KH 25歳 / KY 55歳）が並んで気付いた。
+   */
+  const bodyShare = new Map()
+  for (const r of rows('candidates')) {
+    if (r.data_env !== 'prod') continue
+    const b = r.rp_text ?? ''
+    if (!b) continue
+    const k = `${b.length}:${b.slice(0, 120)}`
+    bodyShare.set(k, (bodyShare.get(k) ?? 0) + 1)
+  }
+
+  /**
+   * `--since YYYY-MM-DD` で作成日を絞る。
+   *
+   * ⚠ **控えは prod より長い履歴を持つ**ので、直した後の挙動を見たいときは
+   *   必ず切ること。例: 複数人メールで「本文に全員ぶんが入る」問題は
+   *   **2026-09-17 に修正済み**（ブロックだけを保存する）。日付で切らずに測ると
+   *   修正前の行が混ざり、「今も壊れている」という誤った結論になる（2026-10-04 に一度やった）。
+   */
+  const sinceAt = process.argv.indexOf('--since')
+  const SINCE = sinceAt >= 0 ? process.argv[sinceAt + 1] : null
+  const shareOf = (body) => (body ? bodyShare.get(`${body.length}:${body.slice(0, 120)}`) ?? 1 : 1)
+
   let total = 0, bySkills = 0, byBodyOnly = 0, neither = 0, noBody = 0
+  let bodyOnlyShared = 0
   const bodyOnlyPerSkill = new Map()
   for (const r of rows('candidates')) {
     if (r.data_env !== 'prod') continue
+    if (SINCE && String(r.created_at ?? '') < SINCE) continue
     total++
     const have = (Array.isArray(r.skills) ? r.skills : []).map((x) => String(x).toLowerCase())
     const body = r.rp_text ?? ''
@@ -294,6 +363,8 @@ if (cmd === 'skillfilter') {
     const hitBody = res.filter(({ re }) => re.test(body))
     if (hitBody.length) {
       byBodyOnly++
+      const share = shareOf(body)
+      if (share > 1) bodyOnlyShared++
       for (const { s } of hitBody) bodyOnlyPerSkill.set(s, (bodyOnlyPerSkill.get(s) ?? 0) + 1)
       if (samples.length < SAMPLE_N) {
         const { s, re } = hitBody[0]
@@ -302,14 +373,16 @@ if (cmd === 'skillfilter') {
         samples.push({
           name: r.name ?? '(名前なし)',
           skill: s,
+          share,
           skills: (Array.isArray(r.skills) ? r.skills : []).slice(0, 8).join('/') || '(空)',
+          skillCount: (Array.isArray(r.skills) ? r.skills : []).length,
           around: body.slice(Math.max(0, at - 60), at + 80).replace(/\s+/g, ' ').trim(),
         })
       }
     } else neither++
   }
 
-  console.log(`優先スキル: ${skills.join(', ')}`)
+  console.log(`優先スキル: ${skills.join(', ')}${SINCE ? ` / ${SINCE} 以降に登録された人だけ` : ''}`)
   console.log(`prod 人材 ${total} 人（本文が空 ${noBody} 人）`)
   console.log('')
   console.log(`skills 列で該当（索引が効く）      ${String(bySkills).padStart(5)}  ${pct(bySkills, total).trim()}`)
@@ -317,6 +390,11 @@ if (cmd === 'skillfilter') {
   console.log(`どちらにも該当しない               ${String(neither).padStart(5)}  ${pct(neither, total).trim()}`)
   console.log('')
   console.log(`→ 本文マッチを外すと一覧から消える人: ${byBodyOnly} 人`)
+  // 複数人メール由来かどうかで「取りこぼし」か「他人のスキルへの誤ヒット」かが分かれる
+  console.log(`   うち本文を他の人材と共有している（複数人メール）: ${bodyOnlyShared} 人`
+    + ` ${pct(bodyOnlyShared, byBodyOnly).trim()}`)
+  console.log(`   1通1人のメール（＝本人の本文に出ている）:        ${byBodyOnly - bodyOnlyShared} 人`
+    + ` ${pct(byBodyOnly - bodyOnlyShared, byBodyOnly).trim()}`)
   console.log('   内訳（スキル別・重複あり）')
   for (const [s, n] of [...bodyOnlyPerSkill].sort((a, b) => b[1] - a[1])) {
     console.log(`     ${s.padEnd(12)} ${String(n).padStart(5)} 人`)
@@ -327,7 +405,7 @@ if (cmd === 'skillfilter') {
     console.log('本人の経験なら抽出の取りこぼし。募集要項や定型文なら誤ヒット。')
     for (const s of samples) {
       console.log('')
-      console.log(`  ${s.name}  【${s.skill}】  skills列: ${s.skills}`)
+      console.log(`  ${s.name}  【${s.skill}】  本文の共有人数: ${s.share}  skills列 ${s.skillCount}件: ${s.skills}`)
       console.log(`    …${s.around}…`)
     }
   } else {

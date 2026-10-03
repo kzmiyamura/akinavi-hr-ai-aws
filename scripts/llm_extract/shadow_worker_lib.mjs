@@ -123,6 +123,13 @@ export function parseSkillFilterValue(value) {
  *  （英数字・`#`・`+` に挟まれていたら別の語）。 */
 const PG_WORD_CHARS = 'a-zA-Z0-9#+'
 
+/** **スキル名の直前に来てはいけない文字**（上＋`.`）。
+ *  URL の `…/cc.php?t=…` が PHP 経験者として当たるのを防ぐ。
+ *  控えの実測（2026-10-04）で、9/18 以降「本文だけで当たる」56人のうち
+ *  **54人が URL の `.php`** だった。根拠と注意は src/lib/skillWordMatch.ts に詳しく書いた
+ *  （**両方直すこと**。ズレると「AI校正待ち」バッジとキューの中身が食い違う）。 */
+const PG_NOT_BEFORE_CHARS = `${PG_WORD_CHARS}.`
+
 /** PostgreSQL の正規表現メタ文字を無害化する。
  *  バックスラッシュを使うと PostgREST の二重引用符内でさらにエスケープが要るので、
  *  1文字のブラケット式（`[.]` 等）に置き換える。`]` は先頭に置く必要があるため `[]]`。
@@ -144,7 +151,7 @@ export function pgRegexEscape(s) {
 export function pgSkillWordPattern(skill) {
   const esc = pgRegexEscape(skill)
   if (esc === null) return null
-  return `(^|[^${PG_WORD_CHARS}])${esc}([^${PG_WORD_CHARS}]|$)`
+  return `(^|[^${PG_NOT_BEFORE_CHARS}])${esc}([^${PG_WORD_CHARS}]|$)`
 }
 
 /**

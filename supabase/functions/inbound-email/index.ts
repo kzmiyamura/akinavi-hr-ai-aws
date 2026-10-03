@@ -2275,6 +2275,36 @@ function _cachedSkillRegex(pattern: string): RegExp {
   return re
 }
 
+/**
+ * skill_master の語（正式名・別名）を本文から「語として」拾う正規表現。
+ *
+ * ## `_` を語の一部として扱わない（2026-10-04 修正）
+ *
+ * 以前の末尾条件は `(?![a-zA-Z0-9_.])` で、**`_` を語の一部**として扱っていた。
+ * 意図は `JAVA_HOME` / `PHP_INI` のような識別子をスキル名と誤認しないこと。
+ *
+ * ところが**スペースの代わりに `_` を使う送信元**がいる。控えの実測（2026-10-04）:
+ *
+ *   【氏 名】H.K(32歳_男性) 常駐可 … 【スキル】Java_5年8ヶ月 【単 価】60万円
+ *
+ * この人の `skills` 列には Java が入らず、もう1人は**スキル列が空**だった。
+ * 一覧の優先スキル絞り込みから丸ごと消えるので、営業から見ると存在しない人になる。
+ *
+ * そこで `_` の後ろを見て分ける:
+ *   - `_` + 英字/`_`  → 識別子（`JAVA_HOME`）なのでマッチさせない
+ *   - `_` + 数字/日本語/文末 → 区切りとして使われているのでマッチさせる
+ *
+ * ⚠ 2〜3文字の英小文字（`go` 等）だけは別扱いのまま。英語の自然文と区別できないため、
+ *   直後が日本語・空白・文末のときしかマッチさせない（この条件は触っていない）。
+ */
+export function skillTermPattern(term: string): string {
+  const escaped = term.replace(/[.+*?()[\]{}\\|^$]/g, '\\$&')
+  const isShortLowerAscii = /^[a-z]{2,3}$/.test(term)
+  return isShortLowerAscii
+    ? `(?<![a-zA-Z0-9_#])${escaped}(?=[\\s\\u3000-\\u9FFF、。！？）」』]|$)`
+    : `(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9.]|_[a-zA-Z_])`
+}
+
 function extractAndRemoveSkills(
   text: string,
   masterSkills: SkillMasterEntry[],
@@ -2301,14 +2331,8 @@ function extractAndRemoveSkills(
     const terms = [skill.name, ...skill.aliases]
     for (const term of terms) {
       if (!term || term.length < 2) continue
-      const escaped = term.replace(/[.+*?()[\]{}\\|^$]/g, '\\$&')
-
-      // 純粋な英小文字のみ 2〜3 文字の語（go 等）は英語自然文と区別できないため
-      // 直後が日本語文字・空白・文末の場合のみマッチさせる。
-      const isShortLowerAscii = /^[a-z]{2,3}$/.test(term)
-      const pattern = isShortLowerAscii
-        ? `(?<![a-zA-Z0-9_#])${escaped}(?=[\\s\\u3000-\\u9FFF、。！？）」』]|$)`
-        : `(?<![a-zA-Z0-9_#])${escaped}(?![a-zA-Z0-9_.])`
+      // 語境界の規則は skillTermPattern に集約した（`_` の扱いの根拠はそちらに書いてある）
+      const pattern = skillTermPattern(term)
 
       const regex = _cachedSkillRegex(pattern)
       if (regex.test(matchTarget)) {

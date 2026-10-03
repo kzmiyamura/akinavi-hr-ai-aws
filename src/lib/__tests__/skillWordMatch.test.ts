@@ -28,6 +28,26 @@ describe('pgSkillWordPattern', () => {
   it('表現できない名前は null', () => {
     expect(pgSkillWordPattern('a\\b')).toBeNull()
   })
+
+  /**
+   * 本文には配信停止・スキルシートのリンクが必ず入っており、その多くが `.php` で終わる。
+   * 控えの実測（2026-10-04）で、9/18 以降「本文だけで当たる」56人のうち
+   * **54人がこの URL** だった＝PHP を書いていない人が PHP の絞り込みに並んでいた。
+   */
+  it('URL の拡張子をスキルとして拾わない', () => {
+    expect(hit('PHP', 'スキルシート https://a23.hm-f.jp/cc.php?t=M668554&c=2307')).toBe(false)
+    expect(hit('PHP', '配信停止：https://d.bmb.jp/bm/p/f/s.php?id=bm06740ca')).toBe(false)
+    expect(hit('PHP', 'https://a23.hm-f.jp/index.php?action=C1&a=172')).toBe(false)
+    // 本物の記載は当たり続けること（ここが落ちると人が一覧から消える）
+    expect(hit('PHP', '【スキル】：PHP(20年以上)、TypeScript')).toBe(true)
+    expect(hit('PHP', '言語：Python、Java、PHP')).toBe(true)
+    expect(hit('PHP', 'PHP')).toBe(true)
+  })
+
+  it('禁じたのは直前のドットだけ（後ろに足すと文末が当たらなくなる）', () => {
+    expect(hit('Java', '使用言語は Java.')).toBe(true)
+    expect(hit('Java', '使用言語は Java。')).toBe(true)
+  })
 })
 
 describe('ワーカーとの同期', () => {

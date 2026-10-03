@@ -39,8 +39,9 @@ import promisedFlags from './detectors/promised_flags.mjs'
 import errorVisibility from './detectors/error_visibility.mjs'
 import referenceErrors from './detectors/reference_errors.mjs'
 import badNames from './detectors/bad_names.mjs'
+import skillFilterGap from './detectors/skill_filter_gap.mjs'
 
-const DETECTORS = [deadMachinery, promisedFlags, errorVisibility, referenceErrors, badNames]
+const DETECTORS = [deadMachinery, promisedFlags, errorVisibility, referenceErrors, badNames, skillFilterGap]
 
 const HERE = import.meta.dirname
 const BASELINE = join(HERE, 'baseline.json')

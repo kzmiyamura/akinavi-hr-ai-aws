@@ -14,6 +14,30 @@
 /** 語境界とみなさない文字（英数字・`#`・`+`）。skill_satisfies と同じ集合 */
 const WORD_CHARS = 'a-zA-Z0-9#+'
 
+/**
+ * **スキル名の直前に来てはいけない文字**（`WORD_CHARS` ＋ `.`）。
+ *
+ * ## なぜ `.` を足したか（2026-10-04 実測）
+ *
+ * 本文には配信停止やスキルシートのリンクが必ず入っており、その多くが
+ * `https://a23.hm-f.jp/cc.php?t=M668693&c=2307` のような **`.php`** で終わる。
+ * `.` を語境界として扱うと、この URL が **PHP 経験者**として絞り込みに当たる。
+ *
+ * 控えの実測: 2026-09-18 以降に登録された人材で「本文だけで当たる」のは 56人。
+ * **そのうち 54人が URL の `.php`** で、本物は2人だけだった
+ * （`【スキル】Java_5年8ヶ月` を照合側が取れていなかった人）。
+ * 営業から見れば「PHP で絞ったのに PHP を書いていない人が並ぶ」状態だった。
+ *
+ * Edge Function 側（`inbound-email` の `extractAndRemoveSkills`）は前から
+ * `stripUrlsForSkillMatching` で URL を落としてから照合している。
+ * **落としていなかったのは画面とワーカーの絞り込みだけ**だった。
+ * SQL の述語では本文を加工できないので、「直前が `.` なら当てない」で近似する。
+ *
+ * ⚠ 後ろ側（`[^WORD_CHARS]`）に `.` を足してはいけない。
+ *    `Java.` のような文末が当たらなくなる。URL の拡張子は**前が `.`**。
+ */
+const NOT_BEFORE_CHARS = `${WORD_CHARS}.`
+
 /** PostgreSQL 正規表現のメタ文字を1文字ブラケット式で無害化する。
  *  バックスラッシュ／二重引用符を含む名前は表現できないので null。 */
 export function pgRegexEscape(s: string): string | null {
@@ -31,7 +55,7 @@ export function pgRegexEscape(s: string): string | null {
 export function pgSkillWordPattern(skill: string): string | null {
   const esc = pgRegexEscape(skill)
   if (esc === null) return null
-  return `(^|[^${WORD_CHARS}])${esc}([^${WORD_CHARS}]|$)`
+  return `(^|[^${NOT_BEFORE_CHARS}])${esc}([^${WORD_CHARS}]|$)`
 }
 
 /** PostgREST の or() に渡す条件（skills 列の包含 or 本文の語一致）。
@@ -51,7 +75,7 @@ export function skillFilterOrTerms(skills: string[]): string[] {
 /** ブラウザ側で本文を照合するときの正規表現（上のパターンと同じ語境界）。 */
 export function skillWordRegex(skill: string): RegExp {
   const esc = skill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`(^|[^${WORD_CHARS}])${esc}([^${WORD_CHARS}]|$)`, 'i')
+  return new RegExp(`(^|[^${NOT_BEFORE_CHARS}])${esc}([^${WORD_CHARS}]|$)`, 'i')
 }
 
 /** 人材がスキル絞り込みに該当するか。判定はワーカーと同じ二本立て
