@@ -274,8 +274,26 @@ Free Plan の egress 5GB に対し 8/14 時点で 2.98GB 消費・残り9日、
 8/13 単日 822MB のうち **94% が PostgREST**（ブラウザとスクリプトの DB 読み取り）。
 その後の削減が効き、Pro 期間（8/30〜9/30）の実測は **月2.39GB**＝Free の 5GB には収まる水準。
 
+### ⚠ 調査は「ローカル控え」から始める。prod への SQL は最後の手段（2026-10-03 指摘）
+
+**「集計は SQL 側で」は prod に投げてよいという意味ではない。** 順番は常にこう:
+
+1. **`node scripts/archive_query.mjs ...`（ローカル控え・egress ゼロ）** ← まずここ
+2. 控えに無い切り口なら **`archive_query.mjs` にサブコマンドを足す**（その場限りのクエリを書かない）
+3. 経路として動くかを見たいなら demo（53件）
+4. **prod への SQL は「今この瞬間の prod にしか無い事実」だけ**（枠の使用量・cron の状態など）
+
+やらかした例（2026-10-03）: 通知メールに同じ人が2回出た件で、いきなり
+`supabase db query` を prod に投げた（型エラーで2回）。人材データは控えに
+貯まっているので**全部ローカルで出せた**。しかも控えは7日で消える prod より
+**長い履歴を持っている**ので、そちらの方が正しい道具だった。
+
+人材・会社・日次の分布や重複など「データの性質」を見たくなったら、手が
+`supabase db query` に伸びる前に `archive_query.mjs` を見ること。
+
 | やらない | 代わりに |
 |---|---|
+| **データの性質を調べるために prod へ SQL を投げる** | **`node scripts/archive_query.mjs`（ローカル控え）**。足りなければサブコマンドを足す |
 | 行を引いて JS 側で数える・測る | `supabase db query` で **SQL に集計させて数行だけ返す**（`count(*)` / `pg_column_size()`） |
 | 件数確認に `select=*` | `select=id` + `Prefer: count=exact` の HEAD（本文ゼロ） |
 | 本番相手の疎通確認 | `npx vitest run` / `node --check` / `npx tsc --noEmit` / `npm run build` |
