@@ -389,7 +389,12 @@ export async function fetchCandidatesPage(
    *  手元にある分だけを絞ると★の付いた人が出てこないことがある。サーバー側で絞る */
   bookmarkedOnly = false,
 ): Promise<{ candidates: Candidate[]; totalCount: number | null }> {
-  const selectOpts = offset === 0 ? ({ count: 'exact' } as const) : {}
+  // ⚠ **1ページ目に count を相乗りさせない。**
+  //    `count: 'exact'` は述語を全行に評価するので、優先スキルの本文正規表現
+  //    （索引が効かない）が prod 8,222 行に走り、**一覧が1行も描けないまま待たされた**
+  //    （2026-10-03 指摘）。件数は fetchPriorityCandidateCount で別に数える。
+  //    ラウンドトリップは1回増えるが、並行なので描画は止まらない。
+  const selectOpts = {}
   let q = supabase
     .from('candidates')
     .select(
@@ -414,13 +419,16 @@ export async function fetchCandidatesPage(
 
   if (bookmarkedOnly) q = q.eq('bookmarked', true)
 
-  const { data, error, count } = await q
+  const { data, error } = await q
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   // .or() を挟むと supabase-js の戻り型が GenericStringError[] に落ちるため unknown 経由で戻す
-  return { candidates: (data ?? []) as unknown as Candidate[], totalCount: offset === 0 ? (count ?? null) : null }
+  // totalCount は**常に null**。件数は fetchPriorityCandidateCount が別に数える
+  // （count を相乗りさせると一覧が全行スキャンを待つ・上のコメント参照）。
+  // 形は呼び出し側のキャッシュ操作が参照しているので残す。
+  return { candidates: (data ?? []) as unknown as Candidate[], totalCount: null }
 }
 
 /** 優先表示するスキル（app_config.llm_filter_skills）。
@@ -468,6 +476,40 @@ export async function fetchCandidateCount(dataEnv: DataEnv): Promise<number> {
     .eq('data_env', dataEnv)
     .is('merged_into', null)
 
+  if (error) throw new Error(`候補者数の取得に失敗しました: ${error.message}`)
+  return count ?? 0
+}
+
+/**
+ * 優先スキル絞り込み中の件数。**一覧の取得とは別に数える。**
+ *
+ * ⚠ ここは必ず重い。`count: 'exact'` は述語を**全行に対して評価する**ので、
+ *    本文の正規表現（`raw_profile->>text.imatch` ＝索引が効かない）が
+ *    prod 8,222 行すべてに走る。1行の本文は13〜35KBある。
+ *    以前は一覧の1ページ目にこの count を相乗りさせていたため、
+ *    **一覧が1行も描けないまま全行スキャンを待っていた**
+ *    （2026-10-03「人材タブ開いた最初読み込み中が遅くて重い」）。
+ *    件数は後から出てよい情報なので、描画を止めないよう切り離す。
+ *
+ * 本文マッチが足しているのは実測で **6,186件中221件（3.6%）**
+ * （`node scripts/archive_query.mjs skillfilter`）。
+ * 外せば索引だけで済むが221人が一覧から消えるので、外すかはデータを見て決める。
+ *
+ * head: true なので本体は返らない（egress はほぼゼロ）。
+ */
+export async function fetchPriorityCandidateCount(
+  dataEnv: DataEnv,
+  prioritySkills?: string[] | null,
+  bookmarkedOnly = false,
+): Promise<number> {
+  let q = supabase
+    .from('candidates')
+    .select('id', { count: 'exact', head: true })
+    .eq('data_env', dataEnv)
+    .is('merged_into', null)
+  if (prioritySkills?.length) q = q.or(skillFilterOrTerms(prioritySkills).join(','))
+  if (bookmarkedOnly) q = q.eq('bookmarked', true)
+  const { count, error } = await q
   if (error) throw new Error(`候補者数の取得に失敗しました: ${error.message}`)
   return count ?? 0
 }

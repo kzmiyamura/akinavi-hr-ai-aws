@@ -96,8 +96,17 @@
 - `node scripts/gen_agent_license_repair.mjs <出力sql> <結果json>...` — 上の結果から本番修復SQLを生成（人が読んでから流す）
 - `node scripts/audit_agent_company_names.mjs <会社名json>` — 既存の会社名を今の検閲に通し直して壊れている行を出す
 - `node scripts/archive_local.mjs [--dry-run] [--dir <保存先>]` — 本番の控えをローカルに増分で貯める（既定 `~/akinavi-archive`）
-- `node scripts/archive_query.mjs summary|daily|company|missed` — **控えを集計する。本番を引かない**。
+- `node scripts/archive_query.mjs summary|daily|company|missed|rate|skillfilter` — **控えを集計する。本番を引かない**。
   人材は7日で消えるので、過去との比較はこちらで行う（egress ゼロ）
+  - `rate [スキル]` — 経験年数帯ごとの希望単価の分布（25%/中央/75%）。スキル名を付けるとそのスキルだけ。
+    スキル×帯で20人に届くセル数も出す（相場をどの粒度で出せるかの根拠）
+  - `skillfilter [スキル,...]` — 優先スキル絞り込みで、**本文の正規表現マッチが `skills` 配列に足している人数**。
+    索引の効かない述語を外してよいかの判断材料（2026-10-03 実測で 6,186件中221件＝3.6%）
+  - ⚠ **2026-10-03 まで、このスクリプトは全部 0 件を返していた。** `archive_local.mjs` が
+    `db/<表>/` の下に掘るようになったのに追従しておらず、`existsSync` が false で
+    **静かに空を返して終了コード 0** だった。読んだ人は「控えにデータが無い」と判断して prod に
+    SQL を投げる＝この道具が防ぎたかったこと。今は見つからなかった表を最後に必ず表示し
+    **終了コード 2** を返す。`0件` を見たら、まず終了コードを確認すること
 - `npx supabase db query --linked -f scripts/sql/quality_check.sql` — **品質チェック（結果だけ返す版）**。
   **3.4KB**で済む。`npm run quality`（quality_check.mjs）は判定のために raw_profile を
   丸ごと引いており**1回7MB**（繁忙日15〜20MB）かかるので、日常の確認はSQL版を使う。
