@@ -38,8 +38,9 @@ import deadMachinery from './detectors/dead_machinery.mjs'
 import promisedFlags from './detectors/promised_flags.mjs'
 import errorVisibility from './detectors/error_visibility.mjs'
 import referenceErrors from './detectors/reference_errors.mjs'
+import badNames from './detectors/bad_names.mjs'
 
-const DETECTORS = [deadMachinery, promisedFlags, errorVisibility, referenceErrors]
+const DETECTORS = [deadMachinery, promisedFlags, errorVisibility, referenceErrors, badNames]
 
 const HERE = import.meta.dirname
 const BASELINE = join(HERE, 'baseline.json')

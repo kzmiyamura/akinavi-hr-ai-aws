@@ -272,6 +272,15 @@ if (cmd === 'skillfilter') {
   )
   const res = skills.map((s) => ({ s, re: reOf(s) }))
 
+  // `--sample N` で「本文だけ該当」の実物を前後文脈つきで出す。
+  //
+  // ⚠ 件数だけでは**外していいか決められない**。本文に出ているスキルが
+  //   本人の経験なのか（＝抽出の取りこぼし＝直すべき）、募集要項やメールの
+  //   定型文に出ているだけなのか（＝そもそも誤ヒット＝外すべき）で結論が逆になる。
+  const sampleAt = process.argv.indexOf('--sample')
+  const SAMPLE_N = sampleAt >= 0 ? Number(process.argv[sampleAt + 1] ?? 10) : 0
+  const samples = []
+
   let total = 0, bySkills = 0, byBodyOnly = 0, neither = 0, noBody = 0
   const bodyOnlyPerSkill = new Map()
   for (const r of rows('candidates')) {
@@ -286,6 +295,17 @@ if (cmd === 'skillfilter') {
     if (hitBody.length) {
       byBodyOnly++
       for (const { s } of hitBody) bodyOnlyPerSkill.set(s, (bodyOnlyPerSkill.get(s) ?? 0) + 1)
+      if (samples.length < SAMPLE_N) {
+        const { s, re } = hitBody[0]
+        const m = re.exec(body)
+        const at = m ? m.index : 0
+        samples.push({
+          name: r.name ?? '(名前なし)',
+          skill: s,
+          skills: (Array.isArray(r.skills) ? r.skills : []).slice(0, 8).join('/') || '(空)',
+          around: body.slice(Math.max(0, at - 60), at + 80).replace(/\s+/g, ' ').trim(),
+        })
+      }
     } else neither++
   }
 
@@ -300,6 +320,19 @@ if (cmd === 'skillfilter') {
   console.log('   内訳（スキル別・重複あり）')
   for (const [s, n] of [...bodyOnlyPerSkill].sort((a, b) => b[1] - a[1])) {
     console.log(`     ${s.padEnd(12)} ${String(n).padStart(5)} 人`)
+  }
+  if (SAMPLE_N) {
+    console.log('')
+    console.log(`実物 ${samples.length} 件（本文だけ該当・前後の文脈つき）`)
+    console.log('本人の経験なら抽出の取りこぼし。募集要項や定型文なら誤ヒット。')
+    for (const s of samples) {
+      console.log('')
+      console.log(`  ${s.name}  【${s.skill}】  skills列: ${s.skills}`)
+      console.log(`    …${s.around}…`)
+    }
+  } else {
+    console.log('')
+    console.log('実物を見る: node scripts/archive_query.mjs skillfilter "" --sample 10')
   }
 }
 
