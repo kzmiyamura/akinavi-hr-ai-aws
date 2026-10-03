@@ -723,6 +723,44 @@ function shouldRegisterAgentCompany(
   return Boolean(companyName || licenseNumber)
 }
 
+/**
+ * すでに妥当な社名が登録されているドメインでは、**登録済みの名前を正とする**（2026-10-03）。
+ *
+ * ## なぜ要るか
+ *
+ * 社名の抽出は署名が `bodyText.slice(-2000)` に入っているかどうかで結果が変わる。
+ * 実測（extrapeach.jp）: 同じ送信元・同じ件名なのに
+ *   9/20 の人材 … 署名が取れて「Peach株式会社」
+ *   9/24 の人材 … 署名が押し出され件名の【】に落ちて「即戦力AIコンサル/PM」
+ * 後から来たメールが**正しい名前を壊していく**。
+ *
+ * 検閲（isPlausibleCompanyName）はブロックリストなので必ず漏れる。
+ * それより「ドメインは主キーで、一度まともな名前が確定したら動かさない」方が強い。
+ *
+ * @returns known … 登録済みの妥当な社名（無ければ null）
+ *          write … agent_companies に書くべき名前（上書きしないなら null）
+ */
+async function resolveAgentCompanyName(
+  supabase: { from: (t: string) => any },
+  domain: string | null,
+  guessed: string | null,
+): Promise<{ known: string | null; write: string | null }> {
+  if (!domain) return { known: null, write: guessed }
+  try {
+    const { data } = await supabase.from('agent_companies')
+      .select('company_name').eq('domain', domain).maybeSingle()
+    const existing = typeof data?.company_name === 'string' ? data.company_name.trim() : ''
+    if (existing && isPlausibleCompanyName(existing)) {
+      // 既に妥当な名前がある → 推測で上書きしない
+      return { known: existing, write: null }
+    }
+    return { known: null, write: guessed }
+  } catch {
+    // 読めなくても取り込みは止めない。従来どおり推測を使う
+    return { known: null, write: guessed }
+  }
+}
+
 function sanitizeFromCompany(value: string | null | undefined): string | null {
   if (!value) return null
   // ゼロ幅文字（HTMLメールの装飾由来）。目に見えないまま社名に混ざり、
@@ -12770,6 +12808,13 @@ Deno.serve(async (req: Request) => {
         JSON.stringify(_fieldSources),
       )
 
+      // 送信元ドメインで既に確定している社名を先に引く。
+      // 推測より優先して from_company に使い、agent_companies も上書きしない。
+      const senderDomain = from ? from.split('@')[1]?.toLowerCase().trim() ?? null : null
+      const { known: knownAgentCompany } = await resolveAgentCompanyName(
+        supabase, senderDomain, sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany),
+      )
+
       const dbPayload = {
         data_env: inboundDataEnv,
         name: resolvedName,
@@ -12958,7 +13003,10 @@ Deno.serve(async (req: Request) => {
         box_status: boxUrls.length > 0 ? 'pending' : null,
         resume_url: resumeUrl,
         desired_rate: resolvedDesiredRate ?? null,
-        from_company: sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany),
+        // 推測した社名より、**そのドメインで既に確定している社名**を優先する。
+        // 推測は署名が末尾2000字に入ったかどうかで揺れるため（resolveAgentCompanyName 参照）
+        from_company: knownAgentCompany
+          ?? sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany),
       }
 
       // ── INSERT前の重複チェック（同一人物なら UPDATE して INSERT をスキップ）──
@@ -13233,14 +13281,17 @@ Deno.serve(async (req: Request) => {
 
       // agent_companies に会社名・ドメイン・許可番号を upsert（fire and forget）
       {
-        const emailDomain = from ? from.split('@')[1]?.toLowerCase().trim() : null
+        const emailDomain = senderDomain
         const companyName = sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany)
         const { haken, shokai } = extractLicenseNumbers(body)
-        if (shouldRegisterAgentCompany(emailDomain, companyName, haken ?? shokai)) {
+        if (shouldRegisterAgentCompany(emailDomain, companyName ?? knownAgentCompany, haken ?? shokai)) {
           const licenseStatus = haken && shokai ? 'both' : haken ? 'haken' : shokai ? 'shokai' : undefined
           const upsertPayload: Record<string, unknown> = {
             domain: emailDomain,
-            company_name: companyName ?? undefined,
+            // ⚠ 既に妥当な社名があるドメインでは **company_name を送らない**。
+            //    送ると upsert が推測で上書きし、正しい名前が壊れる
+            //    （extrapeach.jp が「Peach株式会社」→「即戦力AIコンサル/PM」になった）
+            company_name: knownAgentCompany ? undefined : (companyName ?? undefined),
             source: 'email',
           }
           if (haken) { upsertPayload.haken_number = haken; upsertPayload.verified_at = new Date().toISOString(); upsertPayload.verified_by = 'email' }
