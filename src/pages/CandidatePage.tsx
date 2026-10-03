@@ -10,11 +10,11 @@ import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
 import { matchesSkillFilter } from '../lib/skillWordMatch'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
 import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
-import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills, fetchCandidateById } from '../lib/db/candidates'
+import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, fetchPriorityCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills, fetchCandidateById } from '../lib/db/candidates'
 import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
 import { COMMERCIAL_FLOW_OPTIONS, EMPLOYMENT_TYPE_OPTIONS, WORK_STYLE_OPTIONS } from '../lib/db/candidates'
 import { fetchSubmissionBadges } from '../lib/db/submissions'
-import { fetchSkillRateMarket, compareToMarket } from '../lib/db/skillRateMarket'
+import { fetchRateMarket, compareToMarket, marketLabel } from '../lib/db/skillRateMarket'
 import type { SubmissionBadge } from '../lib/db/submissions'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
@@ -1240,11 +1240,16 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     refetchInterval: 30_000,
   })
 
-  // スキル別の単価相場。424スキル・数十バイト/行なので丸ごと持って使い回す
-  // （スキルごとに問い合わせると人材1人あたり何十回も往復する）
-  const { data: skillRateMarket } = useQuery({
-    queryKey: ['skill-rate-market'],
-    queryFn: fetchSkillRateMarket,
+  // 単価相場。スキル単位・スキル×経験帯・経験帯だけの3本をまとめて持って使い回す
+  // （スキルごとに問い合わせると人材1人あたり何十回も往復する）。
+  // 一番大きいスキル×経験帯でも1,427行・数十バイト/行なので軽い
+  // ⚠ **人材を選ぶまで引かない。** 相場は選択中の人材カードの中にしか出ないのに、
+  //    タブを開いた瞬間に引いていた（2026-10-03「人材タブ開いた最初読み込み中が遅くて重い」）。
+  //    スキル×経験帯を足して1本584行→3本2千行に増えたので、開くだけで重くなる。
+  const { data: rateMarket } = useQuery({
+    queryKey: ['rate-market', 'v2-by-exp'],
+    queryFn: fetchRateMarket,
+    enabled: !!selectedId,
     staleTime: 30 * 60_000,
   })
 
@@ -1286,6 +1291,24 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
   const [autoShowAll, setAutoShowAll] = useState(false)
   const showAllCandidates = !priorityPref.enabled || autoShowAll
   const activePrioritySkills = autoShowAll ? null : resolvePrioritySkills(priorityPref, prioritySkills)
+
+  /**
+   * 優先スキルが「決まった」か。
+   *
+   * ⚠ 決まる前に一覧を取ると**捨てる取得が1回増える**。
+   *    既定（端末の上書き無し・トグルON）では app_config が届くまで
+   *    `activePrioritySkills` が null になるので、
+   *    まず**絞り込み無しで100件取り**、app_config が届いた瞬間に queryKey が変わって
+   *    **もう一度取り直していた**（2026-10-03「初回読み込みが遅くて重い」）。
+   *    1ページ131KBなので、毎回それが丸ごと無駄になっていた。
+   *
+   *    app_config は1行なので待っても安い。端末の上書きがあるとき・トグルOFFのときは
+   *    app_config を待つ必要が無いので即座に走らせる。
+   */
+  const prioritySkillsResolved = !priorityPref.enabled
+    || autoShowAll
+    || priorityPref.skills !== null
+    || prioritySkills !== undefined
   const togglePriorityFilter = () => {
     if (showAllCandidates) {
       setAutoShowAll(false)
@@ -1312,17 +1335,23 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     // （2026-08-10 実測: egress の91.6%がPostgREST）。5ページ＝約650KBに抑える。
     // 優先スキル設定の有無に関わらず効かせるため、ここで構造的に上限をかける
     maxPages: 5,
-    enabled: !isFiltered,
+    // 優先スキルが決まる前に走らせない（捨てる取得を1回減らす・上の prioritySkillsResolved 参照）
+    enabled: !isFiltered && prioritySkillsResolved,
   })
 
   // 優先スキルに1件も該当しないときは自動的に全件へ戻す。
   // 空の一覧を見せると「人材が消えた」と誤解されるため（2026-08-10 ユーザー判断）
-  const priorityCount = browseInfiniteQuery.data?.pages[0]?.totalCount ?? null
+  // ⚠ 件数（totalCount）ではなく**1ページ目が空かどうか**で判定する。
+  //    件数は別クエリに切り出したので（下の candidates-count）ここに届くのが遅い。
+  //    「1件も返らなかった」はページの中身だけで分かるので、件数を待つ必要がない。
+  const firstPage = browseInfiniteQuery.data?.pages[0]
+  const priorityEmpty = !browseInfiniteQuery.isFetching
+    && firstPage != null && firstPage.candidates.length === 0
   useEffect(() => {
-    if (!showAllCandidates && activePrioritySkills?.length && priorityCount === 0) {
+    if (!showAllCandidates && activePrioritySkills?.length && priorityEmpty) {
       setAutoShowAll(true)
     }
-  }, [showAllCandidates, activePrioritySkills, priorityCount])
+  }, [showAllCandidates, activePrioritySkills, priorityEmpty])
 
   // フィルター検索（ポップアップで絞り込み条件を指定した場合）
   const filterInfiniteQuery = useInfiniteQuery({
@@ -1357,15 +1386,24 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     staleTime: 60_000,
   })
 
-  // 全件数: offset=0 の初回ページ取得と同時に返ってくる totalCount を優先利用（HTTPラウンドトリップ削減）
-  const countFromPages = browseInfiniteQuery.data?.pages[0]?.totalCount ?? null
-  const { data: fetchedCount = 0 } = useQuery({
-    queryKey: ['candidates-count', dataEnv],
-    queryFn: () => fetchCandidateCount(dataEnv),
-    enabled: countFromPages === null && !isFiltered,
+  // 全件数。**一覧の取得とは別に数える。**
+  //
+  // ⚠ 以前は offset=0 のページ取得に `count: 'exact'` を相乗りさせてラウンドトリップを
+  //    1回節約していたが、優先スキル絞り込みが入ると count は述語を全行に評価するため、
+  //    索引の効かない本文正規表現が prod 8,222 行に走り、
+  //    **一覧が1行も描けないまま待たされていた**
+  //    （2026-10-03「人材タブ開いた最初読み込み中が遅くて重い」）。
+  //    件数は後から出てよい。描画を止めないほうが体感が良い。
+  const { data: browseCount = null } = useQuery({
+    queryKey: ['candidates-count', dataEnv, activePrioritySkills, bookmarkOnly],
+    queryFn: () => (activePrioritySkills?.length || bookmarkOnly
+      ? fetchPriorityCandidateCount(dataEnv, activePrioritySkills, bookmarkOnly)
+      : fetchCandidateCount(dataEnv)),
+    enabled: !isFiltered && prioritySkillsResolved,
     staleTime: 60_000,
   })
-  const totalCount = countFromPages ?? fetchedCount
+  /** 件数は一覧より後から届く。届くまでは数字を出さない（「全0件」と誤読されるため） */
+  const totalCountText = browseCount == null ? '…' : String(browseCount)
 
   // フィルター件数（フィルター適用時のみ）
   const { data: filteredCount = 0 } = useQuery({
@@ -2051,7 +2089,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
         <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 flex-wrap">
           <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2">
             <RefreshCw size={18} className="text-gray-500" />
-            登録済み人材（{isFiltered ? `絞り込み${filteredCount}件 / ` : ''}全{totalCount}件）
+            登録済み人材（{isFiltered ? `絞り込み${filteredCount}件 / ` : ''}全{totalCountText}件）
           </h2>
           <button
             type="button"
@@ -2295,7 +2333,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                   disabled={isFetchingNextPage}
                   className="w-full py-2.5 text-xs text-blue-600 hover:bg-blue-50 border-t border-gray-100 transition-colors disabled:opacity-50"
                 >
-                  {isFetchingNextPage ? '読み込み中...' : `もっと見る（${isFiltered ? filteredCount : totalCount}件中${candidates.length}件表示）`}
+                  {isFetchingNextPage ? '読み込み中...' : `もっと見る（${isFiltered ? String(filteredCount) : totalCountText}件中${candidates.length}件表示）`}
                 </button>
               )}
               {/* 優先スキルで絞っている間は、残りの人材へ必ず辿り着けるようにする。
@@ -2380,26 +2418,42 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         )}
                         {/* 相場との比較。単価交渉の根拠をその場に出す。
                             今までは希望単価だけが出ていて、高いのか安いのかは営業の感覚任せだった。
-                            基準は**持っているスキルのうち一番相場が高いもの**（営業が持ち出す武器） */}
+
+                            ⚠ **経験年数を無視して比べない**（2026-10-03 指摘）。
+                            23歳・経験ほぼ無しの人材（VMware・希望50万）に
+                            「相場75万（VMware）-25」と出ていた。相場がスキル単位しか無く、
+                            20年選手の中央値と比べていたため。実測では VMware 0〜2年の
+                            中央値は57万で、50万はほぼ相場どおりだった。
+                            基準は「本人の経験帯 × 一番相場が高いスキル」。
+                            **何を基準にしたかもラベルに出す**（根拠の見えない数字は誤解を生む）。 */}
                         {(() => {
                           const cmp = compareToMarket(
                             (selectedCandidate as unknown as { desired_rate?: string }).desired_rate,
                             selectedCandidate.skills as string[] | null,
-                            skillRateMarket,
+                            selectedCandidate.experience_years,
+                            rateMarket,
                           )
                           if (!cmp) return null
-                          const high = cmp.diff > 5
-                          const low = cmp.diff < -5
+                          // 25〜75% の中なら「高い／低い」と言わない。相場の幅の中だから
+                          const high = !cmp.withinQuartiles && cmp.diff > 5
+                          const low = !cmp.withinQuartiles && cmp.diff < -5
+                          const diffText = cmp.diff > 0 ? `+${cmp.diff}` : `${cmp.diff}`
                           return (
                             <span
                               className={`text-[10px] rounded px-1.5 py-0.5 ${
                                 high ? 'bg-orange-50 text-orange-700'
                                   : low ? 'bg-sky-50 text-sky-700'
                                   : 'bg-gray-100 text-gray-500'}`}
-                              title={`${cmp.skill} の相場は中央値${cmp.median}万。この人の希望は${cmp.rate}万`}
+                              title={
+                                `${marketLabel(cmp)}: 中央値${cmp.median}万・25〜75%は${cmp.p25}〜${cmp.p75}万`
+                                + `（母数${cmp.people}人）。この人の希望は${cmp.rate}万。`
+                                + (cmp.withinQuartiles ? '相場の幅の中。' : '相場の幅の外。')
+                                + (cmp.basis === 'exp' ? 'このスキルは経験帯で割ると20人に届かないため、全スキルの帯で比較。'
+                                  : cmp.basis === 'skill' ? '経験年数が不明なため経験帯で比較できず、スキル単位で比較。' : '')
+                              }
                             >
-                              相場{cmp.median}万（{cmp.skill}）
-                              {high ? ` +${cmp.diff}` : low ? ` ${cmp.diff}` : ' 並'}
+                              {marketLabel(cmp)}
+                              {high || low ? ` ${diffText}` : ' 並'}
                             </span>
                           )
                         })()}

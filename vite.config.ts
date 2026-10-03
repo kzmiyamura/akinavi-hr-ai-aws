@@ -14,12 +14,42 @@ import { VitePWA } from 'vite-plugin-pwa'
 // コミットSHAなら中身が変わったときだけハッシュが変わる。
 const buildId = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ?? `dev-${Date.now()}`
 
+/**
+ * `scripts/*.mjs` の先頭の `#!/usr/bin/env node` をコメントに変える。
+ *
+ * これが無いと、スクリプトの純関数をテストから `import` できない。
+ * vite は `import { readFileSync } from 'node:fs'` を CommonJS の受け取りに
+ * 書き換えるとき、その宣言を**ファイルの先頭に差し込む**。shebang が1行目から
+ * 押し出され、パーサが `Invalid Character '!'` で落ちる
+ * （2026-10-03・`genSkillMasterMigration.test.ts` が collect 0 件になっていた）。
+ *
+ * **「worktree だけの不具合」ではない。** メインツリーでは `node_modules/.vite` に
+ * 変換済みのものが残っていて通っていただけで、キャッシュが無い環境（新しい clone・CI）
+ * なら同じように落ちる。shebang は 126 本のスクリプトに付いていて直接実行のために
+ * 必要なので、消すのではなく読み込み時だけ無効化する。
+ *
+ * `#!` を `//` に差し替えるだけなので **行番号も文字数もずれない**
+ * （スタックトレースが読めなくならない）。
+ */
+function neutralizeScriptShebang() {
+  return {
+    name: 'akinavi-neutralize-script-shebang',
+    enforce: 'pre' as const,
+    transform(code: string, id: string) {
+      if (!/[\\/]scripts[\\/].+\.mjs$/.test(id)) return null
+      if (!code.startsWith('#!')) return null
+      return { code: `//${code.slice(2)}`, map: null }
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   define: {
     __APP_BUILD_ID__: JSON.stringify(buildId),
   },
   plugins: [
+    neutralizeScriptShebang(),
     react(),
     tailwindcss(),
     VitePWA({
