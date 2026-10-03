@@ -662,6 +662,34 @@ const COMPANY_NG_HEADCOUNT = /\d+\s*名$|^その他/
 const COMPANY_NG_PERSON = /^\d{1,2}\s*歳/
 /** 日付。「10月」 */
 const COMPANY_NG_DATE = /^\d{1,2}\s*月$/
+/**
+ * 宛名・敬称（2026-10-03 追加）。
+ *
+ * 人材メールは冒頭で**こちら**を呼ぶ（「ご担当者様」「お取引先 ご担当者各位」）。
+ * これが社名として登録されていた（`ses.cre-co.jp` に「ご担当者」で9人ぶら下がっていた）。
+ *
+ * ⚠ COMPANY_NG_GENERIC は `担当` を**完全一致でしか**見ないので「ご担当者」が素通りした。
+ */
+const COMPANY_NG_SALUTATION =
+  /^(?:お取引先[\s　]*)?(?:ご|御)?(?:担当|担当者|ご担当|関係者|取引先|各位|御中|皆様|諸氏)(?:様|殿|各位|さま)?$/
+/**
+ * 売り込み文句・メールの種別（2026-10-03 追加）。
+ *
+ * 件名の `【】` には社名ではなく**商品説明**が入ることがある。
+ * COMPANY_NG_ROLE_ONLY は役割語の**完全一致の列**しか見ないので、
+ * 「即戦力」「ご案内」のような修飾が付くと素通りした。ここは**語を含むか**で見る。
+ *
+ * 実例（2026-10-03・prod の agent_companies 268社を監査して発見）:
+ *   「即戦力AIコンサル/PM」 … 件名 `【即戦力AIコンサル/PM】…`（extrapeach.jp）。
+ *                              同じ送信元の 9/20 の人材では署名から「Peach株式会社」が
+ *                              取れており、**署名を拾えたかどうかで結果が割れていた**
+ *   「要因配信」            … staff.dream-v.co.jp に7人
+ *   「IPS技術者のご案内」   … ips-j.co.jp
+ *
+ * ⚠ **法人格が無いときだけ**当てる。「株式会社案件ナビ」のような実在社名を消さないため。
+ */
+const COMPANY_NG_PITCH =
+  /(即戦力|急募|おすすめ|優秀|ベテラン|経験者|実績あり|対応可能|歓迎|募集|稼働可能|参画可能|単価|案件|ご紹介|ご提案|推進|一気通貫|強み|配信|お知らせ|ご案内|新着|本日|週次|日次|定期便|まとめ|要員情報|人材情報|要員一覧|人材一覧)/
 /** 役割・職種だけ。「QA/テスター」（9人）。法人格があれば社名の一部とみなして通す */
 const COMPANY_NG_ROLE_ONLY =
   /^(QA|PM|PMO|PL|TL|SE|PG|BSE|インフラ|テスター|テスト|コンサル|コンサルタント|フリーランス|エンジニア|開発|運用|保守|営業|事務|ヘルプデスク|キッティング)(?:[\s　\/・、,＋+&]+(?:QA|PM|PMO|PL|TL|SE|PG|BSE|インフラ|テスター|テスト|コンサル|コンサルタント|フリーランス|エンジニア|開発|運用|保守|営業|事務|ヘルプデスク|キッティング))*$/
@@ -695,6 +723,10 @@ function isPlausibleCompanyName(name: string): boolean {
   if (COMPANY_NG_PERSON.test(s)) return false
   if (COMPANY_NG_DATE.test(s)) return false
   if (COMPANY_NG_RANDOM.test(s)) return false
+  // 宛名・敬称は法人格の有無に関係なく社名ではない（「ご担当者」・2026-10-03）
+  if (COMPANY_NG_SALUTATION.test(s)) return false
+  // 売り込み文句は**法人格が無いときだけ**弾く（「株式会社案件ナビ」を消さないため）
+  if (!COMPANY_HAS_CORP.test(s) && COMPANY_NG_PITCH.test(s)) return false
   // 法人格が付いていても、それを外した識別名が部署名・役割語・一般語・数字だけなら
   // 社名ではない。法人格の有無を通行証にしていたため「株式会社営業部」「6819_株式会社」
   // が素通りしていた（2026-09-12・派遣会社管理の一覧で発覚）
@@ -733,6 +765,44 @@ function shouldRegisterAgentCompany(
   if (emailDomain === AGENT_OWN_DOMAIN) return false
   if (AGENT_NG_DOMAIN.test(emailDomain)) return false
   return Boolean(companyName || licenseNumber)
+}
+
+/**
+ * すでに妥当な社名が登録されているドメインでは、**登録済みの名前を正とする**（2026-10-03）。
+ *
+ * ## なぜ要るか
+ *
+ * 社名の抽出は署名が `bodyText.slice(-2000)` に入っているかどうかで結果が変わる。
+ * 実測（extrapeach.jp）: 同じ送信元・同じ件名なのに
+ *   9/20 の人材 … 署名が取れて「Peach株式会社」
+ *   9/24 の人材 … 署名が押し出され件名の【】に落ちて「即戦力AIコンサル/PM」
+ * 後から来たメールが**正しい名前を壊していく**。
+ *
+ * 検閲（isPlausibleCompanyName）はブロックリストなので必ず漏れる。
+ * それより「ドメインは主キーで、一度まともな名前が確定したら動かさない」方が強い。
+ *
+ * @returns known … 登録済みの妥当な社名（無ければ null）
+ *          write … agent_companies に書くべき名前（上書きしないなら null）
+ */
+async function resolveAgentCompanyName(
+  supabase: { from: (t: string) => any },
+  domain: string | null,
+  guessed: string | null,
+): Promise<{ known: string | null; write: string | null }> {
+  if (!domain) return { known: null, write: guessed }
+  try {
+    const { data } = await supabase.from('agent_companies')
+      .select('company_name').eq('domain', domain).maybeSingle()
+    const existing = typeof data?.company_name === 'string' ? data.company_name.trim() : ''
+    if (existing && isPlausibleCompanyName(existing)) {
+      // 既に妥当な名前がある → 推測で上書きしない
+      return { known: existing, write: null }
+    }
+    return { known: null, write: guessed }
+  } catch {
+    // 読めなくても取り込みは止めない。従来どおり推測を使う
+    return { known: null, write: guessed }
+  }
 }
 
 function sanitizeFromCompany(value: string | null | undefined): string | null {
@@ -12793,6 +12863,13 @@ Deno.serve(async (req: Request) => {
         JSON.stringify(_fieldSources),
       )
 
+      // 送信元ドメインで既に確定している社名を先に引く。
+      // 推測より優先して from_company に使い、agent_companies も上書きしない。
+      const senderDomain = from ? from.split('@')[1]?.toLowerCase().trim() ?? null : null
+      const { known: knownAgentCompany } = await resolveAgentCompanyName(
+        supabase, senderDomain, sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany),
+      )
+
       const dbPayload = {
         data_env: inboundDataEnv,
         name: resolvedName,
@@ -12981,7 +13058,10 @@ Deno.serve(async (req: Request) => {
         box_status: boxUrls.length > 0 ? 'pending' : null,
         resume_url: resumeUrl,
         desired_rate: resolvedDesiredRate ?? null,
-        from_company: sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany),
+        // 推測した社名より、**そのドメインで既に確定している社名**を優先する。
+        // 推測は署名が末尾2000字に入ったかどうかで揺れるため（resolveAgentCompanyName 参照）
+        from_company: knownAgentCompany
+          ?? sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany),
       }
 
       // ── INSERT前の重複チェック（同一人物なら UPDATE して INSERT をスキップ）──
@@ -13260,14 +13340,17 @@ Deno.serve(async (req: Request) => {
 
       // agent_companies に会社名・ドメイン・許可番号を upsert（fire and forget）
       {
-        const emailDomain = from ? from.split('@')[1]?.toLowerCase().trim() : null
+        const emailDomain = senderDomain
         const companyName = sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany)
         const { haken, shokai } = extractLicenseNumbers(body)
-        if (shouldRegisterAgentCompany(emailDomain, companyName, haken ?? shokai)) {
+        if (shouldRegisterAgentCompany(emailDomain, companyName ?? knownAgentCompany, haken ?? shokai)) {
           const licenseStatus = haken && shokai ? 'both' : haken ? 'haken' : shokai ? 'shokai' : undefined
           const upsertPayload: Record<string, unknown> = {
             domain: emailDomain,
-            company_name: companyName ?? undefined,
+            // ⚠ 既に妥当な社名があるドメインでは **company_name を送らない**。
+            //    送ると upsert が推測で上書きし、正しい名前が壊れる
+            //    （extrapeach.jp が「Peach株式会社」→「即戦力AIコンサル/PM」になった）
+            company_name: knownAgentCompany ? undefined : (companyName ?? undefined),
             source: 'email',
           }
           if (haken) { upsertPayload.haken_number = haken; upsertPayload.verified_at = new Date().toISOString(); upsertPayload.verified_by = 'email' }

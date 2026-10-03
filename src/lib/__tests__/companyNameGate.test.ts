@@ -29,6 +29,8 @@ function loadGate(): (name: string) => boolean {
     const COMPANY_NG_HEADCOUNT = ${pick('COMPANY_NG_HEADCOUNT')};
     const COMPANY_NG_PERSON = ${pick('COMPANY_NG_PERSON')};
     const COMPANY_NG_DATE = ${pick('COMPANY_NG_DATE')};
+    const COMPANY_NG_SALUTATION = ${pick('COMPANY_NG_SALUTATION')};
+    const COMPANY_NG_PITCH = ${pick('COMPANY_NG_PITCH')};
     const COMPANY_NG_ROLE_ONLY = ${pick('COMPANY_NG_ROLE_ONLY')};
     const COMPANY_NG_GENERIC = ${pick('COMPANY_NG_GENERIC')};
     const COMPANY_NG_RANDOM = ${pick('COMPANY_NG_RANDOM')};
@@ -122,4 +124,44 @@ describe('会社名の検閲: 法人格があれば役割語を含んでも通�
 describe('会社名の検閲: 極端な長さ', () => {
   it('1文字は弾く', () => expect(isPlausible('A')).toBe(false))
   it('40文字超は弾く', () => expect(isPlausible('あ'.repeat(41))).toBe(false))
+})
+
+/**
+ * 2026-10-03: `agent_companies` 268社を `scripts/audit_agent_companies.mjs` で
+ * 通し直して見つかったもの。**画面で1件ずつ見つけるのをやめた**ので、以後は
+ * 監査スクリプトが出した名前をここに足していく。
+ */
+describe('会社名の検閲: 2026-10-03 の監査で見つかった誤登録', () => {
+  const NG: [string, string][] = [
+    ['ご担当者', '宛名の敬称・ses.cre-co.jp に9人'],
+    ['ご担当者様', '宛名の敬称'],
+    ['お取引先 ご担当者各位', '宛名の敬称'],
+    ['担当者', '宛名の敬称'],
+    ['各位', '宛名の敬称'],
+    ['即戦力AIコンサル/PM', '件名の売り込み・extrapeach.jp'],
+    ['要因配信', 'メールの種別・staff.dream-v.co.jp に7人'],
+    ['要員配信', 'メールの種別'],
+    ['IPS技術者のご案内', '案内文・ips-j.co.jp'],
+    ['本日のご紹介', 'メールの種別'],
+    ['人材情報', 'メールの種別'],
+  ]
+  for (const [name, why] of NG) {
+    it(`弾く: ${name}（${why}）`, () => {
+      expect(isPlausible(name)).toBe(false)
+    })
+  }
+
+  // ⚠ 売り込み語の判定は**法人格が無いときだけ**当てる。
+  //    実在の会社を消すと、その会社の人材が派遣案件から丸ごと消える（p_require_haken）。
+  const OK = [
+    '株式会社案件ナビ',
+    '株式会社人材バンク',
+    '株式会社末広システム',   // 番号 派13-314360 から引いた正式名
+    'アイピーエス',
+    'ドリームビジョン',
+    'Peach株式会社',
+  ]
+  for (const name of OK) {
+    it(`通す: ${name}`, () => expect(isPlausible(name)).toBe(true))
+  }
 })
