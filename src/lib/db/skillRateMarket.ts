@@ -66,15 +66,30 @@ export interface RateMarket {
 
 const skillExpKey = (skill: string, band: ExpBand) => `${skill}${band}`
 
-/** 相場表を丸ごと取る。スキル×帯は1,427セットあるが1行数十バイトなので軽い */
+/**
+ * 相場表を丸ごと取る。スキル×帯は1,427セットあるが1行数十バイトなので軽い。
+ *
+ * ⚠ **経験帯の2つのビューは「無くても動く」ことを保証する。**
+ *   `20261003_rate_market_by_experience.sql` を流す前にフロントが本番に出ると、
+ *   ビューが存在せず PostgREST がエラーを返す。ここで throw すると
+ *   **今まで出ていたスキル単位の相場バッジまで消える**（デプロイ順で既存機能が壊れる）。
+ *   新しい2本は空として扱い、compareToMarket の第3段（スキル単位）へ落とす。
+ *   スキル単位のビューは以前から本番にあるので、そちらの失敗だけは隠さない。
+ */
 export async function fetchRateMarket(): Promise<RateMarket> {
   const [a, b, c] = await Promise.all([
     supabase.from('skill_rate_market').select('*'),
     supabase.from('skill_rate_market_by_exp').select('*'),
     supabase.from('exp_rate_market').select('*'),
   ])
-  for (const r of [a, b, c]) {
-    if (r.error) throw new Error(`単価相場の取得に失敗しました: ${r.error.message}`)
+  if (a.error) throw new Error(`単価相場の取得に失敗しました: ${a.error.message}`)
+  for (const [r, view] of [[b, 'skill_rate_market_by_exp'], [c, 'exp_rate_market']] as const) {
+    if (r.error) {
+      console.warn(
+        `[rate-market] ${view} を読めませんでした（マイグレーション未適用の可能性）。` +
+        `スキル単位の相場だけで表示します: ${r.error.message}`,
+      )
+    }
   }
   const bySkill = new Map<string, SkillRate>()
   for (const r of (a.data ?? []) as SkillRate[]) bySkill.set(r.skill, r)
