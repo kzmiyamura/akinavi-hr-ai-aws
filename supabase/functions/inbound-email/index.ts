@@ -713,6 +713,57 @@ const COMPANY_NG_DEPT_ONLY =
 /** 法人格を外すと数字・記号しか残らない。「6819_株式会社」（ait.co.jp）が実際に登録されていた */
 const COMPANY_NG_NO_IDENT = /^[0-9０-９_＿\-‐－–—\s　.．,，]*$/
 
+// ── 無関係メールの判定（2026-10-03 追加） ───────────────────────────────────
+//
+// ⚠ ファイル先頭のコメントは長らく `INBOUND_RELEVANCE_CHECK: false で事前の無関係
+//    メール判定を無効化（既定は true）` と書いていたが、**その実装は存在しなかった**。
+//    スキップ判定は MAILER_DAEMON / OWN_DOMAIN / BODY_TOO_SHORT / EMPTY / DUPLICATE /
+//    SENDER_DAILY_LIMIT / NO_PERSON_FOUND / PROJECT_DISABLED の8つだけで、
+//    迷惑メール判定は1つも無かった。
+//
+// そのため国税庁を騙るフィッシングや Amazon 偽装、広告メールが人材として登録されていた。
+// 控え実測（prod 8,222件）:
+//   人材語が1つも無い              20件（0.24%）
+//     うち氏名も取れていない        19件 ← 全部フィッシング・広告・アンケート
+//     うち氏名が取れた               1件 ← 取引先調査メール。これも人材ではない
+// つまり**正当な人材メールの巻き込みはゼロ**だった。
+
+/**
+ * ゼロ幅文字。フィッシングメールが**1文字おきに挟んでフィルタを回避する**。
+ * 実例: `還﻿付‍金` `国﻿税⁠庁‍`（U+200B〜U+200F / U+2060〜U+2064 / U+FEFF 等）。
+ * 見た目は同じでも正規表現は一致しないので、判定の前に必ず落とす。
+ */
+const ZERO_WIDTH_RE = /[​-‏‪-‮⁠-⁤﻿᠎]/g
+
+/**
+ * 人材・案件メールであることの証拠。**1つでもあれば通す**（弾く側を極力狭くする）。
+ * ここを削ると正当な人材メールを捨てることになるので、足すのは自由だが消すのは慎重に。
+ */
+const MAIL_HR_SIGNAL_RE =
+  /(氏名|名前|イニシャル|年齢|歳|最寄|単価|スキル|稼働|経験年数|経験\d|所属|フリーランス|技術者|要員|人材|経歴|商流|面談|参画|常駐|リモート|案件|設計|開発|プログラ|エンジニア|資格|言語|FW|DB|インフラ|サーバ|クラウド)/
+
+/** ゼロ幅文字を落とす。判定にも抽出にも効かせる（不可視文字は解析を壊すだけで意味を持たない） */
+function stripZeroWidth(s: string): string {
+  return String(s ?? '').replace(ZERO_WIDTH_RE, '')
+}
+
+/**
+ * 人材メールとして扱う価値が無いか。無関係なら理由、そうでなければ null。
+ *
+ * **判定は「人材語が1つも無い」だけ**にしてある。フィッシング語の一覧で弾く方式は、
+ * 相手が文面を変えるたびに漏れる（しかもゼロ幅文字で回避される）。
+ * 「人材メールなら必ず何かしら人材語が出る」という性質の方が安定している。
+ *
+ * ⚠ 添付がある場合は判定しない。本文が空で経歴書だけ付いたメールが実在するため。
+ */
+function irrelevantMailReason(subject: string, body: string, hasAttachment: boolean): string | null {
+  if (hasAttachment) return null
+  const text = stripZeroWidth(`${subject ?? ''}\n${body ?? ''}`)
+  if (!text.trim()) return null          // 空は EMPTY_BODY_AND_ATTACHMENTS の担当
+  if (MAIL_HR_SIGNAL_RE.test(text)) return null
+  return 'NO_HR_SIGNAL'
+}
+
 /** 会社名として妥当か。ダメなら null にして「不明」として扱う（誤った社名より無しが安全） */
 function isPlausibleCompanyName(name: string): boolean {
   const s = name.trim()
@@ -11416,6 +11467,20 @@ Deno.serve(async (req: Request) => {
       tracePhase = 'skip_too_short'
       return await respondSkipped('BODY_TOO_SHORT',
         { rid: traceRid, type, from, subject, attachments, body }, { bodyLen: plainBodyLength })
+    }
+
+    // ②' 人材メールの証拠が1つも無い → 無関係メールとしてスキップ（2026-10-03 追加）
+    //
+    // ここが無かったため、国税庁を騙るフィッシング・Amazon 偽装・広告メールが
+    // 人材として登録されていた（prod 実測で24件）。判定の根拠と誤爆率は
+    // irrelevantMailReason の定義を参照。
+    //
+    // ⚠ 添付があるときは判定しない（本文が空で経歴書だけ付いたメールが実在する）。
+    const irrelevant = irrelevantMailReason(subject, body, supportedAttachments.length > 0)
+    if (irrelevant) {
+      tracePhase = 'skip_irrelevant'
+      return await respondSkipped('IRRELEVANT_MAIL',
+        { rid: traceRid, type, from, subject, attachments, body }, { why: irrelevant })
     }
 
     // ② 研修報告・案件紹介メールをスキップ（人材メールボックスの誤登録対策）
