@@ -1,0 +1,7 @@
+{
+  "dead-machinery/never-set:candidates.duplicate_flag": {
+    "why": "意図的に立てていない。true にすると fetch_candidates_for_project が duplicate_flag=false で絞るため、その人材がマッチング候補から完全に外れる（2026-08-20 ユーザー判断「別で見れる方がいい」）。inbound-email は常に false を書き、別会社の同一人物は raw_profile.sameAsOtherAgency に記録する。true を書くのは手動登録UI（src/lib/db/candidates.ts:103）だけ。根拠: supabase/functions/inbound-email/index.ts:13048-13049",
+    "at": "2026-10-03",
+    "was": "重複の旗（duplicate_flag）が prod 8222 行で1件も立っていない"
+  }
+}
