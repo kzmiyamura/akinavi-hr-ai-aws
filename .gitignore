@@ -36,3 +36,6 @@ test_results.html
 test_specification.html
 supabase/.branches/
 /deno.lock
+
+# archive_missing_in_db.mjs 等が吐く生成SQL（数百KB・ID の羅列）。正は生成元スクリプト
+scripts/sql/*.gen.sql
