@@ -4,6 +4,21 @@
  *
  * 控えは archive_local.mjs が増分で貯めた JSONL。同じ id が複数日に出るので
  * **後の日を採る**（更新後の姿が正）。
+ *
+ * ## ⚠ 控えは「作成時の姿」しか持たない列がある
+ *
+ * `candidates` は **`created_at` の水位**で増分取得している（`_watermark.json`）。
+ * つまり**1行は作成直後に1回しか撮られない**。その後 UPDATE で変わる列は、
+ * 控えの中では**ずっと初期値のまま**になる。
+ *
+ * 判定してよい列: 取り込み時に決まるもの（`name` `skills` `from_company`
+ *   `experience_years` `raw_profile.*` `duplicate_flag` …）
+ * 判定してはいけない列: 後から変わるもの（`bookmarked` `box_status`
+ *   `box_attempts` `merged_into` `updated_at` …）
+ *
+ * ここを混ぜると「0件だからバグ」という誤った所見を出す。
+ * 1回目の実行で `bookmarked` について実際にやった。
+ * **「引けなかった」を「無い」と書かない。**
  */
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'

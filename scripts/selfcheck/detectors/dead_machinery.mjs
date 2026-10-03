@@ -34,6 +34,15 @@ import { loadTable, prodOnly, distribution, hasField } from '../lib/archive.mjs'
  *   記録専用の列（`ai_logs.status` のような済んだ事実のログ）は書いたら終わりなので、
  *   拾う経路が無くて当たり前。区別しないと 87,158 件の `success` が所見になって
  *   本物が埋もれる（実際に1回目の実行で起きた）。
+ * - `setAt: 'insert' | 'later'` … **その列が書かれるタイミング。**
+ *
+ * ⚠ `setAt: 'later'` の列は**控えでは判定できない**。
+ *    archive_local.mjs は `created_at` の水位で**1行を1回しか撮らない**ので、
+ *    作成後に変わる列は**ずっと初期値のまま残る**。
+ *    1回目の実行で「`bookmarked` が 8,222 行で1件も立っていない」と出したが、
+ *    これは**控えの撮り方の都合**で、バグではなかった（書く経路は
+ *    `src/lib/db/candidates.ts:670` に実在する）。
+ *    「引けなかった」を「無い」と書かないこと。
  */
 const TRACKED = [
   {
@@ -58,8 +67,23 @@ const TRACKED = [
     // 記録専用。拾い直す経路は要らない
     scope: ['scripts/llm_extract/', 'supabase/functions/'],
   },
-  { column: 'duplicate_flag', label: '重複の旗', table: 'candidates', flag: true, scope: ['src/', 'supabase/', 'scripts/'] },
-  { column: 'bookmarked', label: 'ブックマーク', table: 'candidates', flag: true, scope: ['src/', 'supabase/'] },
+  {
+    column: 'duplicate_flag',
+    label: '重複の旗',
+    table: 'candidates',
+    flag: true,
+    setAt: 'insert',
+    scope: ['src/', 'supabase/', 'scripts/'],
+  },
+  {
+    // ⚠ 人が画面で押して初めて立つ。**控えでは永久に false のまま**なので判定しない
+    column: 'bookmarked',
+    label: 'ブックマーク',
+    table: 'candidates',
+    flag: true,
+    setAt: 'later',
+    scope: ['src/', 'supabase/'],
+  },
 ]
 
 /** 値として扱わない語（真偽値・null・変数っぽいもの） */
@@ -159,6 +183,9 @@ export default {
       }
 
       if (t.flag) {
+        // ⚠ 作成後に変わる列は控えが初期値しか持たないので、判定そのものをしない。
+        //    「0件だった」ではなく「測っていない」が正しい
+        if (t.setAt === 'later') continue
         // --- 旗が一度も立っていない ---
         if (dist) {
           const on = (dist.get('true') ?? 0)

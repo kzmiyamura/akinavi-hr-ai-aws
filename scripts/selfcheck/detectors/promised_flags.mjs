@@ -53,6 +53,31 @@ function suffixOfImplemented(tok, implemented) {
   return false
 }
 
+/**
+ * コメントの語の並びが、実装側の識別子の語の**部分列**になっているか。
+ *
+ * コメントは識別子を略して書く。`STALL_HOURS` の実体は `STALL_DEFAULT_HOURS` と
+ * 設定キー `inbound_stall_alert_hours` で、どちらも「約束だけ」ではなく実装済みだった
+ * （1回目の実行で誤検出した）。
+ * 語が順番どおり全部含まれていれば同じものを指していると見る。
+ *
+ * ⚠ 緩めすぎると本物を見逃す。語数2以上を要求し、1語の略記は同一視しない。
+ */
+function sameConceptAsImplemented(tok, implementedSets) {
+  const want = tok.toLowerCase().split('_').filter(Boolean)
+  if (want.length < 2) return false
+  for (const set of implementedSets) {
+    for (const impl of set) {
+      const have = impl.toLowerCase().split('_').filter(Boolean)
+      if (have.length <= want.length) continue      // 同じか短いなら略記ではない
+      let i = 0
+      for (const part of have) if (part === want[i]) i++
+      if (i === want.length) return true
+    }
+  }
+  return false
+}
+
 /** CLAUDE.md の app_config 表から設定キーを拾う（`|` 区切りの行の最初のバッククォート） */
 function documentedConfigKeys() {
   const md = allFiles().find((f) => f.rel === 'CLAUDE.md')
@@ -105,6 +130,7 @@ export default {
           // 文書では接頭辞を省いて書かれる（`VITE_AI_PROVIDER` を `AI_PROVIDER` と）。
           // 実装側に `…_<tok>` があるなら同じものを指している
           if (suffixOfImplemented(tok, implemented)) continue
+          if (sameConceptAsImplemented(tok, [implemented, implementedLower])) continue
           // `HANDOFF_EXCEL_VERIFICATION.md` のようなファイル名は約束ではない
           if (/^\.(?:md|txt|json|sql|ts|mjs)\b/i.test(ch.s.slice(m.index + tok.length))) continue
           if (!promised.has(tok)) promised.set(tok, { rel: f.rel, line: lineOf(f.text, ch.at + m.index), kind: f.kind })
