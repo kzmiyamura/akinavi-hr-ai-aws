@@ -110,11 +110,20 @@
 - `node scripts/gen_agent_license_repair.mjs <出力sql> <結果json>...` — 上の結果から本番修復SQLを生成（人が読んでから流す）
 - `node scripts/audit_agent_company_names.mjs <会社名json>` — 既存の会社名を今の検閲に通し直して壊れている行を出す
 - `node scripts/archive_local.mjs [--dry-run] [--dir <保存先>]` — 本番の控えをローカルに増分で貯める（既定 `~/akinavi-archive`）
-- `node scripts/archive_query.mjs summary|daily|company|missed|rate|skillfilter` — **控えを集計する。本番を引かない**。
+- `node scripts/archive_query.mjs summary|daily|company|dup|resume|missed|rate|skillfilter` — **控えを集計する。本番を引かない**。
   人材は7日で消えるので、過去との比較はこちらで行う（egress ゼロ）
   - `rate [スキル]` — 経験年数帯ごとの希望単価の分布（25%/中央/75%）。スキル名を付けるとそのスキルだけ。
     スキル×帯で20人に届くセル数も出す（相場をどの粒度で出せるかの根拠）
   - `company [社名]` — その会社のメール1通あたりの人数（**名簿かどうか**）。件名＋受信時刻で束ねる
+  - `dup [--since] [--list N] [--company 社名] [--window 7] [--detail]` — **同じ人が増えていないか**。
+    本番の仕様（同社の再送は UPDATE で統合・別会社は分けて残す）で分類し、
+    **「同じ会社・保持期間の窓の中で増えた」分だけ**を取りこぼしとして数える。
+    会社名の正規化は本番の `normalizeAgentCompany` を import する
+    ⚠ `duplicate_flag` では測れない。本番はこのフラグを**意図的に使っていない**
+    （true にすると `fetch_candidates_for_project` の絞りでマッチングから消える）。
+    控えの実測でも 8,279行すべて false。「印が無い＝取りこぼし」は**何も測っていない数字**
+    ⚠ 控えは prod（7日保持）より長い履歴を持つので、`--window` で切らないと
+    **消えた後の再登録**を取りこぼしに数える（切らないと 190組、切ると 24組）
   - `resume [--since YYYY-MM-DD] [--list N]` — **氏名と経歴書ファイル名の一致**。判定は本番と同じ
     `isOwnersResumeFile`。「一致しない」を「他人の経歴書」と読まないこと（ファイル名に名前が
     入っていない・Drive 共有リンク・イニシャルだけの部分一致を分けて出す）

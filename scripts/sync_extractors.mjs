@@ -45,6 +45,9 @@ const TARGET_FUNCTIONS = [
   'normalizeNameForFileMatch',
   'leftoverBelongsToOther',
   'filenameNameTokens',
+  'normalizeAgentCompany',
+  'samePersonRowAttrs',
+  'pickSamePersonRow',
   'assignAttachmentsToBlocks', // ブロック×添付の全体最適割当（管理番号マッチ含む）
   'splitMultiCandidateBody',   // 名簿本文を人ごとのブロックに分割（分割漏れの調査に使う）
   'truncateNameAtBreak',   // 氏名に混ざった別項目で切る（isLabelWordName の手前で使う）
@@ -246,7 +249,7 @@ function stripTs(code) {
   //    旧実装は [^>]* の非貪欲マッチだったため Array<Record<string, string>> のような
   //    入れ子ジェネリクスで内側の > までしか消えず、壊れたJSを生成する実害があった
   {
-    const GENERIC_NAMES = ['Record', 'Array', 'Set', 'Map', 'Promise', 'ReadonlyArray', 'Partial', 'RegExpExecArray']
+    const GENERIC_NAMES = ['Record', 'Array', 'Set', 'Map', 'Promise', 'ReadonlyArray', 'ReadonlySet', 'ReadonlyMap', 'Partial', 'RegExpExecArray']
     let changed = true
     while (changed) {
       changed = false
@@ -298,8 +301,9 @@ function stripTs(code) {
   // 4. 戻り値型注釈 ): Type {  or ): Type =>  or ): Type\n
   //    コロンの直後が型名（大文字始まりや string|null 等）の場合のみ除去
   code = code.replace(/\)\s*:\s*(?:string|number|boolean|void|null|undefined)(?:\[\])*(?:\s*\|\s*(?:string|number|boolean|void|null|undefined)(?:\[\])*)*\s*(?=[\n{(=]|=>)/g, ')')
-  // ): TypeName { / ): TypeName[] {
-  code = code.replace(/\)\s*:\s*[A-Z]\w*(?:\[\])*\s*(?=[{\n]|=>)/g, ')')
+  // ): TypeName { / ): TypeName[] { / ): TypeName | null {
+  //   ユニオン付きを含める（`): SamePersonRow | null {` が残ると構文エラーになる）
+  code = code.replace(/\)\s*:\s*[A-Z]\w*(?:\[\])*(?:\s*\|\s*(?:[A-Z]\w*(?:\[\])*|null|undefined))*\s*(?=[{\n]|=>)/g, ')')
 
   // 5. パラメータ型注釈 (param: type) — コロン後が型名の場合
   //    シンプルな型: string, number, boolean, null, unknown, any
@@ -316,6 +320,10 @@ function stripTs(code) {
   code = code.replace(/(\b\w+)\s*:\s*(?:string|number|boolean|null|undefined)(?:\s*\|\s*(?:string|number|boolean|null|undefined))+(?=\s*[,)=])/g, '$1')
   // 5b. カスタム型（大文字始まりクラス名）パラメータ: SpanCell[] / XlsxCell | undefined 等
   code = code.replace(/(\b\w+)\s*:\s*[A-Z]\w*(?:\[\])*(?:\s*\|\s*(?:[A-Z]\w*(?:\[\])*|null|undefined))*(?=\s*[,)=])/g, '$1')
+  // 5b-2. `readonly` 修飾つきパラメータ: rows: readonly SamePersonRow[]
+  //        これが無いと生成物に `rows: readonly SamePersonRow[],` が残り、
+  //        `node --check` が「Unexpected token ':'」で落ちる（2026-10-04 に踏んだ）
+  code = code.replace(/(\b\w+)\s*:\s*readonly\s+[A-Za-z_$][\w$]*(?:\[\])*(?=\s*[,)=])/g, '$1')
   // 5c. タプル型パラメータ: iv: [number, number][] （projMergeMonths 等の区間配列）
   code = code.replace(/(\b\w+)\s*:\s*\[[^\][]*\](?:\[\])*(?=\s*[,)=])/g, '$1')
   // 6. 変数型注釈 let/const x: Type  (= あり・なし両方)

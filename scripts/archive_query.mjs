@@ -15,7 +15,9 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 // 氏名と経歴書ファイル名の照合は**本番と同じ関数**を使う（書き写すとズレる）
-import { isOwnersResumeFile } from './_extractors.gen.mjs'
+import { isOwnersResumeFile, normalizeAgentCompany } from './_extractors.gen.mjs'
+// 氏名として成立していない行（「不明」「要員」等）を束ねないため。検出器⑤と同じ規則
+import { badNameReasons } from './lib/bad_names.mjs'
 
 /**
  * 控えの場所。環境変数 → D:\akinavi-archive → ~/akinavi-archive の順に探す。
@@ -98,7 +100,7 @@ const cmd = process.argv[2] ?? 'summary'
  *    このスクリプトは「prod に SQL を投げないため」の道具なので、
  *    黙ってゼロを返すのが一番やってはいけない壊れ方（同じ病気で3度目）。
  */
-const FLAGS_WITH_VALUE = new Set(['--sample', '--dir', '--since'])
+const FLAGS_WITH_VALUE = new Set(['--sample', '--dir', '--since', '--list', '--company', '--window'])
 const POSITIONAL = []
 for (let i = 3; i < process.argv.length; i++) {
   const a = process.argv[i]
@@ -111,7 +113,7 @@ for (let i = 3; i < process.argv.length; i++) {
 /** n 番目の位置引数（0 始まり）。無ければ null */
 const posArg = (n) => POSITIONAL[n] ?? null
 
-const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed', 'resume']
+const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed', 'resume', 'dup']
 if (!COMMANDS.includes(cmd)) {
   console.error(`⚠ 知らないサブコマンド: ${cmd}`)
   console.error(`   使えるのは: ${COMMANDS.join(' | ')}`)
@@ -119,6 +121,7 @@ if (!COMMANDS.includes(cmd)) {
   console.error('   skillfilter [スキル,...]  本文マッチが絞り込みに足している人数')
   console.error('   company [社名]       その会社のメール1通あたりの人数（名簿かどうか）')
   console.error('   resume              氏名と経歴書ファイル名の一致')
+  console.error('   dup                 同じ人が何度も登録されていないか')
   process.exit(2)
 }
 
@@ -599,6 +602,179 @@ if (cmd === 'resume') {
       console.log(`  ${s.at}  氏名: ${s.name}`)
       console.log(`              ファイル: ${s.base}`)
       console.log(`              送信元: ${s.co}`)
+    }
+  }
+}
+
+if (cmd === 'dup') {
+  /**
+   * 同じ人が何度も登録されていないかを控えだけで調べる。
+   *
+   *   node scripts/archive_query.mjs dup [--since YYYY-MM-DD] [--list N] [--company 社名]
+   *
+   * ## 本番の重複判定（ここを取り違えると全部無意味になる）
+   *
+   * 氏名一致＋スキル Jaccard ≥ 0.4 で同一人物と見たあと、本番は**送信元で分岐する**:
+   *
+   *   同じ会社からの再送  → **1レコードに UPDATE で統合**（行は増えない）
+   *   別の会社から同じ人  → **分けて残す**（2026-08-20 ユーザー判断。同じ人でも会社で単価が違う）
+   *
+   * つまり**別会社の重複は仕様どおり**で、取りこぼしは「同じ会社なのに行が増えた」分だけ。
+   * 会社名の正規化は本番の `normalizeAgentCompany` を import して使う（書き写すとズレる）。
+   *
+   * ⚠ **`duplicate_flag` では測れない。** 本番はこのフラグを**意図的に使っていない**
+   *   （`fetch_candidates_for_project` が `duplicate_flag=false` で絞るため、
+   *   true にするとマッチングから丸ごと消える）。控えの実測でも 8,279行すべて false。
+   *   最初これを「印が付いていない＝取りこぼし243組」と書きかけた。**何も測っていない数字**だった。
+   *
+   * ⚠ **同じ氏名は同じ人とは限らない。** イニシャル氏名は同名が多く、prod 実測で
+   *   同名10件超の氏名が52種・最大35件ある（2026-08-21）。だから件数だけでは何も言えない。
+   *   年齢・性別・県・スキルの重なりを並べて、**同じ人らしい集まりだけ**を数える。
+   */
+  const sinceAt3 = process.argv.indexOf('--since')
+  const SINCE3 = sinceAt3 >= 0 ? process.argv[sinceAt3 + 1] : null
+  const listAt3 = process.argv.indexOf('--list')
+  const LIST_N3 = listAt3 >= 0 ? Number(process.argv[listAt3 + 1] ?? 10) : 10
+  const DETAIL = process.argv.includes('--detail')
+  const coAt = process.argv.indexOf('--company')
+  const CO = coAt >= 0 ? process.argv[coAt + 1] : null
+
+  const normName = (s) => String(s ?? '')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/[.\s　・,_\-【】()（）．，、]/g, '')
+    .toLowerCase()
+
+  const skillSet = (r) => new Set(
+    (Array.isArray(r.skills) ? r.skills : []).map((s) => String(s).toLowerCase().trim()).filter(Boolean),
+  )
+  const jaccard = (a, b) => {
+    if (!a.size || !b.size) return null          // 測れない（0 と区別する）
+    let inter = 0
+    for (const v of a) if (b.has(v)) inter++
+    return inter / (a.size + b.size - inter)
+  }
+
+  /**
+   * **保持期間の窓**。本番の人材は `candidate_retention_days`（既定7日）で消えるので、
+   * 8日空いた2行は重複ではなく「消えた後の再登録」。控えは prod より長い履歴を持つため、
+   * ここで切らないと**仕様どおりの再登録を取りこぼしとして数える**
+   * （`skillfilter --since` で同じ間違いをしたのと同型・2026-10-04）。
+   */
+  const winAt = process.argv.indexOf('--window')
+  const WINDOW_DAYS = winAt >= 0 ? Number(process.argv[winAt + 1] ?? 7) : 7
+
+  /** 同じ会社の行のうち、幅 WINDOW_DAYS 日の窓に同時に存在した最大行数 */
+  function maxInWindow(list) {
+    const ts = list.map((r) => Date.parse(r.created_at)).filter(Number.isFinite).sort((a, b) => a - b)
+    if (ts.length < 2) return ts.length
+    const span = WINDOW_DAYS * 86400000
+    let best = 1
+    for (let i = 0, j = 0; i < ts.length; i++) {
+      while (ts[i] - ts[j] > span) j++
+      best = Math.max(best, i - j + 1)
+    }
+    return best
+  }
+
+  const groups = new Map()
+  let people = 0, skippedBadName = 0
+  for (const r of rows('candidates')) {
+    if (r.data_env !== 'prod') continue
+    if (r.merged_into) continue
+    if (SINCE3 && String(r.created_at ?? '') < SINCE3) continue
+    if (CO && !String(r.from_company ?? '').includes(CO)) continue
+    const key = normName(r.name)
+    if (key.length < 2) continue                 // 氏名として成立していない行は検出器⑤の担当
+    // 「不明」「要員」等は氏名ではない。束ねると**別人15人が1組の重複**に見える
+    // （最初これを出して、送信元が8社ばらばらの「15件の重複」を作ってしまった）
+    if (badNameReasons(r.name).length) { skippedBadName++; continue }
+    people++
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(r)
+  }
+
+  // 「同じ人らしい」= 氏名が同じで、年齢と性別が一致し、スキルの重なりが本番のしきい値以上
+  const SAME_THRESHOLD = 0.4
+  const dupGroups = []
+  for (const [key, list] of groups) {
+    if (list.length < 2) continue
+    list.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    const base = list[0]
+    const baseSkills = skillSet(base)
+    const same = [base]
+    for (const r of list.slice(1)) {
+      const sameAttr = (r.rp_age ?? null) === (base.rp_age ?? null) && (r.rp_gender ?? null) === (base.rp_gender ?? null)
+      const j = jaccard(baseSkills, skillSet(r))
+      if (sameAttr && (j === null || j >= SAME_THRESHOLD)) same.push(r)
+    }
+    if (same.length < 2) continue
+
+    // 本番と同じ軸で束ねる: 送信アドレスが同じ、または正規化した会社名が同じなら「同じ会社」
+    const agentKey = (r) => normalizeAgentCompany(r.from_company) || String(r.rp_from ?? '').toLowerCase() || '(不明)'
+    const byAgent = new Map()
+    for (const r of same) {
+      const k = agentKey(r)
+      if (!byAgent.has(k)) byAgent.set(k, [])
+      byAgent.get(k).push(r)
+    }
+    const worst = [...byAgent.values()].reduce((a, b) => (b.length > a.length ? b : a))
+    const mails = new Set(same.map((r) => `${r.rp_subject}|${r.rp_received}`))
+    // 1通のメールの中で同じ人が2行になっていないか（ブロック分割の不具合）
+    const perMail = new Map()
+    for (const r of same) {
+      const k = `${r.rp_subject}|${r.rp_received}`
+      perMail.set(k, (perMail.get(k) ?? 0) + 1)
+    }
+    dupGroups.push({
+      key, name: base.name, rows: same, mails: mails.size,
+      agents: byAgent.size,
+      sameAgentMax: worst.length,          // 同じ会社から増えた最大行数
+      windowMax: Math.max(...[...byAgent.values()].map(maxInWindow)),
+      sameMailMax: Math.max(...perMail.values()),
+      senders: new Set(same.map((r) => r.from_company ?? '(不明)')),
+      span: [String(same[0].created_at).slice(0, 10), String(same[same.length - 1].created_at).slice(0, 10)],
+      jac: same.slice(1).map((r) => jaccard(baseSkills, skillSet(r))),
+    })
+  }
+
+  // 取りこぼし = 同じ会社・保持期間の窓の中で2行以上（＝本番に同時に存在していた）
+  const missed = dupGroups.filter((g) => g.windowMax >= 2)
+  const expired = dupGroups.filter((g) => g.windowMax < 2 && g.sameAgentMax >= 2)
+  const byDesign = dupGroups.filter((g) => g.sameAgentMax < 2)
+  missed.sort((a, b) => b.windowMax - a.windowMax)
+
+  const extraRows = missed.reduce((n, g) => n + g.windowMax - 1, 0)
+  const sameMail = dupGroups.filter((g) => g.sameMailMax >= 2)
+
+  console.log(`prod 人材（統合済み・氏名が成立しない行を除く）${people} 人${SINCE3 ? ` / ${SINCE3} 以降` : ''}${CO ? ` / 送信元 ${CO}` : ''}`)
+  console.log(`  氏名として成立しない行を除外   ${skippedBadName} 人`)
+  console.log(`氏名が同じ集まり              ${[...groups.values()].filter((l) => l.length > 1).length} 組`)
+  console.log(`うち同じ人らしい集まり          ${dupGroups.length} 組（年齢・性別一致＋スキル重なり ${SAME_THRESHOLD} 以上）`)
+  console.log('')
+  console.log(`本番の仕様で分けると（保持期間の窓 ${WINDOW_DAYS} 日）`)
+  console.log(`  別会社から同じ人            ${byDesign.length} 組  ←**仕様どおり**（単価が会社で違うので分けて残す）`)
+  console.log(`  7日の保持を過ぎた再登録      ${expired.length} 組  ←**仕様どおり**（前の行は消えている）`)
+  console.log(`  同じ会社・同じ窓で行が増えた  ${missed.length} 組 / 余分 ${extraRows} 行  ←**取りこぼし**`)
+  console.log(`  同じ1通のメールの中で重複    ${sameMail.length} 組  ←分割の不具合`)
+
+  if (missed.length) {
+    console.log('')
+    console.log(`「同じ会社・同じ窓で増えた」多い順に ${Math.min(LIST_N3, missed.length)} 組`)
+    for (const g of missed.slice(0, LIST_N3)) {
+      const jac = g.jac.map((v) => (v === null ? '-' : v.toFixed(2))).join(',')
+      console.log(`  窓内${String(g.windowMax).padStart(2)}件（全${g.rows.length}件・1通に最大${g.sameMailMax}件）  ${g.name}`)
+      console.log(`        メール ${g.mails}通 / 会社 ${g.agents}社: ${[...g.senders].join('・')}`)
+      console.log(`        ${g.span[0]}〜${g.span[1]} / スキル重なり ${jac}`)
+      if (DETAIL) {
+        // 登録時刻を並べる。**同じ取り込み周期に固まっていたら競合**（相手の行がまだ無い）、
+        // ばらけていたら照会そのものが当たっていない。原因が分かれないと直せない
+        for (const r of g.rows) {
+          console.log(`          氏名「${r.name}」 登録 ${String(r.created_at ?? '').replace('T', ' ').slice(0, 19)}`
+            + ` / 受信 ${String(r.rp_received ?? '-').replace('T', ' ').slice(0, 16)}`
+            + ` / 駅 ${r.rp_nearestStation ?? '-'} / 県 ${r.rp_prefecture ?? '-'}`
+            + ` / 経験 ${r.experience_years ?? '-'}年 / スキル${(r.skills ?? []).length}`)
+        }
+      }
     }
   }
 }

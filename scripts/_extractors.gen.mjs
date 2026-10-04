@@ -2517,6 +2517,82 @@ function filenameNameTokens(filename){
     .filter((t) => t.length >= 2)
 }
 
+// ── normalizeAgentCompany ──
+function normalizeAgentCompany(v){
+  return String(v ?? '')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|医療法人|\(株\)|（株）|\(有\)|（有）|㈱|㈲|Inc\.?|Corp(?:oration)?\.?|Co\.,?\s*Ltd\.?|Ltd\.?|LLC|K\.?K\.?)/gi, '')
+    .replace(/[\s　・･\-‐−ー–—.,、。]/g, '')
+    .toLowerCase()
+}
+
+// ── samePersonRowAttrs ──
+function samePersonRowAttrs(r) {
+  const skills = new Set()
+  if (Array.isArray(r.skills)) {
+    for (const s of r.skills) skills.add(String(s).toLowerCase())
+  }
+  let exp = null
+  if (r.experience_years != null) exp = Number(r.experience_years)
+  let id = ''
+  if (r.id != null) id = String(r.id)
+  return {
+    id,
+    subject: r.subject ?? null,
+    station: r.nearestStation ?? r.nearest_station ?? null,
+    prefecture: r.prefecture ?? null,
+    age: r.age ?? null,
+    exp,
+    skills,
+  }
+}
+
+// ── pickSamePersonRow ──
+function pickSamePersonRow(
+  rows,
+  me,
+  opts,
+){
+  const used= opts.usedIds ?? new Set()
+  const threshold = opts.threshold ?? 0.4
+  const mySkills = new Set()
+  for (const s of me.skills ?? []) mySkills.add(String(s).toLowerCase())
+  const myStation = me.station ?? null
+  const myPref = me.prefecture ?? null
+
+  let bestRow = null
+  let bestScore = -1
+  for (const row of rows) {
+    const r = samePersonRowAttrs(row)
+    if (r.id && used.has(r.id)) continue
+
+    if (opts.mode === 'attrs') {
+      if (opts.allowSameSubject !== false && me.subject != null && r.subject === me.subject) return row
+      let hits = 0
+      if (myStation && r.station && String(myStation) === String(r.station)) hits++
+      if (myPref && r.prefecture && String(myPref) === String(r.prefecture)) hits++
+      if (me.age != null && r.age != null && String(me.age) === String(r.age)) hits++
+      if (me.experienceYears != null && r.exp != null && Math.abs(me.experienceYears - r.exp) < 2) hits++
+      if (hits >= 2) return row
+      continue
+    }
+
+    // jaccard: 食い違う行は別人として外す（片方 null は根拠にしない）
+    if (myStation && r.station && String(myStation) !== String(r.station)) continue
+    if (myPref && r.prefecture && String(myPref) !== String(r.prefecture)) continue
+    if (me.experienceYears != null && r.exp != null && Math.abs(me.experienceYears - r.exp) >= 5) continue
+    let inter = 0
+    for (const s of mySkills) if (r.skills.has(s)) inter++
+    const union = new Set([...mySkills, ...r.skills]).size
+    if (union === 0) continue
+    const jac = inter / union
+    if (jac < threshold) continue
+    // **最も重なる行を選ぶ**（先に見つかった行で確定すると、同名の別人を掴むことがある）
+    if (jac > bestScore) { bestScore = jac; bestRow = row }
+  }
+  return bestRow
+}
+
 // ── assignAttachmentsToBlocks ──
 function assignAttachmentsToBlocks(
   blocks,
@@ -4950,6 +5026,9 @@ export {
   normalizeNameForFileMatch,
   leftoverBelongsToOther,
   filenameNameTokens,
+  normalizeAgentCompany,
+  samePersonRowAttrs,
+  pickSamePersonRow,
   assignAttachmentsToBlocks,
   splitMultiCandidateBody,
   truncateNameAtBreak,

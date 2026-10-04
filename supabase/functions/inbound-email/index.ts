@@ -504,6 +504,130 @@ function sameMailConflicts(a: DedupAttrs, b: DedupAttrs): string[] {
   return out
 }
 
+/** 重複判定で既存行から受け取る項目（単数経路は camelCase・RPC は snake_case で返す） */
+type SamePersonRow = {
+  id?: unknown
+  subject?: unknown
+  nearestStation?: unknown
+  nearest_station?: unknown
+  prefecture?: unknown
+  age?: unknown
+  experience_years?: unknown
+  skills?: unknown
+}
+
+/** 重複判定で「自分側」に渡す値（未取得は null/undefined） */
+type SamePersonMe = {
+  subject?: string | null
+  station?: unknown
+  prefecture?: unknown
+  age?: unknown
+  experienceYears?: number | null
+  skills?: readonly string[]
+}
+
+/** 重複判定の設定 */
+type SamePersonOpts = {
+  /** `attrs` = 属性一致（件名一致 or 2項目以上一致） / `jaccard` = スキル重なり */
+  mode: 'attrs' | 'jaccard'
+  /** この取り込みで既に割り当てた既存行の id。1行を2人に割り当てないための札 */
+  usedIds?: ReadonlySet<string>
+  /** 同一メール内に同名の別人がいたときは false（件名一致を本人の根拠にしない） */
+  allowSameSubject?: boolean
+  threshold?: number
+}
+
+/**
+ * 行の表記ゆれ（camelCase / snake_case）を吸収して1つの形にする。
+ *
+ * ⚠ `scripts/sync_extractors.mjs` は**三項演算子の `: []` を型注釈として消す**ため、
+ *   ここでは `? :` を使わずに書く（生成物が構文エラーになる・2026-10-04 に踏んだ）。
+ */
+function samePersonRowAttrs(r: SamePersonRow) {
+  const skills = new Set<string>()
+  if (Array.isArray(r.skills)) {
+    for (const s of r.skills) skills.add(String(s).toLowerCase())
+  }
+  let exp: number | null = null
+  if (r.experience_years != null) exp = Number(r.experience_years)
+  let id = ''
+  if (r.id != null) id = String(r.id)
+  return {
+    id,
+    subject: r.subject ?? null,
+    station: r.nearestStation ?? r.nearest_station ?? null,
+    prefecture: r.prefecture ?? null,
+    age: r.age ?? null,
+    exp,
+    skills,
+  }
+}
+
+/**
+ * 同名の既存行の中から「同じ人の行」を1つ選ぶ。選べなければ null。
+ *
+ * ## なぜ切り出したか（2026-10-04・同じ人が毎日増えていた）
+ *
+ * 同じ判定が**単数メールの経路と名簿ブロックの経路に2つ**書かれており、
+ * しかも名簿側には穴があった。**同一メール内に同名が2人いると、
+ * DB 側の重複判定ごと飛ばしていた**（`blockSameMailDistinct`）。
+ *
+ * 実害（控え実測）: JapanTechnology の日次名簿には `TY` が2人いる
+ * （JR南草津駅の TY と 大阪府八尾市の TY）。2人目は毎日「DB 照会なし」で
+ * INSERT され、**9日で同じ人が9行**になっていた。同型が24組・余分54行。
+ *
+ * 飛ばさずに済むように、**この取り込みで既に割り当てた行（`usedIds`）を除く**
+ * という形に変えた。同名の別人を混ぜる害（後勝ちで前の人が消える・2026-08-16
+ * フォスターネットの18名→16件）は、`usedIds` と属性の食い違いで防ぐ。
+ *
+ * @param mode `attrs` = 同一エージェント内の属性一致（件名一致 or 2項目以上一致）
+ *             `jaccard` = スキル重なりで判定（駅・県・経験年数が食い違う行は除く）
+ */
+function pickSamePersonRow(
+  rows: readonly SamePersonRow[],
+  me: SamePersonMe,
+  opts: SamePersonOpts,
+): SamePersonRow | null {
+  const used: ReadonlySet<string> = opts.usedIds ?? new Set()
+  const threshold = opts.threshold ?? 0.4
+  const mySkills = new Set<string>()
+  for (const s of me.skills ?? []) mySkills.add(String(s).toLowerCase())
+  const myStation = me.station ?? null
+  const myPref = me.prefecture ?? null
+
+  let bestRow: SamePersonRow | null = null
+  let bestScore = -1
+  for (const row of rows) {
+    const r = samePersonRowAttrs(row)
+    if (r.id && used.has(r.id)) continue
+
+    if (opts.mode === 'attrs') {
+      if (opts.allowSameSubject !== false && me.subject != null && r.subject === me.subject) return row
+      let hits = 0
+      if (myStation && r.station && String(myStation) === String(r.station)) hits++
+      if (myPref && r.prefecture && String(myPref) === String(r.prefecture)) hits++
+      if (me.age != null && r.age != null && String(me.age) === String(r.age)) hits++
+      if (me.experienceYears != null && r.exp != null && Math.abs(me.experienceYears - r.exp) < 2) hits++
+      if (hits >= 2) return row
+      continue
+    }
+
+    // jaccard: 食い違う行は別人として外す（片方 null は根拠にしない）
+    if (myStation && r.station && String(myStation) !== String(r.station)) continue
+    if (myPref && r.prefecture && String(myPref) !== String(r.prefecture)) continue
+    if (me.experienceYears != null && r.exp != null && Math.abs(me.experienceYears - r.exp) >= 5) continue
+    let inter = 0
+    for (const s of mySkills) if (r.skills.has(s)) inter++
+    const union = new Set([...mySkills, ...r.skills]).size
+    if (union === 0) continue
+    const jac = inter / union
+    if (jac < threshold) continue
+    // **最も重なる行を選ぶ**（先に見つかった行で確定すると、同名の別人を掴むことがある）
+    if (jac > bestScore) { bestScore = jac; bestRow = row }
+  }
+  return bestRow
+}
+
 /** AI の skills 配列を trim・重複除去（大文字小文字無視） */
 /** "27年9ヶ月" や "5" など様々な形式の経験年数を整数に変換する */
 function toExperienceYears(value: unknown): number | null {
@@ -10344,6 +10468,26 @@ function isOwnersResumeFile(filename: string, bodyNames: string[]): boolean {
 }
 
 /**
+ * 紹介会社名を「同じ会社か」を判定できる形に揃える（法人格・記号・全角半角を落とす）。
+ *
+ * 重複判定で使う。**同じ会社から同じ人が再送されたら1レコードに統合**し、
+ * 別会社から来た同じ人は分けて残す（2026-08-20 ユーザー判断「別で見れる方がいい」。
+ * 同じ人でも会社によって単価が違う）。だからこの正規化を間違えると、
+ * 統合すべき再送が別行として増えるか、別会社の単価が片方消える。
+ *
+ * `src/lib/companyName.ts` の `normalizeCompany` と同じ規則。
+ * 控えの重複調査（`archive_query.mjs dup`）も**この関数を import して**測る
+ * （書き写すと本番と違う判定で「取りこぼし」を数えることになる）。
+ */
+export function normalizeAgentCompany(v: string | null | undefined): string {
+  return String(v ?? '')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|医療法人|\(株\)|（株）|\(有\)|（有）|㈱|㈲|Inc\.?|Corp(?:oration)?\.?|Co\.,?\s*Ltd\.?|Ltd\.?|LLC|K\.?K\.?)/gi, '')
+    .replace(/[\s　・･\-‐−ー–—.,、。]/g, '')
+    .toLowerCase()
+}
+
+/**
  * ケースB（名前はあるが添付が割り当たらなかったブロックが1人だけ）で、
  * **残り1件の添付を渡してよいか**。他のブロックの氏名がファイル名に入っていたら渡さない。
  *
@@ -12092,6 +12236,12 @@ Deno.serve(async (req: Request) => {
         }
         // 同名が3人以上並ぶこともあるため name → 登録済みエントリの配列で持つ
         const batchNameToId = new Map<string, BatchEntry[]>()
+        /**
+         * この取り込みで既に使った既存行の id。**同じ行を2人に割り当てないための札**。
+         * 同一メールに同名が2人いる名簿で、2人目が1人目の行を掴むと後勝ちで1人消える
+         * （2026-08-16 フォスターネット: 18名のうち2組が潰れて16件になった）。
+         */
+        const batchUsedIds = new Set<string>()
 
         // ── Pre-pass: 全ブロックの名前・駅名を一括抽出 → 添付ファイルとの「全体最適」割当を先に確定 ──
         // 旧版は各ブロックの for-loop 内で個別に findMatchingTextContent を呼んでおり、
@@ -12591,7 +12741,7 @@ Deno.serve(async (req: Request) => {
               } else {
                 blockSameMailDistinct = true
                 const why = sameMailConflicts(mine, prevs[prevs.length - 1]).join('・')
-                console.log(`[multi-candidate] 同一メール内の同名 "${blockResolvedName}" だが ${why} が不一致 → 別人として新規登録`)
+                console.log(`[multi-candidate] 同一メール内の同名 "${blockResolvedName}" だが ${why} が不一致 → 同一メール内では別人扱い（DB照会は続ける）`)
                 // 1通の中で同名が何人も「別人」になるのは氏名解決の失敗を疑う。
                 // 実害: 名簿24人が全員 "楊F(ヨウ)" で登録された（2026-09-05）。
                 // 登録は止めない（取りこぼしより残す）が、必ず記録に出して気付けるようにする
@@ -12603,7 +12753,12 @@ Deno.serve(async (req: Request) => {
             // ② 同エージェント（同一 from）から同名が既に登録済み → UPDATE 判定
             // 　 件名一致 → 同一メール確定。件名違い → 駅・都道府県・年齢・経験年数の2つ以上一致で同一人物
             // 　 ①で別人と判定した場合は飛ばす（件名一致＝同一メールなので、ここで必ず拾い直してしまう）
-            if (!blockExistingId && !blockSameMailDistinct && blockResolvedName && blockResolvedName !== '不明') {
+            // ⚠ **`blockSameMailDistinct` で DB 照会を飛ばしてはいけない**（2026-10-04 修正）。
+            //    飛ばしていたため、同一メールに同名が2人いる名簿では2人目が毎日 INSERT され、
+            //    同じ人が9行になっていた（JapanTechnology の `TY`・控え実測で24組・余分54行）。
+            //    代わりに「この取り込みで既に割り当てた行」を除いて照会する。
+            //    件名一致は同一メールの証拠でしかないので、同名の別人がいるときは根拠に使わない。
+            if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明') {
               // raw_profile 全体（1件20〜60KB）は取らず、判定に使うキーだけJSON射影で取る（egress削減）
               const sameAgent = await fetchSameNameRows(
                 supabase,
@@ -12611,59 +12766,29 @@ Deno.serve(async (req: Request) => {
                 blockResolvedName, inboundDataEnv, blockRegexFields.nearestStation ?? null,
                 (q) => q.eq('raw_profile->>from', from),
               )
-              if (sameAgent.length > 0) {
-                for (const s of sameAgent as unknown as any[]) {
-                  const sameSubject = s.subject === subject
-                  let attrMatches = 0
-                  const myStation = blockRegexFields.nearestStation ?? null
-                  const theirStation = s.nearestStation ?? null
-                  if (myStation && theirStation && myStation === theirStation) attrMatches++
-                  const myPref = blockRegexFields.prefecture ?? null
-                  const theirPref = s.prefecture ?? null
-                  if (myPref && theirPref && myPref === theirPref) attrMatches++
-                  const myAge = blockRegexFields.age ?? null
-                  const theirAge = s.age ?? null
-                  if (myAge != null && theirAge != null && myAge === theirAge) attrMatches++
-                  const myExp = toExperienceYears(blockRegexFields.experienceYears)
-                  const theirExp = (s as any).experience_years ?? null
-                  if (myExp != null && theirExp != null && Math.abs(myExp - theirExp) < 2) attrMatches++
-                  if (sameSubject || attrMatches >= 2) {
-                    blockExistingId = s.id
-                    break
-                  }
-                }
-              }
+              const hit = pickSamePersonRow(sameAgent as SamePersonRow[], {
+                subject,
+                station: blockRegexFields.nearestStation ?? null,
+                prefecture: blockRegexFields.prefecture ?? null,
+                age: blockRegexFields.age ?? null,
+                experienceYears: toExperienceYears(blockRegexFields.experienceYears),
+              }, { mode: 'attrs', usedIds: batchUsedIds, allowSameSubject: !blockSameMailDistinct })
+              if (hit) blockExistingId = String(hit.id)
             }
             // ③ DBに同名が存在するか確認（Jaccard類似度による同一人物判定）
-            if (!blockExistingId && !blockSameMailDistinct && blockResolvedName && blockResolvedName !== '不明') {
+            if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明') {
               const similar = await fetchSameNameRows(
                 supabase,
                 'id, skills, experience_years, nearestStation:raw_profile->>nearestStation, prefecture:raw_profile->>prefecture',
                 blockResolvedName, inboundDataEnv, blockRegexFields.nearestStation ?? null,
               )
-              if (similar.length > 0) {
-                for (const s of similar as any[]) {
-                  const myStation = blockRegexFields.nearestStation ?? null
-                  const theirStation = s.nearestStation ?? null
-                  if (myStation && theirStation && myStation !== theirStation) continue
-                  // 都道府県が両方存在して異なる場合は別人と判断
-                  const myBlockPref = blockRegexFields.prefecture ?? null
-                  const theirBlockPref = s.prefecture ?? null
-                  if (myBlockPref && theirBlockPref && myBlockPref !== theirBlockPref) continue
-                  // 経験年数の差が5年以上の場合は別人と判断
-                  const myBlockExp = toExperienceYears(blockRegexFields.experienceYears)
-                  const theirBlockExp = (s as any).experience_years ?? null
-                  if (myBlockExp != null && theirBlockExp != null && Math.abs(myBlockExp - theirBlockExp) >= 5) continue
-                  const mySet = new Set(blockSkillNames.map(sk => sk.toLowerCase()))
-                  const theirSet = new Set(((s.skills as string[]) || []).map(sk => sk.toLowerCase()))
-                  const intersection = [...mySet].filter(sk => theirSet.has(sk)).length
-                  const union = new Set([...mySet, ...theirSet]).size
-                  if (union > 0 && intersection / union >= 0.4) {
-                    blockExistingId = s.id
-                    break
-                  }
-                }
-              }
+              const hit = pickSamePersonRow(similar as SamePersonRow[], {
+                station: blockRegexFields.nearestStation ?? null,
+                prefecture: blockRegexFields.prefecture ?? null,
+                experienceYears: toExperienceYears(blockRegexFields.experienceYears),
+                skills: blockSkillNames,
+              }, { mode: 'jaccard', usedIds: batchUsedIds })
+              if (hit) blockExistingId = String(hit.id)
             }
 
             let blockSavedId: string
@@ -12731,6 +12856,8 @@ Deno.serve(async (req: Request) => {
               else list.push(entry)
               batchNameToId.set(blockResolvedName, list)
             }
+            // 氏名が取れなかったブロックの行も札を立てる（名前なしでも行は使い終わっている）
+            batchUsedIds.add(String(blockSavedId))
 
             // candidate_skills INSERT
             const blockSkillsPayload = blockDbMatchedSkills
@@ -13320,28 +13447,15 @@ Deno.serve(async (req: Request) => {
           .eq('raw_profile->>from', from)
           .gte('created_at', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
           .limit(5)
-        if (sameAgentSingle && sameAgentSingle.length > 0) {
-          for (const s of sameAgentSingle as any[]) {
-            const sameSubject = s.subject === subject
-            let attrMatches = 0
-            const myStation = resolvedStation ?? null
-            const theirStation = s.nearestStation ?? null
-            if (myStation && theirStation && myStation === theirStation) attrMatches++
-            const myPref = resolvedPrefecture ?? null
-            const theirPref = s.prefecture ?? null
-            if (myPref && theirPref && myPref === theirPref) attrMatches++
-            const myAge = regexFields.age ?? null
-            const theirAge = s.age ?? null
-            if (myAge != null && theirAge != null && myAge === theirAge) attrMatches++
-            const myExp = toExperienceYears(resolvedExperienceYears)
-            const theirExp = (s as any).experience_years ?? null
-            if (myExp != null && theirExp != null && Math.abs(myExp - theirExp) < 2) attrMatches++
-            if (sameSubject || attrMatches >= 2) {
-              existingCandidateId = s.id
-              break
-            }
-          }
-        }
+        // 判定は名簿ブロック側と**同じ関数**を使う（2つ書くと必ず片方だけ直して食い違う）
+        const hit = pickSamePersonRow((sameAgentSingle ?? []) as SamePersonRow[], {
+          subject,
+          station: resolvedStation ?? null,
+          prefecture: resolvedPrefecture ?? null,
+          age: regexFields.age ?? null,
+          experienceYears: toExperienceYears(resolvedExperienceYears),
+        }, { mode: 'attrs' })
+        if (hit) existingCandidateId = String(hit.id)
       }
       // 別会社から来た同一人物への参照（統合はしない・2026-08-20）
       let sameAsOtherAgency: Record<string, unknown> | null = null
@@ -13360,32 +13474,21 @@ Deno.serve(async (req: Request) => {
           // （prod実測 90日: 同名10件超の氏名が52種・最大35件）
           p_station: resolvedStation ?? null,
         })
-        if (similar && similar.length > 0) {
-          for (const s of similar as any[]) {
-            const myStation = resolvedStation ?? null
-            // RPC はスネークケースで返す（nearest_station / from_company）
-            const theirStation = s.nearest_station ?? null
-            // 駅が両方存在して異なる場合は別人と判断
-            if (myStation && theirStation && myStation !== theirStation) {
-              continue
-            }
-            // 都道府県が両方存在して異なる場合は別人と判断
-            const myPref = resolvedPrefecture ?? null
-            const theirPref = s.prefecture ?? null
-            if (myPref && theirPref && myPref !== theirPref) {
-              continue
-            }
-            // 経験年数の差が5年以上の場合は別人と判断
-            const myExp = toExperienceYears(resolvedExperienceYears)
-            const theirExp = (s as any).experience_years ?? null
-            if (myExp != null && theirExp != null && Math.abs(myExp - theirExp) >= 5) {
-              continue
-            }
+        {
+          // 判定は名簿ブロック側と同じ `pickSamePersonRow`（jaccard）。
+          // RPC はスネークケース（nearest_station）で返すが、関数側で両方を受ける
+          const s = pickSamePersonRow((similar ?? []) as SamePersonRow[], {
+            station: resolvedStation ?? null,
+            prefecture: resolvedPrefecture ?? null,
+            experienceYears: toExperienceYears(resolvedExperienceYears),
+            skills,
+          }, { mode: 'jaccard' }) as any
+          if (s) {
             const mySkillSet = new Set(skills.map((sk: string) => sk.toLowerCase()))
             const theirSkills = new Set(((s.skills as string[]) || []).map((sk: string) => sk.toLowerCase()))
             const intersection = [...mySkillSet].filter(sk => theirSkills.has(sk)).length
             const union = new Set([...mySkillSet, ...theirSkills]).size
-            if (union > 0 && intersection / union >= 0.4) {
+            {
               // 「別会社かどうか」は送信アドレスだけでは決まらない。同じ会社でも営業担当が
               // 変われば mail_from は変わる（実害: 株式会社Flexibility の担当違いで
               // 同社の同一人物に「別の紹介会社から来た同一人材」バッジが出た・2026-08-21）。
@@ -13394,14 +13497,8 @@ Deno.serve(async (req: Request) => {
               // 「株式会社JapanTechnology」と「JapanTechnology」が別会社になり、
               // 同社の二重登録に「別の紹介会社」バッジが出ていた
               // （src/lib/companyName.ts の normalizeCompany と同じ規則・2026-09-05）
-              const norm = (v: string | null | undefined) =>
-                String(v ?? '')
-                  .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
-                  .replace(/(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|医療法人|\(株\)|（株）|\(有\)|（有）|㈱|㈲|Inc\.?|Corp(?:oration)?\.?|Co\.,?\s*Ltd\.?|Ltd\.?|LLC|K\.?K\.?)/gi, '')
-                  .replace(/[\s　・･\-‐−ー–—.,、。]/g, '')
-                  .toLowerCase()
-              const myCompany = norm(sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany))
-              const theirCompany = norm(s.from_company)
+              const myCompany = normalizeAgentCompany(sanitizeFromCompany(analyzed.fromCompany ?? regexFields.fromCompany))
+              const theirCompany = normalizeAgentCompany(s.from_company)
               const sameAgent = (s.mail_from ?? null) === from
                 || (myCompany !== '' && myCompany === theirCompany)
               if (sameAgent) {
@@ -13426,7 +13523,6 @@ Deno.serve(async (req: Request) => {
                 }
                 console.log(`[dedup] 別会社の同一人物 → 統合せず参照を記録: ${resolvedName} jaccard=${(intersection / union).toFixed(2)} 相手=${s.from_company ?? s.mail_from}`)
               }
-              break
             }
           }
         }

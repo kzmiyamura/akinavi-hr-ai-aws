@@ -86,18 +86,17 @@ describe('keepOtherCompanyOnly', () => {
 
 /**
  * 取り込み時（inbound-email）の同社判定が、表示側と同じ規則で正規化しているか。
- * 手写しのレプリカは作らず、本番に出す index.ts から式を切り出して照合する。
+ *
+ * 手写しのレプリカは作らない。2026-10-04 までは index.ts の本文から正規表現で式を
+ * 切り出していたが、**関数（`normalizeAgentCompany`）に切り出した瞬間にテストが落ちた**
+ * （判定は何も変わっていない）。今は `sync_extractors.mjs` の生成物を読む。
+ * ⚠ index.ts を直したら `node scripts/sync_extractors.mjs` を回すこと。
  */
 describe('inbound-email の会社名正規化が companyName.ts と一致する', () => {
   it('同じ入力から同じキーを作る', async () => {
-    const { readFileSync } = await import('node:fs')
-    const { resolve } = await import('node:path')
-    const src = readFileSync(
-      resolve(__dirname, '../../../supabase/functions/inbound-email/index.ts'), 'utf8')
-    const m = src.match(
-      /const norm = \(v: string \| null \| undefined\) =>\s*([\s\S]*?\.toLowerCase\(\))/)
-    if (!m) throw new Error('inbound-email の norm を切り出せませんでした')
-    const inboundNorm = new Function('v', `return ${m[1]};`) as (v: unknown) => string
+    // @ts-expect-error 型定義のない生成物
+    const gen = await import('../../../scripts/_extractors.gen.mjs')
+    const inboundNorm = gen.normalizeAgentCompany as (v: unknown) => string
 
     for (const name of [
       '株式会社JapanTechnology', 'JapanTechnology', '㈱KICOシステムズ',
