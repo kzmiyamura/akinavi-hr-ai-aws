@@ -14,6 +14,8 @@
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
+// 氏名と経歴書ファイル名の照合は**本番と同じ関数**を使う（書き写すとズレる）
+import { isOwnersResumeFile } from './_extractors.gen.mjs'
 
 /**
  * 控えの場所。環境変数 → D:\akinavi-archive → ~/akinavi-archive の順に探す。
@@ -109,12 +111,14 @@ for (let i = 3; i < process.argv.length; i++) {
 /** n 番目の位置引数（0 始まり）。無ければ null */
 const posArg = (n) => POSITIONAL[n] ?? null
 
-const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed']
+const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed', 'resume']
 if (!COMMANDS.includes(cmd)) {
   console.error(`⚠ 知らないサブコマンド: ${cmd}`)
   console.error(`   使えるのは: ${COMMANDS.join(' | ')}`)
   console.error('   rate [スキル]        経験年数帯ごとの希望単価の分布')
   console.error('   skillfilter [スキル,...]  本文マッチが絞り込みに足している人数')
+  console.error('   company [社名]       その会社のメール1通あたりの人数（名簿かどうか）')
+  console.error('   resume              氏名と経歴書ファイル名の一致')
   process.exit(2)
 }
 
@@ -163,7 +167,58 @@ if (cmd === 'daily') {
 }
 
 if (cmd === 'company') {
-  const top = Number(posArg(0) ?? 15)
+  /**
+   * 社名を渡すと、その会社だけを「1通に何人載っているか」で見る。
+   *
+   *   node scripts/archive_query.mjs company                 # 上位15社
+   *   node scripts/archive_query.mjs company ブライトスター    # その会社の中身
+   *
+   * ⚠ **「名簿か」は人数では分からない。** 1通1人のメールを10通送る会社と、
+   *   10人の名簿を1通送る会社は、どちらも人材10人として入る。
+   *   区別できるのは**本文が同じ人が何人いるか**（複数人メールは1通ぶんの本文を
+   *   各人に配る。2026-09-17 以降は自分のブロックだけなので、
+   *   **ブロック先頭までの共通部分**で見る）。
+   */
+  const nameArg = posArg(0)
+  if (nameArg && !/^\d+$/.test(nameArg)) {
+    const hit = [...rows('candidates')].filter((r) => String(r.from_company ?? '').includes(nameArg))
+    if (!hit.length) {
+      console.error(`⚠ 「${nameArg}」を from_company に含む人材が控えに無い`)
+      console.error('   社名の一部で探す。上位社名は: node scripts/archive_query.mjs company')
+      process.exit(2)
+    }
+    const prod = hit.filter((r) => r.data_env === 'prod')
+    console.log(`「${nameArg}」を含む会社の人材 ${hit.length} 人（prod ${prod.length} 人）`)
+    const cos = [...new Set(hit.map((r) => r.from_company))]
+    console.log(`会社名の表記: ${cos.join(' / ')}`)
+
+    // 同じメール由来かを「件名＋受信時刻」で束ねる。本文はブロックごとに違うので使えない
+    const byMail = new Map()
+    for (const r of hit) {
+      const k = `${r.rp_subject ?? '(件名なし)'}|${r.rp_received ?? r.created_at ?? ''}`
+      if (!byMail.has(k)) byMail.set(k, [])
+      byMail.get(k).push(r)
+    }
+    const sizes = [...byMail.values()].map((v) => v.length).sort((a, b) => b - a)
+    const multi = sizes.filter((n) => n > 1)
+    console.log('')
+    console.log(`メール ${byMail.size} 通 → 1通あたり ${sizes[0]} 〜 ${sizes[sizes.length - 1]} 人`)
+    console.log(`複数人が載っていたメール: ${multi.length} 通（最大 ${multi[0] ?? 0} 人）`)
+    console.log(`1通1人のメール:          ${sizes.length - multi.length} 通`)
+    console.log('')
+    console.log('通ごと（新しい順・上位10通）')
+    const entries = [...byMail].sort((a, b) => String(b[0]).localeCompare(String(a[0]))).slice(0, 10)
+    for (const [k, v] of entries) {
+      const [subj, at] = k.split('|')
+      const noSkill = v.filter((r) => (Array.isArray(r.skills) ? r.skills : []).length === 0).length
+      console.log(`  ${String(v.length).padStart(2)}人  ${String(at).slice(0, 16)}  スキル空 ${noSkill}人`)
+      console.log(`        件名: ${String(subj).slice(0, 70)}`)
+      console.log(`        氏名: ${v.map((r) => r.name ?? '(名前なし)').slice(0, 8).join(' / ')}`)
+    }
+    process.exit(0)
+  }
+
+  const top = Number(nameArg ?? 15)
   const byCo = new Map()
   for (const r of rows('candidates')) {
     const c = (r.from_company ?? '(不明)').trim()
@@ -430,5 +485,120 @@ if (cmd === 'missed') {
   console.log('\n件数  送信元ドメイン')
   for (const [d, n] of [...byDomain].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
     console.log(`${String(n).padStart(4)}  ${d}`)
+  }
+}
+
+if (cmd === 'resume') {
+  /**
+   * 「人材メールの氏名」と「紐付いた経歴書」が同じ人かを控えだけで照合する。
+   *
+   *   node scripts/archive_query.mjs resume [--since YYYY-MM-DD] [--list N]
+   *
+   * ## 何と何を比べているか
+   *
+   * `resume_url` の最後の部分は **添付の元ファイル名を無害化したもの**
+   * （`inbound-email` の `uploadToStorage`: `filename.replace(/[^\w.\-]/g, '_')`）。
+   * **氏名から作っていない**ので、氏名と突き合わせても循環しない。
+   *
+   * 判定は本番と同じ `isOwnersResumeFile`（全角→半角・記号除去してから部分一致）を
+   * そのまま import する。書き写すとズレる。
+   *
+   * ⚠ **「一致しない」は「他人の経歴書」ではない。** ファイル名が
+   *   `skillsheet_20260901.xlsx` のように名前を含まない形なら、そもそも照合できない。
+   *   そこを分けずに「不一致 N件」と報告すると嘘になるので3つに分ける:
+   *     一致 / 名前が入っていないファイル名 / **名前が入っているのに違う**（←これが疑わしい）
+   *   最後の分類の中身は、メール控えの添付を実際に開いて確かめること
+   *   （`D:\akinavi-archive\mail\<日付>\<ID>\` に実ファイルがある）。
+   */
+  const sinceAt2 = process.argv.indexOf('--since')
+  const SINCE2 = sinceAt2 >= 0 ? process.argv[sinceAt2 + 1] : null
+  const listAt = process.argv.indexOf('--list')
+  const LIST_N = listAt >= 0 ? Number(process.argv[listAt + 1] ?? 10) : 0
+
+  /**
+   * ファイル名に「人名らしさ」があるか。無ければ照合不能に分類する。
+   *
+   * ⚠ 最初に書いたときは `shared` と `edit` を人名らしいと見てしまい、
+   *   「名前が入っているのに違う」を 276人と**多く見せていた**（2026-10-04）。
+   *   `shared_<ハッシュ>.xlsx` は匿名の添付名、`edit` は Google Drive の URL の末尾。
+   *   疑わしい件数を多く出す方向の間違いは、調べる手間をそのまま無駄にする。
+   */
+  const GENERIC_RE = /^(?:[-_0-9.]|skill|sheet|skillsheet|resume|cand|cv|keireki|shokumu|youin|profile|ver|copy|new|file|files|doc|docx|document|xls|xlsx|pdf|shared|share|upload|attach|attachment|data|tmp|temp|final|edit|view|usp|sharing|経歴書?|職務経歴書?|スキルシート|要員|人材|履歴書|技術者|提案|無題)+$/i
+  const nameishTokens = (base) => base
+    .replace(/\.[a-z0-9]+$/i, '')
+    .split(/[_\-.\s]+/)
+    .filter((t) => t && !/^[0-9a-f]{8,}$/i.test(t) && !/^\d+$/.test(t))
+
+  let withResume = 0, noResume = 0, ok = 0, noNameInFile = 0, mismatch = 0, noName = 0
+  let driveLink = 0, partial = 0
+  /** isOwnersResumeFile と同じ正規化（全角→半角・記号除去） */
+  const norm = (s) => String(s ?? '')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/[.s　・_-【】()（）]/g, '')
+    .toLowerCase()
+  const samples = []
+  // Google Drive / Docs の共有リンクはファイル名を持たない（末尾が `edit` 等）。
+  // Storage に上げた添付とは別物なので、照合可否の分母から外す
+  const DRIVE_RE = /(?:drive|docs)\.google\.com/i
+  for (const r of rows('candidates')) {
+    if (r.data_env !== 'prod') continue
+    if (r.merged_into) continue
+    if (SINCE2 && String(r.created_at ?? '') < SINCE2) continue
+    if (!r.resume_url) { noResume++; continue }
+    withResume++
+    const name = String(r.name ?? '').trim()
+    if (!name || name === '不明') { noName++; continue }
+
+    if (DRIVE_RE.test(String(r.resume_url))) { driveLink++; continue }
+    const base = decodeURIComponent(String(r.resume_url).split('/').pop() ?? '')
+    if (isOwnersResumeFile(base, [name])) { ok++; continue }
+
+    // 名前を含まないファイル名（`skillsheet_2026.xlsx` 等）は「不一致」ではなく照合不能
+    const toks = nameishTokens(base)
+    const looksNamed = toks.some((t) => !GENERIC_RE.test(t) && t.length >= 2)
+    if (!looksNamed) { noNameInFile++; continue }
+
+    /**
+     * 逆向きの含有（氏名 ⊇ ファイル名の語）は**同じ人**とみなす。
+     *
+     * 本番の `isOwnersResumeFile` は「ファイル名が氏名を含むか」しか見ない。
+     * ところが実データは逆が多い: 氏名 `樊RK` / ファイル `RK_<ハッシュ>.xlsx`、
+     * 氏名 `邱 ZM` / ファイル `_ZM_<ハッシュ>.xlsx`。
+     * 送信元はイニシャルだけでファイルを作り、本文には姓が書いてある。
+     * ここを分けないと「疑わしい」が 113人に膨らむ（実際は部分一致・2026-10-04 実測）。
+     */
+    const nk = norm(name)
+    if (toks.some((t) => { const k = norm(t); return k.length >= 2 && nk.includes(k) })) {
+      partial++
+      continue
+    }
+
+    mismatch++
+    if (samples.length < (LIST_N || 8)) {
+      samples.push({ name, base, co: r.from_company ?? '(不明)', at: String(r.created_at ?? '').slice(0, 10) })
+    }
+  }
+
+  console.log(`prod 人材（統合されたものを除く）${withResume + noResume} 人${SINCE2 ? ` / ${SINCE2} 以降` : ''}`)
+  console.log(`  経歴書が紐付いている   ${String(withResume).padStart(5)} 人  ${pct(withResume, withResume + noResume).trim()}`)
+  console.log(`  紐付いていない         ${String(noResume).padStart(5)} 人`)
+  console.log('')
+  console.log('紐付いている人の内訳（氏名と経歴書ファイル名の照合・本番と同じ判定）')
+  console.log(`  一致                       ${String(ok).padStart(5)} 人  ${pct(ok, withResume).trim()}`)
+  console.log(`  ファイル名に名前が入っていない ${String(noNameInFile).padStart(5)} 人  ${pct(noNameInFile, withResume).trim()}  ←照合できない`)
+  console.log(`  Google Drive の共有リンク     ${String(driveLink).padStart(5)} 人  ${pct(driveLink, withResume).trim()}  ←照合できない`)
+  console.log(`  部分一致（ファイル名はイニシャル）${String(partial).padStart(5)} 人  ${pct(partial, withResume).trim()}  ←同じ人`)
+  console.log(`  名前が入っているのに違う      ${String(mismatch).padStart(5)} 人  ${pct(mismatch, withResume).trim()}  ←**疑わしい**`)
+  console.log(`  氏名が「不明」              ${String(noName).padStart(5)} 人  ${pct(noName, withResume).trim()}`)
+
+  if (samples.length) {
+    console.log('')
+    console.log('「名前が入っているのに違う」実物')
+    console.log('（ファイル名の名前が本人かは、メール控えの添付を開いて確かめること）')
+    for (const s of samples) {
+      console.log(`  ${s.at}  氏名: ${s.name}`)
+      console.log(`              ファイル: ${s.base}`)
+      console.log(`              送信元: ${s.co}`)
+    }
   }
 }

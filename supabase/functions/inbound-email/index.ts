@@ -10335,16 +10335,31 @@ const ROSTER_MAX_ROWS = 70
  *  「本文に無い人は作らない」と一律に決めると実在人材を大量に失う）。
  */
 function isOwnersResumeFile(filename: string, bodyNames: string[]): boolean {
-  const norm = (s: string) => String(s ?? '')
-    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
-    .replace(/[.\s　・_\-【】()（）]/g, '')
-    .toLowerCase()
-  const fn = norm(filename)
+  const fn = normalizeNameForFileMatch(filename)
   if (!fn) return false
   return bodyNames.some((n) => {
-    const k = norm(n)
+    const k = normalizeNameForFileMatch(n)
     return k.length >= 2 && fn.includes(k)
   })
+}
+
+/**
+ * 氏名とファイル名を突き合わせるための正規化（全角→半角・区切り記号の除去）。
+ *
+ * ## 全角の記号も落とす（2026-10-04 追加）
+ *
+ * 以前は半角の `.` と `・` だけを落としており、**全角の `．` が残っていた**。
+ * 控えの実測で、氏名 `K．Y`（全角ピリオド）と経歴書 `KY_<ハッシュ>.xlsx` が
+ * 「別人」と判定されていた。本人の経歴書を他人の文書として扱うと、
+ * 名簿として展開して**実在しない人材を量産する**側に倒れる（上のコメント参照）。
+ *
+ * 落とすのは区切りとして使われる記号だけ。全角の中黒・読点・括弧・空白まで含める。
+ */
+function normalizeNameForFileMatch(s: string): string {
+  return String(s ?? '')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/[.\s　・,_\-【】()（）．，、〔〕［］｛｝「」『』〈〉<>|｜/／\\]/g, '')
+    .toLowerCase()
 }
 
 
