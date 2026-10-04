@@ -17,7 +17,7 @@ import { projectText, candidateText, buildRecommendationRecord } from './recomme
 import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_REPLACE, isUsableName } from './apply.mjs'
 import { buildProjectPatch, buildInterpretationPatch, DEFAULT_TITLE } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
-import { resolveLocalResume, refreshLocalResumeIndex } from './local_resume.mjs'
+import { resolveLocalResume, refreshLocalResumeIndex, storeLocalResume } from './local_resume.mjs'
 import {
   trimBodyForLlm, projectLooksComplete, parseSkillFilterValue, buildSkillFilterClause, pacedAllowance,
   looksLikeCandidateSubject,
@@ -827,6 +827,12 @@ async function processBoxCandidate(c) {
     if (await hasSiblings(c)) throw new Error('複数人メール由来のためBox再解析不可（データ混線防止）')
     const f = await downloadBoxFile(c.box_url)
     log(`  [box:${c.name}] DL完了 ${f.name} (${f.buf.length}B)`)
+    // ここで控えを取らないと原本がどこにも残らない（Storage は7日で消える・メール控えは
+    // Outlook の添付からしか作られない）。失敗しても取り込みは続ける
+    const kept = storeLocalResume(f.buf, f.name)
+    log(kept
+      ? `  [box:${c.name}] ローカル控え${kept.existed ? '済（同じ中身）' : 'に保存'}: ${kept.path}`
+      : `  [box:${c.name}] ローカル控えは取れなかった（Storage のみ）`)
     // 過去の合成本文・合成件名（旧実装の残骸）は元本文扱いしない
     const origBody = c.body && !c.body.startsWith('Box経歴書ファイル取込') ? c.body : null
     const origSubject = c.subject && !c.subject.startsWith('【Box経歴書】') ? c.subject : null

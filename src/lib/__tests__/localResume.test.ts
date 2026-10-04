@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 
 // @ts-expect-error — 常駐ワーカーが使う JS モジュール（型定義なし）
-import { extractStorageHash, hashFileBytes, refreshLocalResumeIndex, resolveLocalResume, _resetCache } from '../../../scripts/llm_extract/local_resume.mjs'
+import { extractStorageHash, hashFileBytes, refreshLocalResumeIndex, resolveLocalResume, storeLocalResume, _resetCache } from '../../../scripts/llm_extract/local_resume.mjs'
 
 let root: string
 
@@ -88,7 +88,7 @@ describe('索引と照合', () => {
     expect(r?.added).toBe(1)
 
     const hash = hashFileBytes(Buffer.from(body))
-    const found = resolveLocalResume(`https://x/K_T_${hash}.xlsx`, { root })
+    const found = resolveLocalResume(`https://x/K_T_${hash}.xlsx`, { root, boxRoot: null })
     expect(found).toContain('01_skillsheet.xlsx')
   })
 
@@ -98,13 +98,13 @@ describe('索引と照合', () => {
     refreshLocalResumeIndex({ root })
     const hash = hashFileBytes(Buffer.from(body))
     // Storage 側は人材名から付けた別の名前になっている
-    expect(resolveLocalResume(`https://x/Y_S_${hash}.xlsx`, { root })).toBeTruthy()
+    expect(resolveLocalResume(`https://x/Y_S_${hash}.xlsx`, { root, boxRoot: null })).toBeTruthy()
   })
 
   it('控えに無ければ null（Storageから落とす動作に退避する）', () => {
     putArchived(today(), 'mail-1', '01_a.xlsx', 'A')
     refreshLocalResumeIndex({ root })
-    expect(resolveLocalResume('https://x/A_dddddddddddddddddddd.xlsx', { root })).toBeNull()
+    expect(resolveLocalResume('https://x/A_dddddddddddddddddddd.xlsx', { root, boxRoot: null })).toBeNull()
   })
 
   it('索引にあっても実ファイルが消えていたら null', () => {
@@ -112,11 +112,11 @@ describe('索引と照合', () => {
     putArchived(today(), 'mail-1', '01_b.xlsx', body)
     refreshLocalResumeIndex({ root })
     const hash = hashFileBytes(Buffer.from(body))
-    expect(resolveLocalResume(`https://x/B_${hash}.xlsx`, { root })).toBeTruthy()
+    expect(resolveLocalResume(`https://x/B_${hash}.xlsx`, { root, boxRoot: null })).toBeTruthy()
 
     rmSync(join(root, today(), 'mail-1'), { recursive: true, force: true })
     _resetCache()
-    expect(resolveLocalResume(`https://x/B_${hash}.xlsx`, { root })).toBeNull()
+    expect(resolveLocalResume(`https://x/B_${hash}.xlsx`, { root, boxRoot: null })).toBeNull()
   })
 
   it('原本メールと管理ファイルは索引に入れない', () => {
@@ -141,17 +141,68 @@ describe('索引と照合', () => {
   })
 })
 
+/**
+ * Box 由来（メールに添付されていない経歴書）の控え。
+ * ここが効かないと、Storage の7日保持が切れた時点で原本がどこにも無くなる。
+ */
+describe('Box 由来の控えを書いて読む', () => {
+  it('書いたファイルを Storage の URL から引ける', () => {
+    const buf = Buffer.from('box xlsx bytes')
+    const kept = storeLocalResume(buf, 'スキルシート 山田.xlsx', { root })
+    expect(kept?.existed).toBe(false)
+    expect(kept?.bytes).toBe(buf.length)
+    // ハッシュは内容由来＝Storage のファイル名と必ず一致する
+    expect(kept?.hash).toBe(hashFileBytes(buf))
+    // 置き場所は <日付>/<ハッシュ>_<無害化した名前>。日本語・空白は `_` にする
+    expect(kept!.path.endsWith(`${kept!.hash}_${'_'.repeat(9)}.xlsx`)).toBe(true)
+    expect(kept!.path).toContain(today())
+
+    const found = resolveLocalResume(`https://x/Y_M_${kept!.hash}.xlsx`, { root: join(root, 'nope'), boxRoot: root })
+    expect(found).toBe(kept!.path)
+  })
+
+  it('同じ中身を二度書かない（existed=true で返る）', () => {
+    const buf = Buffer.from('same bytes')
+    expect(storeLocalResume(buf, 'a.xlsx', { root })?.existed).toBe(false)
+    expect(storeLocalResume(buf, 'a.xlsx', { root })?.existed).toBe(true)
+  })
+
+  it('メール控えが先・無ければ Box 控えを見る', () => {
+    const mailBuf = 'mail side'
+    putArchived(today(), 'mail-1', '01_m.xlsx', mailBuf)
+    refreshLocalResumeIndex({ root })
+    const boxRoot = mkdtempSync(join(tmpdir(), 'akinavi-box-'))
+    try {
+      const boxKept = storeLocalResume(Buffer.from('box side'), 'b.xlsx', { root: boxRoot })
+      const mailHash = hashFileBytes(Buffer.from(mailBuf))
+      expect(resolveLocalResume(`https://x/A_${mailHash}.xlsx`, { root, boxRoot })).toContain('01_m.xlsx')
+      expect(resolveLocalResume(`https://x/A_${boxKept!.hash}.xlsx`, { root, boxRoot })).toBe(boxKept!.path)
+    } finally { rmSync(boxRoot, { recursive: true, force: true }) }
+  })
+
+  it('経歴書でない拡張子は控えない（索引に入れても使えない）', () => {
+    expect(storeLocalResume(Buffer.from('x'), 'note.txt', { root })).toBeNull()
+    expect(storeLocalResume(Buffer.from('x'), 'image.png', { root })).toBeNull()
+  })
+
+  it('空・名前なし・書けない場所でも例外を投げない', () => {
+    expect(storeLocalResume(Buffer.alloc(0), 'a.xlsx', { root })).toBeNull()
+    expect(storeLocalResume(Buffer.from('x'), null, { root })).toBeNull()
+    expect(storeLocalResume(null, 'a.xlsx', { root })).toBeNull()
+  })
+})
+
 describe('壊れていても止めない', () => {
   it('控えのフォルダが無くても例外を投げない', () => {
     const missing = join(root, 'no-such-dir')
     expect(refreshLocalResumeIndex({ root: missing })).toBeNull()
-    expect(resolveLocalResume('https://x/A_eeeeeeeeeeeeeeeeeeee.xlsx', { root: missing })).toBeNull()
+    expect(resolveLocalResume('https://x/A_eeeeeeeeeeeeeeeeeeee.xlsx', { root: missing, boxRoot: null })).toBeNull()
   })
 
   it('索引が壊れていても例外を投げない', () => {
     writeFileSync(join(root, '_resume_index.json'), '{ これはJSONではない')
     _resetCache()
-    expect(resolveLocalResume('https://x/A_ffffffffffffffffffff.xlsx', { root })).toBeNull()
+    expect(resolveLocalResume('https://x/A_ffffffffffffffffffff.xlsx', { root, boxRoot: null })).toBeNull()
     // 壊れた索引は空として扱い、作り直せる
     putArchived(today(), 'mail-1', '01_a.xlsx', 'A')
     expect(refreshLocalResumeIndex({ root })?.added).toBe(1)
