@@ -2566,6 +2566,16 @@ function pickSamePersonRow(
     const r = samePersonRowAttrs(row)
     if (r.id && used.has(r.id)) continue
 
+    // 食い違う行を外す（同名が2人以上いるメールのときだけ）。
+    // **件名一致の近道より先に**置く。件名は「同じ送信元の同じメール」の証拠でしかないので、
+    // 同名が2人いると**相手の行を掴む**（demo 実測: 大阪の ZQ が滋賀の ZQ の行を上書きし、
+    // 滋賀の行が毎回新規登録されていた＝行が増えるだけでなく**県が書き換わる**）
+    if (opts.vetoConflicts) {
+      if (myStation && r.station && String(myStation) !== String(r.station)) continue
+      if (myPref && r.prefecture && String(myPref) !== String(r.prefecture)) continue
+      if (me.age != null && r.age != null && String(me.age) !== String(r.age)) continue
+    }
+
     if (opts.mode === 'attrs') {
       if (opts.allowSameSubject !== false && me.subject != null && r.subject === me.subject) return row
       let hits = 0

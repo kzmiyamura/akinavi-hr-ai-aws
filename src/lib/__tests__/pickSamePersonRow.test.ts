@@ -114,6 +114,48 @@ describe('jaccard モード（スキルの重なりで判定）', () => {
   })
 })
 
+describe('vetoConflicts（1通に同名が2人以上いるとき）', () => {
+  it('件名が同じでも県が食い違う行は掴まない', () => {
+    // ここを入れるまで、大阪の ZQ が滋賀の ZQ の行を件名一致で掴み、
+    // **相手の県を大阪に書き換えて**いた（demo 実測・2026-10-04）
+    const rows = [row({ id: 'shiga', subject: '同じ件名', prefecture: '滋賀県' })]
+    expect(pickSamePersonRow(rows, { subject: '同じ件名', prefecture: '大阪府' },
+      { mode: 'attrs' })?.id).toBe('shiga')          // 従来（1人メールでは正しい）
+    expect(pickSamePersonRow(rows, { subject: '同じ件名', prefecture: '大阪府' },
+      { mode: 'attrs', vetoConflicts: true })).toBeNull()
+  })
+
+  it('駅・年齢の食い違いも外す', () => {
+    expect(pickSamePersonRow([row({ id: 'a', subject: 'S', nearestStation: '八尾駅' })],
+      { subject: 'S', station: 'JR南草津駅' }, { mode: 'attrs', vetoConflicts: true })).toBeNull()
+    expect(pickSamePersonRow([row({ id: 'b', subject: 'S', age: 41 })],
+      { subject: 'S', age: 52 }, { mode: 'attrs', vetoConflicts: true })).toBeNull()
+  })
+
+  it('食い違わなければ掴む（同名でも本人には届く）', () => {
+    const rows = [
+      row({ id: 'shiga', subject: 'S', prefecture: '滋賀県', age: 52 }),
+      row({ id: 'osaka', subject: 'S', prefecture: '大阪府', age: 41 }),
+    ]
+    expect(pickSamePersonRow(rows, { subject: 'S', prefecture: '大阪府', age: 41 },
+      { mode: 'attrs', vetoConflicts: true })?.id).toBe('osaka')
+  })
+
+  it('jaccard でも年齢の食い違いを外す（既定では見ない）', () => {
+    const skills = ['java', 'oracle', 'linux']
+    const rows = [row({ id: 'other', age: 52, skills: ['Java', 'Oracle', 'Linux'] })]
+    expect(pickSamePersonRow(rows, { age: 41, skills }, { mode: 'jaccard' })?.id).toBe('other')
+    expect(pickSamePersonRow(rows, { age: 41, skills },
+      { mode: 'jaccard', vetoConflicts: true })).toBeNull()
+  })
+
+  it('片方が未取得なら食い違いにしない（取りこぼしを増やさない）', () => {
+    const rows = [row({ id: 'c', subject: 'S', prefecture: null, age: 41 })]
+    expect(pickSamePersonRow(rows, { subject: 'S', prefecture: '大阪府', age: 41 },
+      { mode: 'attrs', vetoConflicts: true })?.id).toBe('c')
+  })
+})
+
 describe('実際に起きていた形', () => {
   it('名簿に同名2人：2人目は1人目の行を掴まず、自分の過去行を選ぶ', () => {
     // JapanTechnology の日次名簿: JR南草津駅の TY と 大阪府八尾市の TY が同じメールに並ぶ

@@ -534,6 +534,13 @@ type SamePersonOpts = {
   usedIds?: ReadonlySet<string>
   /** 同一メール内に同名の別人がいたときは false（件名一致を本人の根拠にしない） */
   allowSameSubject?: boolean
+  /**
+   * 駅・県・年齢が**食い違う行を最初から外す**。同一メールに同名が2人以上いるときに使う。
+   *
+   * ⚠ 既定で有効にしてはいけない。1人メールでは「駅が更新された同じ人」が
+   *   食い違いに見えるため、外すと毎回新規登録になる（重複を増やす方向）。
+   */
+  vetoConflicts?: boolean
   threshold?: number
 }
 
@@ -600,6 +607,16 @@ function pickSamePersonRow(
   for (const row of rows) {
     const r = samePersonRowAttrs(row)
     if (r.id && used.has(r.id)) continue
+
+    // 食い違う行を外す（同名が2人以上いるメールのときだけ）。
+    // **件名一致の近道より先に**置く。件名は「同じ送信元の同じメール」の証拠でしかないので、
+    // 同名が2人いると**相手の行を掴む**（demo 実測: 大阪の ZQ が滋賀の ZQ の行を上書きし、
+    // 滋賀の行が毎回新規登録されていた＝行が増えるだけでなく**県が書き換わる**）
+    if (opts.vetoConflicts) {
+      if (myStation && r.station && String(myStation) !== String(r.station)) continue
+      if (myPref && r.prefecture && String(myPref) !== String(r.prefecture)) continue
+      if (me.age != null && r.age != null && String(me.age) !== String(r.age)) continue
+    }
 
     if (opts.mode === 'attrs') {
       if (opts.allowSameSubject !== false && me.subject != null && r.subject === me.subject) return row
@@ -12261,6 +12278,23 @@ Deno.serve(async (req: Request) => {
         })
         const blockAttachAssignment = assignAttachmentsToBlocks(blockMetas, allTextContents)
 
+        /**
+         * **この1通に2人以上いる氏名**。イニシャル氏名なので名簿には普通に同名が並ぶ
+         * （実データ: JapanTechnology の日次名簿に `TY` が2人＝滋賀と大阪）。
+         *
+         * 同名が複数いると分かっている氏名では、重複判定を厳しくする:
+         * 件名一致の近道を使わず、駅・県・年齢が食い違う行は掴まない。
+         * これを入れるまで、片方が**相手の行を上書き**し（県まで書き換わる）、
+         * もう片方が毎回新規登録されていた（demo で再現・2026-10-04）。
+         */
+        const nameCountInMail = new Map<string, number>()
+        for (const m of blockMetas) {
+          if (!m.name) continue
+          // 比較相手は `blockResolvedName`。同じ正規化（normalizeAZ）で数えないと当たらない
+          const k = normalizeAZ(m.name)
+          nameCountInMail.set(k, (nameCountInMail.get(k) ?? 0) + 1)
+        }
+
         // ゾーンD: 名簿昇格ブロックは由来の行エントリと1:1が確定しているため、曖昧マッチに
         // 頼らず内容一致で確定割当する。名簿行のラベルは全行とも親ファイル名になり（パス1不発）、
         // リンク先本文の英語技術語に他人のイニシャルが偶然含まれてパス2.5も全滅する実害があった
@@ -12726,6 +12760,11 @@ Deno.serve(async (req: Request) => {
             // ① 同一メール内の既処理ブロックと名前が一致 → そのIDに UPDATE（DB未コミット分も補足）
             // 　 ただし駅・都道府県・年齢・単価が1つでも食い違えば同姓同名の別人として新規登録する
             let blockSameMailDistinct = false
+            // この氏名が1通に2人以上いるか。**1人目の処理時点でも分かる**ことが肝
+            // （blockSameMailDistinct は2人目以降しか立たないため、1人目が相手の行を掴んでいた）
+            const ambiguousName = blockResolvedName != null
+              && ((nameCountInMail.get(blockResolvedName) ?? 0) > 1
+                || (batchNameToId.get(blockResolvedName)?.length ?? 0) > 0)
             if (!blockExistingId && blockResolvedName && blockResolvedName !== '不明' && batchNameToId.has(blockResolvedName)) {
               const mine = {
                 station: blockRegexFields.nearestStation,
@@ -12772,7 +12811,12 @@ Deno.serve(async (req: Request) => {
                 prefecture: blockRegexFields.prefecture ?? null,
                 age: blockRegexFields.age ?? null,
                 experienceYears: toExperienceYears(blockRegexFields.experienceYears),
-              }, { mode: 'attrs', usedIds: batchUsedIds, allowSameSubject: !blockSameMailDistinct })
+              }, {
+                mode: 'attrs',
+                usedIds: batchUsedIds,
+                allowSameSubject: !ambiguousName,
+                vetoConflicts: ambiguousName,
+              })
               if (hit) blockExistingId = String(hit.id)
             }
             // ③ DBに同名が存在するか確認（Jaccard類似度による同一人物判定）
@@ -12785,9 +12829,10 @@ Deno.serve(async (req: Request) => {
               const hit = pickSamePersonRow(similar as SamePersonRow[], {
                 station: blockRegexFields.nearestStation ?? null,
                 prefecture: blockRegexFields.prefecture ?? null,
+                age: blockRegexFields.age ?? null,
                 experienceYears: toExperienceYears(blockRegexFields.experienceYears),
                 skills: blockSkillNames,
-              }, { mode: 'jaccard', usedIds: batchUsedIds })
+              }, { mode: 'jaccard', usedIds: batchUsedIds, vetoConflicts: ambiguousName })
               if (hit) blockExistingId = String(hit.id)
             }
 
