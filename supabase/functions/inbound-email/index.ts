@@ -504,6 +504,19 @@ function sameMailConflicts(a: DedupAttrs, b: DedupAttrs): string[] {
   return out
 }
 
+/**
+ * 全角の英数字を半角に寄せるだけの正規化（氏名の突き合わせ用）。
+ *
+ * 名簿ブロックの氏名は `Ｋ.Ｔ` のように全角で来ることがあり、
+ * `cleanDisplayName` を通した解決名（半角）と素のままでは一致しない。
+ * 以前はブロック処理の中に同じ式がローカル定義されていたが、
+ * **同じ規則を2か所で使いたくなった**ので上に出した（2026-10-04）。
+ */
+function normalizeFullWidthAZ(s: string): string {
+  return String(s ?? '').replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) =>
+    String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+}
+
 /** 重複判定で既存行から受け取る項目（単数経路は camelCase・RPC は snake_case で返す） */
 type SamePersonRow = {
   id?: unknown
@@ -12290,8 +12303,8 @@ Deno.serve(async (req: Request) => {
         const nameCountInMail = new Map<string, number>()
         for (const m of blockMetas) {
           if (!m.name) continue
-          // 比較相手は `blockResolvedName`。同じ正規化（normalizeAZ）で数えないと当たらない
-          const k = normalizeAZ(m.name)
+          // 比較相手は `blockResolvedName`。同じ正規化で数えないと当たらない
+          const k = normalizeFullWidthAZ(m.name)
           nameCountInMail.set(k, (nameCountInMail.get(k) ?? 0) + 1)
         }
 
@@ -12481,10 +12494,8 @@ Deno.serve(async (req: Request) => {
             // 本文由来の名前が無く、解決名が他ブロックの本文名 or 同一バッチ処理済み名と
             // 一致する場合は添付由来の汚染とみなしてスキップする。
             if (blockMetas[blockIdx].name == null && !matchedTextContent) {
-              const normalizeAZ = (s: string) => s.replace(/[Ａ-Ｚａ-ｚ０-９]/g, c =>
-                String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
               const dupOfSibling = blockMetas.some((m, i) =>
-                i !== blockIdx && m.name != null && normalizeAZ(m.name) === blockResolvedName)
+                i !== blockIdx && m.name != null && normalizeFullWidthAZ(m.name) === blockResolvedName)
               if (dupOfSibling || batchNameToId.has(blockResolvedName)) {
                 console.log(`[multi-candidate] 名無しブロックが兄弟の名前 "${blockResolvedName}" に解決 → 添付汚染とみなしスキップ`)
                 continue
