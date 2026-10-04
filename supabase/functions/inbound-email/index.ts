@@ -10344,6 +10344,55 @@ function isOwnersResumeFile(filename: string, bodyNames: string[]): boolean {
 }
 
 /**
+ * ケースB（名前はあるが添付が割り当たらなかったブロックが1人だけ）で、
+ * **残り1件の添付を渡してよいか**。他のブロックの氏名がファイル名に入っていたら渡さない。
+ *
+ * ## なぜ要るか（2026-10-04 控え実測で3件确認）
+ *
+ * ケースBは「未確定が1人なら残り1件はその人のもの」という残余マッチングだが、
+ * **同じ人の添付が2枚ある**メールでは成り立たない。実例（サイトプラン株式会社）:
+ *
+ *   本文: ■SN（五月台）男性・58歳 / ■JH（東戸塚）男性・60歳
+ *   添付: SN の表 2枚（.xlsm と .xls）
+ *   結果: SN は名前一致で1枚目 → 残った2枚目が **JH** に付いた
+ *         ＝営業が JH を開くと SN の経歴書が出る
+ *
+ * 同じ形が `SK ← WH の2枚目`・`ＮＴ ← KS の2枚目` でも起きていた（計3人）。
+ *
+ * 上の設計方針どおり「**誤った経歴書を見せるより無しの方が安全**」に倒す。
+ *
+ * ## `isOwnersResumeFile` と判定を共有しない理由（部分一致だと塞ぎすぎる）
+ *
+ * `isOwnersResumeFile` は正規化後の**部分一致**で見る。本人判定ではそれでよい
+ * （名簿として展開する方が害が大きいので、迷ったら本人に倒す）。
+ * だがこちらは**逆向き**で、当たると経歴書を渡さない＝営業の画面から消える。
+ * イニシャルは2文字が普通なので部分一致では偶然当たる:
+ *
+ *   `tasks_list.xlsx` に他ブロックの氏名 `KS` → `taskslist`.includes('ks') = true
+ *
+ * そこでファイル名を区切り（`_` `-` 空白 `.` 括弧 中黒 等）で割った**トークンの完全一致**
+ * だけを「他の人のファイル」と見る。実例3件はいずれも `<イニシャル>_<ハッシュ>.xls*` 形で
+ * トークン一致する。区切りの無い `スキルシートSN.xlsx` は当たらない＝従来どおり渡す
+ * （塞ぎ漏れは現状維持にしかならないが、塞ぎすぎは今見えている経歴書を消す）。
+ */
+function leftoverBelongsToOther(filename: string, otherBlockNames: string[]): boolean {
+  const others = otherBlockNames
+    .map((n) => normalizeNameForFileMatch(n))
+    .filter((n) => n.length >= 2)
+  if (!others.length) return false
+  const tokens = filenameNameTokens(filename)
+  return tokens.some((t) => others.includes(t))
+}
+
+/** ファイル名を区切り記号で割り、氏名と比べられる形に正規化したトークン列にする。 */
+function filenameNameTokens(filename: string): string[] {
+  return String(filename ?? '')
+    .split(/[._\-\s　・,【】()（）．，、〔〕［］｛｝「」『』〈〉<>|｜/／\\+]+/)
+    .map((t) => normalizeNameForFileMatch(t))
+    .filter((t) => t.length >= 2)
+}
+
+/**
  * 氏名とファイル名を突き合わせるための正規化（全角→半角・区切り記号の除去）。
  *
  * ## 全角の記号も落とす（2026-10-04 追加）
@@ -12099,8 +12148,15 @@ Deno.serve(async (req: Request) => {
         // 共有はせず resume_url は設定しない（誤った経歴書を見せるより無しの方が安全）。
         const assignedEntriesPre = new Set(blockAttachAssignment.values())
         const unmatchedNameBlockCount = blockMetas.filter((m, i) => m.name && !blockAttachAssignment.has(i)).length
+        // 残り1件が「他の人の2枚目」なら渡さない（leftoverBelongsToOther の実例を参照）。
+        // 未確定ブロック自身の名前は除く＝自分の名前が入ったファイルは当然渡してよい
+        const unmatchedIdx = blockMetas.findIndex((m, i) => m.name && !blockAttachAssignment.has(i))
+        const otherBlockNames = blockMetas
+          .filter((m, i) => i !== unmatchedIdx && m.name)
+          .map(m => m.name as string)
         const singleSafeUnassignedEntry = unmatchedNameBlockCount === 1
-          ? allTextContents.find(t => !assignedEntriesPre.has(t) && t.attachment?.data)
+          ? allTextContents.find(t => !assignedEntriesPre.has(t) && t.attachment?.data
+            && !leftoverBelongsToOther(t.filename, otherBlockNames))
           : undefined
 
         // undefined = まだ計算していない / null = アップロード失敗または対象外 / string = URL

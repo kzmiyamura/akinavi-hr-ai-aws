@@ -596,6 +596,32 @@ console.log('=== K3. isOwnersResumeFile（本人の経歴書を名簿扱いし�
   r('K3-10: 記号を落としても別人は別人', 'WH_667f2e13a2e7516b1da9.xls', ['S．K'], false)
 }
 
+console.log('=== K3b. leftoverBelongsToOther（ケースBの残り1件を渡してよいか） ===')
+{
+  const { leftoverBelongsToOther } = await import('./_extractors.gen.mjs')
+  const r = (label, filename, otherNames, expect) => {
+    const got = leftoverBelongsToOther(filename, otherNames)
+    if (got === expect) { pass++; if (verbose) console.log(`  PASS ${label}`) }
+    else { fail++; failures.push(label); console.log(`  FAIL ${label}\n       leftoverBelongsToOther(${filename})=${got} expect=${expect}`) }
+  }
+  // 実害(2026-10-04 控え実測・3人): 同じ人の添付が2枚あるメールで、
+  // 残った2枚目が「添付が割り当たらなかった別の人」に付き、
+  // 営業がその人を開くと**別人の経歴書**が出ていた（サイトプラン株式会社 ほか）
+  // ブロックの氏名は `SN（五月台）` から括弧を落とした `SN` の形で入る（prod の実データで確認）
+  r('K3b-1: 他の人の2枚目は渡さない（SN→JH）', 'SN_88842f0f9ad1f3e4b1d6.xlsm', ['SN'], true)
+  r('K3b-2: 他の人の2枚目は渡さない（WH→SK）', 'WH_667f2e13a2e7516b1da9.xls', ['WH'], true)
+  r('K3b-3: 全角の氏名でも当てる（KS→ＮＴ）', 'KS_a096c1a3d9b0f2e7c845.xls', ['ＫＳ'], true)
+  // 渡してよい側を塞がないこと（塞ぐと resume_url が付かず経歴書が営業の画面から消える）
+  r('K3b-4: 誰の名前も入っていなければ渡す', 'shared_5f3c1b.xlsx', ['SN', 'KS'], false)
+  r('K3b-5: 名簿らしいファイル名も渡す', '営業中フリーランス一覧_2026.xlsx', ['SN', 'KS'], false)
+  r('K3b-6: 他に名前つきブロックが無ければ渡す', 'SN_88842f0f9ad1f3e4b1d6.xlsm', [], false)
+  // 部分一致で塞ぎすぎない（`taskslist`.includes('ks') で当たっていた）
+  r('K3b-7: 偶然2文字を含むだけのファイル名は渡す', 'tasks_list.xlsx', ['KS'], false)
+  r('K3b-8: 1文字の氏名では判定しない', 'skill_sheet.xlsx', ['K'], false)
+  r('K3b-9: 空文字・空白だけの氏名は無視する', 'SN_88842f0f9ad1f3e4b1d6.xlsm', ['', '  '], false)
+  r('K3b-10: 括弧区切りのファイル名もトークンで当てる', 'スキル表（SN）.xlsx', ['SN'], true)
+}
+
 console.log('=== K4. stripInitialSuffix（氏名を3文字に切らない・#128） ===')
 {
   const { stripInitialSuffix } = await import('./_extractors.gen.mjs')

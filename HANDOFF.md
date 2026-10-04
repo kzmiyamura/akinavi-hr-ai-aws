@@ -169,6 +169,17 @@ Supabaseを経由するしかない。ただし**郵便受けとしてしか使�
   `[Unauthorized Persistence]` で弾かれる。人が登録する必要がある
 - **`auto_match_enabled = false`** … 止めたままでよいか未判断
 - **ブックマークの利用が0件** … 0-HB で可視化してから判断する
+- **Box 由来の経歴書にローカル控えが無い（2026-10-04 実測）** …
+  `box_fetch.mjs` はメモリに持った buf をそのまま `inbound-email` に POST するだけで、
+  **ディスクに書かない**。ローカル控え（`D:\akinavi-archive\mail`）は Outlook のメール添付
+  からしか作られないので、`local_resume.mjs` は Box 由来を**必ずミス**する。
+  控え実測: `box_url` ありの prod 人材 44人・うち `resume_url` あり 35人で、
+  **35人ぜんぶローカルに原本が無い**（最古 2026-09-06）。
+  影響は2つ。①AI校正が読むたび Storage から落とす＝ローカル控えの狙い（egress 削減）が効かない。
+  ②`cleanup-storage` が `resumes/` を7日で消すので、**7日経つと原本がどこにも無い**。
+  `box_url` は残るので Box から取り直せる＝失われてはいないが、保険が掛かっていない。
+  直すなら POST の前に `D:\akinavi-archive\box\` へ書くだけ（索引は内容ハッシュ照合なので
+  命名規則を揃えれば `local_resume.mjs` は無改造）。44件・数MB
 
 ---
 
