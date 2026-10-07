@@ -211,7 +211,7 @@ git add -A && git commit -m "fix: ..." && git push
 ### テーブル一覧
 | テーブル | 用途 |
 |---|---|
-| `candidates` | 人材マスタ。`data_env`（`prod`/`demo`）で論理分離。主要カラム: `box_url`, `resume_url`, `drive_url`, `desired_rate`, `from_company`, `duplicate_flag`, `merged_into` |
+| `candidates` | 人材マスタ。`data_env`（`prod`/`demo`）で論理分離。主要カラム: `box_url`, `resume_url`, `drive_url`, `desired_rate`, `from_company`, `duplicate_flag`, `merged_into`, `candidate_no`（人が読める通し番号・画面では `AK-000123`。絞り込みの「氏名 / 人材番号」欄に入れると1件で引ける。**再送の UPDATE では維持されるが、保持期間を過ぎて消えた後の再登録では新しい番号になる＝実測で約2%**。`src/lib/candidateCode.ts` と DB 側 `filter_candidates` の判定を**同じ規則に保つ**こと） |
 | `projects` | 案件マスタ。`data_env` 同上 |
 | `submissions` | マッチング提案履歴 |
 | `candidate_skills` | スキルをカテゴリ別に分解（14カテゴリ） |
