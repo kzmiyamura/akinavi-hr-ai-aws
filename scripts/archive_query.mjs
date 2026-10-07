@@ -100,7 +100,9 @@ const cmd = process.argv[2] ?? 'summary'
  *    このスクリプトは「prod に SQL を投げないため」の道具なので、
  *    黙ってゼロを返すのが一番やってはいけない壊れ方（同じ病気で3度目）。
  */
-const FLAGS_WITH_VALUE = new Set(['--sample', '--dir', '--since', '--list', '--company', '--window'])
+const FLAGS_WITH_VALUE = new Set(['--sample', '--dir', '--since', '--list', '--company', '--window',
+  // find 用。ここに足し忘れると値がサブコマンドの位置引数として読まれる（2026-10-04 の事故と同じ）
+  '--name', '--skill', '--pref', '--age', '--exp', '--kw'])
 const POSITIONAL = []
 for (let i = 3; i < process.argv.length; i++) {
   const a = process.argv[i]
@@ -113,7 +115,7 @@ for (let i = 3; i < process.argv.length; i++) {
 /** n 番目の位置引数（0 始まり）。無ければ null */
 const posArg = (n) => POSITIONAL[n] ?? null
 
-const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed', 'resume', 'dup']
+const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed', 'resume', 'dup', 'find']
 if (!COMMANDS.includes(cmd)) {
   console.error(`⚠ 知らないサブコマンド: ${cmd}`)
   console.error(`   使えるのは: ${COMMANDS.join(' | ')}`)
@@ -122,6 +124,7 @@ if (!COMMANDS.includes(cmd)) {
   console.error('   company [社名]       その会社のメール1通あたりの人数（名簿かどうか）')
   console.error('   resume              氏名と経歴書ファイル名の一致')
   console.error('   dup                 同じ人が何度も登録されていないか')
+  console.error('   find                条件で人材を引く（--name/--company/--skill/--pref/--age/--exp/--kw）')
   process.exit(2)
 }
 
@@ -604,6 +607,198 @@ if (cmd === 'resume') {
       console.log(`              送信元: ${s.co}`)
     }
   }
+}
+
+if (cmd === 'find') {
+  /**
+   * 条件で人材を引く。**本番は引かない**（2026-10-08 追加）。
+   *
+   *   node scripts/archive_query.mjs find [--name 氏名] [--company 社名] \
+   *        [--skill C#,Java] [--pref 大阪] [--age 30-50] [--exp 5-] \
+   *        [--kw リモート,自走] [--since YYYY-MM-DD] [--list N] [--dump]
+   *
+   * ## なぜ要るか
+   * 「○○社の△△さんの経歴書はあるか」「C# で大阪の人はいるか」を調べるのに、
+   * 今まで prod へ SQL を投げるしか無かった。人材は控えに全部残っているので
+   * egress ゼロで答えられる。その場限りのクエリを書かないための置き場でもある。
+   *
+   * ⚠ **控えは prod（7日保持）より長い履歴を持つ。**「今いるか」を聞かれている
+   *   ときに古い行を混ぜると、営業が連絡できない人を薦めることになる。
+   *   そこで各行に **prod に残っているか（作成が7日以内か）** を必ず出し、
+   *   既に消えている行は `（控えのみ）` と明示する。件数も分けて出す。
+   *
+   * ⚠ **スキルの一致は語境界で見る**（`src/lib/skillWordMatch.ts` と同じ文字集合）。
+   *   部分一致にすると `Java` が `JavaScript` を、`C` が `C#` を食う。
+   */
+  const argVal = (flag) => {
+    const i = process.argv.indexOf(flag)
+    return i >= 0 ? (process.argv[i + 1] ?? null) : null
+  }
+  const NAME_Q = argVal('--name')
+  const CO_Q = argVal('--company')
+  const SKILL_Q = (argVal('--skill') ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  const PREF_Q = argVal('--pref')
+  const KW_Q = (argVal('--kw') ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  const SINCE_F = argVal('--since')
+  const LIST_F = Number(argVal('--list') ?? 20)
+  const DUMP = process.argv.includes('--dump')
+  const PROSE = process.argv.includes('--prose')
+
+  /** `--age 30-50` は **30以上50未満**。`30-` は下限のみ、`-50` は上限のみ */
+  const parseRange = (s) => {
+    if (!s) return null
+    const m = String(s).match(/^(\d+)?-(\d+)?$/)
+    if (m) return { min: m[1] ? Number(m[1]) : null, max: m[2] ? Number(m[2]) : null }
+    return { min: Number(s), max: null }
+  }
+  const AGE_R = parseRange(argVal('--age'))
+  const EXP_R = parseRange(argVal('--exp'))
+
+  if (!NAME_Q && !CO_Q && !SKILL_Q.length && !PREF_Q && !KW_Q.length && !AGE_R && !EXP_R) {
+    console.error('⚠ 条件を1つも指定していない。全員出しても意味が無いので止める。')
+    console.error('   例: find --company リクラシ --name TI')
+    console.error('       find --skill C# --pref 大阪 --age 30-50 --kw リモート')
+    process.exit(2)
+  }
+
+  // 氏名・社名の照合は記号と全角幅を落としてから部分一致（イニシャル氏名は `T・I` / `T.I` / `TI` が混在）
+  const loose = (s) => String(s ?? '')
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .replace(/[\s　・.,_\-【】()（）株式会社有限合同]/g, '')
+    .toLowerCase()
+
+  // 語境界つきスキル一致（skillfilter と同じ文字集合。ここを変えるなら両方変える）
+  const WORD_F = 'a-zA-Z0-9#+'
+  const skillRe = (s) => new RegExp(
+    `(^|[^${WORD_F}])${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^${WORD_F}]|$)`, 'i',
+  )
+  const SKILL_RES = SKILL_Q.map((s) => ({ s, re: skillRe(s) }))
+
+  /**
+   * 控えの `created_at` が保持期間より古いか。保持は `candidate_retention_days`（既定7日）。
+   *
+   * ⚠ **これは「prod から消えている」ことの証明にはならない。**
+   *   `inbound-email` は同じ人の再送を UPDATE するとき
+   *   **`created_at` を now() に書き換えて7日カウントを延長する**（index.ts の
+   *   「created_at をリセットして7日カウントを延長」）。控えは**初回に見た値しか持たない**
+   *   ので（[[archive-has-only-creation-time-values]]）、毎日再送されている人材は
+   *   控えでは「9月の行」に見えるのに prod では生きている。
+   *   2026-10-08 に実際にやらかした: リクラシの TI さんを控えの created_at（9/27）だけで
+   *   「prod から消えている」と判断したが、prod の created_at は 10/06 で**居た**。
+   *   在否を断定したいときは prod を1行だけ引く（`sb-query.mjs`）。
+   */
+  const RETENTION_DAYS = 7
+  const cutoff = new Date(Date.now() - RETENTION_DAYS * 86400_000).toISOString().slice(0, 10)
+
+  // 経歴書の原本がローカル控えにあるか。D: が無い環境でも落とさない
+  let resolveLocal = () => null
+  try {
+    const m = await import('./llm_extract/local_resume.mjs')
+    resolveLocal = (url) => { try { return m.resolveLocalResume(url) } catch { return null } }
+  } catch { /* 控えが読めなくても検索自体は成立する */ }
+
+  const hits = []
+  let scanned = 0
+  for (const r of rows('candidates')) {
+    if (r.data_env !== 'prod') continue
+    if (r.merged_into) continue
+    if (SINCE_F && String(r.created_at ?? '') < SINCE_F) continue
+    scanned++
+
+    if (NAME_Q && !loose(r.name).includes(loose(NAME_Q))) continue
+    if (CO_Q && !loose(r.from_company).includes(loose(CO_Q))) continue
+
+    if (SKILL_RES.length) {
+      const skillText = (Array.isArray(r.skills) ? r.skills.join(' / ') : String(r.skills ?? ''))
+        + ' ' + Object.keys(r.rp_skillYears ?? {}).filter((k) => !k.startsWith('_')).join(' ')
+      if (!SKILL_RES.every(({ re }) => re.test(skillText))) continue
+    }
+
+    if (PREF_Q) {
+      const place = [r.rp_prefecture, r.rp_nearestStation,
+        ...(Array.isArray(r.rp_availableRegions) ? r.rp_availableRegions : [])].join(' ')
+      if (!place.includes(PREF_Q)) continue
+    }
+
+    const age = Number(r.rp_age)
+    if (AGE_R) {
+      if (!Number.isFinite(age)) continue
+      if (AGE_R.min != null && age < AGE_R.min) continue
+      if (AGE_R.max != null && age >= AGE_R.max) continue   // 上限は「未満」
+    }
+    const exp = Number(r.experience_years)
+    if (EXP_R) {
+      if (!Number.isFinite(exp)) continue
+      if (EXP_R.min != null && exp < EXP_R.min) continue
+      if (EXP_R.max != null && exp >= EXP_R.max) continue
+    }
+
+    // キーワードは本文・自己PR・担当コメントを対象にする（OR）。当たった語を出す
+    let kwHit = []
+    if (KW_Q.length) {
+      const prose = [r.rp_text, r.rp_selfPR, r.rp_agentComment].filter(Boolean).join('\n')
+      kwHit = KW_Q.filter((k) => prose.includes(k))
+      if (!kwHit.length) continue
+    }
+    hits.push({ r, kwHit })
+  }
+
+  const inProd = hits.filter((h) => String(h.r.created_at ?? '').slice(0, 10) >= cutoff)
+  console.log(`該当 ${hits.length} 人（prod 対象 ${scanned} 行を走査${SINCE_F ? ` / ${SINCE_F} 以降` : ''}）`)
+  console.log(`  控えの初回登録が ${cutoff} 以降（prod にほぼ確実に居る） ${inProd.length} 人`)
+  console.log(`  それより古い（**消えたとは限らない**・再送更新で生きている場合がある） ${hits.length - inProd.length} 人`)
+
+  const order = [...hits].sort((a, b) => String(b.r.created_at ?? '').localeCompare(String(a.r.created_at ?? '')))
+  for (const { r, kwHit } of order.slice(0, LIST_F)) {
+    const at = String(r.created_at ?? '').slice(0, 10)
+    const alive = at >= cutoff ? '' : '  （控えの初回登録が古い・prod の在否は未確認）'
+    console.log('')
+    console.log(`■ ${r.name ?? '(氏名なし)'}  ${at}${alive}`)
+    console.log(`   送信元: ${r.from_company ?? '(不明)'}`)
+    console.log(`   年齢 ${r.rp_age ?? '-'} / 経験 ${r.experience_years ?? '-'}年 / 希望単価 ${r.desired_rate ?? '-'}`)
+    console.log(`   場所: ${r.rp_prefecture ?? '-'} / 最寄 ${r.rp_nearestStation ?? '-'} / 稼働可 ${(r.rp_availableRegions ?? []).join('・') || '-'}`)
+    console.log(`   商流 ${r.rp_commercialFlow ?? '-'} / 雇用 ${r.rp_employmentType ?? '-'} / リモート ${r.rp_remoteAvailable ?? '-'} / 派遣可 ${r.rp_hakenOk ?? '-'}`)
+    console.log(`   役割: ${(r.rp_roles ?? []).join('・') || '-'}  到達 ${JSON.stringify(r.rp_roleLevels ?? {})}`)
+    console.log(`   スキル: ${(Array.isArray(r.skills) ? r.skills : []).join(' / ') || '-'}`)
+    const sy = Object.entries(r.rp_skillYears ?? {}).filter(([k]) => !k.startsWith('_'))
+    if (sy.length) console.log(`   年数: ${sy.map(([k, v]) => `${k}=${v}`).join(' / ')}`)
+    if (kwHit.length) console.log(`   キーワード一致: ${kwHit.join('・')}`)
+
+    /**
+     * `--prose` で担当コメントと自己PRを出す。
+     *
+     * ⚠ 「自走できるか」「週何日なら常駐できるか」は**列になっていない**。
+     *   営業がメールに書いた一文にしか無いので、列だけ見て答えると推測になる。
+     *   `--kw` が当たった語は前後も出す（どこに書かれていたかで意味が変わる）。
+     */
+    if (PROSE) {
+      const clip = (s, n) => (s ? String(s).replace(/\s+/g, ' ').slice(0, n) : null)
+      if (r.rp_agentComment) console.log(`   担当コメント: ${clip(r.rp_agentComment, 300)}`)
+      if (r.rp_selfPR) console.log(`   自己PR: ${clip(r.rp_selfPR, 300)}`)
+      for (const k of kwHit) {
+        const prose = [r.rp_text, r.rp_selfPR, r.rp_agentComment].filter(Boolean).join('\n')
+        const i = prose.indexOf(k)
+        console.log(`   「${k}」の前後: …${prose.slice(Math.max(0, i - 60), i + 60).replace(/\s+/g, ' ')}…`)
+      }
+    }
+
+    // ⚠ 経歴書は3経路（添付=resume_url / Box=box_url / 共有リンク=drive_url）。
+    //    1つだけ見て「無い」と書かない
+    const urls = [['添付', r.resume_url], ['Box', r.box_url], ['共有リンク', r.drive_url]]
+      .filter(([, u]) => u)
+    if (!urls.length) {
+      console.log('   経歴書: **紐付いていない**（resume_url / box_url / drive_url すべて空）')
+    } else {
+      for (const [kind, u] of urls) {
+        const base = decodeURIComponent(String(u).split('/').pop() ?? '')
+        const local = resolveLocal(u)
+        console.log(`   経歴書(${kind}): ${base}`)
+        console.log(`       原本の控え: ${local ?? '（ローカルに無い）'}`)
+      }
+    }
+    if (DUMP) console.log(`   [dump] ${JSON.stringify({ ...r, rp_text: undefined })}`)
+  }
+  if (order.length > LIST_F) console.log(`\n…他 ${order.length - LIST_F} 人（--list で増やす）`)
 }
 
 if (cmd === 'dup') {
