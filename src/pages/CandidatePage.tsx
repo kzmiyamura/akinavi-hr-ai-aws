@@ -9,6 +9,7 @@ import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
 import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
 import { matchesSkillFilter } from '../lib/skillWordMatch'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
+import { formatCandidateNo, parseCandidateCode } from '../lib/candidateCode'
 import { patchCandidateInCache, removeCandidateFromCache } from '../lib/candidateCache'
 import { updateCandidate, fetchCandidatesPage, fetchCandidateCount, fetchPriorityCandidateCount, filterCandidates, filterCandidateCount, deleteCandidate, fetchCandidateRawProfile, fetchPrioritySkills, fetchCandidateById } from '../lib/db/candidates'
 import type { CandidateFilter, SkillYearFilter } from '../lib/db/candidates'
@@ -433,6 +434,17 @@ export function CandidateProfileFields({
     <div className="flex-1 min-w-0">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="font-medium text-gray-800 text-sm" title={c.name ?? ''}>{displayCandidateName(c.name)}</span>
+        {/* 人材番号。氏名はイニシャルが多く同名も多い（prod 実測で同名10件超の氏名が52種）ので、
+            口頭とメモで使える番号を名前の隣に出す。絞り込みの氏名欄にそのまま貼れば1件に絞れる。
+            マイグレーション適用前は null なので出ない */}
+        {formatCandidateNo(c.candidate_no) && (
+          <span
+            className="text-xs font-mono text-gray-500 bg-gray-100 rounded px-1.5 py-0.5 select-all"
+            title="人材番号（絞り込みの氏名欄に入れると1件で引けます）"
+          >
+            {formatCandidateNo(c.candidate_no)}
+          </span>
+        )}
         {c.duplicate_flag && (
           <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
         )}
@@ -1648,12 +1660,20 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
             <div className="px-6 py-5 space-y-4">
               {/* 氏名 */}
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">氏名</label>
+                <label className="block text-xs font-medium text-gray-600 mb-1">氏名 / 人材番号</label>
+                {/* 番号も同じ欄で受ける。営業は名前も番号も同じ所に入れるので、
+                    欄を分けるより入力の形で分岐させた方が間違えない。
+                    判定は DB 側（filter_candidates）と同じ規則（src/lib/candidateCode.ts）*/}
+                <p className="text-xs text-gray-400 mb-1.5">
+                  {parseCandidateCode(filterDraft.name)
+                    ? `人材番号 ${formatCandidateNo(parseCandidateCode(filterDraft.name))} で引きます`
+                    : 'AK-000123 のような人材番号でも引けます'}
+                </p>
                 <input
                   type="text"
                   value={filterDraft.name}
                   onChange={e => setFilterDraft(prev => ({ ...prev, name: e.target.value }))}
-                  placeholder="例: 田中"
+                  placeholder="例: 田中　または　AK-000123"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   autoFocus
                 />

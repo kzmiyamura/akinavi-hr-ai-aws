@@ -5,6 +5,7 @@ import { fetchCandidateById, type Candidate } from '../lib/db/candidates'
 import { patchCandidateInCache } from '../lib/candidateCache'
 import { CandidateProfileFields, CandidateEditModal } from './CandidatePage'
 import { toViewerUrl } from '../lib/viewerUrl'
+import { formatCandidateNo } from '../lib/candidateCode'
 import { BookmarkStar } from '../components/BookmarkStar'
 import { OriginalEmailDetails } from '../components/OriginalEmailDetails'
 import type { DataEnv } from '../lib/dataEnv'
@@ -77,6 +78,16 @@ export function CandidateDetailPage({ candidateId, nickname, dataEnv, onBack }: 
           })()
           return (
             <>
+              {/* 人材番号。ここが「相手に伝える番号」を確認する場所になるので、
+                  クリック1回で選択できるようにしてある（select-all）*/}
+              {formatCandidateNo(candidate.candidate_no) && (
+                <span
+                  className="text-xs sm:text-sm font-mono text-gray-600 bg-gray-100 border border-gray-200 rounded-lg px-2.5 py-2 select-all"
+                  title="人材番号。人材タブの「氏名 / 人材番号」欄に入れるとこの人だけが出ます"
+                >
+                  {formatCandidateNo(candidate.candidate_no)}
+                </span>
+              )}
               <BookmarkStar
                 candidateId={candidate.id}
                 dataEnv={dataEnv}

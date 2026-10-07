@@ -102,7 +102,7 @@ const cmd = process.argv[2] ?? 'summary'
  */
 const FLAGS_WITH_VALUE = new Set(['--sample', '--dir', '--since', '--list', '--company', '--window',
   // find 用。ここに足し忘れると値がサブコマンドの位置引数として読まれる（2026-10-04 の事故と同じ）
-  '--name', '--skill', '--pref', '--age', '--exp', '--kw'])
+  '--name', '--skill', '--pref', '--age', '--exp', '--kw', '--no'])
 const POSITIONAL = []
 for (let i = 3; i < process.argv.length; i++) {
   const a = process.argv[i]
@@ -635,6 +635,13 @@ if (cmd === 'find') {
     return i >= 0 ? (process.argv[i + 1] ?? null) : null
   }
   const NAME_Q = argVal('--name')
+  /** 人材番号で引く。`--no 123` / `--no AK-000123` のどちらでも受ける */
+  const NO_Q = (() => {
+    const v = argVal('--no')
+    if (!v) return null
+    const d = String(v).replace(/[^0-9]/g, '')
+    return d === '' ? null : Number(d)
+  })()
   const CO_Q = argVal('--company')
   const SKILL_Q = (argVal('--skill') ?? '').split(',').map((s) => s.trim()).filter(Boolean)
   const PREF_Q = argVal('--pref')
@@ -654,9 +661,10 @@ if (cmd === 'find') {
   const AGE_R = parseRange(argVal('--age'))
   const EXP_R = parseRange(argVal('--exp'))
 
-  if (!NAME_Q && !CO_Q && !SKILL_Q.length && !PREF_Q && !KW_Q.length && !AGE_R && !EXP_R) {
+  if (!NAME_Q && !NO_Q && !CO_Q && !SKILL_Q.length && !PREF_Q && !KW_Q.length && !AGE_R && !EXP_R) {
     console.error('⚠ 条件を1つも指定していない。全員出しても意味が無いので止める。')
-    console.error('   例: find --company リクラシ --name TI')
+    console.error('   例: find --no AK-000123')
+    console.error('       find --company リクラシ --name TI')
     console.error('       find --skill C# --pref 大阪 --age 30-50 --kw リモート')
     process.exit(2)
   }
@@ -705,6 +713,7 @@ if (cmd === 'find') {
     if (SINCE_F && String(r.created_at ?? '') < SINCE_F) continue
     scanned++
 
+    if (NO_Q != null && Number(r.candidate_no) !== NO_Q) continue
     if (NAME_Q && !loose(r.name).includes(loose(NAME_Q))) continue
     if (CO_Q && !loose(r.from_company).includes(loose(CO_Q))) continue
 
@@ -752,8 +761,12 @@ if (cmd === 'find') {
   for (const { r, kwHit } of order.slice(0, LIST_F)) {
     const at = String(r.created_at ?? '').slice(0, 10)
     const alive = at >= cutoff ? '' : '  （控えの初回登録が古い・prod の在否は未確認）'
+    // 人材番号（控えに入っているのは 20261008_candidate_no.sql 適用後の行だけ）
+    const code = r.candidate_no == null
+      ? ''
+      : `  AK-${String(r.candidate_no).padStart(6, '0')}`
     console.log('')
-    console.log(`■ ${r.name ?? '(氏名なし)'}  ${at}${alive}`)
+    console.log(`■ ${r.name ?? '(氏名なし)'}${code}  ${at}${alive}`)
     console.log(`   送信元: ${r.from_company ?? '(不明)'}`)
     console.log(`   年齢 ${r.rp_age ?? '-'} / 経験 ${r.experience_years ?? '-'}年 / 希望単価 ${r.desired_rate ?? '-'}`)
     console.log(`   場所: ${r.rp_prefecture ?? '-'} / 最寄 ${r.rp_nearestStation ?? '-'} / 稼働可 ${(r.rp_availableRegions ?? []).join('・') || '-'}`)

@@ -92,7 +92,10 @@ const TARGETS = [
     // raw_profile は attachmentText を除いて丸ごと持つ。
     // PostgREST は「JSON の一部を除く」ができないので、要る項目を列挙する。
     select: [
-      'id', 'name', 'created_at', 'updated_at', 'data_env',
+      // candidate_no は人が読める通し番号（20261008_candidate_no.sql）。
+      // ⚠ マイグレーションを当てる前にこの列を select すると PostgREST が 400 を返し、
+      //   控えの取り込みが止まる。main に出すのは適用後。
+      'id', 'candidate_no', 'name', 'created_at', 'updated_at', 'data_env',
       'skills', 'experience_years', 'desired_rate', 'from_company',
       'duplicate_flag', 'merged_into', 'bookmarked',
       'resume_url', 'drive_url', 'box_url',
