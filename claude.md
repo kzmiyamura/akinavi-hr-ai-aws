@@ -251,6 +251,7 @@ git add -A && git commit -m "fix: ..." && git push
 | `candidate_retention_days` | `7` | （未作成） | 人材データ保持日数 |
 | `own_email_domain` | — | `i-voice.co.jp` | 自社ドメイン（送信元を所属会社にしないため） |
 | `app_memo` | — | — | 営業引き継ぎ用フリーテキスト |
+| `app_base_url` | `https://akinavi-hr-ai-aws.vercel.app` | （未作成） | 通知メールに入れる人材リンクの宛先。`?c=<uuid>` を付けて送る（`notify-candidates`）。別URLで運用するときだけ入れる |
 
 #### ⚠ 制限を入れるときは「何を守るためか」を書く（2026-09-16 の教訓）
 
