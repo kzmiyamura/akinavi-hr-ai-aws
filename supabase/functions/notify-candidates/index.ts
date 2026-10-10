@@ -100,6 +100,34 @@ async function fetchTexts(sb: Sb, ids: string[]): Promise<Map<string, string>> {
   return out
 }
 
+// ── 通知メールから1人を開くためのリンク（2026-10-10 営業から「開きにくい」指摘）────────
+//
+// それまでメールには氏名と最寄駅しか入っておらず、受け取った側は
+// アプリ → 人材タブ → 絞り込みに氏名を打ち直していた。イニシャル氏名は
+// prod 実測で同名10件超が52種・最大35件あるので、打ち直しても本人に辿り着けない。
+//
+// ⚠ **URL に氏名・メールアドレス・単価を入れないこと。** 受信側のメールソフトや
+//   プロキシに URL ごと残る。入れるのは uuid と通し番号だけにする。
+
+/** 既定の宛先。社内の別URLで運用するなら `app_config.app_base_url` に入れて上書きする */
+const DEFAULT_APP_BASE_URL = 'https://akinavi-hr-ai-aws.vercel.app'
+
+/**
+ * `123` → `AK-000123`。
+ * ⚠ **`src/lib/candidateCode.ts` の `formatCandidateNo` と同じ規則に保つこと。**
+ *   Edge Function は Deno なので src/ を import できず、規則が2か所にある。
+ *   ズレ検出は `src/lib/__tests__/candidateLinkParity.test.ts`。
+ */
+function formatCandidateNo(no: number | null | undefined): string | null {
+  if (no == null || !Number.isFinite(Number(no))) return null
+  return `AK-${String(Math.trunc(Number(no))).padStart(6, '0')}`
+}
+
+/** その人の詳細を直接開く URL。フロント側は `?c=` を uuid でも `AK-000123` でも受ける */
+function candidateLink(base: string, id: string): string {
+  return `${base.replace(/\/+$/, '')}/?c=${encodeURIComponent(id)}`
+}
+
 async function getConfig(sb: Sb, key: string): Promise<string> {
   const { data } = await sb.from('app_config').select('value').eq('key', key).maybeSingle()
   return data?.value ?? ''
@@ -385,7 +413,7 @@ Deno.serve(async (req) => {
         //   内訳は jsonRows 18MB / attachmentText 12MB / text 6MB で、**どれも通知判定に
         //   使っていない**。必要な項目だけを JSON パスで取ると 1.97MB/日 になる。
         //   経歴本文は他の条件を全部通った人にだけ後段で引く（下の fetchTexts）。
-        .select('id, name, skills, data_env, created_at, updated_at, experience_years, st:raw_profile->>nearestStation, pf:raw_profile->>prefecture, ag:raw_profile->>age, sy:raw_profile->skillYears, lv:raw_profile->_roleLevels')
+        .select('id, name, candidate_no, skills, data_env, created_at, updated_at, experience_years, st:raw_profile->>nearestStation, pf:raw_profile->>prefecture, ag:raw_profile->>age, sy:raw_profile->skillYears, lv:raw_profile->_roleLevels')
         .eq('data_env', env)
         .is('merged_into', null)
         .or(`created_at.gt.${sinceIso},updated_at.gt.${sinceIso}`)
@@ -403,6 +431,7 @@ Deno.serve(async (req) => {
         cands.push({
           id: String(row.id),
           name: String(row.name ?? ''),
+          candidateNo: toInt(row.candidate_no),
           skills: Array.isArray(row.skills) ? (row.skills as string[]) : [],
           station: `${row.st ?? ''} ${row.pf ?? ''}`,
           data_env: String(row.data_env),
@@ -466,6 +495,8 @@ Deno.serve(async (req) => {
 
     let sent = 0
     const errors: string[] = []
+    // リンクの宛先。設定が空なら本番の URL（1周で1回だけ引く）
+    const appBase = (await getConfig(sb, 'app_base_url')) || DEFAULT_APP_BASE_URL
     for (const { rule, hits } of perRule.values()) {
       const title = rule.label || [rule.name_keyword, rule.skill_keywords.join('+'), rule.station_keyword]
         .filter(Boolean).join(' / ')
@@ -479,16 +510,24 @@ Deno.serve(async (req) => {
         const rest = h.skills.filter((s) => !matched.includes(s))
         const shown = rest.slice(0, SKILL_PREVIEW)
         const more = rest.length - shown.length
+        // 番号は口頭・チャットでそのまま使える。リンクが押せない環境でも
+        // 人材タブの「氏名 / 人材番号」欄に貼れば1件で引ける
+        const no = formatCandidateNo(h.candidateNo)
         return [
-          `・${h.name}${h.station.trim() ? `（${h.station.trim()}）` : ''}`,
+          `・${no ? `${no} ` : ''}${h.name}${h.station.trim() ? `（${h.station.trim()}）` : ''}`,
           `  該当: ${matched.join(', ') || '（スキル以外の条件で合致）'}`,
           `  他のスキル: ${shown.join(', ') || '－'}${more > 0 ? ` ほか${more}件` : ''}`,
+          `  開く: ${candidateLink(appBase, h.id)}`,
         ].join('\n')
       })
       const body = [
         `通知ルール「${title}」に合致する人材が登録・更新されました（${hits.length}名）。`,
         '',
         ...lines,
+        '',
+        '※「開く」のリンクでその人の詳細が直接開きます。',
+        '　開けないときは人材タブの「氏名 / 人材番号」欄に AK- の番号を貼ってください。',
+        '　人材データは7日で自動削除されるため、古い通知のリンクは開けないことがあります。',
         '',
         '— AkiNavi HR-AI 自動通知',
       ].join('\n')

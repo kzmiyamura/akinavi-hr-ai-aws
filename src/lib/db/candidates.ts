@@ -144,6 +144,40 @@ export async function fetchCandidateById(id: string, dataEnv: DataEnv): Promise<
 }
 
 /**
+ * 通知メールのリンク（`?c=<uuid>` / `?c=AK-000123`）から開く行を引く。2026-10-10
+ *
+ * - **`data_env` で絞らない。** リンクを押した端末がデモ表示のままだと
+ *   本番の人材を「見つからない」と言ってしまうので、どちらの環境の行かを
+ *   返して呼び出し側で表示環境を合わせる
+ * - `merged_into` が入っている行（重複統合で畳まれた側）は**統合先へ1段たどる**。
+ *   メール送信後に統合されると、たどらない限りリンクが行き止まりになる
+ * - 引くのは4列だけ。`select('*')` は1行35KB あるので、存在確認に使わない
+ */
+export async function resolveCandidateLinkTarget(
+  target: { kind: 'id'; id: string } | { kind: 'no'; no: number },
+): Promise<{ id: string; dataEnv: DataEnv; name: string } | null> {
+  const base = supabase.from('candidates').select('id, data_env, name, merged_into')
+  const { data, error } = await (
+    target.kind === 'id' ? base.eq('id', target.id) : base.eq('candidate_no', target.no)
+  ).limit(1).maybeSingle()
+
+  if (error) throw new Error(`人材リンクの解決に失敗しました: ${error.message}`)
+  if (!data) return null
+
+  const row = data as { id: string; data_env: DataEnv; name: string; merged_into: string | null }
+  if (row.merged_into) {
+    const { data: merged } = await supabase
+      .from('candidates')
+      .select('id, data_env, name')
+      .eq('id', row.merged_into)
+      .maybeSingle()
+    const m = merged as { id: string; data_env: DataEnv; name: string } | null
+    if (m) return { id: m.id, dataEnv: m.data_env, name: m.name }
+  }
+  return { id: row.id, dataEnv: row.data_env, name: row.name }
+}
+
+/**
  * マッチング用候補者取得（RPC経由）
  * 優先順位: 登録日時 DESC → 経験年数 DESC
  * limit デフォルト 2000（7日分の全候補者を取りこぼさないよう余裕を持たせる）

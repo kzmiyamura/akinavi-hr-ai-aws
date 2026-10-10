@@ -35,6 +35,8 @@ import {
   writeStoredDataEnv,
 } from './lib/dataEnv'
 import { projectsQueryKeys } from './lib/db/projects'
+import { CANDIDATE_LINK_PARAM, formatCandidateNo, parseCandidateLinkParam } from './lib/candidateCode'
+import { resolveCandidateLinkTarget } from './lib/db/candidates'
 
 class TabErrorBoundary extends Component<
   { children: ReactNode },
@@ -134,6 +136,21 @@ function stripDemoKeyQueryParams() {
   }
 }
 
+/**
+ * 通知メールのリンクで開いた `?c=` を URL から外す（2026-10-10）。
+ * 詳細を閉じたあとも付いたままだと、再読み込みで勝手に詳細が開き直る。
+ */
+function stripCandidateLinkParam() {
+  try {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has(CANDIDATE_LINK_PARAM)) return
+    url.searchParams.delete(CANDIDATE_LINK_PARAM)
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  } catch {
+    /* ignore */
+  }
+}
+
 function AppInner() {
   // /auth/callback ルートは認証コールバック専用ページ
   if (window.location.pathname === '/auth/callback') {
@@ -184,6 +201,55 @@ function AppInner() {
   useEffect(() => {
     writeStoredDataEnv(dataEnv)
   }, [dataEnv])
+
+  // ── 通知メールのリンクから直接その人を開く（2026-10-10 営業から「開きにくい」指摘）────
+  //
+  // それまで通知メールは氏名と最寄駅しか書いておらず、受け取った側は
+  // アプリ → 人材タブ → 絞り込みに氏名を打ち直す必要があった。
+  // イニシャル氏名は prod 実測で同名10件超が52種・最大35件あるので、
+  // 打ち直しても本人に辿り着けないことがあった。
+  //
+  // 見つからなかったときは**黙って一覧を出さない**。7日の保持を過ぎて消えたのか、
+  // 番号を打ち間違えたのかが分からないと、営業は何度も押し直すことになる。
+  const [linkMiss, setLinkMiss] = useState<string | null>(null)
+  useEffect(() => {
+    const raw = new URLSearchParams(window.location.search).get(CANDIDATE_LINK_PARAM)
+    const target = parseCandidateLinkParam(raw)
+    if (!target) {
+      // 解釈できない値が付いていても詰まらせない（メールソフトが末尾に記号を足すことがある）
+      if (raw) stripCandidateLinkParam()
+      return
+    }
+    const shown = target.kind === 'no' ? (formatCandidateNo(target.no) ?? String(target.no)) : (raw ?? '')
+    let cancelled = false
+    resolveCandidateLinkTarget(target)
+      .then((found) => {
+        if (cancelled) return
+        if (!found) {
+          setLinkMiss(shown)
+          return
+        }
+        // 表示環境を行に合わせる。デモ表示のままだと本番の人材を「見つからない」と言ってしまう
+        if (found.dataEnv === 'prod') {
+          setDataEnv('prod')
+          writeStoredDataEnv('prod')
+        } else if (getDemoUiEnabled()) {
+          setDataEnv('demo')
+          writeStoredDataEnv('demo')
+        } else {
+          // demo の行はデモ解除前の端末では開けない。黙って本番を探しに行かせない
+          setLinkMiss(shown)
+          return
+        }
+        setTabPage('candidates')
+        setDetail({ kind: 'candidate', id: found.id })
+      })
+      .catch((e) => {
+        if (!cancelled) setLinkMiss(shown)
+        console.error('[link] 人材リンクの解決に失敗', e)
+      })
+    return () => { cancelled = true }
+  }, [])
 
   // マッチングタブへ切り替え時にプロジェクト一覧を強制更新（案件追加後の未反映対策）
   useEffect(() => {
@@ -272,6 +338,24 @@ function AppInner() {
       {/* 詳細を開いている間も一覧側はアンマウントしない。
           以前は詳細のときに renderMain() を丸ごと差し替えていたため、人材マップの
           絞り込み（スキル・期間・選択中の都道府県・ズーム）が戻ると消えていた。 */}
+      {/* 通知メールのリンクが行き止まりだったとき。押した本人には理由が分からないので文章で出す */}
+      {linkMiss && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-medium">{linkMiss} は見つかりませんでした。</p>
+          <p className="mt-1 text-xs leading-relaxed text-amber-800">
+            人材データは保持期間（既定7日）を過ぎると自動で消えます。
+            同じ人が再送されると<strong>新しい番号</strong>になるため、
+            人材タブの絞り込みで<strong>氏名</strong>から探し直してください。
+          </p>
+          <button
+            type="button"
+            onClick={() => { setLinkMiss(null); stripCandidateLinkParam() }}
+            className="mt-2 text-xs underline hover:no-underline"
+          >
+            閉じる
+          </button>
+        </div>
+      )}
       <div className={detail ? 'hidden' : 'block'}>{renderMain()}</div>
       {detail?.kind === 'candidate' && (
         <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
@@ -279,7 +363,7 @@ function AppInner() {
             candidateId={detail.id}
             nickname={nickname}
             dataEnv={dataEnv}
-            onBack={() => setDetail(null)}
+            onBack={() => { setDetail(null); stripCandidateLinkParam() }}
           />
         </Suspense>
       )}

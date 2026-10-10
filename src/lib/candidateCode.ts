@@ -42,3 +42,51 @@ export function parseCandidateCode(input: string | null | undefined): number | n
   const n = Number(digits)
   return Number.isSafeInteger(n) && n > 0 ? n : null
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// 通知メールから1人を開くためのリンク（2026-10-10）
+//
+// 通知メールは氏名と最寄駅しか書いていなかったので、受け取った営業は
+// アプリを開く → 人材タブ → 絞り込みに氏名を打つ、という手順を踏んでいた。
+// イニシャル氏名は prod 実測で同名10件超が52種・最大35件あるので、
+// **打ち直しても本人に辿り着けない**ことがある。メール側にリンクを入れる。
+//
+// リンクは `?c=<uuid>` を基本にする（送信時点の行を一意に指す）。
+// `?c=AK-000123` も受ける：口頭・チャットで番号だけ共有されたときに使える。
+// ⚠ 番号は行の番号であって人物の恒久IDではない（上の注意書きを参照）。
+// ───────────────────────────────────────────────────────────────────────────
+
+/** リンクのクエリ名。短いのは携帯メールで折り返されにくくするため */
+export const CANDIDATE_LINK_PARAM = 'c'
+
+/** uuid v4 形式。ハイフン付きの36文字だけを id と見なす */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export type CandidateLinkTarget =
+  | { kind: 'id'; id: string }
+  | { kind: 'no'; no: number }
+
+/**
+ * `?c=` の値を解釈する。uuid ならその行、`AK-000123` なら番号、それ以外は null。
+ *
+ * メールソフトが末尾に `.` や `)` を足して壊すことがあるので、
+ * 判定に通らなかったものは**黙って無視する**（人材タブを普通に開く）。
+ */
+export function parseCandidateLinkParam(raw: string | null | undefined): CandidateLinkTarget | null {
+  if (!raw) return null
+  const v = raw.trim()
+  if (UUID_RE.test(v)) return { kind: 'id', id: v.toLowerCase() }
+  const no = parseCandidateCode(v)
+  return no == null ? null : { kind: 'no', no }
+}
+
+/**
+ * 通知メールに入れるリンク。`base` は末尾スラッシュ有無どちらでも受ける。
+ *
+ * ⚠ **氏名やメールアドレスを URL に入れないこと。** 受信側のメールソフトや
+ *   プロキシに URL ごと残る。入れるのは uuid と番号だけにする。
+ */
+export function candidateLinkUrl(base: string, idOrCode: string): string {
+  const root = base.replace(/\/+$/, '')
+  return `${root}/?${CANDIDATE_LINK_PARAM}=${encodeURIComponent(idOrCode)}`
+}

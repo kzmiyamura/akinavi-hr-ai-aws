@@ -28,6 +28,8 @@ export interface NotifyRule {
 export interface CandidateLite {
   id: string
   name: string
+  /** 人が読める通し番号（candidates.candidate_no）。通知メールに出して口頭でも使えるようにする */
+  candidateNo?: number | null
   skills: string[]
   /** 最寄駅 + 都道府県の連結（raw_profile.nearestStation / prefecture 由来） */
   station: string
