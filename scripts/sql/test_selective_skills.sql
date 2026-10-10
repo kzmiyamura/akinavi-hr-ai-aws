@@ -1,53 +1,41 @@
--- 汎用スキル（誰でも持っている必須スキル）の扱いを固定するテスト（2026-08-13）。
+-- selective_skills（汎用スキルを資格判定から外す）のテスト（2026-10-10）
 --
--- ① selective_skills が汎用スキルだけを落とす
--- ② 必須が汎用スキルだけの案件では元の配列を返す（候補を空にしない）
--- ③ fetch_candidates_for_project が「汎用スキルだけ合致する人」を候補にしない
--- ④ 技術スキルを満たす人は従来どおり候補に残る（絞り込みを効かせすぎていない）
+-- 実行: npx supabase db query --linked -f scripts/sql/test_selective_skills.sql
+-- 期待: 「結果」列が全て PASS。
 --
--- 前提: refresh_generic_skills() 実行済み（現在の汎用は テスト / 基本設計）。
+-- なぜ要るか:
+--   2026-10-10 まで `lower(trim(m.name)) = lower(trim(s))` で**正式名の完全一致**しか
+--   見ておらず、案件に**別名で書かれた汎用スキル**が汎用と判定されずに資格判定に残っていた。
+--   「クラウド上での開発」（=「クラウド開発」の別名・汎用）だけで候補資格が決まると、
+--   61.4% の人材が技術要件を1つも満たさないまま候補に残る。
+--   Issue #189 の対応で別名経由の要件が実際に入ってくるので、ここを縛る。
+--
+-- 仕様:
+--   ・汎用スキルを除いた配列を返す
+--   ・**全部が汎用なら元の配列をそのまま返す**（候補が空になるのを防ぐ）
+--   ・配点には影響しない（汎用スキルの合致も従来どおり加点される）
 
--- selective_skills の戻り順は保証されない（集合演算の結果）ので、比較は必ず並べ替えてから行う
-WITH t AS (
-  SELECT
-    (SELECT array_agg(x ORDER BY x) FROM unnest(selective_skills(ARRAY['基本設計','PowerShell'])) x) AS 技術混在,
-    (SELECT array_agg(x ORDER BY x) FROM unnest(selective_skills(ARRAY['基本設計','テスト'])) x)     AS 汎用のみ,
-    (SELECT array_agg(x ORDER BY x) FROM unnest(selective_skills(ARRAY['Java','SQL'])) x)            AS 汎用なし
+WITH cases(input, expected, why) AS (VALUES
+  (ARRAY['C#', 'クラウド上での開発'], ARRAY['C#'],
+   '別名で書かれた汎用スキルも外す（2026-10-10 に直した本体）'),
+  (ARRAY['C#', 'クラウド開発'], ARRAY['C#'],
+   '正式名で書かれた場合（従来から動いていた）'),
+  (ARRAY['クラウド上での開発'], ARRAY['クラウド上での開発'],
+   '全部が汎用なら元の配列を返す＝クラウド経験者が候補になる'),
+  (ARRAY['C#', 'Java'], ARRAY['C#', 'Java'],
+   '技術名は充足率が高くても汎用にしない'),
+  (ARRAY['C#', 'ローコード開発'], ARRAY['C#', 'ローコード開発'],
+   'ローコード開発は 4.1% なので汎用ではない（絞り込みとして機能する）'),
+  (ARRAY[]::text[], ARRAY[]::text[],
+   '空配列で落ちない')
 ),
--- ③④ PowerShell 案件の必須スキルで候補集合を比べる
-pool AS (
-  SELECT
-    (SELECT COUNT(*) FROM skill_hit_weights('prod',
-       ARRAY['基本設計','Microsoft 365','PowerShell','EntraID','Azure Functions'], NULL)) AS 旧,
-    (SELECT COUNT(*) FROM skill_hit_weights('prod',
-       selective_skills(ARRAY['基本設計','Microsoft 365','PowerShell','EntraID','Azure Functions']), NULL)) AS 現,
-    (SELECT COUNT(*) FROM fetch_candidates_for_project(
-       'prod'::text,
-       ARRAY['基本設計','Microsoft 365','PowerShell','EntraID','Azure Functions']::text[],
-       NULL::numeric, NULL::numeric, NULL::text, NULL::text, 3000,
-       40, 15, 15, 20, 10, false, NULL::text, NULL::text, NULL::integer,
-       NULL::jsonb, NULL::text[]))                                                        AS rpc件数
+result AS (
+  SELECT input, expected, why, selective_skills(input) AS actual FROM cases
 )
-SELECT
-  array_to_string(t.技術混在, ',')  AS 技術混在_結果,
-  array_to_string(t.汎用のみ, ',')  AS 汎用のみ_結果,
-  array_to_string(t.汎用なし, ',')  AS 汎用なし_結果,
-  pool.旧                            AS 旧_候補人数,
-  pool.現                            AS 現_候補人数,
-  pool.rpc件数                       AS RPCが返した人数,
-  CASE
-    WHEN t.技術混在 <> ARRAY['PowerShell']
-      THEN 'FAIL: 汎用スキルが落ちていない'
-    WHEN t.汎用のみ <> ARRAY['テスト','基本設計']
-      THEN 'FAIL: 全部汎用のとき元の配列を返していない（候補が空になる）'
-    WHEN t.汎用なし <> ARRAY['Java','SQL']   -- 並べ替え済みなので Java,SQL の順
-      THEN 'FAIL: 技術スキルまで落としている'
-    WHEN pool.現 >= pool.旧
-      THEN 'FAIL: 絞り込みが効いていない'
-    WHEN pool.rpc件数 <> pool.現
-      THEN 'FAIL: RPC の候補集合が selective_skills と一致しない'
-    WHEN pool.現 = 0
-      THEN 'FAIL: 候補が空になった（絞り込みすぎ）'
-    ELSE 'PASS'
-  END AS 判定
-FROM t, pool;
+SELECT CASE WHEN COALESCE(actual, ARRAY[]::text[]) = expected THEN 'PASS' ELSE '★FAIL' END AS 結果,
+       array_to_string(input, ' / ')    AS 必須スキル,
+       array_to_string(expected, ' / ') AS 期待,
+       array_to_string(actual, ' / ')   AS 実際,
+       why                              AS 理由
+  FROM result
+ ORDER BY (COALESCE(actual, ARRAY[]::text[]) = expected), 必須スキル;

@@ -36,7 +36,23 @@ WITH cases(have, want, expected, why) AS (VALUES
   ('SQL Server',  'SQL',             true,  '同上'),
   ('単体テスト',   'テスト',           true,  'skill_master の別名'),
   ('MongoDB',     'SQL',             false, 'NoSQL は SQL 要件を満たさない'),
-  ('S3',          'S',               false, 'バージョン番号剥がしで S3→S にしてはいけない')
+  ('S3',          'S',               false, 'バージョン番号剥がしで S3→S にしてはいけない'),
+
+  -- ▼ ローコード・クラウド（Issue #189・2026-10-10）
+  --   案件に「ローコード開発」「クラウド上での開発」と書かれても誰にも当たっていなかった。
+  --   控え9,014人の実測で、そう書いている人材は**0人**（製品名で書く）。
+  ('Power Apps',   'ローコード開発',     true,  '包含関係。控えで125人（Issue #189）'),
+  ('Power Automate','ローコード',        true,  '別名「ローコード」→ローコード開発→包含関係。340人'),
+  ('Java',         'ローコード開発',     false, 'ローコードではない'),
+  ('ローコード開発','Power Apps',        false, '逆向きは成り立たない'),
+  ('AWS',          'クラウド上での開発', true,  '別名→クラウド開発→包含関係。4,821人'),
+  ('Azure',        'クラウド開発',       true,  '同上。1,893人'),
+  ('Google Cloud', 'クラウド上での開発', true,  '同上。1,163人'),
+  ('AWS Lambda',   'クラウド開発',       true,  'clouds カテゴリを丸ごと子にしている'),
+  ('BigQuery',     'クラウド開発',       true,  'dwh カテゴリだが GCP のサービス。サービス名だけ書く人が居る'),
+  ('DynamoDB',     'クラウド開発',       true,  'databases カテゴリだが AWS のサービス'),
+  ('Java',         'クラウド開発',       false, 'クラウド経験とはみなさない'),
+  ('クラウド開発', 'AWS',                false, '逆向きは成り立たない')
 ),
 result AS (
   SELECT have, want, expected, why,
