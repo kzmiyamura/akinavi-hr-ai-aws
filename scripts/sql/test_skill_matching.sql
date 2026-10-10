@@ -52,7 +52,16 @@ WITH cases(have, want, expected, why) AS (VALUES
   ('BigQuery',     'クラウド開発',       true,  'dwh カテゴリだが GCP のサービス。サービス名だけ書く人が居る'),
   ('DynamoDB',     'クラウド開発',       true,  'databases カテゴリだが AWS のサービス'),
   ('Java',         'クラウド開発',       false, 'クラウド経験とはみなさない'),
-  ('クラウド開発', 'AWS',                false, '逆向きは成り立たない')
+  ('クラウド開発', 'AWS',                false, '逆向きは成り立たない'),
+
+  -- ▼ C# と C#.NET（2026-10-10・Issue #188 の調査中に発見）
+  --   別行かつ包含関係なしで、要件を C#.NET と書くと C# の人が全員落ちていた。
+  --   prod 1,915人中 451人（C#技術者の88%）が復帰する
+  ('C#',          'C#.NET',           true,  'C# は .NET 上の言語。451人が落ちていた'),
+  ('C#.NET',      'C#',               true,  '逆向きは語境界一致で元から成立'),
+  ('VB.NET',      'C#.NET',           false, 'VB.NET は別言語（257人が誤って入る）'),
+  ('ASP.NET',     'C#.NET',           false, 'ASP.NET は VB でも書ける（165人・営業判断待ち）'),
+  ('C',           'C#.NET',           false, 'C言語 は C# ではない')
 ),
 result AS (
   SELECT have, want, expected, why,
