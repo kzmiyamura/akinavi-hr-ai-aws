@@ -15,6 +15,14 @@
 //   通知の再連携が受信を壊さないよう、キーを分ける。
 //
 // 環境変数: GRAPH_CLIENT_ID / GRAPH_CLIENT_SECRET / GRAPH_REFRESH_TOKEN_HUMAN(初期値)
+//
+// 【試し送信】2026-10-10
+//   cron は本文なし（`{}`）で呼ぶ。本文に `test` を入れると手動の試し送信になる:
+//     node scripts/invoke_notify.mjs --test --days 7 --limit 10 --dry   # 下見（送らない）
+//     node scripts/invoke_notify.mjs --test --days 7 --limit 10         # 実際に送る
+//   本番と同じ判定・同じ本文で送り、違うのは「どこから人材を拾うか」と
+//   「記録を残さないこと」だけ。notification_log もウォーターマークも動かさないので、
+//   試し送信をしても本番の通知が飛ばされない。詳細は TestOptions のコメント。
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { matchesRule, matchedSkills, matchesText, ruleNeedsText, type CandidateLite, type NotifyRule } from './match.ts'
 
@@ -126,6 +134,55 @@ function formatCandidateNo(no: number | null | undefined): string | null {
 /** その人の詳細を直接開く URL。フロント側は `?c=` を uuid でも `AK-000123` でも受ける */
 function candidateLink(base: string, id: string): string {
   return `${base.replace(/\/+$/, '')}/?c=${encodeURIComponent(id)}`
+}
+
+/**
+ * 試し送信の指定（手動実行のときだけ本文に入る）。
+ *
+ * **なぜ別経路にせず本番の流れに条件を足したか**: メールの形を確認するための
+ * 送信なので、本物と1文字でも違うと確認にならない。判定・本文組み立て・送信は
+ * 同じコードを通し、違えるのは「どこから人材を拾うか」と「記録を残すか」だけにする。
+ *
+ * 試し送信では次をしない:
+ *   ・notification_log に書かない（本番の通知が「送信済み」で止まらないように）
+ *   ・notify_last_checked_at を進めない（本番の窓を飛ばさないように）
+ *   ・取り込み停止・ストレージ逼迫の監視を回さない（別件の警告が混ざらないように）
+ */
+type TestOptions = {
+  /** 何日ぶん遡るか（既定7日＝人材の保持期間。これより古い人材は消えている） */
+  days: number
+  /** メールに載せる人数の上限（既定10人） */
+  limit: number
+  /** 送らずに誰が載るかだけ返す */
+  dryRun: boolean
+  /** 対象ルール（未指定なら有効な全ルール） */
+  ruleId: string | null
+  /** 宛先の上書き（未指定ならルールの notify_email） */
+  to: string | null
+}
+
+async function parseTestOptions(req: Request): Promise<TestOptions | null> {
+  if (req.method !== 'POST') return null
+  let raw: unknown
+  try {
+    raw = await req.json()
+  } catch {
+    return null // cron は本文なし・`{}` で呼ぶ
+  }
+  const t = (raw as Record<string, unknown> | null)?.test
+  if (!t || typeof t !== 'object') return null
+  const o = t as Record<string, unknown>
+  const num = (v: unknown, dflt: number, max: number) => {
+    const n = Number(v)
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.trunc(n), max) : dflt
+  }
+  return {
+    days: num(o.days, 7, 30),
+    limit: num(o.limit, 10, 50),
+    dryRun: o.dryRun === true,
+    ruleId: typeof o.ruleId === 'string' && o.ruleId.trim() !== '' ? o.ruleId.trim() : null,
+    to: typeof o.to === 'string' && o.to.trim() !== '' ? o.to.trim() : null,
+  }
 }
 
 async function getConfig(sb: Sb, key: string): Promise<string> {
@@ -343,8 +400,12 @@ Deno.serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
   )
 
+  // 試し送信の指定（cron は本文なしなので常に null＝従来どおり）
+  const test = await parseTestOptions(req)
+
   try {
-    if ((await getConfig(sb, 'notify_enabled')) === 'false') {
+    // 試し送信は notify_enabled を見ない（通知を止めている間にも形は確認したい）
+    if (!test && (await getConfig(sb, 'notify_enabled')) === 'false') {
       return json(200, { ok: true, skipped: 'disabled' })
     }
 
@@ -362,26 +423,31 @@ Deno.serve(async (req) => {
       }
       throw new Error(ruleErr.message)
     }
-    const rules = (ruleRows ?? []) as NotifyRule[]
+    const allRules = (ruleRows ?? []) as NotifyRule[]
+    // 試し送信でルールを指定したときは、そのルールだけを対象にする
+    const rules = test?.ruleId ? allRules.filter((r) => r.id === test.ruleId) : allRules
 
     // 死活監視は人材ルールと独立に毎回まわす（ルールが0件でも取り込みの停止は知りたい）。
     // 失敗しても通知本体を止めない。
-    let stall: Record<string, unknown>
-    try {
-      stall = await checkInboundStall(sb, rules[0]?.notify_email ?? '')
-    } catch (e) {
-      stall = { checked: false, reason: String(e).slice(0, 200) }
-    }
-    if (stall.alerted) console.log('[notify] 取り込み停止を通報:', JSON.stringify(stall))
+    // 試し送信では回さない（メールの形を見たいだけなのに別件の警告が飛ぶのを防ぐ）。
+    let stall: Record<string, unknown> = { checked: false, reason: 'test_send' }
+    let storage: Record<string, unknown> = { checked: false, reason: 'test_send' }
+    if (!test) {
+      try {
+        stall = await checkInboundStall(sb, rules[0]?.notify_email ?? '')
+      } catch (e) {
+        stall = { checked: false, reason: String(e).slice(0, 200) }
+      }
+      if (stall.alerted) console.log('[notify] 取り込み停止を通報:', JSON.stringify(stall))
 
-    // ストレージ容量の監視も人材ルールと独立にまわす（失敗しても通知本体を止めない）
-    let storage: Record<string, unknown>
-    try {
-      storage = await checkStorageQuota(sb, rules[0]?.notify_email ?? '')
-    } catch (e) {
-      storage = { checked: false, reason: String(e).slice(0, 200) }
+      // ストレージ容量の監視も人材ルールと独立にまわす（失敗しても通知本体を止めない）
+      try {
+        storage = await checkStorageQuota(sb, rules[0]?.notify_email ?? '')
+      } catch (e) {
+        storage = { checked: false, reason: String(e).slice(0, 200) }
+      }
+      if (storage.alerted) console.log('[notify] ストレージ逼迫を通報:', JSON.stringify(storage))
     }
-    if (storage.alerted) console.log('[notify] ストレージ逼迫を通報:', JSON.stringify(storage))
 
     if (rules.length === 0) return json(200, { ok: true, matched: 0, reason: 'no_rules', stall, storage })
 
@@ -390,7 +456,11 @@ Deno.serve(async (req) => {
     const lastStr = await getConfig(sb, 'notify_last_checked_at')
     const floor = Date.now() - MAX_LOOKBACK_MS
     const last = Math.max(lastStr ? Date.parse(lastStr) || floor : floor, floor)
-    const sinceIso = new Date(last).toISOString()
+    // 試し送信は前回実行時刻ではなく指定日数ぶん遡る（24時間の上限も外す）。
+    // ウォーターマークは進めないので、本番の窓には影響しない。
+    const sinceIso = test
+      ? new Date(Date.now() - test.days * 24 * 60 * 60 * 1000).toISOString()
+      : new Date(last).toISOString()
 
     // 新着・更新された人材（email一致の再登録UPDATEも「現れた」に含める）
     //
@@ -417,7 +487,9 @@ Deno.serve(async (req) => {
         .eq('data_env', env)
         .is('merged_into', null)
         .or(`created_at.gt.${sinceIso},updated_at.gt.${sinceIso}`)
-        .order('updated_at', { ascending: true })
+        // 本番は「更新の古い順」（ウォーターマークを正しく進めるため）。
+        // 試し送信は「直近」を見たいので新しい順にする
+        .order('updated_at', { ascending: !test })
         .limit(CANDIDATE_FETCH_LIMIT)
       if (error) throw new Error(error.message)
       const rows = data ?? []
@@ -454,8 +526,8 @@ Deno.serve(async (req) => {
     }
 
     if (cands.length === 0) {
-      await setConfig(sb, 'notify_last_checked_at', nextWatermark)
-      return json(200, { ok: true, matched: 0, checked: 0, stall, storage })
+      if (!test) await setConfig(sb, 'notify_last_checked_at', nextWatermark)
+      return json(200, { ok: true, matched: 0, checked: 0, since: sinceIso, stall, storage })
     }
 
     // ルールごとのマッチ（通知済みは除外）
@@ -469,6 +541,12 @@ Deno.serve(async (req) => {
         hits = hits.filter((h) => matchesText(rule, texts.get(h.id) ?? ''))
       }
       if (hits.length === 0) continue
+      // 試し送信は「送信済み」を見ない（すでに通知した人でも形を確認したい）。
+      // 代わりに件数を絞る。cands は新しい順に積んであるので先頭が直近。
+      if (test) {
+        perRule.set(rule.id, { rule, hits: hits.slice(0, test.limit) })
+        continue
+      }
       const { data: logged } = await sb
         .from('notification_log')
         .select('candidate_id')
@@ -479,14 +557,28 @@ Deno.serve(async (req) => {
       if (fresh.length > 0) perRule.set(rule.id, { rule, hits: fresh })
     }
     if (perRule.size === 0) {
-      await setConfig(sb, 'notify_last_checked_at', nextWatermark)
-      return json(200, { ok: true, matched: 0, checked: cands.length, stall, storage })
+      if (!test) await setConfig(sb, 'notify_last_checked_at', nextWatermark)
+      return json(200, { ok: true, matched: 0, checked: cands.length, since: sinceIso, stall, storage })
+    }
+
+    // 試し送信の下見。誰が載るかだけ返して送らない
+    if (test?.dryRun) {
+      return json(200, {
+        ok: true, dryRun: true, since: sinceIso, checked: cands.length,
+        rules: [...perRule.values()].map(({ rule, hits }) => ({
+          rule: rule.label || rule.id,
+          to: test.to || rule.notify_email,
+          count: hits.length,
+          names: hits.map((h) => `${formatCandidateNo(h.candidateNo) ?? '(番号なし)'} ${h.name}`),
+        })),
+      })
     }
 
     // 送信トークン取得（Mail.Send 未同意ならここで止まる → エラーを画面から見える場所に記録）
     const token = await getAccessTokenForSend(sb)
     if ('error' in token) {
-      await setConfig(sb, 'notify_last_error',
+      // 試し送信の失敗は画面の「最後のエラー」を上書きしない（本番の記録を汚さない）
+      if (!test) await setConfig(sb, 'notify_last_error',
         `メール送信不可: ${token.error}（設定画面からMicrosoft再連携でMail.Send権限の同意が必要な可能性）`)
       console.error('[notify] token error:', token.error)
       // last_checked は進めない（同意後に再送させる）
@@ -521,7 +613,9 @@ Deno.serve(async (req) => {
         ].join('\n')
       })
       const body = [
-        `通知ルール「${title}」に合致する人材が登録・更新されました（${hits.length}名）。`,
+        test
+          ? `【これは手動の試し送信です】通知ルール「${title}」に合致する直近${test.days}日の人材（${hits.length}名）。`
+          : `通知ルール「${title}」に合致する人材が登録・更新されました（${hits.length}名）。`,
         '',
         ...lines,
         '',
@@ -531,13 +625,15 @@ Deno.serve(async (req) => {
         '',
         '— AkiNavi HR-AI 自動通知',
       ].join('\n')
-      const err = await sendMail(token.accessToken, rule.notify_email,
-        `【AkiNavi】人材通知: ${title}（${hits.length}名）`, body)
+      const err = await sendMail(token.accessToken, test?.to || rule.notify_email,
+        `【AkiNavi】${test ? '試し送信' : '人材通知'}: ${title}（${hits.length}名）`, body)
       if (err) {
         errors.push(`${rule.id}: ${err}`)
         continue
       }
       sent++
+      // 試し送信は「送信済み」を残さない。残すと本番の通知がこの人を飛ばしてしまう
+      if (test) continue
       await sb.from('notification_log').upsert(
         hits.map((h) => ({
           rule_id: rule.id,
@@ -549,10 +645,16 @@ Deno.serve(async (req) => {
       )
     }
 
-    await setConfig(sb, 'notify_last_checked_at', nextWatermark)
-    await setConfig(sb, 'notify_last_error', errors.length > 0 ? errors.join(' | ').slice(0, 500) : '')
-    console.log(`[notify] checked=${cands.length} rules=${rules.length} sent=${sent} errors=${errors.length}`)
-    return json(200, { ok: errors.length === 0, checked: cands.length, sent, errors, stall, storage })
+    // 試し送信はウォーターマークもエラー記録も動かさない（本番の通知を飛ばさない）
+    if (!test) {
+      await setConfig(sb, 'notify_last_checked_at', nextWatermark)
+      await setConfig(sb, 'notify_last_error', errors.length > 0 ? errors.join(' | ').slice(0, 500) : '')
+    }
+    console.log(`[notify]${test ? ' TEST' : ''} checked=${cands.length} rules=${rules.length} sent=${sent} errors=${errors.length}`)
+    return json(200, {
+      ok: errors.length === 0, test: test ? { days: test.days, limit: test.limit } : undefined,
+      since: sinceIso, checked: cands.length, sent, errors, stall, storage,
+    })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[notify] FATAL:', msg)
