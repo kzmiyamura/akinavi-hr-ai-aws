@@ -288,7 +288,16 @@ git add -A && git commit -m "fix: ..." && git push
   絞り込み条件は 2026-10-01 に拡張した（`20261001_notification_rule_filters.sql`）:
   年齢の上下限・経験年数の下限・スキル年数の下限・到達レベルCの除外・本文キーワード（OR）・
   値が取れていない人材を通すか（`include_unknown`・既定 true）。
-  **`include_unknown` を false にすると取りこぼす**（skillYears は31%、到達レベルは49%が未取得）
+  **`include_unknown` を false にすると取りこぼす**（skillYears は31%、到達レベルは49%が未取得）。
+  2026-10-12 に**商流・雇用形態の選択条件**を足した（`20261012_3_notification_rule_employment.sql`）:
+  `commercial_flows`（自社/1社先/2社先以降）と `employment_types`
+  （フリーランス/正社員/契約社員/派遣社員/業務委託）。軸の中は OR・軸どうしは AND。
+  「自社正社員」は 商流=自社 × 雇用形態=正社員（prod 実測352人）で表す。
+  取得率は雇用形態82.6% / 商流85.0% なので、未取得の扱いは `include_unknown` に従う。
+  選択肢は画面（`src/lib/db/notificationRules.ts`）と Edge Function（`match.ts`）の2か所にあり、
+  ズレ検出は `src/lib/__tests__/notificationRuleOptions.test.ts`。
+  **手動の試し送信**ができる（`node scripts/invoke_notify.mjs --test [--dry]`）。
+  本番と同じ判定・同じ本文で送り、`notification_log` もウォーターマークも動かさない
 - **認証なし**: ニックネームを `localStorage` に保存
 - **表示優先スキル**: 既定は `app_config.llm_filter_skills`（設定画面「AI校正の優先スキル」＝常駐AIの解析対象と共有）。
   人材画面の絞り込みポップアップから**端末ごとに上書き**でき、ON/OFF と中身を `localStorage`

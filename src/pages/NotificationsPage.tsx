@@ -10,6 +10,8 @@ import {
   listNotificationRules,
   notificationRulesQueryKey,
   updateNotificationRule,
+  COMMERCIAL_FLOW_OPTIONS,
+  EMPLOYMENT_TYPE_OPTIONS,
   type NotificationRule,
   type NotificationRuleInput,
 } from '../lib/db/notificationRules'
@@ -33,12 +35,21 @@ interface FormState {
   exclude_level_c: boolean
   text_keywords: string // カンマ区切り入力
   include_unknown: boolean
+  // ── 2026-10-12 追加。選択形式なので配列で持つ（空=指定なし） ────────────────
+  employment_types: string[]
+  commercial_flows: string[]
 }
 
 const EMPTY_FORM: FormState = {
   label: '', name_keyword: '', skills: '', station_keyword: '', notify_email: '',
   age_min: '', age_max: '', experience_years_min: '', skill_years_min: '',
   exclude_level_c: false, text_keywords: '', include_unknown: true,
+  employment_types: [], commercial_flows: [],
+}
+
+/** 選択肢を1つ入れ替える（チェックボックスの ON/OFF） */
+function toggle(list: string[], v: string): string[] {
+  return list.includes(v) ? list.filter((x) => x !== v) : [...list, v]
 }
 
 /** 空文字・非数値は「指定なし」＝null。0 を指定なしに丸めない */
@@ -67,6 +78,8 @@ function toInput(form: FormState): NotificationRuleInput {
     exclude_level_c: form.exclude_level_c,
     text_keywords: form.text_keywords.split(/[、,]/).map((s) => s.trim()).filter(Boolean),
     include_unknown: form.include_unknown,
+    employment_types: form.employment_types,
+    commercial_flows: form.commercial_flows,
   }
 }
 
@@ -78,6 +91,7 @@ function validate(form: FormState): string | null {
     || form.age_min.trim() !== '' || form.age_max.trim() !== ''
     || form.experience_years_min.trim() !== '' || form.skill_years_min.trim() !== ''
     || form.exclude_level_c || form.text_keywords.trim() !== ''
+    || form.employment_types.length > 0 || form.commercial_flows.length > 0
   if (!hasCondition) return '条件を1つ以上指定してください'
   const lo = toNum(form.age_min), hi = toNum(form.age_max)
   // 入れ違えると常に0件になり、原因が分からないまま「通知が来ない」と言われる
@@ -150,6 +164,8 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
       exclude_level_c: rule.exclude_level_c,
       text_keywords: (rule.text_keywords ?? []).join(', '),
       include_unknown: rule.include_unknown,
+      employment_types: rule.employment_types ?? [],
+      commercial_flows: rule.commercial_flows ?? [],
     })
     setFormError(null)
   }
@@ -252,6 +268,62 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
             <input className={inputCls} value={form.text_keywords} placeholder="例: 共通部品, 共通基盤, フレームワーク開発"
               onChange={(e) => setForm({ ...form, text_keywords: e.target.value })} />
           </label>
+
+          {/* 商流・雇用形態（2026-10-12）。
+              「自社正社員」は1つの値ではなく 商流=自社 × 雇用形態=正社員 なので2軸に分ける。
+              選んだ数を出すのは、何も選ばない＝指定なし だと分かりにくいため。 */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="text-xs text-gray-500 space-y-1">
+              <span>商流（いずれか・無選択なら指定なし）</span>
+              <div className="flex flex-wrap gap-1.5">
+                {COMMERCIAL_FLOW_OPTIONS.map((v) => {
+                  const on = form.commercial_flows.includes(v)
+                  return (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setForm({ ...form, commercial_flows: toggle(form.commercial_flows, v) })}
+                      className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                        on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="text-xs text-gray-500 space-y-1">
+              <span>雇用形態（いずれか・無選択なら指定なし）</span>
+              <div className="flex flex-wrap gap-1.5">
+                {EMPLOYMENT_TYPE_OPTIONS.map((v) => {
+                  const on = form.employment_types.includes(v)
+                  return (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setForm({ ...form, employment_types: toggle(form.employment_types, v) })}
+                      className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                        on ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+          {(form.commercial_flows.length > 0 || form.employment_types.length > 0) && (
+            <p className="text-[11px] text-gray-400">
+              {form.commercial_flows.includes('自社') && form.employment_types.includes('正社員')
+                && form.commercial_flows.length === 1 && form.employment_types.length === 1
+                ? '「自社正社員」＝ 商流が自社 かつ 雇用形態が正社員（本番実測 352人）。'
+                : '選んだ中はいずれか（OR）、商流と雇用形態の間は両方満たすこと（AND）。'}
+              雇用形態は約83%、商流は約85%しか取得できていません。既定では取れていない人も通します
+              （下の「値が取れていない人材を除く」で変えられます）
+            </p>
+          )}
           <label className="flex items-start gap-2 text-xs text-gray-600">
             <input type="checkbox" className="mt-0.5" checked={form.exclude_level_c}
               onChange={(e) => setForm({ ...form, exclude_level_c: e.target.checked })} />
@@ -346,6 +418,12 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
                 )}
                 {(rule.text_keywords ?? []).length > 0 && (
                   <span>本文: <b className="text-gray-700">{rule.text_keywords.join(' / ')}</b>のいずれか</span>
+                )}
+                {(rule.commercial_flows ?? []).length > 0 && (
+                  <span>商流: <b className="text-gray-700">{rule.commercial_flows.join(' / ')}</b>のいずれか</span>
+                )}
+                {(rule.employment_types ?? []).length > 0 && (
+                  <span>雇用形態: <b className="text-gray-700">{rule.employment_types.join(' / ')}</b>のいずれか</span>
                 )}
                 {rule.exclude_level_c && <span className="text-amber-700">従事どまりを除く</span>}
                 {!rule.include_unknown && <span className="text-amber-700">値が不明な人を除く</span>}

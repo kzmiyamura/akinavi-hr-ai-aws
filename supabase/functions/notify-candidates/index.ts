@@ -24,7 +24,7 @@
 //   「記録を残さないこと」だけ。notification_log もウォーターマークも動かさないので、
 //   試し送信をしても本番の通知が飛ばされない。詳細は TestOptions のコメント。
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { matchesRule, matchedSkills, matchesText, ruleNeedsText, type CandidateLite, type NotifyRule } from './match.ts'
+import { matchesRule, matchedSkills, matchesText, ruleNeedsText, flowBucket, type CandidateLite, type NotifyRule } from './match.ts'
 
 const CLIENT_ID = Deno.env.get('GRAPH_CLIENT_ID') ?? ''
 const CLIENT_SECRET = Deno.env.get('GRAPH_CLIENT_SECRET') ?? ''
@@ -415,7 +415,7 @@ Deno.serve(async (req) => {
       // 2026-10-01 追加の条件列も読む。ルール行は数十件しかないので列を足しても軽い。
       // ⚠ 文字列を連結して渡さないこと。supabase-js は select の**文字列リテラル**から
       //   戻り値の型を組み立てるので、連結すると GenericStringError[] に化けて deno check が落ちる
-      .select('id, label, name_keyword, skill_keywords, station_keyword, notify_email, enabled, data_env, age_min, age_max, experience_years_min, skill_years_min, exclude_level_c, text_keywords, include_unknown')
+      .select('id, label, name_keyword, skill_keywords, station_keyword, notify_email, enabled, data_env, age_min, age_max, experience_years_min, skill_years_min, exclude_level_c, text_keywords, include_unknown, employment_types, commercial_flows')
       .eq('enabled', true)
     if (ruleErr) {
       if (/notification_rules/.test(ruleErr.message)) {
@@ -483,7 +483,7 @@ Deno.serve(async (req) => {
         //   内訳は jsonRows 18MB / attachmentText 12MB / text 6MB で、**どれも通知判定に
         //   使っていない**。必要な項目だけを JSON パスで取ると 1.97MB/日 になる。
         //   経歴本文は他の条件を全部通った人にだけ後段で引く（下の fetchTexts）。
-        .select('id, name, candidate_no, skills, data_env, created_at, updated_at, experience_years, st:raw_profile->>nearestStation, pf:raw_profile->>prefecture, ag:raw_profile->>age, sy:raw_profile->skillYears, lv:raw_profile->_roleLevels')
+        .select('id, name, candidate_no, skills, data_env, created_at, updated_at, experience_years, st:raw_profile->>nearestStation, pf:raw_profile->>prefecture, ag:raw_profile->>age, sy:raw_profile->skillYears, lv:raw_profile->_roleLevels, et:raw_profile->>employmentType, cf:raw_profile->>commercialFlow')
         .eq('data_env', env)
         .is('merged_into', null)
         .or(`created_at.gt.${sinceIso},updated_at.gt.${sinceIso}`)
@@ -513,6 +513,8 @@ Deno.serve(async (req) => {
           experienceYears: toInt(row.experience_years),
           skillYears: toNumberMap(row.sy),
           roleLevels: toStringMap(row.lv),
+          employmentType: row.et == null ? null : String(row.et),
+          commercialFlow: row.cf == null ? null : String(row.cf),
           // 経歴本文はここでは引かない（重い）。text は undefined のままにしておき、
           // 他の条件を全部通った人にだけ後段で引く。matchesRule は undefined を
           // 「未取得」として扱い、本文条件をこの時点では判定しない
@@ -590,8 +592,14 @@ Deno.serve(async (req) => {
     // リンクの宛先。設定が空なら本番の URL（1周で1回だけ引く）
     const appBase = (await getConfig(sb, 'app_base_url')) || DEFAULT_APP_BASE_URL
     for (const { rule, hits } of perRule.values()) {
-      const title = rule.label || [rule.name_keyword, rule.skill_keywords.join('+'), rule.station_keyword]
-        .filter(Boolean).join(' / ')
+      const title = rule.label || [
+        rule.name_keyword,
+        rule.skill_keywords.join('+'),
+        rule.station_keyword,
+        // 名前を付けていないルールでも、何で絞ったかが件名で分かるようにする
+        (rule.commercial_flows ?? []).filter((s) => s.trim() !== '').join('/'),
+        (rule.employment_types ?? []).filter((s) => s.trim() !== '').join('/'),
+      ].filter(Boolean).join(' / ')
       // 「なぜ通知されたか」を先に出す（2026-09-01）。
       // 以前はスキルを先頭10件だけ並べており、24個中23番目に Java がある人が
       // 「C#でもJavaでもない人に通知が来た」と誤解される事故があった。
@@ -605,8 +613,17 @@ Deno.serve(async (req) => {
         // 番号は口頭・チャットでそのまま使える。リンクが押せない環境でも
         // 人材タブの「氏名 / 人材番号」欄に貼れば1件で引ける
         const no = formatCandidateNo(h.candidateNo)
+        // ルールが雇用形態・商流で絞っているときは、その人の実際の値を出す（2026-10-12）。
+        // 「自社正社員だけ通知」にしたのに根拠が見えないと、営業は通知を信用できない。
+        // 取れていない人も既定では通知されるので、**取れていないことも書く**
+        const wantsEmp = (rule.employment_types ?? []).some((s) => s.trim() !== '')
+        const wantsFlow = (rule.commercial_flows ?? []).some((s) => s.trim() !== '')
+        const attrs: string[] = []
+        if (wantsFlow) attrs.push(flowBucket(h.commercialFlow) ?? '商流不明')
+        if (wantsEmp) attrs.push((h.employmentType ?? '').trim() || '雇用形態不明')
         return [
-          `・${no ? `${no} ` : ''}${h.name}${h.station.trim() ? `（${h.station.trim()}）` : ''}`,
+          `・${no ? `${no} ` : ''}${h.name}${h.station.trim() ? `（${h.station.trim()}）` : ''}`
+            + `${attrs.length > 0 ? ` ［${attrs.join('・')}］` : ''}`,
           `  該当: ${matched.join(', ') || '（スキル以外の条件で合致）'}`,
           `  他のスキル: ${shown.join(', ') || '－'}${more > 0 ? ` ほか${more}件` : ''}`,
           `  開く: ${candidateLink(appBase, h.id)}`,

@@ -20,7 +20,25 @@ export interface NotificationRuleFilters {
   text_keywords: string[]
   /** 値が取れていない人材を通すか（既定 true） */
   include_unknown: boolean
+  /**
+   * 雇用形態（複数選択・中は OR）。空=指定なし。
+   * prod 実測で82.6%しか取れていないので、未取得の扱いは include_unknown に従う
+   */
+  employment_types: string[]
+  /**
+   * 商流（複数選択・中は OR）。空=指定なし。
+   * 「自社正社員」は employment_types=['正社員'] と併せて指定する（prod 352人）
+   */
+  commercial_flows: string[]
 }
+
+/**
+ * 選択肢。**判定は Edge Function 側（match.ts の EMPLOYMENT_TYPES / COMMERCIAL_FLOWS）が正。**
+ * Deno なので src/ を import できず、同じ集合が2か所にある。
+ * ズレ検出は `src/lib/__tests__/notificationRuleOptions.test.ts`（match.ts を文字列として読む）。
+ */
+export const EMPLOYMENT_TYPE_OPTIONS = ['フリーランス', '正社員', '契約社員', '派遣社員', '業務委託'] as const
+export const COMMERCIAL_FLOW_OPTIONS = ['自社', '1社先', '2社先以降'] as const
 
 export interface NotificationRule extends NotificationRuleFilters {
   id: string
@@ -71,6 +89,8 @@ export async function listNotificationRules(dataEnv: DataEnv): Promise<Notificat
     skill_years_min: row.skill_years_min ?? null,
     exclude_level_c: row.exclude_level_c ?? false,
     include_unknown: row.include_unknown ?? true,
+    employment_types: Array.isArray(row.employment_types) ? row.employment_types : [],
+    commercial_flows: Array.isArray(row.commercial_flows) ? row.commercial_flows : [],
   })) as NotificationRule[]
 }
 

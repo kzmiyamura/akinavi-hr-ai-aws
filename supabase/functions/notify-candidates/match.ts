@@ -23,6 +23,40 @@ export interface NotifyRule {
   text_keywords?: string[] | null
   /** 値が取れていない人材を通すか（既定 true） */
   include_unknown?: boolean | null
+  // ── 2026-10-12 追加。営業の要望「自社正社員とか選択形式に」 ──────────────────
+  /**
+   * 雇用形態（正社員/フリーランス/契約社員/派遣社員/業務委託）。空=指定なし・中は OR。
+   * prod 実測で82.6%しか取れていないので、未取得の扱いは include_unknown に従う
+   */
+  employment_types?: string[] | null
+  /**
+   * 商流（自社/1社先/2社先以降）。空=指定なし・中は OR。
+   * 「自社正社員」は employment_types=['正社員'] と併せて指定する（prod 352人）
+   */
+  commercial_flows?: string[] | null
+}
+
+/** 雇用形態の選択肢。画面と判定で同じ集合を使う（prod 実測の出現順） */
+export const EMPLOYMENT_TYPES = ['フリーランス', '正社員', '契約社員', '派遣社員', '業務委託'] as const
+
+/** 商流の選択肢。実データは `自社` と `N社先` なので3つに丸める */
+export const COMMERCIAL_FLOWS = ['自社', '1社先', '2社先以降'] as const
+
+/**
+ * 人材の商流を選択肢のどれかに丸める。取れていなければ null。
+ *
+ * ⚠ 文字列比較を画面と Edge Function の両方に書くとズレるので、判定はここだけ。
+ *   実データは `自社`(1,122人) と `1社先`(496人) だが、抽出側は `N社先` を作れる
+ *   （inbound-email の `${normalizeShaNum(n)}社先`）ので 2社先以降をまとめて受ける。
+ */
+export function flowBucket(flow: string | null | undefined): string | null {
+  const v = (flow ?? '').trim()
+  if (v === '') return null
+  if (v === '自社') return '自社'
+  if (v === '1社先') return '1社先'
+  // 2社先・3社先… に加え、想定外の表記もここに落ちる。
+  // 「自社」でも「1社先」でもないものを「2社先以降」と呼ぶ
+  return '2社先以降'
 }
 
 export interface CandidateLite {
@@ -45,6 +79,10 @@ export interface CandidateLite {
   skillYears?: Record<string, number> | null
   /** 役割ごとの到達レベル（raw_profile._roleLevels）。実測で6役割にしか付かない */
   roleLevels?: Record<string, string> | null
+  /** 雇用形態（raw_profile.employmentType）。prod 実測で82.6%しか取れていない */
+  employmentType?: string | null
+  /** 商流（raw_profile.commercialFlow）。`自社` / `N社先`。85.0%しか取れていない */
+  commercialFlow?: string | null
   /** 経歴本文（添付テキスト＋自己PR）。本文キーワード条件の判定に使う */
   text?: string
 }
@@ -90,6 +128,8 @@ export function ruleHasCondition(rule: NotifyRule): boolean {
     || rule.skill_years_min != null
     || rule.exclude_level_c === true
     || (rule.text_keywords ?? []).some((k) => k.trim() !== '')
+    || (rule.employment_types ?? []).some((k) => k.trim() !== '')
+    || (rule.commercial_flows ?? []).some((k) => k.trim() !== '')
 }
 
 /**
@@ -224,6 +264,30 @@ export function matchesRule(rule: NotifyRule, cand: CandidateLite): boolean {
       if (!ok) return false
     } else if (!unknownOk) {
       return false // 年数が1つも取れていない（実測31%）
+    }
+  }
+
+  // 雇用形態・商流（2026-10-12）。軸の中は OR、軸どうしは AND。
+  // 「自社正社員」は 商流=自社 × 雇用形態=正社員 で表す（prod 352人）。
+  // ⚠ どちらも取得率が100%ではない（雇用形態82.6% / 商流85.0%）。
+  //   「取れていない＝条件を満たさない」にすると、条件を1つ足すだけで
+  //   2割近く取りこぼす。既定（include_unknown=true）では通す。
+  const empTypes = (rule.employment_types ?? []).map((s) => s.trim()).filter((s) => s !== '')
+  if (empTypes.length > 0) {
+    const v = (cand.employmentType ?? '').trim()
+    if (v === '') {
+      if (!unknownOk) return false
+    } else if (!empTypes.includes(v)) {
+      return false
+    }
+  }
+  const flows = (rule.commercial_flows ?? []).map((s) => s.trim()).filter((s) => s !== '')
+  if (flows.length > 0) {
+    const bucket = flowBucket(cand.commercialFlow)
+    if (bucket == null) {
+      if (!unknownOk) return false
+    } else if (!flows.includes(bucket)) {
+      return false
     }
   }
 
