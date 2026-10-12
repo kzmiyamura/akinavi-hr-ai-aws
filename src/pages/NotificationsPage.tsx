@@ -275,7 +275,7 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="text-xs text-gray-500 space-y-1">
               <span>商流（いずれか・無選択なら指定なし）</span>
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-2">
                 {COMMERCIAL_FLOW_OPTIONS.map((v) => {
                   const on = form.commercial_flows.includes(v)
                   return (
@@ -283,7 +283,7 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
                       key={v}
                       type="button"
                       onClick={() => setForm({ ...form, commercial_flows: toggle(form.commercial_flows, v) })}
-                      className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                      className={`rounded-full border px-4 min-h-10 text-xs transition-colors ${
                         on ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
                       }`}
                     >
@@ -295,7 +295,7 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
             </div>
             <div className="text-xs text-gray-500 space-y-1">
               <span>雇用形態（いずれか・無選択なら指定なし）</span>
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-2">
                 {EMPLOYMENT_TYPE_OPTIONS.map((v) => {
                   const on = form.employment_types.includes(v)
                   return (
@@ -303,7 +303,7 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
                       key={v}
                       type="button"
                       onClick={() => setForm({ ...form, employment_types: toggle(form.employment_types, v) })}
-                      className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                      className={`rounded-full border px-4 min-h-10 text-xs transition-colors ${
                         on ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
                       }`}
                     >
@@ -356,19 +356,19 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
           どれか1つ以上の条件が必須。
         </p>
         {formError && <p className="text-xs text-red-600">{formError}</p>}
-        <div className="flex gap-2">
+        <div className="flex gap-3">
           <button
             onClick={handleSubmit}
             disabled={saveMutation.isPending || tableMissing}
-            className="flex items-center gap-1.5 bg-blue-600 text-white rounded-lg px-4 py-1.5 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center justify-center gap-1.5 bg-blue-600 text-white rounded-lg px-5 min-h-11 text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            <Plus size={14} />
+            <Plus size={16} />
             {editingId ? '更新する' : '追加する'}
           </button>
           {editingId && (
             <button
               onClick={() => { setEditingId(null); setForm(EMPTY_FORM); setFormError(null) }}
-              className="text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5"
+              className="text-sm text-gray-500 hover:text-gray-700 px-4 min-h-11 rounded-lg"
             >
               キャンセル
             </button>
@@ -430,10 +430,13 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
                 <span>→ {rule.notify_email}</span>
               </div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
+            {/* スマホで押し間違える（2026-10-13 指摘）。指の接触面は約9mm＝44px なので
+                どのボタンもその大きさを下回らせない。削除だけは取り消せないので、
+                編集との間を広げて隣接させない（確認ダイアログはあるが、停止は確認なしで効く） */}
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
               <button
                 onClick={() => toggleMutation.mutate(rule)}
-                className={`text-xs rounded-lg px-2.5 py-1.5 border transition-colors ${
+                className={`text-xs rounded-lg px-4 min-h-11 border transition-colors ${
                   rule.enabled
                     ? 'border-gray-200 text-gray-500 hover:bg-gray-50'
                     : 'border-blue-200 text-blue-600 hover:bg-blue-50'
@@ -442,27 +445,31 @@ export function NotificationsPage({ dataEnv, nickname }: Props) {
                 {rule.enabled ? '停止' : '再開'}
               </button>
               <button onClick={() => startEdit(rule)} title="編集"
-                className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors">
-                <Pencil size={15} />
+                className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:text-blue-600 hover:bg-gray-50 transition-colors">
+                <Pencil size={17} />
               </button>
-              <button
-                onClick={() => {
-                  if (window.confirm(`通知ルール「${rule.label || rule.notify_email}」を削除しますか？`)) {
-                    deleteMutation.mutate(rule.id)
-                  }
-                }}
-                title="削除"
-                className="p-1.5 text-gray-400 hover:text-red-600 transition-colors"
-              >
-                <Trash2 size={15} />
-              </button>
+              <div className="ml-1 pl-2 border-l border-gray-100">
+                <button
+                  onClick={() => {
+                    if (window.confirm(`通知ルール「${rule.label || rule.notify_email}」を削除しますか？`)) {
+                      deleteMutation.mutate(rule.id)
+                    }
+                  }}
+                  title="削除"
+                  className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                >
+                  <Trash2 size={17} />
+                </button>
+              </div>
             </div>
           </div>
         ))}
       </div>
 
       <p className="text-[11px] text-gray-400 leading-relaxed">
-        チェックは5分間隔で自動実行されます。送信元は人材メール取り込みと同じMicrosoftアカウントです。
+        {/* 「5分間隔」と書いていたが、cron は毎時（notify-candidates-hourly / 0 * * * *）。
+            2026-10-03 に実測して判明。営業が「5分経っても来ない」と見る原因になる */}
+        チェックは1時間ごとに自動実行されます。送信元は人材メール取り込みと同じMicrosoftアカウントです。
         初回はメール送信権限（Mail.Send）の同意が必要なため、送信エラーが表示された場合は
         設定タブからMicrosoft再連携を行ってください。同じ人材に同じルールで二重通知はされません。
       </p>
