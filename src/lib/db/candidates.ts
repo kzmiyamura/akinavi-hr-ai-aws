@@ -351,6 +351,19 @@ export interface ProjectScoreParams {
    * 渡さないと SQL 側が NULL＝中立になり、役割が順位に効かない。
    */
   requiredRole?: string | null
+  /**
+   * 勤務地の縛り（既定 true）。フルリモート案件でない限り、**地方が違う人を候補に入れない**。
+   *
+   * 勤務地は配点ではなく前提条件だというユーザー判断（2026-10-12
+   * 「フルリモートでない限り勤務地縛り100」）。配点だけだと順位は正しくても
+   * 一覧の中身が通えない人で埋まる: 大阪（淀屋橋）の案件で C#.NET を満たす514人のうち
+   * **488人（95%）が関西外**で、上位10人を過ぎると以降は全員が通えない人だった。
+   *
+   * 同一県・同一地方（淀屋橋に兵庫・京都から通うのは普通）・居住地が取れていない人
+   * （prod 実測3.3%）は残す。案件の都道府県が特定できない案件では縛らない。
+   * 関東在住で大阪常駐が可能な人を見たいときだけ false にする。
+   */
+  locationGate?: boolean
   weights?: ScoringWeights
 }
 
@@ -386,6 +399,9 @@ export async function fetchCandidatesForProject(
       p_skill_weights:   params.skillWeights ?? null,
       p_nice_skills:     params.niceToHaveSkills ?? null,
       p_required_role:   params.requiredRole ?? null,
+      // 既定で縛る。渡さないと SQL 側の既定（true）になるが、
+      // 画面のチェックと実際の絞り込みがズレないよう明示的に送る
+      p_location_gate:   params.locationGate ?? true,
     })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as (Candidate & { rule_score: number })[]

@@ -128,9 +128,17 @@ export function MatchingInputs({ project: p, requiredSkillCount, niceCount, weig
     {
       axis: '勤務地', weight: w.location,
       value: p.work_prefecture,
+      // 2026-10-12 から勤務地は配点だけでなく**候補の前提条件**になった。
+      // 表の説明が配点の話だけだと「なぜこの人が出ないのか」が分からない
       note: p.work_prefecture
-        ? `表記「${p.work_location ?? '—'}」から判定。同一県=満点／同一地方=半分`
-        : `「${p.work_location ?? '未入力'}」から都道府県を特定できず、全候補者が横並びになります`,
+        ? /フルリモート|完全リモート|100[%％]リモート/.test(p.remote_policy ?? '')
+          ? `表記「${p.work_location ?? '—'}」から判定。同一県=満点／同一地方=半分。`
+            + 'フルリモート案件なので勤務地では絞り込みません'
+          : `表記「${p.work_location ?? '—'}」から判定。同一県=満点／同一地方=半分。`
+            + `フルリモートでないため、**${p.work_prefecture}と地方が違う人材は候補に入れません**`
+            + '（同じ地方・居住地不明は残します）'
+        : `「${p.work_location ?? '未入力'}」から都道府県を特定できず、全候補者が横並びになります`
+            + '（絞り込みも効きません）',
     },
     {
       axis: '単価', weight: w.rate,

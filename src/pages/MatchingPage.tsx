@@ -1366,6 +1366,9 @@ export function MatchingPage({
   const [showWeightsPanel, setShowWeightsPanel] = useState(false)
   const [savingWeights, setSavingWeights] = useState(false)
   const [requireHaken, setRequireHaken] = useState(false)
+  // 勤務地の縛り（2026-10-12 ユーザー判断「フルリモートでない限り勤務地縛り100」）。
+  // 既定で入れる。切ると関東在住で大阪常駐が可能な人も見られる
+  const [locationGate, setLocationGate] = useState(true)
   // エージェント会社マスタはほぼ不変。3分で失効させると画面を触るたびに引き直す
   const { data: agentDomainMap } = useQuery({
     queryKey: ['agentDomainMap'],
@@ -1575,7 +1578,7 @@ const { data: projects = [] } = useQuery({
       // full: SQL で上位 500 件を取得し、match-batch 内で先頭 BATCH_TOP_N だけ AI 採点
       const sqlLimit = matchingRunMode === 'fast' ? fastMaxCandidates : 500
       const targets = await fetchCandidatesForProject(
-        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, weights: scoringWeights },
+        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, locationGate, weights: scoringWeights },
         dataEnv,
         sqlLimit,
         requireHaken,
@@ -1702,7 +1705,7 @@ const { data: projects = [] } = useQuery({
           // fast: SQL で上位 BATCH_TOP_N 件のみ取得してそのまま全件 AI 採点
           const sqlLimit2 = matchingRunMode === 'fast' ? BATCH_TOP_N : 500
           const targets = await fetchCandidatesForProject(
-            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, weights: scoringWeights },
+            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, locationGate, weights: scoringWeights },
             dataEnv,
             sqlLimit2,
             project.contract_type === '派遣' ? requireHaken : false,
@@ -2087,6 +2090,46 @@ const { data: projects = [] } = useQuery({
           </button>
         </div>
       )}
+
+      {/* 勤務地の縛り（2026-10-12）。
+          勤務地は配点ではなく前提条件、というユーザー判断。既定で入れる。
+          黙って絞ると「なぜこの人が出ないのか」が分からなくなるので、
+          効いているかどうかと理由を必ずこの行に出す。 */}
+      {mode === 'project' && selectedProject && (() => {
+        const isFullRemote = /フルリモート|完全リモート|100[%％]リモート/.test(selectedProject.remote_policy ?? '')
+        const pref = selectedProject.work_prefecture ?? ''
+        const active = locationGate && !isFullRemote && pref !== ''
+        return (
+          <div className={`rounded-xl border px-4 py-3 flex items-center justify-between gap-3 ${active ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'}`}>
+            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+              <span className="text-sm font-semibold text-gray-800 shrink-0">勤務地で絞る</span>
+              {active && (
+                <span className="text-xs text-blue-600">
+                  {pref}と同じ地方の人材のみ対象（同じ県・同じ地方・居住地不明は残す）
+                </span>
+              )}
+              {locationGate && isFullRemote && (
+                <span className="text-xs text-gray-500">この案件はフルリモートなので縛りません</span>
+              )}
+              {locationGate && !isFullRemote && pref === '' && (
+                <span className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded px-1.5 py-0.5">
+                  案件の都道府県が未取得のため縛れません
+                </span>
+              )}
+              {!locationGate && (
+                <span className="text-xs text-gray-500">地方が違う人も点数順に並べます（通えない人が混ざります）</span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setLocationGate(v => !v)}
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${locationGate ? 'bg-blue-600' : 'bg-gray-200'}`}
+            >
+              <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform duration-200 ${locationGate ? 'translate-x-4' : 'translate-x-0'}`} />
+            </button>
+          </div>
+        )
+      })()}
 
       {/* スコアウェイト調整パネル */}
       <div className="bg-white rounded-xl border border-gray-200 min-w-0">
