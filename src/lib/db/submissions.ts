@@ -192,32 +192,81 @@ export async function fetchSubmissionsByCandidateIds(candidateIds: string[], dat
  *  fetchSubmissionsByCandidateIds は ai_raw（AI の生出力）まで引くので、
  *  100人ぶん取ると転送量が跳ねる。バッジに要るのは件数と状態だけ。
  *  営業が「この人もう提案したっけ」を毎回思い出していたのを画面で解決する。 */
+/** バッジが指している提案先。
+ *  **どの案件に対してかが画面に無いと「提案候補4」の 4 が読めない**（2026-10-19 指摘）。 */
+export interface SubmissionBadgeProject {
+  projectId: string
+  /** 案件が消えていれば '(削除された案件)'。prod 実測では 117件すべて生きている（2026-10-19） */
+  title: string
+  status: Submission['status']
+  /** 最後に動いた日時。古いマッチング結果が残っているだけなのかを見分ける */
+  at: string
+}
 export interface SubmissionBadge {
-  /** 提案の総数 */
+  /** 提案の総数＝この人が候補に挙がっている案件の数（同一ペアは上書きなので案件数と一致する） */
   count: number
   /** 一番進んでいる状態。accepted > sent > pending > rejected の順で採る */
   best: Submission['status']
+  /** 進んでいる順・新しい順。先頭がバッジに出る1件 */
+  projects: SubmissionBadgeProject[]
 }
+
+const SUBMISSION_RANK: Record<Submission['status'], number> = {
+  accepted: 3, sent: 2, pending: 1, rejected: 0,
+}
+
 export async function fetchSubmissionBadges(
   candidateIds: string[],
   dataEnv: DataEnv,
 ): Promise<Map<string, SubmissionBadge>> {
   const out = new Map<string, SubmissionBadge>()
   if (candidateIds.length === 0) return out
+  // ⚠ 案件名は submissions に埋め込み select（projects(title)）で取らない。
+  //    同じ案件名が行数ぶん繰り返されるため。prod 実測（2026-10-19・117行）で
+  //    埋め込みは 31.3KB、ここで使う「ID だけ＋案件名を別に1回」は 15.6KB。
+  //    提案は案件12件に対して117行＝1案件あたり約10行なので、繰り返すほど無駄になる。
   const { data, error } = await supabase
     .from('submissions')
-    .select('candidate_id,status')
+    .select('candidate_id,status,project_id,updated_at')
     .eq('data_env', dataEnv)
     .in('candidate_id', candidateIds)
   if (error) throw new Error(`提案履歴の取得に失敗しました: ${error.message}`)
-  const RANK: Record<Submission['status'], number> = { accepted: 3, sent: 2, pending: 1, rejected: 0 }
-  for (const row of (data ?? []) as Array<{ candidate_id: string; status: Submission['status'] }>) {
+  const rows = (data ?? []) as Array<{
+    candidate_id: string; status: Submission['status']; project_id: string; updated_at: string
+  }>
+  if (rows.length === 0) return out
+
+  // 案件名は実体のぶんだけ。prod は12案件＝約1.5KB
+  const titles = new Map<string, string>()
+  const projectIds = [...new Set(rows.map((r) => r.project_id))]
+  const { data: projects } = await supabase
+    .from('projects')
+    .select('id,title')
+    .in('id', projectIds)
+  for (const p of (projects ?? []) as Array<{ id: string; title: string | null }>) {
+    titles.set(p.id, (p.title ?? '').trim() || '（案件名なし）')
+  }
+
+  for (const row of rows) {
+    const entry: SubmissionBadgeProject = {
+      projectId: row.project_id,
+      // 案件は ON DELETE CASCADE なので普通は消えないが、取れなかったことを隠さない
+      title: titles.get(row.project_id) ?? '（削除された案件）',
+      status: row.status,
+      at: row.updated_at,
+    }
     const cur = out.get(row.candidate_id)
-    if (!cur) out.set(row.candidate_id, { count: 1, best: row.status })
+    if (!cur) out.set(row.candidate_id, { count: 1, best: row.status, projects: [entry] })
     else {
       cur.count++
-      if (RANK[row.status] > RANK[cur.best]) cur.best = row.status
+      cur.projects.push(entry)
+      if (SUBMISSION_RANK[row.status] > SUBMISSION_RANK[cur.best]) cur.best = row.status
     }
+  }
+  // 進んでいる順 → 新しい順。バッジに出す1件を決めるのと、詳細の並びを兼ねる
+  for (const badge of out.values()) {
+    badge.projects.sort((a, b) =>
+      SUBMISSION_RANK[b.status] - SUBMISSION_RANK[a.status] || b.at.localeCompare(a.at))
   }
   return out
 }

@@ -17,6 +17,13 @@ import { COMMERCIAL_FLOW_OPTIONS, EMPLOYMENT_TYPE_OPTIONS, WORK_STYLE_OPTIONS } 
 import { fetchSubmissionBadges } from '../lib/db/submissions'
 import { fetchRateMarket, compareToMarket, marketLabel } from '../lib/db/skillRateMarket'
 import type { SubmissionBadge } from '../lib/db/submissions'
+import {
+  SUBMISSION_STATUS_LABEL,
+  submissionBadgeShortText,
+  submissionBadgeStyle,
+  submissionBadgeText,
+  submissionBadgeTitle,
+} from '../lib/submissionBadge'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -449,20 +456,15 @@ export function CandidateProfileFields({
           <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
         )}
         {/* 提案済みの印。営業が「この人もう出したっけ」を毎回思い出していた。
-            一番進んでいる状態で色を変える（決定＞送付済＞下書き＞見送り） */}
+            一番進んでいる状態で色を変える（決定＞提案済＞マッチ済＞見送り）。
+            文言は src/lib/submissionBadge.ts（絞り込み一覧と共用・そちらに経緯を書いた） */}
         {(() => {
           const sb = submissionBadges?.get(c.id)
           if (!sb) return null
-          const style = sb.best === 'accepted' ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-            : sb.best === 'sent' ? 'bg-blue-100 text-blue-700 border-blue-200'
-            : sb.best === 'rejected' ? 'bg-gray-100 text-gray-500 border-gray-200'
-            : 'bg-violet-50 text-violet-700 border-violet-200'
-          const label = sb.best === 'accepted' ? '決定' : sb.best === 'sent' ? '提案済'
-            : sb.best === 'rejected' ? '見送り' : '提案候補'
           return (
-            <span className={`text-xs border rounded px-2 py-0.5 ${style}`}
-              title={`この人材への提案 ${sb.count}件（一番進んでいる状態: ${label}）`}>
-              {label}{sb.count > 1 ? ` ${sb.count}` : ''}
+            <span className={`text-xs border rounded px-2 py-0.5 max-w-full truncate ${submissionBadgeStyle(sb, true)}`}
+              title={submissionBadgeTitle(sb)}>
+              {submissionBadgeText(sb)}
             </span>
           )
         })()}
@@ -475,6 +477,32 @@ export function CandidateProfileFields({
           )
         })()}
       </div>
+      {/* 「何に対しての候補なのか」を詳細で必ず出す（2026-10-19 指摘）。
+          バッジは幅の都合で先頭1件しか出せず、スマホでは title も読めない */}
+      {detailMode && (() => {
+        const sb = submissionBadges?.get(c.id)
+        if (!sb || sb.projects.length === 0) return null
+        return (
+          <div className="mt-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+            <p className="text-xs font-medium text-gray-600">
+              マッチングの結果が残っている案件（{sb.count}件）
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {sb.projects.map((p) => (
+                <li key={p.projectId} className="text-xs text-gray-600 flex gap-1.5">
+                  <span className="text-gray-400 shrink-0">{p.at.slice(5, 10).replace('-', '/')}</span>
+                  <span className="shrink-0">{SUBMISSION_STATUS_LABEL[p.status]}</span>
+                  <span className="truncate">{p.title}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[11px] text-gray-400 mt-1 leading-relaxed">
+              マッチングを実行すると、候補に挙がった人全員にこの記録が自動で作られます。
+              この人を実際に提案したという意味ではありません。
+            </p>
+          </div>
+        )
+      })()}
       <p className="text-xs text-gray-400 mt-0.5">
         {c.email ?? 'メールなし'} ／ 経験{c.experience_years ?? '?'}年{age != null ? ` ／ ${age}歳` : ''}{gender ? `（${gender}）` : ''}{nationality ? ` ／ ${nationality}` : ''}
       </p>
@@ -2332,16 +2360,12 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         {(() => {
                           const sb = submissionBadges?.get(c.id)
                           if (!sb) return null
-                          const style = sb.best === 'accepted' ? 'bg-emerald-100 text-emerald-700'
-                            : sb.best === 'sent' ? 'bg-blue-100 text-blue-700'
-                            : sb.best === 'rejected' ? 'bg-gray-100 text-gray-500'
-                            : 'bg-violet-50 text-violet-700'
-                          const label = sb.best === 'accepted' ? '決定' : sb.best === 'sent' ? '提案済'
-                            : sb.best === 'rejected' ? '見送り' : '提案候補'
+                          // この行は氏名の隣で幅が無いので案件名は出せない。
+                          // 「どの案件か」は行をタップした詳細に出す（スマホでは title が読めない）
                           return (
-                            <span className={`text-[10px] rounded px-1 shrink-0 ${style}`}
-                              title={`提案 ${sb.count}件`}>
-                              {label}{sb.count > 1 ? sb.count : ''}
+                            <span className={`text-[10px] rounded px-1 shrink-0 ${submissionBadgeStyle(sb, false)}`}
+                              title={submissionBadgeTitle(sb)}>
+                              {submissionBadgeShortText(sb)}
                             </span>
                           )
                         })()}
