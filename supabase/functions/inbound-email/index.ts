@@ -2728,6 +2728,15 @@ function extractNameFallbackRaw(text: string): string | null {
     return markedInitial[1].replace(/[Ａ-Ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
   }
 
+  // ①'' 行頭の連番名簿の見出し（「1．ＢＢＫ（最寄駅：JR総武線・津田沼駅）」）。
+  //     splitMultiCandidateBody が人の境目に使うのと同じ形だけを氏名として拾う
+  //     （括弧の中が最寄駅・年齢・性別であることまで要求するので、
+  //      「1．Java（5年）」のような技術の列挙は氏名にならない）。
+  const numbered = text.match(NUMBERED_PERSON_NAME_RE)
+  if (numbered) {
+    return numbered[1].replace(/[Ａ-Ｚａ-ｚ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+  }
+
   // ② イニシャル: 大文字2文字の間にスペース・・.のいずれか（例: T・Y / T Y / K.M）
   // 直後が英数字でなければマッチ（】 _ スペース 末尾 等）
   // 地名・国名略称（例: 「アメリカC.A.」＝カリフォルニア州）を候補者名として誤認識しないよう除外
@@ -11426,10 +11435,49 @@ const MULTI_CANDIDATE_FIELD_RE = /【[^】]{1,10}】|[◇◆][^\n：:]{1,15}[：
 // 「■MM（石川町）男性・57歳」（括弧内は駅名、性別・年齢は括弧の外に「・」区切りで続く）にも対応
 const MULTI_NAME_FIELD_RE = /【[^】]{0,5}(?:氏名|お名前|名前|姓名|氏　名|氏　　名|名　前|名　　前)[^】]{0,5}】|【氏[^】]{0,3}】|【[ 　]*氏[ 　]*名[ 　]*】|【[ 　]*名[ 　]*前[ 　]*】|^[■●▪▶]?[ 　]*氏[ 　]*名[　 ]*[：:]|^[■●▪▶◇◆]?[ 　]*名[ 　]*前[　 ]*[：:]|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ.\-]{1,8}（\d+歳|^[■●▪▶◆◇][A-Za-zＡ-Ｚａ-ｚ]{1,10}[（(][^)）\d]{1,15}[）)][　 ]*(?:男性|女性|男|女)[・･]/m
 
+// 行頭の連番で人を並べる名簿の見出し行（「1．ＢＢＫ（最寄駅：JR総武線・津田沼駅）」）。
+//
+// 2026-10-20 実害: マクロシステムの「要員4名」メールが1行に潰れ、画面は「氏名未取得」、
+// スキルは4人ぶんの合算（Ruby/C++/COBOL/Delphi…）になっていた。何にでも当たる行になる。
+// 区切り線が「＜即～＞ーーーー…」と前置き付きのため ^[ー]{8,} に当たらず、
+// 人の境目は連番見出しだけだった。
+//
+// ⚠ 連番は「アピールの箇条書き」にも使われる。本番にあった連番メール4通のうち
+//   **3通は1人**（「1. 炎上・遅延案件を確実に完遂させるPM/リカバリー推進力」など）で、
+//   素朴に連番で切ると1人が3つに割れる。そこで人の見出しとみなすのは
+//   **連番＋短い氏名＋（最寄駅・年齢・性別）** の形だけに限る。
+const NUMBERED_PERSON_NAME_SRC = '[0-9０-９]{1,2}[．.][ 　]*([A-Za-zＡ-Ｚａ-ｚ][A-Za-zＡ-Ｚａ-ｚ.\\-]{0,9}|[一-龯ぁ-んァ-ヶー]{2,8})[（(][^）)\\n]{0,40}(?:最寄|駅|歳|才|男性|女性)'
+const NUMBERED_PERSON_HEAD_RE = new RegExp(`^[ 　]{0,3}${NUMBERED_PERSON_NAME_SRC}`)
+const NUMBERED_PERSON_NAME_RE = new RegExp(`(?:^|[\\n\\r])[ 　]{0,3}${NUMBERED_PERSON_NAME_SRC}`)
+
 function splitMultiCandidateBody(body: string): string[] | null {
   const CANDIDATE_FIELD_RE = MULTI_CANDIDATE_FIELD_RE
   const NAME_FIELD_RE = MULTI_NAME_FIELD_RE
   const lines = body.split(/\r?\n/)
+
+  // 連番見出しでの分割（区切り線が無い形式）。区切り線での分割が効かなかったときだけ使う
+  function trySplitNumbered(): string[] | null {
+    const heads: number[] = []
+    for (let i = 0; i < lines.length; i++) {
+      if (NUMBERED_PERSON_HEAD_RE.test(lines[i])) heads.push(i)
+    }
+    if (heads.length < 2) return null
+    // 1,2,3… と連続していること。番号が飛ぶ・1から始まらないものは人の並びとみなさない
+    for (let k = 0; k < heads.length; k++) {
+      const num = lines[heads[k]].match(/[0-9０-９]{1,2}/)?.[0] ?? ''
+      const half = Number(num.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)))
+      if (half !== k + 1) return null
+    }
+    const blocks: string[] = []
+    for (let k = 0; k < heads.length; k++) {
+      const end = k + 1 < heads.length ? heads[k + 1] : lines.length
+      const content = lines.slice(heads[k], end).join('\n').trim()
+      // 1つでも人材の項目を持たないブロックがあれば、人の並びではないと判断して分割しない
+      if (content.length < 50 || !CANDIDATE_FIELD_RE.test(content)) return null
+      blocks.push(content)
+    }
+    return blocks.length >= 2 ? blocks : null
+  }
 
   function trySplit(delimRe: RegExp): string[] | null {
     const delimIndices: number[] = []
@@ -11482,8 +11530,10 @@ function splitMultiCandidateBody(body: string): string[] | null {
   //         全角ビュレット ●○■□◆◇ の連続も区切り線として扱う（ai-more 等が候補者間の区切りに使用。
   //         これが無いと「●●●●…」区切りの複数人名簿が1人目だけの単一候補者に潰れる実害があった）
   // Pass 2: - も含む（ical 等の --- のみ形式に対応）
+  // Pass 3: 区切り線が無く、行頭の連番だけで人が並ぶ形式（マクロシステム等）
   return trySplit(/^[\*=＊＝━ーー─―—●○■□◆◇]{8,}\s*$/)
       ?? trySplit(/^[\*\-=＊＝━ーー─―—●○■□◆◇]{8,}\s*$/)
+      ?? trySplitNumbered()
 }
 
 Deno.serve(async (req: Request) => {

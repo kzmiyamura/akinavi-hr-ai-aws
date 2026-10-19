@@ -426,6 +426,10 @@ const TARGET_CONSTS = [
   'ZIP_EXT_MIME',
   'MULTI_CANDIDATE_FIELD_RE', // splitMultiCandidateBody が参照する「人ごとの見出し」判定
   'MULTI_NAME_FIELD_RE',      // 同上（氏名欄の判定）
+  // 行頭の連番で人を並べる名簿（「1．ＢＢＫ（最寄駅：…）」）。分割と氏名抽出で共用する
+  'NUMBERED_PERSON_NAME_SRC',
+  'NUMBERED_PERSON_HEAD_RE',
+  'NUMBERED_PERSON_NAME_RE',
   'PREFECTURES',       // extractPrefectureFromStationText が参照（複数行定義）
   'STATION_TO_PREFECTURE', // inferPrefectureFromStation が参照（複数行定義）
   'NATIONALITY_NAMES', // isValidNationality が参照する国名表（複数行定義）
