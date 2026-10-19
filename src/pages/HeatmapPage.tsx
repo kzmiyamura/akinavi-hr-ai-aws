@@ -5,8 +5,10 @@ import type { GeoPermissibleObjects } from 'd3-geo'
 import { feature } from 'topojson-client'
 import type { Topology } from 'topojson-specification'
 import { fetchPrefectureCounts, fetchSkillNames, fetchCandidatesByPrefecture } from '../lib/db/heatmap'
+import { fetchPrioritySkills } from '../lib/db/candidates'
 import { BookmarkStar } from '../components/BookmarkStar'
 import { readRecentSkills, writeRecentSkills, pushRecentSkill } from '../lib/recentSkillFilters'
+import { readPrioritySkillPref } from '../lib/prioritySkillPref'
 import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
@@ -47,6 +49,18 @@ function formatDate(iso: string): string {
   return `${d.getFullYear()}/${mm}/${dd} ${hh}:${min}`
 }
 
+/** 一覧用の短い日時。スマホでは `2026/` が氏名と件名を押し出すので年は今年なら省く
+ *  （全期間表示では去年の人も出るため、年が違うときだけ出す・2026-10-20 指摘） */
+function formatDateShort(iso: string): string {
+  const d = new Date(iso)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  const sameYear = d.getFullYear() === new Date().getFullYear()
+  return sameYear ? `${mm}/${dd} ${hh}:${min}` : `${d.getFullYear()}/${mm}/${dd}`
+}
+
 const MAP_W = 700
 const MAP_H = 500
 
@@ -56,6 +70,7 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   const [period, setPeriod] = useState<'7d' | 'all'>('7d')
   const [hovered, setHovered] = useState<{ name: string; count: number; x: number; y: number } | null>(null)
   const [selectedPref, setSelectedPref] = useState<string | null>(null)
+  const [showAllPrefs, setShowAllPrefs] = useState(false)
   const [zoom, setZoom] = useState<ZoomState>(ZOOM_NONE)
   const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([])
   // 最近の絞り込みは端末ごとに覚える（認証が無くユーザーを識別できないため）
@@ -83,6 +98,22 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
     queryFn: fetchSkillNames,
     staleTime: 5 * 60_000,
   })
+
+  // ボタンで絞り込むためのスキル（2026-10-20 営業の要望「ボタンだけで絞りが効くように」）。
+  // 人材タブの「表示優先スキル」と同じ集合を使う。別の表を作ると、営業が見ている
+  // 優先スキルと地図のボタンがズレる。端末ごとの上書き（localStorage）も同じ約束で読む
+  const { data: settingsPrioritySkills } = useQuery({
+    queryKey: ['priority-skills'],
+    queryFn: fetchPrioritySkills,
+    staleTime: 5 * 60_000,
+  })
+  const priorityPref = useMemo(() => readPrioritySkillPref(), [])
+  const skillButtons = useMemo(() => {
+    const base = priorityPref.skills ?? settingsPrioritySkills ?? []
+    // 最近使ったスキルのうち、優先スキルに無いものを後ろに足す（打ち直さずに戻れる）
+    const extra = recentSkills.filter((s) => !base.includes(s))
+    return [...base, ...extra].slice(0, 10)
+  }, [priorityPref.skills, settingsPrioritySkills, recentSkills])
 
   const { data: prefCandidates = [], isLoading: candLoading } = useQuery({
     queryKey: ['heatmap-candidates', dataEnv, selectedPref, skillFilter, period],
@@ -180,7 +211,8 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
     setZoom(ZOOM_NONE)
   }
 
-  const top10 = useMemo(() => prefData.slice(0, 10), [prefData])
+  // 既定は上位10件。ボタンで全件に広げられる（地図を触らずに県を選べるように）
+  const rankedPrefs = useMemo(() => (showAllPrefs ? prefData : prefData.slice(0, 10)), [prefData, showAllPrefs])
 
   return (
     <div className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
@@ -192,24 +224,60 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
         </div>
 
         {/* 期間トグル */}
-        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5 text-xs">
+        {/* 指で押せる大きさ（40px）に揃える。通知タブと同じ基準（2026-10-20） */}
+        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5 text-sm self-start">
           <button
             onClick={() => setPeriod('7d')}
-            className={`px-3 py-1 rounded-md transition-colors ${period === '7d' ? 'bg-white text-gray-800 shadow-sm font-medium' : 'text-gray-500 hover:text-gray-700'}`}
+            className={`px-4 min-h-10 rounded-md transition-colors ${period === '7d' ? 'bg-white text-gray-800 shadow-sm font-medium' : 'text-gray-500 hover:text-gray-700'}`}
           >
             直近7日
           </button>
           <button
             onClick={() => setPeriod('all')}
-            className={`px-3 py-1 rounded-md transition-colors ${period === 'all' ? 'bg-white text-gray-800 shadow-sm font-medium' : 'text-gray-500 hover:text-gray-700'}`}
+            className={`px-4 min-h-10 rounded-md transition-colors ${period === 'all' ? 'bg-white text-gray-800 shadow-sm font-medium' : 'text-gray-500 hover:text-gray-700'}`}
           >
             全期間
           </button>
         </div>
 
-        {/* スキルフィルター */}
-        <div className="relative sm:ml-auto">
-          <div className="flex items-center gap-2">
+      </div>
+
+      {/* スキルの絞り込み。
+          スマホで文字を打たずに使えるよう、まずボタンを出す（2026-10-20 営業の要望）。
+          並びは人材タブの「表示優先スキル」そのままなので、両方の画面で同じ言葉を押せる。
+          入力欄はその下に残す（ボタンに無いスキルを見たいときだけ使う） */}
+      <div className="mb-3">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+          <button
+            type="button"
+            onClick={clearFilter}
+            className={`shrink-0 text-sm rounded-lg px-4 min-h-10 border transition-colors ${
+              skillFilter === ''
+                ? 'bg-blue-600 border-blue-600 text-white font-medium'
+                : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            すべて
+          </button>
+          {skillButtons.map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => (s === skillFilter ? clearFilter() : applySkill(s))}
+              className={`shrink-0 text-sm rounded-lg px-4 min-h-10 border transition-colors ${
+                s === skillFilter
+                  ? 'bg-blue-600 border-blue-600 text-white font-medium'
+                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+
+        <details className="mt-1.5">
+          <summary className="text-xs text-gray-400 cursor-pointer select-none">ほかのスキルで絞る</summary>
+          <div className="relative mt-1.5 flex items-center gap-2">
             <div className="relative">
               <input
                 type="text"
@@ -219,15 +287,15 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
                   if (e.key === 'Enter') applySkill(inputValue)
                   if (e.key === 'Escape') clearFilter()
                 }}
-                placeholder="スキルで絞り込み（例: Java）"
-                className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                placeholder="スキル名（例: AS/400）"
+                className="border border-gray-300 rounded-md px-3 min-h-10 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-400"
               />
               {suggestions.length > 0 && (
                 <ul className="absolute z-10 bg-white border border-gray-200 rounded-md shadow-lg mt-1 w-full max-h-48 overflow-y-auto text-sm">
                   {suggestions.map((s) => (
                     <li
                       key={s}
-                      className="px-3 py-1.5 hover:bg-blue-50 cursor-pointer"
+                      className="px-3 py-2 hover:bg-blue-50 cursor-pointer"
                       onMouseDown={() => applySkill(s)}
                     >
                       {s}
@@ -236,42 +304,17 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
                 </ul>
               )}
             </div>
-            {skillFilter && (
-              <button onClick={clearFilter} className="text-xs text-gray-400 hover:text-gray-600 underline whitespace-nowrap">
-                クリア
-              </button>
-            )}
-          </div>
-
-          {/* 最近の絞り込み（この端末に保存。同じスキルを打ち直す手間を省く） */}
-          {recentSkills.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap mt-1.5">
-              <span className="text-[10px] text-gray-400 shrink-0">最近:</span>
-              {recentSkills.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => applySkill(s)}
-                  className={`text-[11px] rounded-full px-2 py-0.5 border transition-colors ${
-                    s === skillFilter
-                      ? 'bg-blue-50 border-blue-300 text-blue-700 font-medium'
-                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
+            {recentSkills.length > 0 && (
               <button
                 type="button"
                 onClick={clearRecent}
-                title="この端末の履歴を消す"
-                className="text-[10px] text-gray-300 hover:text-gray-500 px-1"
+                className="text-xs text-gray-400 hover:text-gray-600 underline whitespace-nowrap"
               >
-                ×
+                履歴を消す
               </button>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </details>
       </div>
 
       {/* 集計サマリー */}
@@ -388,16 +431,16 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
             <div className="text-xs text-gray-400">該当する人材が見つかりません</div>
           ) : (
             <ol className="space-y-1.5">
-              {top10.map(({ prefecture, count }, i) => (
+              {rankedPrefs.map(({ prefecture, count }, i) => (
                 <li
                   key={prefecture}
-                  className={`flex items-center gap-2 text-sm cursor-pointer rounded px-1 -mx-1 transition-colors ${selectedPref === prefecture ? 'bg-amber-50' : 'hover:bg-gray-50'}`}
+                  className={`flex items-center gap-2 text-sm cursor-pointer rounded px-1 -mx-1 py-1.5 min-h-11 transition-colors ${selectedPref === prefecture ? 'bg-amber-50' : 'hover:bg-gray-50'}`}
                   onClick={() => handlePrefClick(prefecture)}
                 >
                   <span className="w-5 text-right text-xs text-gray-400 shrink-0">{i + 1}</span>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-0.5">
-                      <span className={`text-xs truncate ${selectedPref === prefecture ? 'text-amber-700 font-medium' : 'text-gray-800'}`}>{prefecture}</span>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-sm truncate ${selectedPref === prefecture ? 'text-amber-700 font-medium' : 'text-gray-800'}`}>{prefecture}</span>
                       <span className="text-xs text-gray-500 ml-1 shrink-0">{count.toLocaleString()}人</span>
                     </div>
                     <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
@@ -410,7 +453,16 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
                 </li>
               ))}
               {prefData.length > 10 && (
-                <li className="text-xs text-gray-400 pt-1">他 {prefData.length - 10} 都道府県…</li>
+                // 「他 18 都道府県…」は押せない字だった。地図を触らずに県を選べるようにする
+                <li className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowAllPrefs((v) => !v)}
+                    className="w-full text-xs text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded min-h-10 px-2 text-left"
+                  >
+                    {showAllPrefs ? '上位10件だけ表示' : `他 ${prefData.length - 10} 都道府県を表示`}
+                  </button>
+                </li>
               )}
             </ol>
           )}
@@ -420,15 +472,24 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
       {/* 都道府県クリック時の人材リスト */}
       {selectedPref && (
         <div className="mt-4 bg-white rounded-xl border border-amber-200 shadow-sm">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-800">{selectedPref}</span>
-              {skillFilter && (
-                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{skillFilter}</span>
-              )}
-              <span className="text-xs text-gray-400">受信メール一覧（最大10件・新しい順）</span>
+          <div className="flex items-start justify-between gap-2 px-3 sm:px-4 py-3 border-b border-gray-100">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-semibold text-gray-800">{selectedPref}</span>
+                {skillFilter && (
+                  <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{skillFilter}</span>
+                )}
+              </div>
+              {/* 狭い画面では同じ行に入らず氏名を押し出していたので、説明は下の行に置く */}
+              <div className="text-[11px] text-gray-400 mt-0.5">受信メール一覧（最大10件・新しい順）</div>
             </div>
-            <button onClick={handleReset} className="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
+            <button
+              onClick={handleReset}
+              title="閉じる"
+              className="shrink-0 flex h-11 w-11 items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 text-lg leading-none"
+            >
+              ×
+            </button>
           </div>
 
           {candLoading ? (
@@ -444,26 +505,34 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
               {prefCandidates.map((c) => {
                 const canOpen = !c.is_archived && !!onSelectCandidate
                 return (
+                  // スマホでは氏名が右端に飛ばされ、件名がその下に半分だけ出ていた
+                  // （2026-10-20 指摘）。日時を先頭に置くのをやめ、**氏名を行の頭**にして
+                  // 日時は右肩へ逃がす。行の高さも指で押せる大きさ（56px）にする
                   <li
                     key={c.id}
-                    className={`px-4 py-2.5 flex items-start gap-3 transition-colors ${canOpen ? 'cursor-pointer hover:bg-amber-50' : ''}`}
+                    className={`px-3 sm:px-4 py-3 min-h-14 flex items-start gap-2 sm:gap-3 transition-colors ${canOpen ? 'cursor-pointer hover:bg-amber-50' : ''}`}
                     onClick={canOpen ? () => onSelectCandidate(c.id) : undefined}
                   >
                     {/* アーカイブ済みは candidates から消えているので星を出さない */}
                     {!c.is_archived && (
                       <BookmarkStar candidateId={c.id} dataEnv={dataEnv} bookmarked={c.bookmarked} />
                     )}
-                    <div className="shrink-0 text-xs text-gray-400 mt-0.5 whitespace-nowrap">
-                      {formatDate(c.created_at)}
-                    </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        <span className={`text-xs font-medium ${canOpen ? 'text-blue-700 underline' : 'text-gray-700'}`}>{c.name}</span>
+                      <div className="flex items-baseline gap-2">
+                        <span className={`text-sm font-medium truncate ${canOpen ? 'text-blue-700 underline' : 'text-gray-700'}`}>
+                          {c.name}
+                        </span>
                         {c.is_archived && (
-                          <span className="text-xs bg-gray-100 text-gray-400 px-1 rounded">アーカイブ</span>
+                          <span className="text-[10px] bg-gray-100 text-gray-400 px-1 rounded shrink-0">アーカイブ</span>
                         )}
+                        <span
+                          className="ml-auto shrink-0 text-[11px] text-gray-400 whitespace-nowrap"
+                          title={formatDate(c.created_at)}
+                        >
+                          {formatDateShort(c.created_at)}
+                        </span>
                       </div>
-                      <div className="text-xs text-gray-500 truncate" title={c.subject ?? ''}>
+                      <div className="text-xs text-gray-500 truncate mt-0.5" title={c.subject ?? ''}>
                         {c.subject ?? '（件名なし）'}
                       </div>
                     </div>
