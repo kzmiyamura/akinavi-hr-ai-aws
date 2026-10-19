@@ -17,13 +17,9 @@ import { COMMERCIAL_FLOW_OPTIONS, EMPLOYMENT_TYPE_OPTIONS, WORK_STYLE_OPTIONS } 
 import { fetchSubmissionBadges } from '../lib/db/submissions'
 import { fetchRateMarket, compareToMarket, marketLabel } from '../lib/db/skillRateMarket'
 import type { SubmissionBadge } from '../lib/db/submissions'
-import {
-  SUBMISSION_STATUS_LABEL,
-  submissionBadgeShortText,
-  submissionBadgeStyle,
-  submissionBadgeText,
-  submissionBadgeTitle,
-} from '../lib/submissionBadge'
+import { SUBMISSION_STATUS_LABEL, badgeStyle, resolveCandidateBadge } from '../lib/submissionBadge'
+import { fetchTopMatchMarks } from '../lib/db/topMatchMarks'
+import type { TopMatchMarkSet } from '../lib/db/topMatchMarks'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -379,6 +375,7 @@ export function CandidateProfileFields({
   detailMode = false,
   agentDomainMap,
   submissionBadges,
+  topMatchMarks,
 }: {
   c: Candidate
   isExpanded: boolean
@@ -388,6 +385,8 @@ export function CandidateProfileFields({
   agentDomainMap?: Map<string, AgentCompany>
   /** 人材ID → 提案の件数と状態。一覧の親がまとめて引いて渡す（行ごとに問い合わせない） */
   submissionBadges?: Map<string, SubmissionBadge>
+  /** 人材ID → 今どの案件の上位に入っているか（1時間ごとに再計算した印） */
+  topMatchMarks?: Map<string, TopMatchMarkSet>
 }) {
   const raw = getRaw(c)
   // 「AI校正待ち」バッジの表示判定に使う（ワーカーの絞込対象外なら待ちを出さない）。
@@ -455,16 +454,15 @@ export function CandidateProfileFields({
         {c.duplicate_flag && (
           <span className="text-xs bg-yellow-100 text-yellow-700 rounded px-2 py-0.5">重複の疑い</span>
         )}
-        {/* 提案済みの印。営業が「この人もう出したっけ」を毎回思い出していた。
-            一番進んでいる状態で色を変える（決定＞提案済＞マッチ済＞見送り）。
-            文言は src/lib/submissionBadge.ts（絞り込み一覧と共用・そちらに経緯を書いた） */}
+        {/* 人が動かした記録（決定／提案済／見送り）を優先し、無ければ「今の上位候補」。
+            どちらを出すかの判定と文言は src/lib/submissionBadge.ts（絞り込み一覧と共用） */}
         {(() => {
-          const sb = submissionBadges?.get(c.id)
-          if (!sb) return null
+          const b = resolveCandidateBadge(submissionBadges?.get(c.id), topMatchMarks?.get(c.id))
+          if (!b) return null
           return (
-            <span className={`text-xs border rounded px-2 py-0.5 max-w-full truncate ${submissionBadgeStyle(sb, true)}`}
-              title={submissionBadgeTitle(sb)}>
-              {submissionBadgeText(sb)}
+            <span className={`text-xs border rounded px-2 py-0.5 max-w-full truncate ${badgeStyle(b.tone, true)}`}
+              title={b.title}>
+              {b.text}
             </span>
           )
         })()}
@@ -480,12 +478,36 @@ export function CandidateProfileFields({
       {/* 「何に対しての候補なのか」を詳細で必ず出す（2026-10-19 指摘）。
           バッジは幅の都合で先頭1件しか出せず、スマホでは title も読めない */}
       {detailMode && (() => {
+        const tm = topMatchMarks?.get(c.id)
+        if (!tm || tm.projects.length === 0) return null
+        return (
+          <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+            <p className="text-xs font-medium text-amber-900">
+              今この人が上位に入る案件（{tm.count}件）
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {tm.projects.map((p) => (
+                <li key={p.projectId} className="text-xs text-amber-900 flex gap-1.5">
+                  <span className="shrink-0 font-medium">{p.rank}位</span>
+                  <span className="truncate">{p.title}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[11px] text-amber-700/80 mt-1 leading-relaxed">
+              1時間ごとに計算し直しています。マッチング画面で開くと、この順位で並びます。
+            </p>
+          </div>
+        )
+      })()}
+      {/* 過去にマッチングを実行したときの履歴。印としては出さない（今の順位と関係ないため）が、
+          「この人いつ見たっけ」は詳細では追えるようにしておく */}
+      {detailMode && (() => {
         const sb = submissionBadges?.get(c.id)
         if (!sb || sb.projects.length === 0) return null
         return (
           <div className="mt-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
             <p className="text-xs font-medium text-gray-600">
-              マッチングの結果が残っている案件（{sb.count}件）
+              過去にマッチングを実行した案件（{sb.count}件）
             </p>
             <ul className="mt-1 space-y-0.5">
               {sb.projects.map((p) => (
@@ -497,8 +519,8 @@ export function CandidateProfileFields({
               ))}
             </ul>
             <p className="text-[11px] text-gray-400 mt-1 leading-relaxed">
-              マッチングを実行すると、候補に挙がった人全員にこの記録が自動で作られます。
-              この人を実際に提案したという意味ではありません。
+              実行した時点で候補に挙がったという記録です。今も上位とは限りません
+              （今の上位は上の「上位に入る案件」を見てください）。
             </p>
           </div>
         )
@@ -1456,6 +1478,15 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     staleTime: 60_000,
   })
 
+  // 「今マッチングし直したら上位に入る」印。元の表は cron が毎時20分に入れ替えるので、
+  // 画面側で短い間隔に引き直しても新しい値にはならない（staleTime は長めで足りる）
+  const { data: topMatchMarks } = useQuery({
+    queryKey: ['top-match-marks', dataEnv, visibleCandidateIds.length],
+    queryFn: () => fetchTopMatchMarks(visibleCandidateIds, dataEnv),
+    enabled: visibleCandidateIds.length > 0,
+    staleTime: 10 * 60_000,
+  })
+
   // 全件数。**一覧の取得とは別に数える。**
   //
   // ⚠ 以前は offset=0 のページ取得に `count: 'exact'` を相乗りさせてラウンドトリップを
@@ -2358,14 +2389,14 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         {/* 提案済みの印。営業が「この人もう出したっけ」を毎回思い出していた。
                             親でまとめて引いた Map から引く（行ごとに問い合わせない） */}
                         {(() => {
-                          const sb = submissionBadges?.get(c.id)
-                          if (!sb) return null
+                          const b = resolveCandidateBadge(submissionBadges?.get(c.id), topMatchMarks?.get(c.id))
+                          if (!b) return null
                           // この行は氏名の隣で幅が無いので案件名は出せない。
                           // 「どの案件か」は行をタップした詳細に出す（スマホでは title が読めない）
                           return (
-                            <span className={`text-[10px] rounded px-1 shrink-0 ${submissionBadgeStyle(sb, false)}`}
-                              title={submissionBadgeTitle(sb)}>
-                              {submissionBadgeShortText(sb)}
+                            <span className={`text-[10px] rounded px-1 shrink-0 ${badgeStyle(b.tone, false)}`}
+                              title={b.title}>
+                              {b.shortText}
                             </span>
                           )
                         })()}
@@ -2709,7 +2740,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       {boxUploadMsg.text}
                     </p>
                   )}
-                  <CandidateProfileFields c={selectedCandidate} isExpanded detailMode agentDomainMap={agentDomainMap} submissionBadges={submissionBadges} />
+                  <CandidateProfileFields c={selectedCandidate} isExpanded detailMode agentDomainMap={agentDomainMap} submissionBadges={submissionBadges} topMatchMarks={topMatchMarks} />
                   {/* 同一人物候補（別の紹介会社から来ている人を含む）。
                       duplicate_flag の条件は外した（全員 false で表示されていなかった・2026-08-20）。
                       レコードは統合しない方針なので、ここで並べて単価を比較できるようにする */}
