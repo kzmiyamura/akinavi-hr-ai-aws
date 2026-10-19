@@ -4,6 +4,7 @@ import {
   badgeStyle,
   hasHumanSubmission,
   resolveCandidateBadge,
+  skillHitLabel,
   type BadgeTone,
 } from '../submissionBadge'
 import type { SubmissionBadge } from '../db/submissions'
@@ -26,7 +27,7 @@ const sub = (over: Partial<SubmissionBadge> = {}): SubmissionBadge => ({
 
 const marks = (over: Partial<TopMatchMarkSet> = {}): TopMatchMarkSet => ({
   count: 1,
-  projects: [{ projectId: 'p9', title: '国際系勘定システム', rank: 3 }],
+  projects: [{ projectId: 'p9', title: '国際系勘定システム', rank: 3, skillHit: 2, skillTotal: 5 }],
   ...over,
 })
 
@@ -53,8 +54,8 @@ describe('人材一覧の印', () => {
     const b = resolveCandidateBadge(null, marks({
       count: 3,
       projects: [
-        { projectId: 'p9', title: '国際系勘定システム', rank: 3 },
-        { projectId: 'p8', title: '化成品メーカー向け保守開発', rank: 1 },
+        { projectId: 'p9', title: '国際系勘定システム', rank: 3, skillHit: 2, skillTotal: 5 },
+        { projectId: 'p8', title: '化成品メーカー向け保守開発', rank: 1, skillHit: 4, skillTotal: 4 },
       ],
     }))!
     // 順位の良い順に並べ替えてから先頭を出す
@@ -98,10 +99,22 @@ describe('人材一覧の印', () => {
     }
   })
 
-  it('上位候補の補足に「1時間」の遅れを書く（新着が漏れることを隠さない）', () => {
+  it('上位候補の補足に遅れを書く（新着が漏れることを隠さない）', () => {
     const b = resolveCandidateBadge(null, marks())!
-    expect(b.title).toContain('1時間')
+    // 2026-10-20 に毎時の計算をやめ、人材が届いたときだけ計算するようにした
+    expect(b.title).toContain('10分')
     expect(b.title).toContain('3位 国際系勘定システム')
+  })
+
+  it('上位候補の補足に「必須何件中何件か」を出す（順位だけでは合っているか分からない）', () => {
+    const b = resolveCandidateBadge(null, marks())!
+    expect(b.title).toContain('必須5件中2件')
+  })
+
+  it('充足数が取れていない印では件数を書かない（古い行・スキル指定なしの案件）', () => {
+    expect(skillHitLabel({ skillHit: null, skillTotal: null })).toBe('')
+    expect(skillHitLabel({ skillHit: 0, skillTotal: 0 })).toBe('')
+    expect(skillHitLabel({ skillHit: 3, skillTotal: 9 })).toBe('（必須9件中3件）')
   })
 
   it('印ごとに色が分かれる（枠線あり・なしの両方）', () => {

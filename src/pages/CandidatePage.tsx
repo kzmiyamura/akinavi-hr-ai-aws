@@ -17,9 +17,11 @@ import { COMMERCIAL_FLOW_OPTIONS, EMPLOYMENT_TYPE_OPTIONS, WORK_STYLE_OPTIONS } 
 import { fetchSubmissionBadges } from '../lib/db/submissions'
 import { fetchRateMarket, compareToMarket, marketLabel } from '../lib/db/skillRateMarket'
 import type { SubmissionBadge } from '../lib/db/submissions'
-import { SUBMISSION_STATUS_LABEL, badgeStyle, resolveCandidateBadge } from '../lib/submissionBadge'
+import { SUBMISSION_STATUS_LABEL, badgeStyle, resolveCandidateBadge, skillHitLabel } from '../lib/submissionBadge'
 import { fetchTopMatchMarks } from '../lib/db/topMatchMarks'
 import type { TopMatchMarkSet } from '../lib/db/topMatchMarks'
+import { fetchNotificationMarks } from '../lib/db/notificationMarks'
+import type { NotificationMark } from '../lib/db/notificationMarks'
 import { supabase } from '../lib/supabase'
 import { getIsImportActive } from '../lib/db/emailSettings'
 import type { Candidate } from '../lib/db/candidates'
@@ -367,6 +369,18 @@ function splitComma(s: string): string[] {
   return s.split(',').map(x => x.trim()).filter(Boolean)
 }
 
+/** 印に添える短い日付（「通知済 10/14」）。印の中に年まで入れると氏名が押し出される */
+function formatDateShort(iso: string): string {
+  const d = new Date(iso)
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+/** 補足（title）用。こちらは年と時刻まで出す */
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('ja-JP', {
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
+
 // ---- プロフィール表示（一覧カード・詳細画面で共用） ----
 export function CandidateProfileFields({
   c,
@@ -376,6 +390,7 @@ export function CandidateProfileFields({
   agentDomainMap,
   submissionBadges,
   topMatchMarks,
+  notificationMarks,
 }: {
   c: Candidate
   isExpanded: boolean
@@ -385,8 +400,10 @@ export function CandidateProfileFields({
   agentDomainMap?: Map<string, AgentCompany>
   /** 人材ID → 提案の件数と状態。一覧の親がまとめて引いて渡す（行ごとに問い合わせない） */
   submissionBadges?: Map<string, SubmissionBadge>
-  /** 人材ID → 今どの案件の上位に入っているか（1時間ごとに再計算した印） */
+  /** 人材ID → 今どの案件の上位に入っているか（人材が届くたびに計算し直した印） */
   topMatchMarks?: Map<string, TopMatchMarkSet>
+  /** 人材ID → この人をメール通知で送ったか（2026-10-20 営業の要望） */
+  notificationMarks?: Map<string, NotificationMark>
 }) {
   const raw = getRaw(c)
   // 「AI校正待ち」バッジの表示判定に使う（ワーカーの絞込対象外なら待ちを出さない）。
@@ -466,6 +483,21 @@ export function CandidateProfileFields({
             </span>
           )
         })()}
+        {/* メール通知で送った印（2026-10-20 営業の要望）。上の印とは別の軸なので並べて出す。
+            「もう送った人か」は営業が一番よく確認する情報で、照会のたびにメールを探していた */}
+        {(() => {
+          const nm = notificationMarks?.get(c.id)
+          if (!nm) return null
+          return (
+            <span
+              className="text-xs border rounded px-2 py-0.5 bg-violet-50 text-violet-700 border-violet-200"
+              title={[`メール通知で送りました（${formatDateTime(nm.sentAt)}）`,
+                      ...nm.rules.map((r) => `・ルール: ${r}`)].join('\n')}
+            >
+              通知済 {formatDateShort(nm.sentAt)}
+            </span>
+          )
+        })()}
         {(() => {
           const st = aiCorrectionStage(c, badgeFilterSkills ?? null)
           return st && (
@@ -490,11 +522,16 @@ export function CandidateProfileFields({
                 <li key={p.projectId} className="text-xs text-amber-900 flex gap-1.5">
                   <span className="shrink-0 font-medium">{p.rank}位</span>
                   <span className="truncate">{p.title}</span>
+                  {/* 順位だけでは「本当にこの案件に合っているのか」が分からない
+                      （2026-10-20「本当か？データ分析基盤やで。bigqueryとかやろ？」） */}
+                  {skillHitLabel(p) && (
+                    <span className="shrink-0 text-amber-700/80">{skillHitLabel(p)}</span>
+                  )}
                 </li>
               ))}
             </ul>
             <p className="text-[11px] text-amber-700/80 mt-1 leading-relaxed">
-              1時間ごとに計算し直しています。マッチング画面で開くと、この順位で並びます。
+              新しい人材が届くたびに計算し直しています（最大10分遅れ）。マッチング画面で開くと、この順位で並びます。
             </p>
           </div>
         )
@@ -1478,13 +1515,24 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     staleTime: 60_000,
   })
 
-  // 「今マッチングし直したら上位に入る」印。元の表は cron が毎時20分に入れ替えるので、
-  // 画面側で短い間隔に引き直しても新しい値にはならない（staleTime は長めで足りる）
+  // 「今マッチングし直したら上位に入る」印。元の表は人材が届いたときだけ
+  // 入れ替わる（cron top-match-marks-on-arrival が10分おきに到着を見る）ので、
+  // 画面側で短い間隔に引き直しても新しい値にはならない
   const { data: topMatchMarks } = useQuery({
     queryKey: ['top-match-marks', dataEnv, visibleCandidateIds.length],
     queryFn: () => fetchTopMatchMarks(visibleCandidateIds, dataEnv),
     enabled: visibleCandidateIds.length > 0,
     staleTime: 10 * 60_000,
+  })
+
+  // 「メール通知で送った」印（2026-10-20 営業の要望）。
+  // 本番実測で notification_log 246件のうち、今いる人材に当たるのは16人だけ（人材は7日で消える）。
+  // 列は3つしか返らないビューなので転送量は数KB
+  const { data: notificationMarks } = useQuery({
+    queryKey: ['notification-marks', visibleCandidateIds.length],
+    queryFn: () => fetchNotificationMarks(visibleCandidateIds),
+    enabled: visibleCandidateIds.length > 0,
+    staleTime: 5 * 60_000,
   })
 
   // 全件数。**一覧の取得とは別に数える。**
@@ -2400,6 +2448,15 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                             </span>
                           )
                         })()}
+                        {/* メール通知で送った印。上の印とは別の軸なので並べて出す */}
+                        {notificationMarks?.get(c.id) && (
+                          <span
+                            className="text-[10px] rounded px-1 shrink-0 bg-violet-100 text-violet-700"
+                            title={`メール通知で送りました（${formatDateTime(notificationMarks.get(c.id)!.sentAt)}）`}
+                          >
+                            通知済
+                          </span>
+                        )}
                         {(() => {
                           const st = aiCorrectionStage(c, prioritySkills ?? null)
                           return st && (
@@ -2740,7 +2797,7 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                       {boxUploadMsg.text}
                     </p>
                   )}
-                  <CandidateProfileFields c={selectedCandidate} isExpanded detailMode agentDomainMap={agentDomainMap} submissionBadges={submissionBadges} topMatchMarks={topMatchMarks} />
+                  <CandidateProfileFields c={selectedCandidate} isExpanded detailMode agentDomainMap={agentDomainMap} submissionBadges={submissionBadges} topMatchMarks={topMatchMarks} notificationMarks={notificationMarks} />
                   {/* 同一人物候補（別の紹介会社から来ている人を含む）。
                       duplicate_flag の条件は外した（全員 false で表示されていなかった・2026-08-20）。
                       レコードは統合しない方針なので、ここで並べて単価を比較できるようにする */}

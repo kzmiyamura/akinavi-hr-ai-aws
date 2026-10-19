@@ -1,5 +1,5 @@
 import type { SubmissionBadge } from './db/submissions'
-import type { TopMatchMarkSet } from './db/topMatchMarks'
+import type { TopMatchMark, TopMatchMarkSet } from './db/topMatchMarks'
 
 /**
  * 人材一覧に出す印の文言。**一覧カードと絞り込み一覧の2か所で描いているので、
@@ -94,11 +94,21 @@ export function resolveCandidateBadge(
         : `上位候補: ${top.title}（${top.rank}位）`,
       shortText: tm.count > 1 ? `上位候補 ${tm.count}案件` : `上位候補 ${top.rank}位`,
       title: [
-        '今マッチングし直すと、この案件の上位に入ります（最大1時間前の計算）',
-        ...byRank.map((p) => `・${p.rank}位 ${p.title}`),
+        '今マッチングし直すと、この案件の上位に入ります（人材が届くたびに計算・最大10分遅れ）',
+        ...byRank.map((p) => `・${p.rank}位 ${p.title}${skillHitLabel(p)}`),
       ].join('\n'),
     }
   }
 
   return null
+}
+
+/**
+ * 「必須9件中6件」。順位だけでは「本当にこの案件に合っているのか」が分からない
+ * （2026-10-20 営業の疑い「本当か？データ分析基盤やで。bigqueryとかやろ？」）。
+ * 件数が取れていない古い印・スキル指定の無い案件では空文字を返して、何も言わない。
+ */
+export function skillHitLabel(m: Pick<TopMatchMark, 'skillHit' | 'skillTotal'>): string {
+  if (m.skillTotal == null || m.skillTotal <= 0 || m.skillHit == null) return ''
+  return `（必須${m.skillTotal}件中${m.skillHit}件）`
 }
