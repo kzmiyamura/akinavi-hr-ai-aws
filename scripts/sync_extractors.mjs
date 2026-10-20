@@ -13,8 +13,15 @@ import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const SRC  = resolve(ROOT, 'supabase/functions/inbound-email/index.ts')
-const DEST = resolve(ROOT, 'scripts/_extractors.gen.mjs')
+// --src / --dest で差し替えられる（既定は本番の index.ts → scripts/_extractors.gen.mjs）。
+// 変更前後を比べるときに使う: git show HEAD:...index.ts を書き出して別名で生成し、
+// 同じ実データに両方を掛けて差を数える（2026-10-20 に雇用形態の判定で実施）
+const argOf = (name, fallback) => {
+  const i = process.argv.indexOf(name)
+  return i !== -1 && process.argv[i + 1] ? resolve(process.argv[i + 1]) : fallback
+}
+const SRC  = argOf('--src', resolve(ROOT, 'supabase/functions/inbound-email/index.ts'))
+const DEST = argOf('--dest', resolve(ROOT, 'scripts/_extractors.gen.mjs'))
 
 // 抽出対象の関数名
 const TARGET_FUNCTIONS = [
@@ -65,6 +72,13 @@ const TARGET_FUNCTIONS = [
   //   この関数を単体で検証したいときは、nationalityGate.test.ts と同じ方式で
   //   index.ts からテキストとして切り出すこと。
   'extractWorkStyleNote',
+  // 雇用形態・商流（2026-10-20 に追加）。通知ルールの「自社正社員」等の判定に直結するので、
+  // ラベルの形を足したら scripts/test_employment_extraction.mjs で回帰を見る
+  'normalizeShaNum',
+  'parseEmploymentValue',
+  'employmentFromLabel',
+  'employmentFromContext',
+  'extractEmploymentType',
   'findWorkStyleIn',        // extractWorkStyleNote が呼ぶ（本文優先・添付は案件説明を弾く）
   'extractLicenseNumbers',  // 派遣・職業紹介の許可番号（旧表記 般/特・全角に対応）
   'deriveWorkStyleTag',
@@ -424,6 +438,7 @@ const TARGET_CONSTS = [
   'ZIP_MAX_TOTAL_BYTES',
   'ZIP_MAX_ENTRY_BYTES',
   'ZIP_EXT_MIME',
+  'KANJI_TO_NUM',             // normalizeShaNum が参照する漢数字表（複数行定義）
   'MULTI_CANDIDATE_FIELD_RE', // splitMultiCandidateBody が参照する「人ごとの見出し」判定
   'MULTI_NAME_FIELD_RE',      // 同上（氏名欄の判定）
   // 行頭の連番で人を並べる名簿（「1．ＢＢＫ（最寄駅：…）」）。分割と氏名抽出で共用する

@@ -1112,23 +1112,68 @@ function parseEmploymentValue(val: string): { commercialFlow: string | null; emp
   // 商流: N社先/N社下/N次請け（漢数字/全角対応）。「一社下正社員」=1社挟んだ先の正社員
   const nShaM = val.match(/([0-9０-９一二三四五六七八九十]+)[　 ]*(?:社[先下]|次請)/)
   if (nShaM) commercialFlow = `${normalizeShaNum(nShaM[1])}社先`
+  // 協力会社の人（BP = ビジネスパートナー・協力会社・グループ会社）は**自社ではない**。
+  // 送信元の給与を受けていないので1社挟む＝1社先。
+  // ⚠ ここを自社に寄せると「自社だけ」の通知ルールに他社の人が混ざる（通知の信用を落とす）。
+  // 控え実測（2026-10-20）: 「BP正社員」92人・「BP社員」35人・「BP要員」2人・
+  // 「BPプロパー」1人・「弊社グループ会社正社員」2人
+  // ⚠ 「弊社グループ会社」は 1社先にしない（2026-10-20 に入れて戻した）。
+  //    控えで157人が自社→1社先に変わり、しかも本文に「※ご契約の際直接契約可」と
+  //    書いてある。商流は「直接契約できるか」の判断材料なので、直接契約できる人を
+  //    1社先に落とすと営業の読みを狂わせる。
+  else if (/(?:^|[^A-Za-zＡ-Ｚ])(?:BP|ＢＰ)(?![A-Za-zＡ-Ｚ])|協力会社|ビジネスパートナー|パートナー(?:会社|企業)/.test(val)) {
+    commercialFlow = '1社先'
+  }
   // 雇用形態（SES→正社員に開く。N社先社員/正社員→正社員）
   if (/フリー(?:ランス)?|個人事業/.test(val)) employmentType = 'フリーランス'
   else if (/契約社員/.test(val)) employmentType = '契約社員'
   else if (/派遣社員|派遣/.test(val)) employmentType = '派遣社員'
   else if (/業務委託/.test(val)) employmentType = '業務委託'
   else if (/SES/.test(val)) employmentType = '正社員'
-  else if (/正社員|社先[　 ]*社員/.test(val)) employmentType = '正社員'
+  // プロパー＝その会社の正規社員（BP プロパー＝協力会社の正社員）
+  else if (/プロパー/.test(val)) employmentType = '正社員'
+  else if (/正社員|社先[　 ]*社員|(?:BP|ＢＰ)[　 ]*社員/.test(val)) employmentType = '正社員'
   // 商流の記載がなく雇用形態が取れた場合は「自社」とみなす
   if (!commercialFlow && employmentType) commercialFlow = '自社'
   return { commercialFlow, employmentType }
 }
 function extractEmploymentType(bodyText: string, attachText: string): { commercialFlow: string | null; employmentType: string | null } {
   const t = bodyText + ' ' + attachText
+  const fromLabel = employmentFromLabel(t)
+  if (fromLabel.commercialFlow || fromLabel.employmentType) {
+    // ラベルは具体的なので商流はラベルを採る。
+    // ただしラベルが商流しか決めなかったとき（「[所 属] BP要員」等）は、
+    // 雇用形態だけ文脈から補う。ここで打ち切ると、本文に「業務委託」と
+    // 書いてあるのに取れない人が出る（2026-10-20 に控えで1人確認）
+    if (fromLabel.employmentType) return fromLabel
+    return {
+      commercialFlow: fromLabel.commercialFlow,
+      employmentType: employmentFromContext(t).employmentType,
+    }
+  }
+  return employmentFromContext(t)
+}
+
+/**
+ * ラベル（【所属】/[所 属]/所属：）の値から判定する。
+ * どのラベルも値を決められなければ両方 null を返す（呼ぶ側はそれを「ラベル無し」として扱う）。
+ * ⚠ 戻り値を `| null` にしないこと。sync_extractors の型除去が
+ *   `: {...} | null` を落とせず、生成ファイルが構文エラーになる（2026-10-20 に踏んだ）
+ */
+function employmentFromLabel(t: string): { commercialFlow: string | null; employmentType: string | null } {
   // 【 所 属 】形式（スペース区切り全角ラベル）: SES業界の複数人材メールに多い
   const bracketM = t.match(/【[　 ]*所[　 ]*属[　 ]*】[　 ]*([^\n【】]{1,30})/)
   if (bracketM) {
     const r = parseEmploymentValue(bracketM[1].trim())
+    if (r.commercialFlow || r.employmentType) return r
+  }
+  // [所 属] 形式（半角・全角の角括弧／コロン無し）。
+  // 2026-10-20 に追加。ラベル判定が【 】とコロン区切りだけで、この形を読めていなかった。
+  // 控え実測で134人（雇用形態が未取得の1,858人の7.2%）がこの形だけで書かれている
+  // （ほぼ全部が1社の名簿メール。「[所 属] BP正社員」）
+  const squareM = t.match(/[[［][　 ]*(?:所[　 ]*属|雇[　 ]*用[　 ]*形[　 ]*態|立[　 ]*場|契[　 ]*約[　 ]*形[　 ]*態)[　 ]*[\]］][　 ]*([^\n[\]［］]{1,30})/)
+  if (squareM) {
+    const r = parseEmploymentValue(squareM[1].trim())
     if (r.commercialFlow || r.employmentType) return r
   }
   // ラベルあり（コロン区切り）: 雇用形態・就業形態・立場・所属・属性等
@@ -1137,12 +1182,19 @@ function extractEmploymentType(bodyText: string, attachText: string): { commerci
     const r = parseEmploymentValue(labelM[1].trim())
     if (r.commercialFlow || r.employmentType) return r
   }
-  // ラベルなし（文脈パターン）
+  return { commercialFlow: null, employmentType: null }
+}
+
+/** ラベルが無いときの文脈パターン */
+function employmentFromContext(t: string): { commercialFlow: string | null; employmentType: string | null } {
   // 商流表現（弊社=自社／N社先）は文脈からも拾う
   const ctxNSha = t.match(/([0-9０-９一二三四五六七八九十]+)[　 ]*社[先下][　 ]*(正社員|社員|フリー(?:ランス)?)?/)
   if (ctxNSha) {
     const flow = `${normalizeShaNum(ctxNSha[1])}社先`
-    const form = ctxNSha[2] ? (/フリー/.test(ctxNSha[2]) ? 'フリーランス' : '正社員') : null
+    // ⚠ 三項の後ろに `: null` を書かない。sync_extractors の型注釈除去が
+    //    `) : null` を型と見て落とし、生成ファイルが構文エラーになる（2026-10-20 に踏んだ）
+    let form: string | null = null
+    if (ctxNSha[2]) form = /フリー/.test(ctxNSha[2]) ? 'フリーランス' : '正社員'
     return { commercialFlow: flow, employmentType: form }
   }
   if (/弊社[　 ]*(正社員|社員)/.test(t)) return { commercialFlow: '自社', employmentType: '正社員' }
