@@ -2,7 +2,7 @@ import { useState, useRef, useMemo, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import { Loader2, UserPlus, RefreshCw, Trash2, ChevronDown, ChevronUp, MapPin, Wifi, SlidersHorizontal, Mail, Pencil, X, Paperclip, ChevronRight, ExternalLink, Reply, Map as MapIcon, Star } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
-import { captureScroll, scrollToRestore } from '../lib/listScrollMemory'
+import { captureScroll, runScrollRestore, scrollToRestore } from '../lib/listScrollMemory'
 import { isSameCompany as isSameCompanyName, keepOtherCompanyOnly } from '../lib/companyName'
 import { BookmarkStar } from '../components/BookmarkStar'
 import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
@@ -1152,39 +1152,10 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
     })
     if (!target) return
 
-    // 一覧の高さが決まるまで届かない。1〜2フレームでは足りず、切り詰められた位置で
-    // 止まる（スマホは詳細表示中 `hidden` で一覧が消えており、戻した直後の
-    // documentElement.scrollHeight が保存位置より小さい）。届くまで再試行する。
-    //
-    // ⚠ 再試行中にユーザーが指で動かしたら即やめる。競ると「スクロールが効かない」
-    // 体感になる（2026-09-05 の実害）。
-    let raf = 0
-    let stopped = false
-    const deadline = performance.now() + 700
-    const stop = () => { stopped = true }
-    const events = ['touchstart', 'wheel', 'keydown'] as const
-    events.forEach((e) => window.addEventListener(e, stop, { passive: true, once: true }))
-
-    const reached = () => {
-      const winOk = target.window === 0 || Math.abs(window.scrollY - target.window) <= 2
-      const el = listScrollRef.current
-      const boxOk = target.container === 0 || !el || Math.abs(el.scrollTop - target.container) <= 2
-      return winOk && boxOk
-    }
-    const tick = () => {
-      if (stopped) return
-      if (listScrollRef.current && target.container > 0) {
-        listScrollRef.current.scrollTop = target.container
-      }
-      if (target.window > 0) window.scrollTo({ top: target.window })
-      if (!reached() && performance.now() < deadline) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-
-    return () => {
-      cancelAnimationFrame(raf)
-      events.forEach((e) => window.removeEventListener(e, stop))
-    }
+    // 届くまで追いかける処理は listScrollMemory.runScrollRestore に集約した（2026-10-20）。
+    // 人材マップ（App 側の詳細）でも同じ「戻るとスクロールが消える」が起きており、
+    // 書き写すとまたどちらかだけ直す羽目になる
+    return runScrollRestore(target, () => listScrollRef.current)
   }, [selectedId])
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {

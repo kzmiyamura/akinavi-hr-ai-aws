@@ -38,3 +38,48 @@ export function scrollToRestore(saved: ScrollMemory): ScrollMemory | null {
   if (saved.container === 0 && saved.window === 0) return null
   return saved
 }
+
+/**
+ * 保存位置へ**届くまで追いかける**。戻り値は後片付けなので useEffect からそのまま返す。
+ *
+ * ⚠ 1〜2フレームでは届かない。詳細を開いている間、一覧は `hidden` で高さを持たないので、
+ *    戻した直後の `documentElement.scrollHeight` が保存位置より小さく、
+ *    切り詰められた位置で止まる（2026-09-05 の実害）。
+ * ⚠ 追いかけている最中にユーザーが指で動かしたら即やめる。競うと
+ *    「スクロールが効かない」体感になる（同日の実害）。
+ *
+ * 2026-10-20 に CandidatePage から切り出した。人材マップ（App 側の詳細）でも
+ * 同じことが起きていた＝「戻るとスクロールが消えてる」。2か所で書き写すとまたズレる。
+ */
+export function runScrollRestore(
+  target: ScrollMemory,
+  getContainer: () => HTMLElement | null = () => null,
+  deadlineMs = 700,
+): () => void {
+  let raf = 0
+  let stopped = false
+  const deadline = performance.now() + deadlineMs
+  const stop = () => { stopped = true }
+  const events = ['touchstart', 'wheel', 'keydown'] as const
+  events.forEach((e) => window.addEventListener(e, stop, { passive: true, once: true }))
+
+  const reached = () => {
+    const winOk = target.window === 0 || Math.abs(window.scrollY - target.window) <= 2
+    const el = getContainer()
+    const boxOk = target.container === 0 || !el || Math.abs(el.scrollTop - target.container) <= 2
+    return winOk && boxOk
+  }
+  const tick = () => {
+    if (stopped) return
+    const el = getContainer()
+    if (el && target.container > 0) el.scrollTop = target.container
+    if (target.window > 0) window.scrollTo({ top: target.window })
+    if (!reached() && performance.now() < deadline) raf = requestAnimationFrame(tick)
+  }
+  raf = requestAnimationFrame(tick)
+
+  return () => {
+    cancelAnimationFrame(raf)
+    events.forEach((e) => window.removeEventListener(e, stop))
+  }
+}

@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useState, Component } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState, Component } from 'react'
 import type { ReactNode } from 'react'
 import { lazyPage, isChunkLoadError } from './lib/lazyPage'
 import { QueryClient } from '@tanstack/react-query'
@@ -34,6 +34,7 @@ import {
   readStoredDataEnv,
   writeStoredDataEnv,
 } from './lib/dataEnv'
+import { captureScroll, runScrollRestore, scrollToRestore } from './lib/listScrollMemory'
 import { projectsQueryKeys } from './lib/db/projects'
 import { CANDIDATE_LINK_PARAM, formatCandidateNo, parseCandidateLinkParam } from './lib/candidateCode'
 import { resolveCandidateLinkTarget } from './lib/db/candidates'
@@ -160,6 +161,11 @@ function AppInner() {
   const { nickname, saveNickname, clearNickname } = useNickname()
   const [tabPage, setTabPage] = useState<Page>('matching')
   const [detail, setDetail] = useState<DetailView | null>(null)
+  /** 詳細を開く前のウィンドウ位置。戻ったときに同じ場所へ返すため（2026-10-20 営業の指摘
+   *  「人材マップで人材を開いた後、戻るとスクロールが消えてる」）。
+   *  詳細表示中は一覧側が `hidden` で高さを持たないので、ブラウザは scrollY を 0 に丸める。
+   *  人材タブは自前で同じことをしている（CandidatePage）。判定は listScrollMemory に1本化した */
+  const savedWindowScroll = useRef(0)
 
   const demoUnlockInitially = useMemo(() => getDemoUiEnabled(), [])
   const [demoUiEnabled, setDemoUiEnabled] = useState(demoUnlockInitially)
@@ -251,6 +257,15 @@ function AppInner() {
     return () => { cancelled = true }
   }, [])
 
+  // 詳細を閉じたら、開く前に見ていた位置へ戻す（人材マップ・マッチングから開いた詳細）。
+  // 復元そのものは listScrollMemory が持つ（人材タブと同じ処理・2026-10-20）
+  useEffect(() => {
+    if (detail !== null) return
+    const target = scrollToRestore({ container: 0, window: savedWindowScroll.current })
+    if (!target) return
+    return runScrollRestore(target)
+  }, [detail])
+
   // マッチングタブへ切り替え時にプロジェクト一覧を強制更新（案件追加後の未反映対策）
   useEffect(() => {
     if (tabPage === 'matching') {
@@ -272,13 +287,27 @@ function AppInner() {
   function handleNavigate(page: Page) {
     setTabPage(page)
     setDetail(null)
+    // タブを移ったら前のタブの位置は捨てる（新しいタブを途中から見せない）
+    savedWindowScroll.current = 0
+  }
+
+  /** 詳細を開く。戻ったときのために今の位置を覚える。
+   *  詳細 → 別の詳細（「同一人材の可能性」等）では覚え直さない＝詳細側の位置に飛ばない */
+  function rememberScroll() {
+    savedWindowScroll.current = captureScroll(
+      detail !== null,
+      { container: 0, window: savedWindowScroll.current },
+      { container: 0, window: window.scrollY },
+    ).window
   }
 
   function openCandidateDetail(id: string) {
+    rememberScroll()
     setDetail({ kind: 'candidate', id })
   }
 
   function openProjectDetail(id: string) {
+    rememberScroll()
     setDetail({ kind: 'project', id })
   }
 
