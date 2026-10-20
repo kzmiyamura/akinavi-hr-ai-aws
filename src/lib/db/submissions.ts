@@ -396,6 +396,26 @@ export function topSubmissionsPerCandidate(
   return out
 }
 
+/**
+ * 提案の状態を人が動かす（提案済・見送り・取り消し）。#191・2026-10-20。
+ *
+ * 遷移の判定は `src/lib/submissionAction.ts`（画面と共用）。ここは書き込みだけ。
+ * ⚠ 参画確定（accepted）は `MatchingPage` の decideMutation が担う。
+ *    あちらは同一人材の他案件を一括で rejected にするので、ここでは扱わない。
+ */
+export async function updateSubmissionStatus(
+  id: string,
+  status: Submission['status'],
+  dataEnv: DataEnv,
+): Promise<void> {
+  const { error } = await supabase
+    .from('submissions')
+    .update({ status })
+    .eq('id', id)
+    .eq('data_env', dataEnv)
+  if (error) throw new Error(`提案の状態の更新に失敗しました: ${error.message}`)
+}
+
 /** 全マッチング結果を削除する（data_env 単位） */
 export async function deleteAllSubmissions(dataEnv: DataEnv): Promise<number> {
   const { count, error } = await supabase

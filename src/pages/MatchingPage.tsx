@@ -28,7 +28,9 @@ import {
   fetchSubmissionsByProject,
   fetchSubmissionsByCandidate,
   fetchSubmissionStats,
+  updateSubmissionStatus,
 } from '../lib/db/submissions'
+import { MARK_LABEL, markButton, nextStatusFor, type MarkKind } from '../lib/submissionAction'
 import { supabase } from '../lib/supabase'
 import { getMatchingSettings, MATCHING_DEFAULTS } from '../lib/db/matchingSettings'
 import { fetchAgentDomainMap } from '../lib/db/agentCompanies'
@@ -657,6 +659,7 @@ function ProjectModeRankCard({
   onOpenCandidateDetail,
   scoreColor,
   onDecide,
+  onMark,
   duplicates,
   requiredSkills = [],
   niceToHaveSkills = [],
@@ -671,6 +674,8 @@ function ProjectModeRankCard({
   onOpenCandidateDetail?: (candidateId: string) => void
   scoreColor: (score: number) => string
   onDecide?: (submission: Submission) => void
+  /** 提案済・見送りの印を付ける（#191）。状態の遷移は submissionAction が決める */
+  onMark?: (submission: Submission, status: Submission['status']) => void
   duplicates?: DuplicateCandidate[]
   requiredSkills?: string[]
   niceToHaveSkills?: string[]
@@ -1150,6 +1155,7 @@ function ProjectModeRankCard({
             この人に決定
           </button>
         ) : null}
+        <SubmissionMarkButtons s={s} onMark={onMark} />
       </div>
     </div>
     {duplicates && duplicates.length > 0 && (() => {
@@ -1238,6 +1244,50 @@ function ProjectModeRankCard({
   )
 }
 
+/**
+ * 「提案済」「見送り」の印（#191・2026-10-20）。
+ *
+ * 状態を進める画面が到達不能で、prod の submissions は117件すべて pending だった。
+ * 営業が「出した」と判断するのはこの画面を見ている瞬間なので、ここに置く。
+ * 遷移の判定は `src/lib/submissionAction.ts`（テスト付き）。ここは描くだけ。
+ * 色は人材一覧の印と揃える（提案済=青 / 見送り=灰・`submissionBadge.badgeStyle`）。
+ */
+function SubmissionMarkButtons({
+  s,
+  onMark,
+}: {
+  s: Submission
+  onMark?: (submission: Submission, status: Submission['status']) => void
+}) {
+  if (!onMark || s.status === 'accepted') return null
+  return (
+    <div className="flex sm:flex-col gap-1">
+      {(['sent', 'rejected'] as MarkKind[]).map((kind) => {
+        const b = markButton(s.status, kind)
+        const next = nextStatusFor(s.status, kind)
+        const on = kind === 'sent'
+          ? 'bg-blue-100 text-blue-700 border-blue-300'
+          : 'bg-gray-200 text-gray-600 border-gray-300'
+        return (
+          <button
+            key={kind}
+            type="button"
+            disabled={b.disabled}
+            aria-pressed={b.active}
+            onClick={() => { if (next) onMark(s, next) }}
+            title={b.title}
+            className={`min-h-10 rounded-md border px-2 text-xs font-medium transition-colors disabled:opacity-40 ${
+              b.active ? on : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+            }`}
+          >
+            {b.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function CandidateModeRankCard({
   s,
   rankIndex,
@@ -1245,6 +1295,7 @@ function CandidateModeRankCard({
   onOpenProjectDetail,
   scoreColor,
   onDecide,
+  onMark,
 }: {
   s: Submission
   rankIndex: number
@@ -1252,6 +1303,7 @@ function CandidateModeRankCard({
   onOpenProjectDetail?: (projectId: string) => void
   scoreColor: (score: number) => string
   onDecide?: (submission: Submission) => void
+  onMark?: (submission: Submission, status: Submission['status']) => void
 }) {
   return (
     <div className="border border-gray-100 rounded-lg p-3 sm:p-4 flex flex-col gap-3 sm:flex-row sm:items-start bg-white min-w-0">
@@ -1350,6 +1402,7 @@ function CandidateModeRankCard({
             この案件に決定
           </button>
         ) : null}
+        <SubmissionMarkButtons s={s} onMark={onMark} />
       </div>
     </div>
   )
@@ -1564,6 +1617,30 @@ const { data: projects = [] } = useQuery({
     onSuccess: () => {
       invalidateMatchingQueries()
       setMessage({ type: 'success', text: '参画確定にしました（同一人材の他案件は不採用に更新）' })
+    },
+    onError: (e) => { logError(e, 'MatchingPage', undefined, { dataEnv, nickname }); setMessage({ type: 'error', text: String(e) }) },
+  })
+
+  /**
+   * 提案済・見送りの印（#191・2026-10-20）。
+   * 参画確定（decideMutation）と違い、**この1件だけ**を動かす
+   * （他案件を巻き込むのは「決定」だけ。見送りで他案件を触ると履歴が壊れる）。
+   */
+  const markMutation = useMutation({
+    mutationFn: async ({ submission, status }: { submission: Submission; status: Submission['status'] }) => {
+      await updateSubmissionStatus(submission.id, status, dataEnv)
+      return status
+    },
+    onSuccess: (status) => {
+      invalidateMatchingQueries()
+      // 人材一覧の印はこのクエリから描いている（submissionBadge）
+      queryClient.invalidateQueries({ queryKey: ['submission-badges', dataEnv] })
+      setMessage({
+        type: 'success',
+        text: status === 'pending'
+          ? '印を取り消しました'
+          : `${MARK_LABEL[status === 'sent' ? 'sent' : 'rejected']}にしました（人材一覧にも出ます）`,
+      })
     },
     onError: (e) => { logError(e, 'MatchingPage', undefined, { dataEnv, nickname }); setMessage({ type: 'error', text: String(e) }) },
   })
@@ -2542,6 +2619,7 @@ const { data: projects = [] } = useQuery({
                               onOpenCandidateDetail={onOpenCandidateDetail}
                               scoreColor={scoreColor}
                               onDecide={(sub) => decideMutation.mutate(sub)}
+                              onMark={(sub, status) => markMutation.mutate({ submission: sub, status })}
                               duplicates={duplicatesMap[s.candidate.id]}
                               requiredSkills={selectedProject.required_skills as string[]}
                               niceToHaveSkills={(selectedProject.raw_data as Record<string, unknown>)?.niceToHaveSkills as string[] ?? []}
@@ -2567,6 +2645,7 @@ const { data: projects = [] } = useQuery({
                                 onOpenCandidateDetail={onOpenCandidateDetail}
                                 scoreColor={scoreColor}
                                 onDecide={(sub) => decideMutation.mutate(sub)}
+                                onMark={(sub, status) => markMutation.mutate({ submission: sub, status })}
                                 // 6位以降にも同一人物候補を出す（2026-08-20）。
                                 // 上位5枚にしか渡しておらず、アコーディオンを開いても気づけなかった。
                                 // duplicatesMap は取得済みなので通信は増えない
@@ -2875,6 +2954,7 @@ const { data: projects = [] } = useQuery({
                                 onOpenProjectDetail={onOpenProjectDetail}
                                 scoreColor={scoreColor}
                                 onDecide={(sub) => decideMutation.mutate(sub)}
+                                onMark={(sub, status) => markMutation.mutate({ submission: sub, status })}
                               />
                             )
                           })}
@@ -2890,6 +2970,7 @@ const { data: projects = [] } = useQuery({
                                   onOpenProjectDetail={onOpenProjectDetail}
                                   scoreColor={scoreColor}
                                   onDecide={(sub) => decideMutation.mutate(sub)}
+                                onMark={(sub, status) => markMutation.mutate({ submission: sub, status })}
                                 />
                               )
                             })}
