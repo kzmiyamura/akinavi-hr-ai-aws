@@ -364,6 +364,15 @@ export interface ProjectScoreParams {
    * 関東在住で大阪常駐が可能な人を見たいときだけ false にする。
    */
   locationGate?: boolean
+  /**
+   * 今うちから出せる人だけ（既定 true・2026-10-20 営業の指示「ボタンをおけ」）。
+   * 自社or1社先 × 経歴書あり × 稼働が今日以前。未取得は通さない（人材マップの絞りと同じ）。
+   *
+   * 本番実測: 公開15案件の上位5人（75人）のうち全部満たすのは 20人(27%)。
+   * 採点式に所属・経歴書・稼働は入っていないので、重みでは直らない。
+   * 判定は SQL の offerable_ok に1つだけ置く。来月からの案件では false にする。
+   */
+  offerableOnly?: boolean
   weights?: ScoringWeights
 }
 
@@ -402,6 +411,7 @@ export async function fetchCandidatesForProject(
       // 既定で縛る。渡さないと SQL 側の既定（true）になるが、
       // 画面のチェックと実際の絞り込みがズレないよう明示的に送る
       p_location_gate:   params.locationGate ?? true,
+      p_offerable_only:  params.offerableOnly ?? true,
     })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as (Candidate & { rule_score: number })[]

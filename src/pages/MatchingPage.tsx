@@ -1423,6 +1423,9 @@ export function MatchingPage({
   // 勤務地の縛り（2026-10-12 ユーザー判断「フルリモートでない限り勤務地縛り100」）。
   // 既定で入れる。切ると関東在住で大阪常駐が可能な人も見られる
   const [locationGate, setLocationGate] = useState(true)
+  // 今うちから出せる人だけ（2026-10-20 営業の指示「ボタンをおけ」）。
+  // 既定で入れる。上位5人のうち出せる人が27%しかいなかった（本番実測）。来月からの案件では切る
+  const [offerableOnly, setOfferableOnly] = useState(true)
   // エージェント会社マスタはほぼ不変。3分で失効させると画面を触るたびに引き直す
   const { data: agentDomainMap } = useQuery({
     queryKey: ['agentDomainMap'],
@@ -1656,7 +1659,7 @@ const { data: projects = [] } = useQuery({
       // full: SQL で上位 500 件を取得し、match-batch 内で先頭 BATCH_TOP_N だけ AI 採点
       const sqlLimit = matchingRunMode === 'fast' ? fastMaxCandidates : 500
       const targets = await fetchCandidatesForProject(
-        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, locationGate, weights: scoringWeights },
+        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, locationGate, offerableOnly, weights: scoringWeights },
         dataEnv,
         sqlLimit,
         requireHaken,
@@ -1783,7 +1786,7 @@ const { data: projects = [] } = useQuery({
           // fast: SQL で上位 BATCH_TOP_N 件のみ取得してそのまま全件 AI 採点
           const sqlLimit2 = matchingRunMode === 'fast' ? BATCH_TOP_N : 500
           const targets = await fetchCandidatesForProject(
-            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, locationGate, weights: scoringWeights },
+            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, locationGate, offerableOnly, weights: scoringWeights },
             dataEnv,
             sqlLimit2,
             project.contract_type === '派遣' ? requireHaken : false,
@@ -2208,6 +2211,33 @@ const { data: projects = [] } = useQuery({
           </div>
         )
       })()}
+
+      {/* 今うちから出せる人だけ（2026-10-20 営業の指示「ボタンをおけ」）。
+          本番実測で上位5人のうち出せる人は27%。採点式に所属・経歴書・稼働が入っていないので
+          重みでは直らず、勤務地と同じ前提条件にした。判定は SQL の offerable_ok（1か所）。
+          黙って絞ると「なぜこの人が出ないのか」が分からないので、条件をこの行に必ず出す */}
+      {mode === 'project' && selectedProject && (
+        <div className={`rounded-xl border px-4 py-3 flex items-center justify-between gap-3 ${offerableOnly ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-gray-200'}`}>
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+            <span className="text-sm font-semibold text-gray-800 shrink-0">今出せる人だけ</span>
+            {offerableOnly ? (
+              <span className="text-xs text-emerald-700">
+                自社・1社先 × 経歴書あり × 稼働が今日以前の人のみ対象（所属・稼働時期が未記載の人は出ません）
+              </span>
+            ) : (
+              <span className="text-xs text-gray-500">2社先以降・経歴書なし・来月以降の人も点数順に並べます（来月からの案件向け）</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setOfferableOnly(v => !v)}
+            aria-pressed={offerableOnly}
+            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${offerableOnly ? 'bg-emerald-600' : 'bg-gray-200'}`}
+          >
+            <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform duration-200 ${offerableOnly ? 'translate-x-4' : 'translate-x-0'}`} />
+          </button>
+        </div>
+      )}
 
       {/* スコアウェイト調整パネル */}
       <div className="bg-white rounded-xl border border-gray-200 min-w-0">

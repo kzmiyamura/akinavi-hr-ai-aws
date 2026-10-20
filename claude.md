@@ -285,6 +285,17 @@ git add -A && git commit -m "fix: ..." && git push
 ## 6. アーキテクチャメモ
 
 - **マッチングスコア計算**: `fetch_candidates_for_project` RPC（SQL）でルールスコアを計算 → topN件だけ AI 採点。スコア配点・ウェイト詳細はRPC定義を参照
+  - **「今出せる人だけ」の縛り（2026-10-20 営業の指示「ボタンをおけ」）**: `p_offerable_only`
+    （既定 true）。自社or1社先 × 経歴書あり × 稼働が今日以前。判定は `offerable_ok()`
+    （`20261020_4_offerable_gate_shared.sql`）の1か所で、人材マップの絞りと同じ式。
+    RPC 本体は `scripts/gen_fetch_candidates_offerable_gate.py` で生成する（手で写さない）。
+    テストは `scripts/sql/test_offerable_gate.sql`。
+    理由: 公開15案件の上位5人（75人）のうち3条件を満たすのは **20人(27%)**、出せる人が
+    1人もいない案件が3件（本番実測）。採点式に所属・経歴書・稼働は入っていないので、
+    **重みをいくら動かしても直らない**。勤務地と同じ前提条件にした。
+    ⚠ `top_match_marks`（「上位候補」印）もこの RPC を呼ぶので、印も出せる人の上位になる。
+       適用後に `refresh_top_match_marks('prod')` を1回呼んだ（75行/15案件）。
+    ⚠ 未取得（商流18%・稼働18%）は通さない。来月からの案件は画面のスイッチで切る
 - **スキル一致判定**: 実体は `skill_hit_weights()`、定義は `skill_satisfies()`（`20260812_skill_match_normalize.sql`）。
   正規化（skill_master の別名）＋包含関係（`skill_implications`）＋語境界の3つで判定する。
   **部分一致は使わない**（`JavaScript` が `Java` に、`Shell` が `PowerShell` に一致していた）。
