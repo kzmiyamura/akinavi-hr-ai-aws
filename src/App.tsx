@@ -1,6 +1,5 @@
-import { Suspense, useEffect, useMemo, useRef, useState, Component } from 'react'
-import type { ReactNode } from 'react'
-import { lazyPage, isChunkLoadError } from './lib/lazyPage'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazyPage } from './lib/lazyPage'
 import { QueryClient } from '@tanstack/react-query'
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client'
 import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister'
@@ -12,6 +11,7 @@ import {
 } from './lib/queryPersist'
 import { useNickname } from './hooks/useNickname'
 import { NicknameModal } from './components/NicknameModal'
+import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { Layout } from './components/Layout'
 import type { Page } from './components/Layout'
 import { MatchingPage } from './pages/MatchingPage'
@@ -38,46 +38,6 @@ import { captureScroll, runScrollRestore, scrollToRestore } from './lib/listScro
 import { projectsQueryKeys } from './lib/db/projects'
 import { CANDIDATE_LINK_PARAM, formatCandidateNo, parseCandidateLinkParam } from './lib/candidateCode'
 import { resolveCandidateLinkTarget } from './lib/db/candidates'
-
-class TabErrorBoundary extends Component<
-  { children: ReactNode },
-  { error: Error | null }
-> {
-  constructor(props: { children: ReactNode }) {
-    super(props)
-    this.state = { error: null }
-  }
-  static getDerivedStateFromError(error: Error) {
-    return { error }
-  }
-  render() {
-    if (this.state.error) {
-      // チャンクが取れない＝自動再読み込みを1回試してもダメだった状態。
-      // 回線が切れているか、配信側がまだ新しいファイルを配れていない。
-      // 原因が違えば直し方も違うので、同じ赤文字にまとめない
-      const isChunk = isChunkLoadError(this.state.error)
-      return (
-        <div className="flex flex-col items-center justify-center p-10 gap-4 text-center">
-          <p className="text-red-600 font-medium">ページの読み込みに失敗しました</p>
-          {isChunk && (
-            <p className="text-sm text-gray-600 max-w-sm">
-              アプリが更新されたか、通信が切れています。
-              少し待ってから再読み込みしてください。
-            </p>
-          )}
-          <p className="text-xs text-gray-400 max-w-sm break-all">{this.state.error.message}</p>
-          <button
-            onClick={() => { this.setState({ error: null }); window.location.reload() }}
-            className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
-          >
-            再読み込み
-          </button>
-        </div>
-      )
-    }
-    return this.props.children
-  }
-}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -317,14 +277,18 @@ function AppInner() {
     return (
       <>
         <div className={tabPage === 'matching' ? 'block' : 'hidden'}>
-          <MatchingPage
-            nickname={nickname}
-            dataEnv={dataEnv}
-            onOpenCandidateDetail={openCandidateDetail}
-            onOpenProjectDetail={openProjectDetail}
-          />
+          {/* 遅延読み込みではないが、描画中に落ちればやはりアプリごと外れる。
+              マッチングが落ちても他のタブは使えるようにする */}
+          <AppErrorBoundary label="マッチング" dataEnv={dataEnv} nickname={nickname}>
+            <MatchingPage
+              nickname={nickname}
+              dataEnv={dataEnv}
+              onOpenCandidateDetail={openCandidateDetail}
+              onOpenProjectDetail={openProjectDetail}
+            />
+          </AppErrorBoundary>
         </div>
-        <TabErrorBoundary>
+        <AppErrorBoundary label="タブ" dataEnv={dataEnv} nickname={nickname}>
           <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
             {/* タブ切替でアンマウントすると絞り込み等のローカル状態が消えるため、常にマウントしつつ表示だけ切り替える */}
             <div className={tabPage === 'candidates' ? 'block' : 'hidden'}>
@@ -349,7 +313,7 @@ function AppInner() {
               <HeatmapPage dataEnv={dataEnv} onSelectCandidate={openCandidateDetail} />
             )}
           </Suspense>
-        </TabErrorBoundary>
+        </AppErrorBoundary>
       </>
     )
   }
@@ -386,20 +350,40 @@ function AppInner() {
         </div>
       )}
       <div className={detail ? 'hidden' : 'block'}>{renderMain()}</div>
+      {/* ⚠ 詳細も必ず境界の中に入れる。ここだけ外に出ていたため、人材マップから
+          人材を開いてチャンクの取得に失敗すると例外がルートまで抜け、**アプリ全体が
+          外れて画面が青一色（＝何も描かれていない）になっていた**（2026-10-20 営業から報告）。
+          戻る手段が無くなるので、境界には「一覧に戻る」を持たせる */}
       {detail?.kind === 'candidate' && (
-        <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
-          <CandidateDetailPage
-            candidateId={detail.id}
-            nickname={nickname}
-            dataEnv={dataEnv}
-            onBack={() => { setDetail(null); stripCandidateLinkParam() }}
-          />
-        </Suspense>
+        <AppErrorBoundary
+          label="人材詳細"
+          dataEnv={dataEnv}
+          nickname={nickname}
+          resetKey={detail.id}
+          onLeave={() => { setDetail(null); stripCandidateLinkParam() }}
+        >
+          <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
+            <CandidateDetailPage
+              candidateId={detail.id}
+              nickname={nickname}
+              dataEnv={dataEnv}
+              onBack={() => { setDetail(null); stripCandidateLinkParam() }}
+            />
+          </Suspense>
+        </AppErrorBoundary>
       )}
       {detail?.kind === 'project' && (
-        <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
-          <ProjectDetailPage projectId={detail.id} nickname={nickname} dataEnv={dataEnv} onBack={() => setDetail(null)} />
-        </Suspense>
+        <AppErrorBoundary
+          label="案件詳細"
+          dataEnv={dataEnv}
+          nickname={nickname}
+          resetKey={detail.id}
+          onLeave={() => setDetail(null)}
+        >
+          <Suspense fallback={<div className="flex justify-center items-center p-10 text-gray-400 text-sm">読み込み中...</div>}>
+            <ProjectDetailPage projectId={detail.id} nickname={nickname} dataEnv={dataEnv} onBack={() => setDetail(null)} />
+          </Suspense>
+        </AppErrorBoundary>
       )}
     </Layout>
   )
@@ -416,7 +400,12 @@ export default function App() {
         dehydrateOptions: { shouldDehydrateQuery: shouldPersistQuery },
       }}
     >
-      <AppInner />
+      {/* 最後の受け皿。ここより外に例外が出ると #root が空になり、
+          iOS Safari は manifest の theme_color で画面を塗る＝「青一色」になる。
+          何が起きてもエラー文と［再読み込み］だけは残す */}
+      <AppErrorBoundary label="アプリ全体">
+        <AppInner />
+      </AppErrorBoundary>
     </PersistQueryClientProvider>
   )
 }
