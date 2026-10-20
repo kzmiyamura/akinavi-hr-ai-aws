@@ -5,6 +5,7 @@ import { toViewerUrl } from '../lib/viewerUrl'
 import { captureScroll, runScrollRestore, scrollToRestore } from '../lib/listScrollMemory'
 import { isSameCompany as isSameCompanyName, keepOtherCompanyOnly } from '../lib/companyName'
 import { BookmarkStar } from '../components/BookmarkStar'
+import { CopyCandidateLinkButton } from '../components/CopyCandidateLinkButton'
 import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
 import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
 import { matchesSkillFilter } from '../lib/skillWordMatch'
@@ -2604,6 +2605,8 @@ export function CandidatePage({ nickname, dataEnv, demoUiEnabled = false, onOpen
                         bookmarked={selectedCandidate.bookmarked === true}
                         size="md"
                       />
+                      {/* この人を直接開く URL（2026-10-20 営業の要望）。通知メールのリンクと同じ形 */}
+                      <CopyCandidateLinkButton candidateId={selectedCandidate.id} dataEnv={dataEnv} />
                       {(() => {
                         // drive_url → resume_url → raw_profile.text内のDrive URL の順で探す
                         const resumeLink = selectedCandidate.drive_url || selectedCandidate.resume_url || (() => {

@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Loader2, AlertTriangle, Briefcase, User, RefreshCw, ChevronDown, CheckCircle, ChevronRight, Search, FileText, Mail, SlidersHorizontal, RotateCcw, Reply, ExternalLink, Star } from 'lucide-react'
 import { toViewerUrl } from '../lib/viewerUrl'
+import { CopyCandidateLinkButton } from '../components/CopyCandidateLinkButton'
 import { CandidateProfileFields } from './CandidatePage'
 import {
   fetchCandidatesForMatching,
@@ -2861,6 +2862,8 @@ const { data: projects = [] } = useQuery({
                               </div>
                             </div>
                             <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              {/* この人を直接開く URL（2026-10-20 営業の要望）。通知メールのリンクと同じ形 */}
+                              <CopyCandidateLinkButton candidateId={selectedCandidate.id} dataEnv={dataEnv} />
                               {resumeLink && (
                                 <a href={toViewerUrl(resumeLink)} target="_blank" rel="noopener noreferrer"
                                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-blue-200 rounded-lg text-blue-600 hover:bg-blue-50 transition-colors">

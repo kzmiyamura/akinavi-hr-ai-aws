@@ -7,6 +7,7 @@ import { CandidateProfileFields, CandidateEditModal } from './CandidatePage'
 import { toViewerUrl } from '../lib/viewerUrl'
 import { formatCandidateNo } from '../lib/candidateCode'
 import { BookmarkStar } from '../components/BookmarkStar'
+import { CopyCandidateLinkButton } from '../components/CopyCandidateLinkButton'
 import { OriginalEmailDetails } from '../components/OriginalEmailDetails'
 import type { DataEnv } from '../lib/dataEnv'
 
@@ -94,6 +95,9 @@ export function CandidateDetailPage({ candidateId, nickname, dataEnv, onBack }: 
                 bookmarked={candidate.bookmarked === true}
                 size="md"
               />
+              {/* この人を直接開く URL（2026-10-20 営業の要望）。人材詳細はこの画面・
+                  人材タブの右ペイン・マッチングの人材ペインの3か所にあるので、同じ部品を全部に置く */}
+              <CopyCandidateLinkButton candidateId={candidate.id} dataEnv={dataEnv} size="md" />
               {resumeLink && (
                 <a
                   href={toViewerUrl(resumeLink)}
