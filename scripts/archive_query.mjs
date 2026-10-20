@@ -115,7 +115,8 @@ for (let i = 3; i < process.argv.length; i++) {
 /** n 番目の位置引数（0 始まり）。無ければ null */
 const posArg = (n) => POSITIONAL[n] ?? null
 
-const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed', 'resume', 'dup', 'find']
+const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed', 'resume', 'dup', 'find',
+  'affiliation']
 if (!COMMANDS.includes(cmd)) {
   console.error(`⚠ 知らないサブコマンド: ${cmd}`)
   console.error(`   使えるのは: ${COMMANDS.join(' | ')}`)
@@ -125,6 +126,7 @@ if (!COMMANDS.includes(cmd)) {
   console.error('   resume              氏名と経歴書ファイル名の一致')
   console.error('   dup                 同じ人が何度も登録されていないか')
   console.error('   find                条件で人材を引く（--name/--company/--skill/--pref/--age/--exp/--kw）')
+  console.error('   affiliation         商流×雇用形態・経歴書の人数（絞り込みボタンが効くかの判断用）')
   process.exit(2)
 }
 
@@ -985,4 +987,109 @@ if (cmd === 'dup') {
       }
     }
   }
+}
+
+if (cmd === 'affiliation') {
+  /**
+   * 人材マップの絞り込みに何を出すかを決めるための実測（2026-10-20）。
+   *
+   *   node scripts/archive_query.mjs affiliation [--since YYYY-MM-DD] [--pref 大阪府]
+   *
+   * 営業の要望は「人材マップ絞り込みに自社の社員とかも入れて」。
+   * **ボタンを足す前に「押したときに人が残るのか」を数える。**
+   * 人材マップのブックマーク（星）で同じ判断をしており、本番0人だったので
+   * 並び替えに入れなかった（20261020_heatmap_candidate_sort.sql）。
+   *
+   * 見るのは4つ:
+   *   ① 商流×雇用形態の組み合わせごとの人数（＝どのボタンが効くか）
+   *   ② 取れていない人の割合（＝絞った瞬間に何人消えるか）
+   *   ③ 経歴書の有無（「出せる人だけ見る」が成立するか）
+   *   ④ 県ごとの人数（マップは県単位なので、県で割っても残るかが本番の使い勝手）
+   */
+  const SINCE = (() => { const i = process.argv.indexOf('--since'); return i >= 0 ? process.argv[i + 1] : null })()
+  const PREF = (() => { const i = process.argv.indexOf('--pref'); return i >= 0 ? process.argv[i + 1] : null })()
+
+  // ⚠ 丸め方の正は notify-candidates/match.ts の flowBucket。ここは控えを数えるための写し。
+  //   「自社」でも「1社先」でもないものは全部「2社先以降」に落とす（3社先・想定外表記も）
+  const flowBucket = (v) => {
+    const s = String(v ?? '').trim()
+    if (s === '') return null
+    if (s === '自社') return '自社'
+    if (s === '1社先') return '1社先'
+    return '2社先以降'
+  }
+  const hasResume = (r) => !!(r.resume_url || r.drive_url || r.box_url)
+
+  const FLOWS = ['自社', '1社先', '2社先以降']
+  const TYPES = ['フリーランス', '正社員', '契約社員', '派遣社員', '業務委託']
+
+  let n = 0, noFlow = 0, noType = 0, noBoth = 0, resume = 0, noExp = 0, noPref = 0
+  const cross = new Map()          // `${flow}/${type}` → 人数
+  const typeOther = new Map()      // 選択肢に無い雇用形態の実値
+  const byPref = new Map()         // 県 → {all, jisha, jishaSeishain, judged, resume}
+  for (const r of rows('candidates')) {
+    if (r.data_env !== 'prod') continue
+    if (SINCE && String(r.created_at ?? '') < SINCE) continue
+    const pref = r.rp_prefecture ? String(r.rp_prefecture) : null
+    if (PREF && pref !== PREF) continue
+    n++
+    const flow = flowBucket(r.rp_commercialFlow)
+    const type = r.rp_employmentType ? String(r.rp_employmentType).trim() : ''
+    if (!flow) noFlow++
+    if (!type) noType++
+    if (!flow && !type) noBoth++
+    if (hasResume(r)) resume++
+    if (r.experience_years == null) noExp++
+    if (!pref) noPref++
+    if (type && !TYPES.includes(type)) typeOther.set(type, (typeOther.get(type) ?? 0) + 1)
+    const key = `${flow ?? '未取得'}/${type || '未取得'}`
+    cross.set(key, (cross.get(key) ?? 0) + 1)
+    if (pref) {
+      const e = byPref.get(pref) ?? { all: 0, jisha: 0, jishaSeishain: 0, judged: 0, resume: 0 }
+      e.all++
+      if (flow && type) e.judged++
+      if (flow === '自社') e.jisha++
+      if (flow === '自社' && type === '正社員') e.jishaSeishain++
+      if (hasResume(r)) e.resume++
+      byPref.set(pref, e)
+    }
+  }
+
+  console.log(`控え: ${ARCHIVE_DIR}`)
+  console.log(`対象 ${n} 人（prod${SINCE ? ` / ${SINCE} 以降` : '・全期間'}${PREF ? ` / ${PREF}` : ''}）`)
+  console.log('')
+  console.log('① 取得率（絞ると未取得の人は消える）')
+  console.log(`  商流が取れている      ${String(n - noFlow).padStart(5)}  ${pct(n - noFlow, n)}`)
+  console.log(`  雇用形態が取れている  ${String(n - noType).padStart(5)}  ${pct(n - noType, n)}`)
+  console.log(`  両方とも取れていない  ${String(noBoth).padStart(5)}  ${pct(noBoth, n)}`)
+  console.log(`  経歴書がある          ${String(resume).padStart(5)}  ${pct(resume, n)}`)
+  console.log(`  経験年数が取れている  ${String(n - noExp).padStart(5)}  ${pct(n - noExp, n)}`)
+  console.log(`  都道府県が取れている  ${String(n - noPref).padStart(5)}  ${pct(n - noPref, n)}（マップに出る母数）`)
+
+  console.log('')
+  console.log('② 商流 × 雇用形態（ボタンの組み合わせごとの人数）')
+  console.log(`  ${''.padEnd(10)}${TYPES.map((t) => t.padStart(8)).join('')}${'未取得'.padStart(8)}`)
+  for (const f of [...FLOWS, '未取得']) {
+    const cells = [...TYPES, '未取得'].map((t) => String(cross.get(`${f}/${t}`) ?? 0).padStart(8)).join('')
+    console.log(`  ${f.padEnd(10)}${cells}`)
+  }
+  if (typeOther.size > 0) {
+    console.log(`  ⚠ 選択肢に無い雇用形態: ${[...typeOther].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}(${v})`).join(' ')}`)
+  }
+
+  console.log('')
+  console.log('③ 県ごと（マップは県単位。県で割っても残るか）')
+  console.log('  都道府県      全体  所属が取れている   自社   自社正社員  経歴書あり')
+  const top = [...byPref].sort((a, b) => b[1].all - a[1].all).slice(0, 12)
+  for (const [p, e] of top) {
+    console.log(`  ${p.padEnd(10)}${String(e.all).padStart(6)}`
+      + `${String(e.judged).padStart(8)} ${pct(e.judged, e.all)}`
+      + `${String(e.jisha).padStart(8)}${String(e.jishaSeishain).padStart(11)}`
+      + `${String(e.resume).padStart(11)}`)
+  }
+  const usable = [...byPref].filter(([, e]) => e.jishaSeishain >= 3).length
+  console.log('')
+  console.log(`  「自社正社員」が3人以上いる県: ${usable} / ${byPref.size} 県`)
+  console.log('  ⚠ アーカイブ済み（candidates_archive_light）は商流・雇用形態・経歴書の列を持たない。')
+  console.log('     全期間表示で所属を絞ると、アーカイブ側は判定できないので除くほかない。')
 }

@@ -12,10 +12,26 @@ import { readPrioritySkillPref } from '../lib/prioritySkillPref'
 import {
   HEATMAP_SORT_DEFAULT,
   HEATMAP_SORT_OPTIONS,
+  hasSortValue,
   listCaption,
   sortMetaLabel,
   type HeatmapSortKey,
 } from '../lib/heatmapCandidateSort'
+import {
+  HEATMAP_EMPLOYMENT_OPTIONS,
+  HEATMAP_FILTER_EMPTY,
+  HEATMAP_FLOW_OPTIONS,
+  HEATMAP_TOGGLE_OPTIONS,
+  filterChips,
+  filterNotes,
+  filterQueryKey,
+  isFilterActive,
+  toggleValue,
+  type HeatmapEmployment,
+  type HeatmapFilterState,
+  type HeatmapFlow,
+} from '../lib/heatmapFilters'
+import { commercialFlowClass } from '../components/CommercialFlowBadge'
 import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
@@ -83,6 +99,9 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   const [showAllPrefs, setShowAllPrefs] = useState(false)
   // 並び替えはボタンで押す（2026-10-20 営業の要望）。並べるのは DB 側
   const [sortKey, setSortKey] = useState<HeatmapSortKey>(HEATMAP_SORT_DEFAULT)
+  // 所属・稼働・経歴書の絞り込み（2026-10-20 営業の要望「自社の社員とかも入れて」）。
+  // 地図の色・ランキング・一覧の3つに同じ条件を効かせる（片方だけだと数が食い違う）
+  const [filter, setFilter] = useState<HeatmapFilterState>(HEATMAP_FILTER_EMPTY)
   const [zoom, setZoom] = useState<ZoomState>(ZOOM_NONE)
   const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([])
   // 最近の絞り込みは端末ごとに覚える（認証が無くユーザーを識別できないため）
@@ -100,8 +119,8 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   }, [])
 
   const { data: prefData = [], isLoading: prefLoading } = useQuery({
-    queryKey: ['heatmap', dataEnv, skillFilter, period],
-    queryFn: () => fetchPrefectureCounts(dataEnv, skillFilter || null, period),
+    queryKey: ['heatmap', dataEnv, skillFilter, period, filterQueryKey(filter)],
+    queryFn: () => fetchPrefectureCounts(dataEnv, skillFilter || null, period, filter),
     staleTime: 60_000,
   })
 
@@ -128,9 +147,11 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   }, [priorityPref.skills, settingsPrioritySkills, recentSkills])
 
   const { data: prefCandidates = [], isLoading: candLoading } = useQuery({
-    queryKey: ['heatmap-candidates', dataEnv, selectedPref, skillFilter, period, sortKey],
+    queryKey: ['heatmap-candidates', dataEnv, selectedPref, skillFilter, period, sortKey, filterQueryKey(filter)],
     queryFn: () =>
-      fetchCandidatesByPrefecture(dataEnv, selectedPref!, skillFilter || null, period, LIST_LIMIT, sortKey),
+      fetchCandidatesByPrefecture(
+        dataEnv, selectedPref!, skillFilter || null, period, LIST_LIMIT, sortKey, filter,
+      ),
     enabled: !!selectedPref,
     staleTime: 30_000,
   })
@@ -183,6 +204,17 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
     setInputValue('')
   }
 
+  /** 所属・条件のボタン。押すたびに入れ外しする（同じものを押したら外れる） */
+  function toggleFlow(v: HeatmapFlow) {
+    setFilter((f) => ({ ...f, flows: toggleValue(f.flows, v) }))
+  }
+  function toggleType(v: HeatmapEmployment) {
+    setFilter((f) => ({ ...f, types: toggleValue(f.types, v) }))
+  }
+  function toggleFlag(key: 'availableNow' | 'hasResume') {
+    setFilter((f) => ({ ...f, [key]: !f[key] }))
+  }
+
   /** 履歴だけを消す。いま掛かっている絞り込みには触らない */
   function clearRecent() {
     setRecentSkills([])
@@ -226,6 +258,16 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
 
   // 既定は上位10件。ボタンで全件に広げられる（地図を触らずに県を選べるように）
   const rankedPrefs = useMemo(() => (showAllPrefs ? prefData : prefData.slice(0, 10)), [prefData, showAllPrefs])
+
+  const activeChips = filterChips(filter)
+  const notes = filterNotes(filter, period)
+  /** 絞り込みボタンの見た目。自社バッジと同じ緑系にして、スキル（青）・並び（橙）と区別する */
+  const chipClass = (active: boolean) =>
+    `shrink-0 text-sm rounded-lg px-4 min-h-10 border transition-colors ${
+      active
+        ? 'bg-emerald-600 border-emerald-600 text-white font-medium'
+        : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+    }`
 
   return (
     <div className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
@@ -330,6 +372,70 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
         </details>
       </div>
 
+      {/* 所属・条件の絞り込み（2026-10-20 営業の要望「人材マップ絞り込みに自社の社員とかも入れて」）。
+          営業が県を開いて判断するのは「この人を今うちから出せるか」なので、それを決める
+          3つ（所属＝商流×雇用形態 / 稼働時期 / 経歴書）を押せるようにする。
+          ⚠ 2社先以降(本番4人)・派遣社員(14人)・業務委託(10人) はボタンにしていない。
+             県で割ると必ず0人になり「絞り込みが壊れている」と読まれる。選択肢と実測は
+             src/lib/heatmapFilters.ts と 20261020_2_heatmap_affiliation_filter.sql に書いた。
+          ⚠ 絞り込みは**地図の色・ランキング・一覧の3つ全部**に効く（片方だけだと数が食い違う） */}
+      <div className="mb-3 space-y-1.5">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+          <span className="shrink-0 text-[11px] text-gray-400 w-8">所属</span>
+          {HEATMAP_FLOW_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => toggleFlow(o.value)}
+              aria-pressed={filter.flows.includes(o.value)}
+              title={o.title}
+              className={chipClass(filter.flows.includes(o.value))}
+            >
+              {o.label}
+            </button>
+          ))}
+          {/* 商流と雇用形態は別の軸（軸の中は OR・軸どうしは AND）。仕切りで見せる */}
+          <span className="shrink-0 self-stretch w-px bg-gray-200" />
+          {HEATMAP_EMPLOYMENT_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => toggleType(o.value)}
+              aria-pressed={filter.types.includes(o.value)}
+              title={o.title}
+              className={chipClass(filter.types.includes(o.value))}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+          <span className="shrink-0 text-[11px] text-gray-400 w-8">条件</span>
+          {HEATMAP_TOGGLE_OPTIONS.map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              onClick={() => toggleFlag(o.key)}
+              aria-pressed={filter[o.key]}
+              title={o.title}
+              className={chipClass(filter[o.key])}
+            >
+              {o.label}
+            </button>
+          ))}
+          {isFilterActive(filter) && (
+            <button
+              type="button"
+              onClick={() => setFilter(HEATMAP_FILTER_EMPTY)}
+              className="shrink-0 text-xs text-gray-500 hover:text-gray-800 underline whitespace-nowrap px-2 min-h-10"
+            >
+              絞り込みを解除
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* 集計サマリー */}
       <div className="mb-4 text-sm text-gray-500">
         {prefLoading ? (
@@ -340,11 +446,23 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
             {skillFilter ? (
               <><span className="font-medium text-blue-600">{skillFilter}</span> を持つ人材：</>
             ) : '全人材：'}
+            {activeChips.length > 0 && (
+              <span className="font-medium text-emerald-700">{activeChips.join(' / ')} の</span>
+            )}
             <span className="font-bold text-gray-800 ml-1">{totalCount.toLocaleString()} 人</span>
             　{prefData.length} 都道府県に分布
           </span>
         )}
       </div>
+
+      {/* 絞ると誰が消えるかを必ず書く。黙って減らすと「取りこぼし」に見える */}
+      {notes.length > 0 && (
+        <ul className="mb-4 -mt-2 text-[11px] text-gray-400 space-y-0.5">
+          {notes.map((n) => (
+            <li key={n}>※ {n}</li>
+          ))}
+        </ul>
+      )}
 
       <div className="flex flex-col lg:flex-row gap-4">
         {/* 地図 */}
@@ -492,6 +610,10 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
                 {skillFilter && (
                   <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{skillFilter}</span>
                 )}
+                {/* 今かかっている絞り込み。一覧だけ見ていても条件が分かるように出す */}
+                {activeChips.map((c) => (
+                  <span key={c} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded">{c}</span>
+                ))}
               </div>
               {/* 狭い画面では同じ行に入らず氏名を押し出していたので、説明は下の行に置く */}
               <div className="text-[11px] text-gray-400 mt-0.5">{listCaption(sortKey, LIST_LIMIT, period)}</div>
@@ -515,6 +637,7 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
                 type="button"
                 onClick={() => setSortKey(o.value)}
                 aria-pressed={sortKey === o.value}
+                title={o.title}
                 className={`shrink-0 text-xs rounded-lg px-3 min-h-10 border transition-colors ${
                   sortKey === o.value
                     ? 'bg-amber-500 border-amber-500 text-white font-medium'
@@ -529,10 +652,23 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
           {candLoading ? (
             <div className="px-4 py-6 text-center text-sm text-gray-400">読み込み中...</div>
           ) : prefCandidates.length === 0 ? (
+            // 条件を全部書いて出す。「見つかりません」だけだと、絞ったせいなのか
+            // その県に本当に居ないのかが分からない（解除もここから押せるようにする）
             <div className="px-4 py-6 text-center text-sm text-gray-400">
-              {skillFilter
-                ? `${selectedPref}に${skillFilter}を持つ人材は見つかりません`
+              {[skillFilter, ...activeChips].filter(Boolean).length > 0
+                ? `${selectedPref}に ${[skillFilter, ...activeChips].filter(Boolean).join('・')} の人材は見つかりません`
                 : `${selectedPref}の人材は見つかりません`}
+              {isFilterActive(filter) && (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={() => setFilter(HEATMAP_FILTER_EMPTY)}
+                    className="text-xs text-emerald-700 hover:text-emerald-900 underline min-h-10 px-2"
+                  >
+                    絞り込みを解除して見る
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <ul className="divide-y divide-gray-50">
@@ -569,14 +705,29 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
                         </span>
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
+                        {/* 所属（商流・雇用形態）。営業がこの一覧で決めるのは
+                            「今うちから出せるか」なので、件名より先に置く。
+                            色はマッチング画面・人材詳細と同じ判定（自社=緑 / 1社先=黄 / 2社先〜=赤）。
+                            商流が取れていない人は色を付けない（黄色に見えると1社先と誤読される） */}
+                        {(c.commercial_flow || c.employment_type) && (
+                          <span
+                            className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded ${
+                              c.commercial_flow ? commercialFlowClass(c.commercial_flow) : 'bg-gray-100 text-gray-500'
+                            }`}
+                            title="商流・雇用形態（自社=直接紹介可 / N社先=N社を挟む）"
+                          >
+                            {[c.commercial_flow, c.employment_type].filter(Boolean).join('・')}
+                          </span>
+                        )}
                         <span className="text-xs text-gray-500 truncate" title={c.subject ?? ''}>
                           {c.subject ?? '（件名なし）'}
                         </span>
-                        {/* 単価で並べたのに単価が見えないと、並んでいるか確かめようがない */}
+                        {/* 単価で並べたのに単価が見えないと、並んでいるか確かめようがない。
+                            稼働が早い順・経験が長い順でも同じ理由でその値を出す */}
                         {meta && (
                           <span
                             className={`shrink-0 text-[11px] px-1.5 py-0.5 rounded ${
-                              c.desired_rate ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-400'
+                              hasSortValue(c, sortKey) ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-400'
                             }`}
                           >
                             {meta}

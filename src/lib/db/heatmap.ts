@@ -1,22 +1,35 @@
 import { supabase } from '../supabase'
 import type { DataEnv } from '../dataEnv'
 import { HEATMAP_SORT_DEFAULT, type HeatmapSortKey } from '../heatmapCandidateSort'
+import { HEATMAP_FILTER_EMPTY, toRpcParams, type HeatmapFilterState } from '../heatmapFilters'
 
 export interface PrefectureCount {
   prefecture: string
   count: number
 }
 
-/** 都道府県別の人材数を取得。skillFilter 指定時はスキルで絞り込む（DB側でJOIN・集計） */
+/**
+ * 都道府県別の人材数を取得。skillFilter 指定時はスキルで絞り込む（DB側でJOIN・集計）。
+ *
+ * ⚠ 絞り込み（所属・稼働・経歴書）は**地図の色とランキングにも効かせる**。
+ *    一覧だけに効かせると「大阪に50人」と塗られている県を開いて3人しか出ず、
+ *    どちらが本当か画面から判断できない。
+ */
 export async function fetchPrefectureCounts(
   dataEnv: DataEnv,
   skillFilter: string | null,
-  period: '7d' | 'all' = '7d'
+  period: '7d' | 'all' = '7d',
+  filter: HeatmapFilterState = HEATMAP_FILTER_EMPTY
 ): Promise<PrefectureCount[]> {
+  const f = toRpcParams(filter)
   const { data, error } = await supabase.rpc('prefecture_counts', {
     p_data_env: dataEnv,
     p_skill: skillFilter ?? null,
     p_period: period,
+    p_flows: f.flows,
+    p_types: f.types,
+    p_available_now: f.availableNow,
+    p_has_resume: f.hasResume,
   })
   if (error) throw error
   return (data ?? []).map((r: { prefecture: string; cnt: number }) => ({
@@ -35,6 +48,14 @@ export interface PrefectureCandidate {
   bookmarked: boolean
   /** 希望単価（自由記述のまま）。アーカイブ済みは列が無いので常に null */
   desired_rate: string | null
+  /** 商流（`自社` / `N社先`）。丸めは SQL の flow_bucket()。アーカイブ済みは null */
+  commercial_flow: string | null
+  /** 雇用形態（正社員 / フリーランス 等）。アーカイブ済みは null */
+  employment_type: string | null
+  /** 稼働時期。**書かれていた文字のまま**（「即日」「11月〜」）。アーカイブ済みは null */
+  available_from: string | null
+  /** 経験年数。アーカイブ済みは列が無いので null */
+  experience_years: number | null
 }
 
 /**
@@ -50,8 +71,10 @@ export async function fetchCandidatesByPrefecture(
   skillFilter: string | null,
   period: '7d' | 'all' = '7d',
   limit = 10,
-  sort: HeatmapSortKey = HEATMAP_SORT_DEFAULT
+  sort: HeatmapSortKey = HEATMAP_SORT_DEFAULT,
+  filter: HeatmapFilterState = HEATMAP_FILTER_EMPTY
 ): Promise<PrefectureCandidate[]> {
+  const f = toRpcParams(filter)
   const { data, error } = await supabase.rpc('candidates_by_prefecture', {
     p_data_env: dataEnv,
     p_prefecture: prefecture,
@@ -59,11 +82,17 @@ export async function fetchCandidatesByPrefecture(
     p_limit: limit,
     p_period: period,
     p_sort: sort,
+    p_flows: f.flows,
+    p_types: f.types,
+    p_available_now: f.availableNow,
+    p_has_resume: f.hasResume,
   })
   if (error) throw error
   return (data ?? []).map((r: {
     id: string; name: string; subject: string | null; created_at: string
     is_archived: boolean; bookmarked?: boolean; desired_rate?: string | null
+    commercial_flow?: string | null; employment_type?: string | null
+    available_from?: string | null; experience_years?: number | null
   }) => ({
     id: r.id,
     name: r.name || '不明',
@@ -72,6 +101,10 @@ export async function fetchCandidatesByPrefecture(
     is_archived: r.is_archived,
     bookmarked: r.bookmarked === true,
     desired_rate: r.desired_rate ?? null,
+    commercial_flow: r.commercial_flow ?? null,
+    employment_type: r.employment_type ?? null,
+    available_from: r.available_from ?? null,
+    experience_years: r.experience_years ?? null,
   }))
 }
 
