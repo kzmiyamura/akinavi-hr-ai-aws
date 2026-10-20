@@ -1,5 +1,6 @@
 import { supabase } from '../supabase'
 import type { DataEnv } from '../dataEnv'
+import { HEATMAP_SORT_DEFAULT, type HeatmapSortKey } from '../heatmapCandidateSort'
 
 export interface PrefectureCount {
   prefecture: string
@@ -32,15 +33,24 @@ export interface PrefectureCandidate {
   is_archived: boolean
   /** ブックマーク（星）。アーカイブ済みは列を持たないので常に false */
   bookmarked: boolean
+  /** 希望単価（自由記述のまま）。アーカイブ済みは列が無いので常に null */
+  desired_rate: string | null
 }
 
-/** 都道府県クリック時に最大10件の人材を取得（件名・受信日時・氏名） */
+/**
+ * 都道府県クリック時に最大10件の人材を取得（件名・受信日時・氏名・希望単価）。
+ *
+ * ⚠ `sort` は **DB に渡す**。返るのは先頭 `limit` 件なので、受け取ってから画面で
+ *    並べ替えると「古い順」が *新着10件を古い順に並べたもの* になる（母集団が変わる）。
+ *    キーの集合は `src/lib/heatmapCandidateSort.ts` が正。
+ */
 export async function fetchCandidatesByPrefecture(
   dataEnv: DataEnv,
   prefecture: string,
   skillFilter: string | null,
   period: '7d' | 'all' = '7d',
-  limit = 10
+  limit = 10,
+  sort: HeatmapSortKey = HEATMAP_SORT_DEFAULT
 ): Promise<PrefectureCandidate[]> {
   const { data, error } = await supabase.rpc('candidates_by_prefecture', {
     p_data_env: dataEnv,
@@ -48,11 +58,12 @@ export async function fetchCandidatesByPrefecture(
     p_skill: skillFilter ?? null,
     p_limit: limit,
     p_period: period,
+    p_sort: sort,
   })
   if (error) throw error
   return (data ?? []).map((r: {
     id: string; name: string; subject: string | null; created_at: string
-    is_archived: boolean; bookmarked?: boolean
+    is_archived: boolean; bookmarked?: boolean; desired_rate?: string | null
   }) => ({
     id: r.id,
     name: r.name || '不明',
@@ -60,6 +71,7 @@ export async function fetchCandidatesByPrefecture(
     created_at: r.created_at,
     is_archived: r.is_archived,
     bookmarked: r.bookmarked === true,
+    desired_rate: r.desired_rate ?? null,
   }))
 }
 

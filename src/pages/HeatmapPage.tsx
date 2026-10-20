@@ -9,6 +9,13 @@ import { fetchPrioritySkills } from '../lib/db/candidates'
 import { BookmarkStar } from '../components/BookmarkStar'
 import { readRecentSkills, writeRecentSkills, pushRecentSkill } from '../lib/recentSkillFilters'
 import { readPrioritySkillPref } from '../lib/prioritySkillPref'
+import {
+  HEATMAP_SORT_DEFAULT,
+  HEATMAP_SORT_OPTIONS,
+  listCaption,
+  sortMetaLabel,
+  type HeatmapSortKey,
+} from '../lib/heatmapCandidateSort'
 import type { DataEnv } from '../lib/dataEnv'
 
 interface Props {
@@ -64,6 +71,9 @@ function formatDateShort(iso: string): string {
 const MAP_W = 700
 const MAP_H = 500
 
+/** 県別一覧の件数上限。並び替えを入れたので「どの10件か」は並びで変わる */
+const LIST_LIMIT = 10
+
 export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   const [skillFilter, setSkillFilter] = useState<string>('')
   const [inputValue, setInputValue] = useState<string>('')
@@ -71,6 +81,8 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   const [hovered, setHovered] = useState<{ name: string; count: number; x: number; y: number } | null>(null)
   const [selectedPref, setSelectedPref] = useState<string | null>(null)
   const [showAllPrefs, setShowAllPrefs] = useState(false)
+  // 並び替えはボタンで押す（2026-10-20 営業の要望）。並べるのは DB 側
+  const [sortKey, setSortKey] = useState<HeatmapSortKey>(HEATMAP_SORT_DEFAULT)
   const [zoom, setZoom] = useState<ZoomState>(ZOOM_NONE)
   const [geoFeatures, setGeoFeatures] = useState<GeoFeature[]>([])
   // 最近の絞り込みは端末ごとに覚える（認証が無くユーザーを識別できないため）
@@ -116,8 +128,9 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   }, [priorityPref.skills, settingsPrioritySkills, recentSkills])
 
   const { data: prefCandidates = [], isLoading: candLoading } = useQuery({
-    queryKey: ['heatmap-candidates', dataEnv, selectedPref, skillFilter, period],
-    queryFn: () => fetchCandidatesByPrefecture(dataEnv, selectedPref!, skillFilter || null, period),
+    queryKey: ['heatmap-candidates', dataEnv, selectedPref, skillFilter, period, sortKey],
+    queryFn: () =>
+      fetchCandidatesByPrefecture(dataEnv, selectedPref!, skillFilter || null, period, LIST_LIMIT, sortKey),
     enabled: !!selectedPref,
     staleTime: 30_000,
   })
@@ -481,7 +494,7 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
                 )}
               </div>
               {/* 狭い画面では同じ行に入らず氏名を押し出していたので、説明は下の行に置く */}
-              <div className="text-[11px] text-gray-400 mt-0.5">受信メール一覧（最大10件・新しい順）</div>
+              <div className="text-[11px] text-gray-400 mt-0.5">{listCaption(sortKey, LIST_LIMIT, period)}</div>
             </div>
             <button
               onClick={handleReset}
@@ -490,6 +503,27 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
             >
               ×
             </button>
+          </div>
+
+          {/* 並び替え。文字を打たずに押せる形（スキル絞り込みのボタンと同じ基準・40px）。
+              押すと DB に並びを渡して引き直す＝出てくる10件そのものが入れ替わる */}
+          <div className="flex items-center gap-2 overflow-x-auto px-3 sm:px-4 py-2 border-b border-gray-100">
+            <span className="shrink-0 text-[11px] text-gray-400">並び</span>
+            {HEATMAP_SORT_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => setSortKey(o.value)}
+                aria-pressed={sortKey === o.value}
+                className={`shrink-0 text-xs rounded-lg px-3 min-h-10 border transition-colors ${
+                  sortKey === o.value
+                    ? 'bg-amber-500 border-amber-500 text-white font-medium'
+                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
           </div>
 
           {candLoading ? (
@@ -504,6 +538,8 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
             <ul className="divide-y divide-gray-50">
               {prefCandidates.map((c) => {
                 const canOpen = !c.is_archived && !!onSelectCandidate
+                // 並び替えの基準になっている値（単価順のときだけ入る）
+                const meta = sortMetaLabel(c, sortKey)
                 return (
                   // スマホでは氏名が右端に飛ばされ、件名がその下に半分だけ出ていた
                   // （2026-10-20 指摘）。日時を先頭に置くのをやめ、**氏名を行の頭**にして
@@ -532,8 +568,20 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
                           {formatDateShort(c.created_at)}
                         </span>
                       </div>
-                      <div className="text-xs text-gray-500 truncate mt-0.5" title={c.subject ?? ''}>
-                        {c.subject ?? '（件名なし）'}
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-xs text-gray-500 truncate" title={c.subject ?? ''}>
+                          {c.subject ?? '（件名なし）'}
+                        </span>
+                        {/* 単価で並べたのに単価が見えないと、並んでいるか確かめようがない */}
+                        {meta && (
+                          <span
+                            className={`shrink-0 text-[11px] px-1.5 py-0.5 rounded ${
+                              c.desired_rate ? 'bg-amber-50 text-amber-700' : 'bg-gray-100 text-gray-400'
+                            }`}
+                          >
+                            {meta}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </li>
