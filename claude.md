@@ -336,6 +336,14 @@ git add -A && git commit -m "fix: ..." && git push
   - 選択肢に**入れなかったもの**: `2社先以降`(本番4人)・`派遣社員`(14人)・`業務委託`(10人)。
     県で割ると必ず0人になるボタンは置かない（星を並びに入れなかったのと同じ判断）。
     RPC は値を受け取れるので、必要になれば画面側に1行足すだけでよい
+  - **リモート／常駐（同日追加・`20261020_3_heatmap_work_style_filter.sql`）**: 絞るのは
+    `raw_profile.workStyleTag`（リモート希望 / 併用可 / 常駐可）＝人材タブの Wifi 印と同じ値。
+    付けている側は inbound-email の `deriveWorkStyleTag`（値のズレは `heatmapFilters.test.ts` が
+    ソースで検出）。色は `src/lib/workStyleBadge.ts` の1か所。
+    ⚠ `remoteAvailable`（true/false）では絞らない。「リモート可と読めた」だけで常駐に出せるかが
+    分からない。本番実測（2026-10-20）: 併用可472 / 常駐可378 / リモート希望222 / **未取得841(44%)**。
+    未取得が多いので注記に割合を出す。測り方は `archive_query.mjs remote`（workStyleTag は
+    控えに列が無いので remoteAvailable の分布だけ・prod には1回しか聞いていない）
 - **人材を直接開く URL（2026-10-20 営業の要望「人材詳細の全部の箇所に」）**:
   `src/components/CopyCandidateLinkButton.tsx`。形は通知メールのリンクと同じ `?c=<uuid>` で、
   組み立ては `candidateLinkUrl`（`src/lib/candidateCode.ts`）に1本化してある。

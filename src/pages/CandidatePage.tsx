@@ -7,6 +7,7 @@ import { isSameCompany as isSameCompanyName, keepOtherCompanyOnly } from '../lib
 import { BookmarkStar } from '../components/BookmarkStar'
 import { CopyCandidateLinkButton } from '../components/CopyCandidateLinkButton'
 import { CommercialFlowBadge } from '../components/CommercialFlowBadge'
+import { workStyleClass } from '../lib/workStyleBadge'
 import { readBookmarkOnly, writeBookmarkOnly } from '../lib/bookmarkPref'
 import { matchesSkillFilter } from '../lib/skillWordMatch'
 import { displayCandidateName, isUsableCandidateName } from '../lib/candidateName'
@@ -643,11 +644,7 @@ export function CandidateProfileFields({
             const rws = (raw as Record<string, unknown>).remoteWorkStyle as string | null | undefined
             const label = tag ?? (rws && rws !== 'リモート可' ? rws : null)
             if (!label) return null
-            const cls = label === '常駐可'
-              ? 'bg-emerald-100 text-emerald-800'
-              : label === 'リモート希望'
-                ? 'bg-rose-100 text-rose-700'
-                : 'bg-amber-100 text-amber-800' // 併用可・その他
+            const cls = workStyleClass(label) // 人材マップの一覧と同じ色（workStyleBadge.ts）
             return (
               <span
                 className={`flex items-center gap-1 text-xs rounded px-1.5 py-0.5 ${cls} font-medium`}

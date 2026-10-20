@@ -116,7 +116,7 @@ for (let i = 3; i < process.argv.length; i++) {
 const posArg = (n) => POSITIONAL[n] ?? null
 
 const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed', 'resume', 'dup', 'find',
-  'affiliation']
+  'affiliation', 'remote']
 if (!COMMANDS.includes(cmd)) {
   console.error(`⚠ 知らないサブコマンド: ${cmd}`)
   console.error(`   使えるのは: ${COMMANDS.join(' | ')}`)
@@ -127,6 +127,7 @@ if (!COMMANDS.includes(cmd)) {
   console.error('   dup                 同じ人が何度も登録されていないか')
   console.error('   find                条件で人材を引く（--name/--company/--skill/--pref/--age/--exp/--kw）')
   console.error('   affiliation         商流×雇用形態・経歴書の人数（絞り込みボタンが効くかの判断用）')
+  console.error('   remote              リモート可否の取得率と県ごとの人数（人材マップのリモート絞り込み用）')
   process.exit(2)
 }
 
@@ -987,6 +988,55 @@ if (cmd === 'dup') {
       }
     }
   }
+}
+
+if (cmd === 'remote') {
+  /**
+   * 人材マップに「リモート」の絞り込みを足す前の実測（2026-10-20 営業の要望）。
+   *
+   *   node scripts/archive_query.mjs remote [--since YYYY-MM-DD]
+   *
+   * 控えにあるのは raw_profile.remoteAvailable（true / false / null）だけ。
+   * 判定は inbound-email の deriveRemoteAvailable: 本文のワークスタイルが
+   * フルリモート・リモート可・リモート希望なら true、「常駐可」と明記なら false、
+   * 書いていなければ null（**不可と混同しない**）。
+   * ⚠ workStyleTag（リモート希望/併用可/常駐可）は控えに列が無いので、ここでは測れない。
+   */
+  const SINCE = (() => { const i = process.argv.indexOf('--since'); return i >= 0 ? process.argv[i + 1] : null })()
+  let n = 0, yes = 0, no = 0, nul = 0, noPref = 0
+  const byPref = new Map()   // 県 → {all, yes, no}
+  for (const r of rows('candidates')) {
+    if (r.data_env !== 'prod') continue
+    if (SINCE && String(r.created_at ?? '') < SINCE) continue
+    n++
+    const v = r.rp_remoteAvailable
+    if (v === true) yes++
+    else if (v === false) no++
+    else nul++
+    const pref = r.rp_prefecture ? String(r.rp_prefecture) : null
+    if (!pref) { noPref++; continue }
+    const e = byPref.get(pref) ?? { all: 0, yes: 0, no: 0 }
+    e.all++
+    if (v === true) e.yes++
+    if (v === false) e.no++
+    byPref.set(pref, e)
+  }
+  console.log(`控え: ${ARCHIVE_DIR}`)
+  console.log(`対象 ${n} 人（prod${SINCE ? ` / ${SINCE} 以降` : '・全期間'}）`)
+  console.log('')
+  console.log('① remoteAvailable の分布')
+  console.log(`  true （リモート可と読めた）   ${String(yes).padStart(5)}  ${pct(yes, n)}`)
+  console.log(`  false（常駐可と明記）         ${String(no).padStart(5)}  ${pct(no, n)}`)
+  console.log(`  null （記載なし）             ${String(nul).padStart(5)}  ${pct(nul, n)}`)
+  console.log(`  都道府県なし（マップに出ない）${String(noPref).padStart(5)}  ${pct(noPref, n)}`)
+  console.log('')
+  console.log('② 県ごと（上位20）: 全員 / リモート可 / 常駐明記')
+  const prefs = [...byPref.entries()].sort((a, b) => b[1].all - a[1].all).slice(0, 20)
+  for (const [p, e] of prefs) {
+    console.log(`  ${p.padEnd(5)} ${String(e.all).padStart(6)} ${String(e.yes).padStart(6)} ${String(e.no).padStart(6)}`)
+  }
+  console.log(`  ⚠ 県ごとの「リモート可」が0に近い県では、ボタンを押しても誰も出ない`)
+  process.exit(0)
 }
 
 if (cmd === 'affiliation') {

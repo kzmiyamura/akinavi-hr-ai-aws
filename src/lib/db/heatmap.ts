@@ -30,6 +30,7 @@ export async function fetchPrefectureCounts(
     p_types: f.types,
     p_available_now: f.availableNow,
     p_has_resume: f.hasResume,
+    p_work_styles: f.workStyles,
   })
   if (error) throw error
   return (data ?? []).map((r: { prefecture: string; cnt: number }) => ({
@@ -56,6 +57,8 @@ export interface PrefectureCandidate {
   available_from: string | null
   /** 経験年数。アーカイブ済みは列が無いので null */
   experience_years: number | null
+  /** ワークスタイル（workStyleTag: リモート希望 / 併用可 / 常駐可）。未取得・アーカイブ済みは null */
+  work_style: string | null
 }
 
 /**
@@ -86,6 +89,7 @@ export async function fetchCandidatesByPrefecture(
     p_types: f.types,
     p_available_now: f.availableNow,
     p_has_resume: f.hasResume,
+    p_work_styles: f.workStyles,
   })
   if (error) throw error
   return (data ?? []).map((r: {
@@ -93,6 +97,7 @@ export async function fetchCandidatesByPrefecture(
     is_archived: boolean; bookmarked?: boolean; desired_rate?: string | null
     commercial_flow?: string | null; employment_type?: string | null
     available_from?: string | null; experience_years?: number | null
+    work_style?: string | null
   }) => ({
     id: r.id,
     name: r.name || '不明',
@@ -105,6 +110,7 @@ export async function fetchCandidatesByPrefecture(
     employment_type: r.employment_type ?? null,
     available_from: r.available_from ?? null,
     experience_years: r.experience_years ?? null,
+    work_style: r.work_style ?? null,
   }))
 }
 

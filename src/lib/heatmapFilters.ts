@@ -36,8 +36,22 @@ export const HEATMAP_EMPLOYMENT_OPTIONS = [
   { value: '契約社員', label: '契約社員', title: '雇用形態が契約社員の人' },
 ] as const
 
+/** リモート／常駐（2026-10-20 営業の要望「人材マップの絞り込みでリモート関連」）。
+ *
+ *  値は raw_profile.workStyleTag そのもの＝人材タブのカードに出ている Wifi 印と同じ言葉。
+ *  判定の正は inbound-email の `deriveWorkStyleTag`（`__tests__` でソースと突き合わせる）。
+ *  本番実測（2026-10-20・1,913人）: 併用可 472 / 常駐可 378 / リモート希望 222 / **未取得 841(44%)**。
+ *  案件がリモートなら［リモート希望］＋［併用可］、常駐なら［常駐可］＋［併用可］を押す想定。
+ *  ⚠ remoteAvailable（true/false）は使わない。「リモート可と読めた」だけで、常駐に出せるかが分からない */
+export const HEATMAP_WORK_STYLE_OPTIONS = [
+  { value: 'リモート希望', label: 'リモート希望', title: 'フルリモート・リモート前提と書かれている人（常駐案件には出しにくい）' },
+  { value: '併用可', label: '併用可', title: 'リモートと出社の併用（週N日出社 など）と書かれている人' },
+  { value: '常駐可', label: '常駐可', title: '常駐・出社可と書かれている人' },
+] as const
+
 export type HeatmapFlow = (typeof HEATMAP_FLOW_OPTIONS)[number]['value']
 export type HeatmapEmployment = (typeof HEATMAP_EMPLOYMENT_OPTIONS)[number]['value']
+export type HeatmapWorkStyle = (typeof HEATMAP_WORK_STYLE_OPTIONS)[number]['value']
 
 export interface HeatmapFilterState {
   /** 商流。空＝指定なし。複数選べて中は OR */
@@ -48,6 +62,8 @@ export interface HeatmapFilterState {
   availableNow: boolean
   /** 経歴書（添付・Drive・Box のいずれか）がある人だけ */
   hasResume: boolean
+  /** ワークスタイル（workStyleTag）。空＝指定なし。中は OR。未取得（44%）は出ない */
+  workStyles: HeatmapWorkStyle[]
 }
 
 export const HEATMAP_FILTER_EMPTY: HeatmapFilterState = {
@@ -55,6 +71,7 @@ export const HEATMAP_FILTER_EMPTY: HeatmapFilterState = {
   types: [],
   availableNow: false,
   hasResume: false,
+  workStyles: [],
 }
 
 /** 「はい/いいえ」で押す絞り込み。ボタンの言葉と説明をここに置く */
@@ -83,7 +100,7 @@ export function toggleValue<T>(list: readonly T[], v: T): T[] {
 }
 
 export function isFilterActive(f: HeatmapFilterState): boolean {
-  return f.flows.length > 0 || f.types.length > 0 || f.availableNow || f.hasResume
+  return f.flows.length > 0 || f.types.length > 0 || f.availableNow || f.hasResume || f.workStyles.length > 0
 }
 
 /** 今かかっている絞り込みを短い言葉にする（一覧の見出しに並べる） */
@@ -92,6 +109,7 @@ export function filterChips(f: HeatmapFilterState): string[] {
   if (f.flows.length > 0) chips.push(f.flows.join('・'))
   if (f.types.length > 0) chips.push(f.types.join('・'))
   for (const t of HEATMAP_TOGGLE_OPTIONS) if (f[t.key]) chips.push(t.label)
+  if (f.workStyles.length > 0) chips.push(f.workStyles.join('・'))
   return chips
 }
 
@@ -109,8 +127,10 @@ export function filterNotes(f: HeatmapFilterState, period: '7d' | 'all'): string
     notes.push('所属が取れていない人は出ません（商流18%・雇用形態22%が未取得）')
   }
   if (f.availableNow) notes.push('稼働時期が書かれていない人は出ません（18%）')
+  // 44% は多い。黙って減らすと「人がいない」と読まれるので、割合を必ず出す
+  if (f.workStyles.length > 0) notes.push('リモート・常駐の記載が無い人は出ません（44%が未取得）')
   if (period === 'all') {
-    notes.push('アーカイブ済み（7日より前）は所属・稼働時期・経歴書の記録が無いため除いています')
+    notes.push('アーカイブ済み（7日より前）は所属・稼働時期・経歴書・ワークスタイルの記録が無いため除いています')
   }
   return notes
 }
@@ -121,16 +141,22 @@ export function toRpcParams(f: HeatmapFilterState): {
   types: string[] | null
   availableNow: boolean
   hasResume: boolean
+  workStyles: string[] | null
 } {
   return {
     flows: f.flows.length > 0 ? [...f.flows] : null,
     types: f.types.length > 0 ? [...f.types] : null,
     availableNow: f.availableNow,
     hasResume: f.hasResume,
+    workStyles: f.workStyles.length > 0 ? [...f.workStyles] : null,
   }
 }
 
 /** React Query のキーに入れる値。**取り違えるとキャッシュを跨いで古い結果が出る** */
 export function filterQueryKey(f: HeatmapFilterState): string {
-  return [f.flows.join(','), f.types.join(','), f.availableNow ? 'av' : '', f.hasResume ? 'rs' : ''].join('|')
+  return [
+    f.flows.join(','), f.types.join(','),
+    f.availableNow ? 'av' : '', f.hasResume ? 'rs' : '',
+    f.workStyles.join(','),
+  ].join('|')
 }

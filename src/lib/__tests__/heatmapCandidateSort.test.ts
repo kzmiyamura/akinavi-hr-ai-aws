@@ -20,11 +20,12 @@ import {
  * （既定の新しい順に落ちる）＝一番気付きにくい壊れ方なので、SQL を文字列として突き合わせる。
  */
 /** ⚠ `candidates_by_prefecture` を**最後に作り直した**マイグレーションを見る。
- *  並び替えを足したのは 20261020_heatmap_candidate_sort.sql だが、同日の
- *  20261020_2_heatmap_affiliation_filter.sql が絞り込みと2つの並び（稼働・経験）を足して
- *  関数ごと作り直している。古い方を読むと、増えたキーを検査しないまま通ってしまう。 */
+ *  並び替えを足したのは 20261020_heatmap_candidate_sort.sql、絞り込みと2つの並び（稼働・経験）を
+ *  足したのが 20261020_2_heatmap_affiliation_filter.sql、ワークスタイル絞り込みで
+ *  20261020_3_heatmap_work_style_filter.sql がまた関数ごと作り直している。
+ *  古い方を読むと、増えたキーを検査しないまま通ってしまう。 */
 const SQL = readFileSync(
-  resolve(__dirname, '../../../supabase/migrations/20261020_2_heatmap_affiliation_filter.sql'),
+  resolve(__dirname, '../../../supabase/migrations/20261020_3_heatmap_work_style_filter.sql'),
   'utf8',
 )
 

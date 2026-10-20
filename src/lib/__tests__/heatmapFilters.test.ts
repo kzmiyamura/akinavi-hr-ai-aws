@@ -10,6 +10,7 @@ import {
   HEATMAP_FILTER_EMPTY,
   HEATMAP_FLOW_OPTIONS,
   HEATMAP_TOGGLE_OPTIONS,
+  HEATMAP_WORK_STYLE_OPTIONS,
   filterChips,
   filterNotes,
   filterQueryKey,
@@ -28,6 +29,16 @@ import {
  */
 const SQL = readFileSync(
   resolve(__dirname, '../../../supabase/migrations/20261020_2_heatmap_affiliation_filter.sql'),
+  'utf8',
+)
+/** ワークスタイル絞り込み（2026-10-20）。関数を作り直しているので、こちらが今の実体 */
+const SQL_WS = readFileSync(
+  resolve(__dirname, '../../../supabase/migrations/20261020_3_heatmap_work_style_filter.sql'),
+  'utf8',
+)
+/** workStyleTag を付けている側（deriveWorkStyleTag）。値の正はここ */
+const INBOUND = readFileSync(
+  resolve(__dirname, '../../../supabase/functions/inbound-email/index.ts'),
   'utf8',
 )
 
@@ -75,10 +86,10 @@ describe('人材マップの絞り込み', () => {
 
   it('空の配列は null で渡す（SQL 側の「指定なし」と同じ意味にする）', () => {
     expect(toRpcParams(HEATMAP_FILTER_EMPTY)).toEqual({
-      flows: null, types: null, availableNow: false, hasResume: false,
+      flows: null, types: null, availableNow: false, hasResume: false, workStyles: null,
     })
     expect(toRpcParams(withFilter({ flows: ['自社'], types: ['正社員'] }))).toEqual({
-      flows: ['自社'], types: ['正社員'], availableNow: false, hasResume: false,
+      flows: ['自社'], types: ['正社員'], availableNow: false, hasResume: false, workStyles: null,
     })
   })
 
@@ -113,7 +124,37 @@ describe('人材マップの絞り込み', () => {
     const a = filterQueryKey(withFilter({ flows: ['自社'] }))
     const b = filterQueryKey(withFilter({ types: ['自社' as never] }))
     const c = filterQueryKey(withFilter({ flows: ['自社'], availableNow: true }))
-    expect(new Set([a, b, c, filterQueryKey(HEATMAP_FILTER_EMPTY)]).size).toBe(4)
+    const d = filterQueryKey(withFilter({ workStyles: ['常駐可'] }))
+    expect(new Set([a, b, c, d, filterQueryKey(HEATMAP_FILTER_EMPTY)]).size).toBe(5)
+  })
+
+  describe('リモート／常駐（2026-10-20）', () => {
+    it('値は inbound-email の deriveWorkStyleTag が返すものだけ（人材タブの印と同じ言葉）', () => {
+      const fn = INBOUND.slice(INBOUND.indexOf('function deriveWorkStyleTag('))
+      const body = fn.slice(0, fn.indexOf('\n}\n'))
+      for (const { value } of HEATMAP_WORK_STYLE_OPTIONS) {
+        expect(body, `deriveWorkStyleTag が「${value}」を返さない`).toContain(`return '${value}'`)
+      }
+    })
+
+    it('SQL は workStyleTag を見て、指定なしは cardinality 0 で判定する', () => {
+      expect(SQL_WS).toContain("raw_profile->>'workStyleTag'")
+      expect(SQL_WS).toContain('COALESCE(cardinality(p_work_styles), 0) = 0')
+      // 絞ったらアーカイブ側は通さない（列が無い）
+      expect(SQL_WS.match(/COALESCE\(cardinality\(p_work_styles\), 0\) = 0/g)?.length).toBeGreaterThanOrEqual(4)
+    })
+
+    it('RPC には配列で渡し、空は null', () => {
+      expect(toRpcParams(HEATMAP_FILTER_EMPTY).workStyles).toBeNull()
+      expect(toRpcParams(withFilter({ workStyles: ['リモート希望', '併用可'] })).workStyles)
+        .toEqual(['リモート希望', '併用可'])
+    })
+
+    it('絞ると未取得（44%）が消えることを画面に書く', () => {
+      expect(isFilterActive(withFilter({ workStyles: ['常駐可'] }))).toBe(true)
+      expect(filterChips(withFilter({ workStyles: ['常駐可', '併用可'] }))).toEqual(['常駐可・併用可'])
+      expect(filterNotes(withFilter({ workStyles: ['常駐可'] }), '7d').join('')).toContain('44%')
+    })
   })
 
   it('はい/いいえのボタンは説明に判定を書く（人材タブと NULL の扱いが逆なので）', () => {

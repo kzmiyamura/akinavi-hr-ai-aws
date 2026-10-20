@@ -22,6 +22,7 @@ import {
   HEATMAP_FILTER_EMPTY,
   HEATMAP_FLOW_OPTIONS,
   HEATMAP_TOGGLE_OPTIONS,
+  HEATMAP_WORK_STYLE_OPTIONS,
   filterChips,
   filterNotes,
   filterQueryKey,
@@ -30,7 +31,9 @@ import {
   type HeatmapEmployment,
   type HeatmapFilterState,
   type HeatmapFlow,
+  type HeatmapWorkStyle,
 } from '../lib/heatmapFilters'
+import { workStyleClass } from '../lib/workStyleBadge'
 import { commercialFlowClass } from '../components/CommercialFlowBadge'
 import type { DataEnv } from '../lib/dataEnv'
 
@@ -213,6 +216,9 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
   }
   function toggleFlag(key: 'availableNow' | 'hasResume') {
     setFilter((f) => ({ ...f, [key]: !f[key] }))
+  }
+  function toggleWorkStyle(v: HeatmapWorkStyle) {
+    setFilter((f) => ({ ...f, workStyles: toggleValue(f.workStyles, v) }))
   }
 
   /** 履歴だけを消す。いま掛かっている絞り込みには触らない */
@@ -420,6 +426,21 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
               aria-pressed={filter[o.key]}
               title={o.title}
               className={chipClass(filter[o.key])}
+            >
+              {o.label}
+            </button>
+          ))}
+          {/* リモート／常駐（2026-10-20 要望）。言葉は人材タブの Wifi 印と同じ。
+              案件がリモートなら［リモート希望］［併用可］、常駐なら［常駐可］［併用可］を押す */}
+          <span className="shrink-0 self-stretch w-px bg-gray-200" />
+          {HEATMAP_WORK_STYLE_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => toggleWorkStyle(o.value)}
+              aria-pressed={filter.workStyles.includes(o.value)}
+              title={o.title}
+              className={chipClass(filter.workStyles.includes(o.value))}
             >
               {o.label}
             </button>
@@ -717,6 +738,15 @@ export function HeatmapPage({ dataEnv, onSelectCandidate }: Props) {
                             title="商流・雇用形態（自社=直接紹介可 / N社先=N社を挟む）"
                           >
                             {[c.commercial_flow, c.employment_type].filter(Boolean).join('・')}
+                          </span>
+                        )}
+                        {/* リモート／常駐。色は人材タブの Wifi 印と同じ（1か所: workStyleBadge.ts） */}
+                        {c.work_style && (
+                          <span
+                            className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded ${workStyleClass(c.work_style)}`}
+                            title="本文のワークスタイル記載から付けた印（目安）"
+                          >
+                            {c.work_style}
                           </span>
                         )}
                         <span className="text-xs text-gray-500 truncate" title={c.subject ?? ''}>
