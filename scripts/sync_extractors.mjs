@@ -104,6 +104,7 @@ const TARGET_FUNCTIONS = [
   'isPhaseTableHeader',    // ↑が参照するフェーズ表ヘッダー判定
   'stripUrlsForSkillMatching',
   'skillTermPattern',
+  'filterBySkillRating',  // 評価欄つき雛形の絞り込み（skillRatingFilter.test.ts）
   'inferRoleFamilyHint',    // 役割が取れない人の系統ヒント（表示・集計のみ）
   'stripAgentSolicitation', // 営業の「他にも多数おります」定型文を役割抽出から外す
   'sameMailConflicts',      // 同一メール内の同名を別人と判定する（駅・県・年齢・単価の食い違い）
@@ -422,6 +423,8 @@ const TARGET_CONSTS = [
   'NEVER_RESUME_HOST_RE',
   'RESUME_LINK_CONTEXT_RE',
   'PROJ_MON',          // projParsePeriod が使う英語3文字月名
+  'RATING_CELL_RE',    // filterBySkillRating の評価セル
+  'DURATION_CELL_RE',  // filterBySkillRating の年数セル
   '_skillRegexCache',  // _cachedSkillRegex のキャッシュ
   // extractSkillYearsVisualProject（案件ブロックunion）が参照する判定regex群
   'PROJ_TECHCOL',

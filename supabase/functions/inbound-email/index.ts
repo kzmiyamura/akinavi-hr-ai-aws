@@ -2584,11 +2584,24 @@ function extractAndRemoveSkills(
  * Excel を CSV 化すると評価行は  "Python,3,B"  や  "Python,,○,,,"  のようになる。
  * 行に [ABC] が standalone で含まれれば高評価、[DE] のみなら低評価と判定する。
  * スキルシート形式でない場合（評価行 <5 行）は入力をそのまま返す。
+ *
+ * ## 評価は「次の行」にも来る（2026-10-21）
+ *
+ * 添付は CSV ではなく `gridToFieldText` で文字にしている。3セル以上の行は
+ * **1セル1行**になるので、雛形の「C言語 | A」は `C言語` と `A` の2行に分かれる。
+ * 同じ行だけを見ていた頃は、評価の付いたスキルも雛形の中では全部落ちていた。
+ * そこで「スキル名の行の次の行が評価」も認める（年数のセルを1つ挟む形も）。
+ *
+ * もう1つ、**C 言語だけが必ず残っていた**。行「C」のスキル名そのものを評価の C と
+ * 読んでいたため。雛形に印刷されているだけの C が、控えの実測（2026-09-18 以降）で
+ * 多数の人に付いていた。評価はスキル名を取り除いてから探す。
+ * テストは src/lib/__tests__/skillRatingFilter.test.ts
  */
-function filterBySkillRating(
-  text: string,
-  skills: { name: string; category: string }[],
-): { name: string; category: string }[] {
+type RatedSkill = { name: string; category: string }
+// 評価だけのセル（「A」や凡例どおりの「【A】業務の独力遂行…」）と、年数だけのセル
+const RATING_CELL_RE = /^(?:[ABC]|【[ABC]】.*)$/
+const DURATION_CELL_RE = /^[\d.０-９]+\s*(?:年|ヶ月|か月|ヵ月|カ月)/
+function filterBySkillRating(text: string, skills: RatedSkill[]): RatedSkill[] {
   if (!text.trim() || skills.length === 0) return skills
 
   const lines = text.split(/\r?\n/)
@@ -2602,15 +2615,23 @@ function filterBySkillRating(
   return skills.filter(skill => {
     const escaped = skill.name.replace(/[.*+?()[\]{}\\|^$]/g, '\\$&')
     const nameRe = new RegExp(`(?<![a-zA-Z0-9_])${escaped}(?![a-zA-Z0-9_])`, 'i')
-    const matchingLines = lines.filter(l => nameRe.test(l))
+    const nameReAll = new RegExp(nameRe.source, 'gi')
+    const hitIdx = lines.flatMap((l, i) => (nameRe.test(l) ? [i] : []))
 
-    if (matchingLines.length === 0) return true // 該当行なし → 保持
+    if (hitIdx.length === 0) return true // 該当行なし → 保持
 
-    // ホワイトリスト方式: いずれかの行に明示的な A/B/C が含まれる場合のみ保持
+    // ホワイトリスト方式: いずれかの行に明示的な A/B/C が付いている場合のみ保持
     // 空欄・D/E はいずれも除外（スキルシート形式では評価なし＝経験なしとみなす）
-    return matchingLines.some(l =>
-      /(?:^|,|\t)\s*[ABC]\s*(?:,|\t|$)/.test(l),
-    )
+    return hitIdx.some(i => {
+      const l = lines[i]
+      // 同じ行（スキル名そのものは評価と読まない）
+      if (/(?:^|,|\t)\s*[ABC]\s*(?:,|\t|$)/.test(l.replace(nameReAll, ' '))) return true
+      // 次の行（1セル1行になった雛形）。長い文の次の行は偶然なので、セルらしい短い行に限る
+      if (l.trim().length > 30) return false
+      const next = (lines[i + 1] ?? '').trim()
+      if (RATING_CELL_RE.test(next)) return true
+      return DURATION_CELL_RE.test(next) && RATING_CELL_RE.test((lines[i + 2] ?? '').trim())
+    })
   })
 }
 
