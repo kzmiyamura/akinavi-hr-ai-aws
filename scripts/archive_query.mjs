@@ -116,7 +116,7 @@ for (let i = 3; i < process.argv.length; i++) {
 const posArg = (n) => POSITIONAL[n] ?? null
 
 const COMMANDS = ['summary', 'daily', 'company', 'rate', 'skillfilter', 'missed', 'resume', 'dup', 'find',
-  'affiliation', 'remote']
+  'affiliation', 'remote', 'sygap']
 if (!COMMANDS.includes(cmd)) {
   console.error(`⚠ 知らないサブコマンド: ${cmd}`)
   console.error(`   使えるのは: ${COMMANDS.join(' | ')}`)
@@ -128,6 +128,7 @@ if (!COMMANDS.includes(cmd)) {
   console.error('   find                条件で人材を引く（--name/--company/--skill/--pref/--age/--exp/--kw）')
   console.error('   affiliation         商流×雇用形態・経歴書の人数（絞り込みボタンが効くかの判断用）')
   console.error('   remote              リモート可否の取得率と県ごとの人数（人材マップのリモート絞り込み用）')
+  console.error('   sygap               スキル一覧にあるのに年数だけ無い技術スキル（誤検知の目印になるか）')
   process.exit(2)
 }
 
@@ -1036,6 +1037,101 @@ if (cmd === 'remote') {
     console.log(`  ${p.padEnd(5)} ${String(e.all).padStart(6)} ${String(e.yes).padStart(6)} ${String(e.no).padStart(6)}`)
   }
   console.log(`  ⚠ 県ごとの「リモート可」が0に近い県では、ボタンを押しても誰も出ない`)
+  process.exit(0)
+}
+
+if (cmd === 'sygap') {
+  /**
+   * スキル一覧にあるのに、スキル年数だけが付いていない技術スキルを数える（2026-10-21 営業の問い）。
+   *
+   *   node scripts/archive_query.mjs sygap [--since YYYY-MM-DD] [--sample N]
+   *
+   * 発端: TK（AK-002737）は C# の案件経験が無いのに skills に C# が入り、C# 案件の上位候補に出た。
+   * スキルシートの書式に**最初から印刷されている言語名**（Java/C/C++/C#/COBOL…空欄）を拾っていた。
+   * 他のスキルには年数が付いているのにそれだけ年数が無い＝誤検知の目印になるか、を測る。
+   *
+   * 数え方:
+   *   ・対象は「技術スキル（下の TECH_CATS）の年数が3件以上付いている人」＝年数表が読めている人
+   *   ・skills の技術スキルのうち、skillYears のどのキーとも skill_master 上で同じ正式名にならないもの＝穴
+   *   ・工程名・資格・ツールは数えない（年数を付けない運用なので、穴に見えて当然）
+   * ⚠ 控えの skillYears は**取り込み時の値**（後の AI 校正は入らない）。誤検知の発生源は取り込みなので、
+   *   この問いにはそれで足りる。
+   */
+  const SINCE = (() => { const i = process.argv.indexOf('--since'); return i >= 0 ? process.argv[i + 1] : '2026-09-18' })()
+  const SAMPLE = (() => { const i = process.argv.indexOf('--sample'); return i >= 0 ? Number(process.argv[i + 1]) : 0 })()
+  const TECH_CATS = new Set(['languages', 'frameworks', 'databases', 'libraries', 'clouds', 'os', 'infrastructures', 'dwh'])
+  const norm = (s) => String(s ?? '').toLowerCase().replace(/[\s　]/g, '')
+  const mdir = tableDir('masters')
+  if (!mdir || !existsSync(join(mdir, 'skill_master.jsonl'))) { missingTables.add('masters/skill_master'); process.exit(2) }
+  const canonOf = new Map()   // 正規化した表記 → { canon, cat }
+  for (const line of readFileSync(join(mdir, 'skill_master.jsonl'), 'utf8').split('\n')) {
+    if (!line.trim()) continue
+    const m = JSON.parse(line)
+    const v = { canon: norm(m.name), cat: m.category }
+    canonOf.set(norm(m.name), v)
+    for (const a of m.aliases ?? []) if (!canonOf.has(norm(a))) canonOf.set(norm(a), v)
+  }
+  const look = (s) => canonOf.get(norm(s)) ?? null
+
+  let n = 0, withGap = 0, gapTotal = 0, techTotal = 0
+  const bySkill = new Map()   // 正式名 → { has, gap }
+  const gapSize = new Map()   // 穴の数 → 人数
+  const samples = []
+  for (const r of rows('candidates')) {
+    if (r.data_env !== 'prod' || r.merged_into) continue
+    if (String(r.created_at ?? '') < SINCE) continue
+    const syKeys = Object.keys(r.rp_skillYears ?? {}).filter((k) => !k.startsWith('_'))
+    const syCanon = new Set(syKeys.map((k) => look(k)?.canon ?? norm(k)))
+    const syTech = syKeys.filter((k) => TECH_CATS.has(look(k)?.cat)).length
+    if (syTech < 3) continue
+    n++
+    const gaps = []
+    const seen = new Set()
+    for (const s of r.skills ?? []) {
+      const m = look(s)
+      if (!m || !TECH_CATS.has(m.cat) || seen.has(m.canon)) continue
+      seen.add(m.canon)
+      techTotal++
+      const e = bySkill.get(s) ?? { has: 0, gap: 0 }
+      e.has++
+      if (!syCanon.has(m.canon) && !syCanon.has(norm(s))) { e.gap++; gaps.push(s) }
+      bySkill.set(s, e)
+    }
+    gapTotal += gaps.length
+    if (gaps.length) withGap++
+    const b = gaps.length === 0 ? '0' : gaps.length <= 2 ? '1-2' : gaps.length <= 5 ? '3-5' : '6+'
+    gapSize.set(b, (gapSize.get(b) ?? 0) + 1)
+    if (gaps.length) samples.push({ no: r.candidate_no, name: r.name, at: String(r.created_at).slice(0, 10), gaps, syTech, url: r.resume_url ?? r.drive_url ?? r.box_url ?? '' })
+  }
+  console.log(`控え: ${ARCHIVE_DIR}`)
+  console.log(`対象 ${n} 人（prod / ${SINCE} 以降 / 技術スキルの年数が3件以上）`)
+  console.log(`技術スキル ${techTotal} 件のうち年数なし ${gapTotal} 件 ${pct(gapTotal, techTotal)}`)
+  console.log(`年数なしの技術スキルを1件以上持つ人 ${withGap} 人 ${pct(withGap, n)}`)
+  console.log('')
+  console.log('① 1人あたりの「年数なし」技術スキル数')
+  for (const k of ['0', '1-2', '3-5', '6+']) console.log(`  ${k.padEnd(4)} ${String(gapSize.get(k) ?? 0).padStart(5)} 人`)
+  console.log('')
+  console.log('② スキル別（持っている人30人以上・年数なし率の高い順）: 持っている / 年数なし / 率')
+  const list = [...bySkill.entries()].filter(([, e]) => e.has >= 30).sort((a, b) => b[1].gap / b[1].has - a[1].gap / a[1].has)
+  for (const [s, e] of list.slice(0, 40)) console.log(`  ${s.padEnd(22)} ${String(e.has).padStart(5)} ${String(e.gap).padStart(5)}  ${pct(e.gap, e.has)}`)
+  // --skill A,B で個別に見る（別名が短い語＝誤検知を疑うスキルの確認用）
+  const PICK = (() => { const i = process.argv.indexOf('--skill'); return i >= 0 ? process.argv[i + 1].split(',') : [] })()
+  if (PICK.length) {
+    console.log('')
+    console.log('②\' 指定したスキル: 持っている / 年数なし / 率')
+    for (const s of PICK) {
+      const e = bySkill.get(s) ?? { has: 0, gap: 0 }
+      console.log(`  ${s.padEnd(22)} ${String(e.has).padStart(5)} ${String(e.gap).padStart(5)}  ${pct(e.gap, e.has)}`)
+    }
+  }
+  if (SAMPLE) {
+    console.log('')
+    console.log(`③ 実例（新しい順に ${SAMPLE} 人）`)
+    for (const x of samples.sort((a, b) => b.at.localeCompare(a.at)).slice(0, SAMPLE)) {
+      console.log(`  AK-${String(x.no).padStart(6, '0')} ${String(x.name).padEnd(6)} ${x.at} 年数あり技術${x.syTech} 穴: ${x.gaps.join(', ')}`)
+      console.log(`      ${x.url}`)
+    }
+  }
   process.exit(0)
 }
 
