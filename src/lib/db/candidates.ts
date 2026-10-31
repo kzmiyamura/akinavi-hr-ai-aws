@@ -359,11 +359,19 @@ export interface ProjectScoreParams {
    * 一覧の中身が通えない人で埋まる: 大阪（淀屋橋）の案件で C#.NET を満たす514人のうち
    * **488人（95%）が関西外**で、上位10人を過ぎると以降は全員が通えない人だった。
    *
-   * 同一県・同一地方（淀屋橋に兵庫・京都から通うのは普通）・居住地が取れていない人
-   * （prod 実測3.3%）は残す。案件の都道府県が特定できない案件では縛らない。
+   * 同一県・同一地方（淀屋橋に兵庫・京都から通うのは普通）は残す。
+   * 居住地が取れていない人は、最寄駅から県を補ったうえで、それでも分からなければ外す
+   * （2026-10-31 営業の指示「求める居住地はマスト」。それまでは残していた）。
+   * 案件の都道府県が特定できない案件では縛らない。
    * 関東在住で大阪常駐が可能な人を見たいときだけ false にする。
    */
   locationGate?: boolean
+  /**
+   * 案件が年数を書いた技術 {"Java":[10]}（projects.raw_data.requiredSkillYears）。
+   * 届かない人と年数が取れていない人を候補から外す（2026-10-31「スキル年数はマスト」）。
+   * 工程（テスト・要件定義）の年数は SQL 側で見ない。経歴書からほとんど取れず、候補が0人になる
+   */
+  requiredSkillYears?: Record<string, number[]> | null
   /**
    * 今うちから出せる人だけ（既定 true・2026-10-20 営業の指示「ボタンをおけ」）。
    * 自社or1社先 × 経歴書あり × 稼働が今日以前。未取得は通さない（人材マップの絞りと同じ）。
@@ -412,6 +420,7 @@ export async function fetchCandidatesForProject(
       // 画面のチェックと実際の絞り込みがズレないよう明示的に送る
       p_location_gate:   params.locationGate ?? true,
       p_offerable_only:  params.offerableOnly ?? true,
+      p_required_skill_years: params.requiredSkillYears ?? null,
     })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as (Candidate & { rule_score: number })[]

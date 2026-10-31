@@ -48,6 +48,9 @@ const candidates = cands.map((c) => {
     remoteAvailable: rp.remoteAvailable ?? null,
     wantsFullRemote: rp.wantsFullRemote ?? null,
     summary: rp.summary ?? '',
+    // 画面（MatchingPage の toCandidateBatchInput）と同じく渡す。渡さないと
+    // 年数の取れている技術まで「年数不明で半分」と出る（2026-10-31）
+    skillYears: rp.skillYears ?? null,
   }
 })
 

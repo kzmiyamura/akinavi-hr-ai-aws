@@ -296,7 +296,25 @@ git add -A && git commit -m "fix: ..." && git push
     ⚠ `top_match_marks`（「上位候補」印）もこの RPC を呼ぶので、印も出せる人の上位になる。
        適用後に `refresh_top_match_marks('prod')` を1回呼んだ（75行/15案件）。
     ⚠ 未取得（商流18%・稼働18%）は通さない。来月からの案件は画面のスイッチで切る
-- **スキル一致判定**: 実体は `skill_hit_weights()`、定義は `skill_satisfies()`（`20260812_skill_match_normalize.sql`）。
+  - **スキル年数と居住地はマスト（2026-10-31 営業の指示「精度悪すぎて使い物になってない」
+    「求める居住地とスキル年数はマスト」）**。部品は `20261031_1_skill_years_must_helpers.sql`、
+    RPC は `scripts/gen_fetch_candidates_years_must.py` で生成（`20261031_3`）。
+    - 案件が年数を書いた**技術**（`raw_data.requiredSkillYears` {"Java":[10]}）は、届かない人と
+      **年数が取れていない人を外す**（化成品 Java 10年: 候補218人→24人）
+    - 年数の指定が無い技術は外さず、**年数が取れていない人はそのスキルの点を半分**にする。
+      SQL（`unv_w`）と match-batch（`match_unverified_tech_batch`）の**両方**に入れてある。
+      画面は match-batch の点数順に出すので、片方だけだと並びが戻る。ズレ検出は
+      `src/lib/__tests__/skillYearsMustParity.test.ts`
+    - 年数を見るのは技術（`skill_is_tech`: 工程・英語・資格・マスタに無い語は除く）だけ。
+      工程の年数は経歴書からほとんど取れず、物流案件（テスト・要件定義 各1年）が0人になった
+    - 「年数が取れている」の照合は `skill_hit_pairs(..., p_from_years => true)`＝スキル一致と同じ規則
+      （MySQL 5年 → SQL の年数あり）。1人ずつ関数で見ると1案件67秒かかった
+    - 居住地が空なら最寄駅から県を補い（`resolve_work_prefecture`）、それでも分からなければ外す
+      （`location_gate_ok`。1,665人中 県が空74人・駅から引けるのは7人）
+    - ⚠ 同時に C#.NET 行を消して C# の別名に寄せた。C#.NET が別スキルで、C# の年数が
+      C#.NET 案件に繋がっていなかった
+    - テスト: `scripts/sql/test_skill_years_must.sql`（37件・本番 DB で読むだけ）
+- **スキル一致判定**: 実体は `skill_hit_pairs()`（合計が `skill_hit_weights()`）、定義は `skill_satisfies()`（`20260812_skill_match_normalize.sql`）。
   正規化（skill_master の別名）＋包含関係（`skill_implications`）＋語境界の3つで判定する。
   **部分一致は使わない**（`JavaScript` が `Java` に、`Shell` が `PowerShell` に一致していた）。
   `fetch_candidates_for_project` / `auto-match` / マッチング画面の緑表示は全てこの判定を共有する。

@@ -64,6 +64,42 @@ async function fetchSatisfiedRequired(
   }
 }
 
+/**
+ * 必須スキルのうち「技術なのに年数が取れていない」組を DB に問い合わせる（2026-10-31）。
+ *
+ * 営業の指示「スキル年数はマスト」。順位を決める fetch_candidates_for_project は、
+ * 年数の取れていない技術のスキル点を半分にしている。ここが同じでないと、
+ * SQL で上に並べた人を画面の点数が並べ直してしまう（画面は match_score 順に出す）。
+ * 判定は match_unverified_tech_batch（skill_is_tech と skill_satisfies）に任せ、ここに持ち込まない。
+ * 失敗時は null（半分にしない＝従来の点数）。点数が出ないより、半分の判定が抜ける方がまし
+ */
+async function fetchUnverifiedTech(
+  years: (Record<string, number> | null | undefined)[],
+  want: string[],
+): Promise<Map<number, Set<string>> | null> {
+  if (want.length === 0 || years.length === 0) return new Map()
+  const url = Deno.env.get('SUPABASE_URL')
+  const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_ANON_KEY')
+  if (!url || !key) return null
+  try {
+    const supabase = createClient(url, key)
+    const { data, error } = await supabase.rpc('match_unverified_tech_batch', {
+      p_years: years.map(y => (y && typeof y === 'object' && !Array.isArray(y) ? y : {})),
+      p_want: want,
+    })
+    if (error) throw new Error(error.message)
+    const map = new Map<number, Set<string>>()
+    for (const row of (data ?? []) as { idx: number; want: string }[]) {
+      if (!map.has(row.idx)) map.set(row.idx, new Set())
+      map.get(row.idx)!.add(row.want)
+    }
+    return map
+  } catch (e) {
+    console.warn('[skill-years] match_unverified_tech_batch 失敗、年数による半減なしで採点する:', String(e))
+    return null
+  }
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -314,6 +350,9 @@ function calcRuleScore(
   // DB（skill_satisfies）が「充足した」と判定した必須スキル。
   // null のときは RPC が使えなかった場合で、完全一致のみに退化する
   satisfiedRequired?: Set<string> | null,
+  // 技術なのに年数が取れていない必須スキル（match_unverified_tech_batch）。
+  // 満たしていてもここに入るものは重みの半分だけ数える（fetch_candidates_for_project と同じ）
+  unverifiedTech?: Set<string> | null,
 ): RuleResult {
   const wSkill = weights.skill
   const wExp = weights.exp
@@ -338,6 +377,8 @@ function calcRuleScore(
   let hitWeight = 0
   // どの必須スキルで合致したか。数字だけ出しても人が確認できないので内訳に名前を出す
   const hitNames: string[] = []
+  // 合致したが年数が取れていない技術。点を半分にした根拠として内訳に出す
+  const unverifiedNames: string[] = []
   const totalWeight = required.reduce((a, r) => a + weightOf(r), 0)
   if (required.length > 0) {
     for (const r of required) {
@@ -375,7 +416,10 @@ function calcRuleScore(
       // 合致して必須5中3合致と出る実害があった（2026-08-13）。
       // 表記ゆれ・包含関係は skill_satisfies（satisfiedRequired）が扱う
       if (hits > before) hitNames.push(r)
-      hitWeight += (hits - before) * w
+      // 年数が取れていない技術は半分（2026-10-31「スキル年数はマスト」）。合致数の表示は変えない
+      const unverified = hits > before && (unverifiedTech?.has(r) ?? false)
+      if (unverified) unverifiedNames.push(r)
+      hitWeight += (hits - before) * w * (unverified ? 0.5 : 1)
     }
   }
   // 歓迎（尚可）スキル: 一致ごとに +1pt。
@@ -404,7 +448,7 @@ function calcRuleScore(
     ? `・尚可${niceToHave.length}中${niceHits}合致${niceHitNames.length > 0 ? `:${niceHitNames.join('・')}` : ''}`
     : ''
   const skillDetail = required.length > 0
-    ? `スキル${cappedSkillScore}/${wSkill}(必須${required.length}中${Math.round(hits)}合致${hitNames.length > 0 ? `:${hitNames.join('・')}` : ''}${niceDetail})`
+    ? `スキル${cappedSkillScore}/${wSkill}(必須${required.length}中${Math.round(hits)}合致${hitNames.length > 0 ? `:${hitNames.join('・')}` : ''}${unverifiedNames.length > 0 ? `・年数不明で半分:${unverifiedNames.join('・')}` : ''}${niceDetail})`
     : `スキル${cappedSkillScore}/${wSkill}(必須スキル未設定${niceDetail})`
 
   // ── 経験年数 ──
@@ -858,9 +902,15 @@ Deno.serve(async (req) => {
           ...((projectRequirements as ProjectReq).niceToHaveSkills ?? []),
         ])],
       )
+      // 技術なのに年数が取れていない必須スキル（点を半分にする）。順位付けの SQL と同じ判定
+      const unverifiedMap = await fetchUnverifiedTech(
+        (candidates as CandidateInput[]).map(c => c.skillYears),
+        (projectRequirements as ProjectReq).requiredSkills ?? [],
+      )
       // ルールスコアで全員採点 → ソート
       const scored = candidates.map((c, i) => {
-        const r = calcRuleScore(c, projectRequirements, weights, satisfiedMap ? (satisfiedMap.get(i) ?? new Set<string>()) : null)
+        const r = calcRuleScore(c, projectRequirements, weights, satisfiedMap ? (satisfiedMap.get(i) ?? new Set<string>()) : null,
+          unverifiedMap ? (unverifiedMap.get(i) ?? new Set<string>()) : null)
         return { ...c, ruleScore: r.total, ruleBreakdown: r.breakdown }
       })
       scored.sort((a, b) => b.ruleScore - a.ruleScore)
@@ -925,8 +975,11 @@ Deno.serve(async (req) => {
       ))]
       const satisfiedOne = await fetchSatisfiedRequired([(candidateProfile as CandidateInput).skills ?? []], allWant)
       const satisfiedSet = satisfiedOne ? (satisfiedOne.get(0) ?? new Set<string>()) : null
+      const allRequired = [...new Set((projects as ProjectReq[]).flatMap(p => p.requiredSkills ?? []))]
+      const unverifiedOne = await fetchUnverifiedTech([(candidateProfile as CandidateInput).skillYears], allRequired)
+      const unverifiedSet = unverifiedOne ? (unverifiedOne.get(0) ?? new Set<string>()) : null
       const scored = projects.map(p => {
-        const r = calcRuleScore(candidateProfile, p, weights, satisfiedSet)
+        const r = calcRuleScore(candidateProfile, p, weights, satisfiedSet, unverifiedSet)
         return { ...p, ruleScore: r.total, ruleBreakdown: r.breakdown }
       })
       scored.sort((a, b) => b.ruleScore - a.ruleScore)
