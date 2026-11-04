@@ -291,12 +291,11 @@ export function matchesRule(rule: NotifyRule, cand: CandidateLite): boolean {
     }
   }
 
-  // 到達レベル C（従事どまり）の除外
-  if (rule.exclude_level_c === true) {
-    const cOnly = isLevelCOnly(cand)
-    if (cOnly === true) return false
-    if (cOnly === null && !unknownOk) return false
-  }
+  // 到達レベル C（従事どまり）の除外。外すのは C の印しか無い人だけ。
+  // ⚠ 印の無い人は include_unknown に関係なく残す。印は約半分にしか付かないので、
+  //   落とすと「印のある人だけ」に化ける（画面にも「印の無い人は除きません」と書いてある）。
+  //   2026-11-04 実例: 大阪の自社正社員が印が無いだけで通知されなかった
+  if (rule.exclude_level_c === true && isLevelCOnly(cand) === true) return false
 
   // 経歴本文のキーワード。本文が渡されていないとき（undefined）はここでは判定せず、
   // 呼ぶ側が絞ったあとに matchesText で見る（本文は重いので後段で引くため）

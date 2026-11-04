@@ -96,6 +96,17 @@ describe('年齢・経験・レベル・本文の条件（2026-10-01 追加）',
     expect(matchesRule(既定, cand({ age: null }))).toBe(true)
   })
 
+  // 2026-11-04 実例: 大阪の自社正社員 KS さんが印が無いだけで通知されなかった。
+  // 2つを同時に ON にすると「印のある人だけ」に化けていた（印は約半分にしか付かない）
+  it('「従事どまりを除く」は include_unknown=false でも印の無い人を落とさない', () => {
+    const 厳しめ = rule({ skill_keywords: ['C#'], exclude_level_c: true, include_unknown: false })
+    expect(matchesRule(厳しめ, cand({ skills: ['C#'], roleLevels: null }))).toBe(true)
+    expect(matchesRule(厳しめ, cand({ skills: ['C#'], roleLevels: {} }))).toBe(true)
+    expect(matchesRule(厳しめ, cand({ skills: ['C#'], roleLevels: { 'PMO': '-' } }))).toBe(true)
+    // C だけの人は従来どおり外す
+    expect(matchesRule(厳しめ, cand({ skills: ['C#'], roleLevels: { 'PMO': 'C' } }))).toBe(false)
+  })
+
   it('新しい条件だけでもルールとして成立する（暴発防止の判定に含まれる）', () => {
     expect(ruleHasCondition(rule({ age_min: 25 }))).toBe(true)
     expect(ruleHasCondition(rule({ exclude_level_c: true }))).toBe(true)
