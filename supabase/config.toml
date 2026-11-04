@@ -18,7 +18,7 @@ enabled = false
 [realtime]
 enabled = false
 
-[inbucket]
+[local_smtp]
 enabled = false
 port = 54334
 
