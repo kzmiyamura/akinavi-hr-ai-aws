@@ -619,7 +619,14 @@ if (cmd === 'find') {
    *
    *   node scripts/archive_query.mjs find [--name 氏名] [--company 社名] \
    *        [--skill C#,Java] [--pref 大阪] [--age 30-50] [--exp 5-] \
-   *        [--kw リモート,自走] [--since YYYY-MM-DD] [--list N] [--dump]
+   *        [--kw リモート,自走] [--since YYYY-MM-DD] [--list N] [--dump] [--rates]
+   *
+   * `--skill` はカンマで「全部」、`|` で「どれか1つ」（2026-11-18 追加）。
+   *   例: `--skill Python,FastAPI|Django|Flask,React|Next.js|TypeScript`
+   *   ＝ Python があり、FastAPI か Django か Flask があり、React 系もある人。
+   *   `rate <スキル>` は1スキルでしか切れず、「この経歴に近い人の単価」に答えられなかった。
+   * `--rates` で該当者の希望単価の分布（25%/中央/75%）を出す。同じ人が別の会社から
+   *   届くと単価が違う（商流の上乗せ）ので、**氏名×会社**で1件に数える。
    *
    * ## なぜ要るか
    * 「○○社の△△さんの経歴書はあるか」「C# で大阪の人はいるか」を調べるのに、
@@ -684,7 +691,7 @@ if (cmd === 'find') {
   const skillRe = (s) => new RegExp(
     `(^|[^${WORD_F}])${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^${WORD_F}]|$)`, 'i',
   )
-  const SKILL_RES = SKILL_Q.map((s) => ({ s, re: skillRe(s) }))
+  const SKILL_RES = SKILL_Q.map((s) => ({ s, res: s.split('|').map((x) => x.trim()).filter(Boolean).map(skillRe) }))
 
   /**
    * 控えの `created_at` が保持期間より古いか。保持は `candidate_retention_days`（既定7日）。
@@ -724,7 +731,7 @@ if (cmd === 'find') {
     if (SKILL_RES.length) {
       const skillText = (Array.isArray(r.skills) ? r.skills.join(' / ') : String(r.skills ?? ''))
         + ' ' + Object.keys(r.rp_skillYears ?? {}).filter((k) => !k.startsWith('_')).join(' ')
-      if (!SKILL_RES.every(({ re }) => re.test(skillText))) continue
+      if (!SKILL_RES.every(({ res }) => res.some((re) => re.test(skillText)))) continue
     }
 
     if (PREF_Q) {
@@ -760,6 +767,39 @@ if (cmd === 'find') {
   console.log(`該当 ${hits.length} 人（prod 対象 ${scanned} 行を走査${SINCE_F ? ` / ${SINCE_F} 以降` : ''}）`)
   console.log(`  控えの初回登録が ${cutoff} 以降（prod にほぼ確実に居る） ${inProd.length} 人`)
   console.log(`  それより古い（**消えたとは限らない**・再送更新で生きている場合がある） ${hits.length - inProd.length} 人`)
+
+  if (process.argv.includes('--rates')) {
+    // rate と同じ規則（範囲は下限・全角も拾う・10〜300万の外は読めない扱い）
+    const parseRate = (src) => {
+      if (!src) return null
+      const z = String(src).replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      const m = z.match(/(\d+(?:\.\d+)?)/)
+      if (!m) return null
+      const v = Number(m[1])
+      return v >= 10 && v <= 300 ? v : null
+    }
+    const pctl = (arr, p) => {
+      const a = [...arr].sort((x, y) => x - y)
+      const i = (a.length - 1) * p
+      const lo = Math.floor(i), hi = Math.ceil(i)
+      return Math.round(lo === hi ? a[lo] : a[lo] + (a[hi] - a[lo]) * (i - lo))
+    }
+    const seen = new Map()
+    for (const { r } of hits) {
+      const v = parseRate(r.desired_rate)
+      if (v == null) continue
+      seen.set(`${loose(r.name)}|${loose(r.from_company)}`, v)
+    }
+    const vals = [...seen.values()]
+    console.log('')
+    if (vals.length === 0) {
+      console.log('希望単価: 読める人が0人')
+    } else {
+      const note = vals.length < 20 ? '  ← 20人未満。相場と呼べない' : ''
+      console.log(`希望単価（氏名×会社で ${vals.length} 件）: 25% ${pctl(vals, 0.25)} / 中央 ${pctl(vals, 0.5)} / 75% ${pctl(vals, 0.75)} 万${note}`)
+      console.log(`  最小 ${Math.min(...vals)} / 最大 ${Math.max(...vals)}`)
+    }
+  }
 
   const order = [...hits].sort((a, b) => String(b.r.created_at ?? '').localeCompare(String(a.r.created_at ?? '')))
   for (const { r, kwHit } of order.slice(0, LIST_F)) {
