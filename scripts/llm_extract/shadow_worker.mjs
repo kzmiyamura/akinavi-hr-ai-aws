@@ -18,6 +18,7 @@ import { buildPatch, pickBodyFieldsFor, mergeSkills, techsFromProjects, SKILLS_R
 import { buildProjectPatch, buildInterpretationPatch, DEFAULT_TITLE } from './project_apply.mjs'
 import { downloadBoxFile } from './box_fetch.mjs'
 import { resolveLocalResume, refreshLocalResumeIndex, storeLocalResume } from './local_resume.mjs'
+import { checkAndAlert } from './llm_health.mjs'
 import {
   trimBodyForLlm, projectLooksComplete, parseSkillFilterValue, buildSkillFilterClause, pacedAllowance,
   looksLikeCandidateSubject,
@@ -973,6 +974,8 @@ while (true) {
   try { await projectCycle() } catch (e) { log('project cycle error:', String(e).slice(0, 300)) }
   try { await projectInterpretCycle() } catch (e) { log('project interpret error:', String(e).slice(0, 300)) }
   try { await recommendCycle() } catch (e) { log('recommend cycle error:', String(e).slice(0, 300)) }
+  // AI が止まっていたら管理者にメール（ログイン切れで2日気づかなかった・2026-11-25）
+  try { await checkAndAlert(log) } catch (e) { log('AI停止の監視に失敗:', String(e).slice(0, 200)) }
   for (let i = 0; i < CYCLE_MS / BOX_POLL_MS; i++) {
     try { await boxQueue() } catch (e) { log('box queue error:', String(e).slice(0, 200)) }
     await new Promise(r => setTimeout(r, BOX_POLL_MS))

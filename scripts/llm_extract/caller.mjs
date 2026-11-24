@@ -5,6 +5,7 @@ import { spawn, execFileSync } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { recordModelResult } from './llm_health.mjs'
 
 const IS_WIN = process.platform === 'win32'
 
@@ -145,10 +146,21 @@ async function callViaApi(modelId, prompt) {
 export async function callModel(modelKey, prompt) {
   const modelId = MODELS[modelKey] ?? modelKey
   const impl = process.env.ANTHROPIC_API_KEY ? callViaApi : callViaClaudeP
+  // 成否は1回ごとに llm_health に記録する（ログイン切れで黙って止まるのを検知するため）
+  const once = async () => {
+    try {
+      const r = await impl(modelId, prompt)
+      recordModelResult(true)
+      return r
+    } catch (e) {
+      recordModelResult(false, e)
+      throw e
+    }
+  }
   try {
-    return await impl(modelId, prompt)
+    return await once()
   } catch (e) {
-    if (e instanceof SyntaxError || /timeout/i.test(String(e.message))) return await impl(modelId, prompt)
+    if (e instanceof SyntaxError || /timeout/i.test(String(e.message))) return await once()
     throw e
   }
 }
