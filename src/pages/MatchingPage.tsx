@@ -1659,7 +1659,7 @@ const { data: projects = [] } = useQuery({
       // full: SQL で上位 500 件を取得し、match-batch 内で先頭 BATCH_TOP_N だけ AI 採点
       const sqlLimit = matchingRunMode === 'fast' ? fastMaxCandidates : 500
       const targets = await fetchCandidatesForProject(
-        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, requiredSkillYears: (project.raw_data?.requiredSkillYears ?? null) as Record<string, number[]> | null, locationGate, offerableOnly, weights: scoringWeights },
+        { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, requiredSkillYears: (project.raw_data?.requiredSkillYears ?? null) as Record<string, number[]> | null, startDate: project.start_date ?? null, locationGate, offerableOnly, weights: scoringWeights },
         dataEnv,
         sqlLimit,
         requireHaken,
@@ -1786,7 +1786,7 @@ const { data: projects = [] } = useQuery({
           // fast: SQL で上位 BATCH_TOP_N 件のみ取得してそのまま全件 AI 採点
           const sqlLimit2 = matchingRunMode === 'fast' ? BATCH_TOP_N : 500
           const targets = await fetchCandidatesForProject(
-            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, requiredSkillYears: (project.raw_data?.requiredSkillYears ?? null) as Record<string, number[]> | null, locationGate, offerableOnly, weights: scoringWeights },
+            { requiredSkills: project.required_skills as string[], budgetMin: project.budget_min, budgetMax: project.budget_max, workLocation: project.work_location, workPrefecture: project.work_prefecture, requiredExpYears: project.required_experience_years, skillWeights: project.skill_weights, niceToHaveSkills: projectReq.niceToHaveSkills, contractType: project.contract_type, remotePolicy: project.remote_policy, requiredRole: getAiInterpretation(project.raw_data)?.requiredRole ?? null, requiredSkillYears: (project.raw_data?.requiredSkillYears ?? null) as Record<string, number[]> | null, startDate: project.start_date ?? null, locationGate, offerableOnly, weights: scoringWeights },
             dataEnv,
             sqlLimit2,
             project.contract_type === '派遣' ? requireHaken : false,
@@ -2222,7 +2222,7 @@ const { data: projects = [] } = useQuery({
             <span className="text-sm font-semibold text-gray-800 shrink-0">今出せる人だけ</span>
             {offerableOnly ? (
               <span className="text-xs text-emerald-700">
-                自社・1社先 × 経歴書あり × 稼働が今日以前の人のみ対象（所属・稼働時期が未記載の人は出ません）
+                自社・1社先 × 経歴書あり × 稼働が案件の開始日まで（開始日が無ければ今日）の人のみ対象（所属・稼働時期が未記載の人は出ません）
               </span>
             ) : (
               <span className="text-xs text-gray-500">2社先以降・経歴書なし・来月以降の人も点数順に並べます（来月からの案件向け）</span>

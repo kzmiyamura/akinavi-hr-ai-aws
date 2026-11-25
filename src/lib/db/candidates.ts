@@ -378,9 +378,15 @@ export interface ProjectScoreParams {
    *
    * 本番実測: 公開15案件の上位5人（75人）のうち全部満たすのは 20人(27%)。
    * 採点式に所属・経歴書・稼働は入っていないので、重みでは直らない。
-   * 判定は SQL の offerable_ok に1つだけ置く。来月からの案件では false にする。
+   * 判定は SQL の offerable_ok に1つだけ置く。
    */
   offerableOnly?: boolean
+  /**
+   * 案件の開始日（projects.start_date・YYYY-MM-DD）。「今出せる人だけ」の稼働を
+   * max(今日, 開始日) と比べる（#192: 12/1開始の案件で「12月〜」の人が落ちていた）。
+   * null なら今日で比べる（従来どおり）
+   */
+  startDate?: string | null
   weights?: ScoringWeights
 }
 
@@ -421,6 +427,7 @@ export async function fetchCandidatesForProject(
       p_location_gate:   params.locationGate ?? true,
       p_offerable_only:  params.offerableOnly ?? true,
       p_required_skill_years: params.requiredSkillYears ?? null,
+      p_start_date:      params.startDate ?? null,
     })
   if (error) throw new Error(`候補者の取得に失敗しました: ${error.message}`)
   return (data ?? []) as (Candidate & { rule_score: number })[]
