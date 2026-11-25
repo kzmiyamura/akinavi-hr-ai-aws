@@ -908,6 +908,52 @@ function stripZeroWidth(s: string): string {
 }
 
 /**
+ * 自社（own_email_domain）が送ったメールの引用より下を切る（#187・2026-11-25）。
+ *
+ * こちらが送った案件紹介・見送り連絡への**返信**が人材メールとして取り込まれ、
+ * 引用された**こちらの案件文（COBOL・DB2・勤務地…）が人材の本文として**扱われていた。
+ * ローカル控えの全期間（9月〜）で10件。うち「氏名=不明」「C9」など人ではない行もあった。
+ * 既存の引用除去は Outlook の区切り線・「From:」（200文字より後）しか見ておらず、
+ * Gmail の「2026年11月11日(水) 14:09 <ikumi@i-voice.co.jp>:」を素通りしていた。
+ *
+ * **切るのは自社アドレスが入った引用だけ**。返信の上に書かれた取引先の文
+ * （「以下の人材いかがでしょうか」＋紹介文）は残す。実際に「Re: 案件のご相談（株式会社ボイス）」
+ * への返信で新しい人を提案してきた行がある（11-24）。他社どうしの引用は今まで通り触らない。
+ * 上に何も残らない（先頭が引用）なら切らない＝今までと同じ挙動にする。
+ */
+function cutOwnDomainQuote(body: string, ownDomain: string | null): string {
+  const dom = String(ownDomain ?? '').trim().toLowerCase()
+  if (!dom || !body) return body
+  const d = dom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const heads = [
+    // Gmail（日本語）: 「2026年11月11日(水) 14:09 <ikumi@i-voice.co.jp>:」。名前の後で折り返すことがある
+    new RegExp(`^[ \\t>]*\\d{4}年\\d{1,2}月\\d{1,2}日[^\\n]{0,80}(?:\\r?\\n[^\\n]{0,80})?<[^<>\\s]+@${d}>\\s*:?[ \\t\\r]*$`, 'mi'),
+    // Gmail（英語）: 「On Wed, Nov 11, 2026 at 2:09 PM Name <x@i-voice.co.jp> wrote:」
+    new RegExp(`^[ \\t>]*On [^\\n]{0,160}@${d}(?![\\w.-])>?[^\\n]{0,40}wrote:[ \\t\\r]*$`, 'mi'),
+    // Outlook / Thunderbird: 「From: 阿部 <x@i-voice.co.jp>」「差出人: …@i-voice.co.jp」「送信者：…」
+    new RegExp(`^[ \\t>]*(?:From|差出人|送信者|送信元)\\s*[:：][^\\n]*@${d}(?![\\w.-])`, 'mi'),
+  ]
+  let cut = -1
+  for (const re of heads) {
+    const m = body.search(re)
+    if (m > 0 && (cut < 0 || m < cut)) cut = m
+  }
+  // 「> 」で引用された塊（連続した > 行）の中に自社アドレスがある（ヘッダが消えて署名だけ残る形）。
+  // 塊ごとに見るので、手前にある他社の引用は切らない
+  const blockRe = /(?:^[ \t]*>[^\n]*(?:\n|$))+/gm
+  for (let m = blockRe.exec(body); m; m = blockRe.exec(body)) {
+    if (m.index > 0 && m[0].toLowerCase().includes('@' + dom)) {
+      if (cut < 0 || m.index < cut) cut = m.index
+      break
+    }
+    if (m[0].length === 0) blockRe.lastIndex++
+  }
+  if (cut <= 0) return body
+  const head = body.slice(0, cut).trim()
+  return head ? head : body
+}
+
+/**
  * 人材メールとして扱う価値が無いか。無関係なら理由、そうでなければ null。
  *
  * **判定は「人材語が1つも無い」だけ**にしてある。フィッシング語の一覧で弾く方式は、
@@ -11775,6 +11821,15 @@ Deno.serve(async (req: Request) => {
     for (const delim of WEAK_QUOTE_DELIMITERS) {
       const m = body.search(delim)
       if (m > 200) { body = body.slice(0, m).trim(); break }
+    }
+    // 自社が送ったメールの引用より下を切る（#187）。こちらの案件文が人材の本文になっていた。
+    // 自社ドメインは上のスキップ判定と同じキャッシュから引く（取れなければ何もしない）
+    {
+      const ownDomainForQuote = await loadOwnEmailDomain(
+        Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')
+      const before = body.length
+      body = cutOwnDomainQuote(body, ownDomainForQuote)
+      if (body.length < before) console.log('[quote] 自社メールの引用を除去', { before, after: body.length })
     }
 
     // 添付の解決は MAILER_DAEMON / OWN_DOMAIN スキップより前へ移した（上を参照）。
