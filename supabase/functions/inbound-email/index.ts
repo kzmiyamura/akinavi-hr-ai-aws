@@ -9594,7 +9594,7 @@ interface SourceEntry {
   content: string
   filename: string
   kind: 'excel' | 'word' | 'pdf' | 'text'
-  origin: 'attachment' | 'drive' | 'sheets' | 'docs'
+  origin: 'attachment' | 'drive' | 'sheets' | 'docs' | 'link'
   skillYears?: Record<string, number>
   attachment?: Attachment
   jsonRows?: Array<Record<string, string>>
@@ -9667,7 +9667,9 @@ type Ledger = ReturnType<typeof createLedger>
 /** content-disposition ヘッダから実ファイル名を取得（Drive経路の既存手法を全ソースへ共通化） */
 function filenameFromDisposition(res: Response): string | null {
   const cd = res.headers.get('content-disposition') ?? ''
-  const m = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';\n]+)["']?/i)
+  // RFC 6266: filename* があればそちらが正。postory は `filename="download"; filename*=UTF-8''<本名>`
+  // の順で返すため、前から1つ目を取ると全員「download」になる（2026-11-27 実物で確認）
+  const m = cd.match(/filename\*=(?:UTF-8'')?["']?([^"';\n]+)["']?/i) ?? cd.match(/filename=["']?([^"';\n]+)["']?/i)
   if (!m) return null
   let name: string
   try { name = decodeURIComponent(m[1].trim()) } catch { name = m[1].trim() }
@@ -9860,40 +9862,108 @@ async function fetchDriveEntry(link: { id: string; index: number }, body: string
   const sourceUrl = `https://drive.google.com/file/d/${link.id}/view`
   try {
     const res = await fetchWithTimeout(`https://drive.google.com/uc?export=download&id=${link.id}`, 1800)
-    if (!res.ok) { ledger.log(entryId, 'A-FETCH-FAIL', `drive status=${res.status}`); return null }
-    const ct = (res.headers.get('content-type') ?? '').split(';')[0].trim()
-    if (ct === 'text/html') {
-      // レート制限・権限なし・ウイルススキャン確認ページ等。HTMLをテキスト経歴書として取り込まない
-      ledger.log(entryId, 'A-FETCH-FAIL', 'driveがHTML応答(レート制限/権限/確認ページ)')
-      return null
-    }
-    const filename = filenameFromDisposition(res) ?? `drive_${link.id}`
-    const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xls[xmb]?|ods)$/i.test(filename)
-    const isWord = WORD_MIME.includes(ct) || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(doc[xm]?)$/i.test(filename)
-    const isPdf = ct.includes('pdf') || /\.pdf$/i.test(filename)
-    if (isPdf) {
-      const b64 = arrayBufferToBase64(await res.arrayBuffer())
-      ledger.log(entryId, 'A-DRIVE-OK', `pdf ${filename}`)
-      return { entryId, label: `Drive PDF(${filename})`, content: '', filename, kind: 'pdf', origin: 'drive', attachment: { data: b64, mimeType: 'application/pdf', name: filename }, sourceUrl }
-    }
-    if (ct.includes('text') || ct.includes('csv')) {
-      ledger.log(entryId, 'A-DRIVE-OK', `text ${filename}`)
-      return { entryId, label: `Driveファイル(${filename})`, content: await res.text(), filename, kind: 'text', origin: 'drive', sourceUrl }
-    }
-    if (isExcel || isWord) {
-      const b64 = arrayBufferToBase64(await res.arrayBuffer())
-      ledger.log(entryId, 'A-DRIVE-OK', `${isExcel ? 'excel' : 'word'} ${filename}`)
-      return {
-        entryId, label: `Drive ${isExcel ? 'Excel' : 'Word'}(${filename})`, content: '', filename,
-        kind: isExcel ? 'excel' : 'word', origin: 'drive',
-        attachment: { data: b64, mimeType: ct || (isExcel ? XLSX_EXPORT_MIME : DOCX_EXPORT_MIME), name: filename },
-        sourceUrl,
-      }
-    }
-    ledger.log(entryId, 'A-FETCH-FAIL', `drive 未対応タイプ(${ct}) ${filename}`)
-    return null
+    return await fileEntryFromResponse(res, {
+      entryId, sourceUrl, origin: 'drive', tag: 'drive', labelPrefix: 'Drive', fallbackName: `drive_${link.id}`,
+    }, ledger)
   } catch (e) {
     ledger.log(entryId, 'A-FETCH-FAIL', `drive ${e instanceof Error ? e.message : String(e)}`)
+    return null
+  }
+}
+
+/**
+ * ファイルを直接返すダウンロード応答を経歴書エントリにする（Drive と配信サービスの直リンクで共有）。
+ * HTML 応答（権限なし・確認ページ・期限切れ）は経歴書として取り込まない。
+ * application/octet-stream で返すサービスがある（postory）ので、型が曖昧なときは
+ * ファイル名の拡張子と中身（xlsx/docx は zip＝先頭 "PK"、PDF は "%PDF"）で決める。
+ */
+async function fileEntryFromResponse(
+  res: Response,
+  o: { entryId: number; sourceUrl: string; origin: SourceEntry['origin']; tag: string; labelPrefix: string; fallbackName: string },
+  ledger: Ledger,
+): Promise<SourceEntry | null> {
+  const { entryId, sourceUrl, origin, tag, labelPrefix } = o
+  if (!res.ok) { ledger.log(entryId, 'A-FETCH-FAIL', `${tag} status=${res.status}`); return null }
+  const ct = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase()
+  if (ct === 'text/html') {
+    // レート制限・権限なし・ウイルススキャン確認ページ等。HTMLをテキスト経歴書として取り込まない
+    ledger.log(entryId, 'A-FETCH-FAIL', `${tag}がHTML応答(レート制限/権限/確認ページ)`)
+    return null
+  }
+  const filename = filenameFromDisposition(res) ?? o.fallbackName
+  if (ct.startsWith('text/') || ct.includes('csv')) {
+    ledger.log(entryId, 'A-DRIVE-OK', `${tag} text ${filename}`)
+    return { entryId, label: `${labelPrefix}ファイル(${filename})`, content: await res.text(), filename, kind: 'text', origin, sourceUrl }
+  }
+  const ab = await res.arrayBuffer()
+  const head = new Uint8Array(ab.slice(0, 4))
+  const isZip = looksLikeZipBytes(ab)
+  const isPdfBytes = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46
+  const isPdf = ct.includes('pdf') || /\.pdf$/i.test(filename) || isPdfBytes
+  const isExcel = EXCEL_MIME.includes(ct) || ct.includes('spreadsheet') || ct.includes('excel') || /\.(xls[xmb]?|ods)$/i.test(filename)
+  const isWord = WORD_MIME.includes(ct) || ct.includes('msword') || ct.includes('wordprocessingml') || /\.(doc[xm]?)$/i.test(filename)
+  if (isPdf) {
+    ledger.log(entryId, 'A-DRIVE-OK', `${tag} pdf ${filename}`)
+    return { entryId, label: `${labelPrefix} PDF(${filename})`, content: '', filename, kind: 'pdf', origin, attachment: { data: arrayBufferToBase64(ab), mimeType: 'application/pdf', name: filename }, sourceUrl }
+  }
+  if (isExcel || isWord) {
+    // 型の名乗りは Office でも中身が HTML のことがある（期限切れページ）。xlsx/docx は zip なので確かめる。
+    // 古い .xls/.doc は zip ではないので、拡張子が新形式のときだけ見る
+    if (/\.(xlsx|xlsm|docx)$/i.test(filename) && !isZip) {
+      ledger.log(entryId, 'A-FETCH-FAIL', `${tag} 中身がzipでない ${filename}`)
+      return null
+    }
+    const mimeType = ct && ct !== 'application/octet-stream' ? ct : (isExcel ? XLSX_EXPORT_MIME : DOCX_EXPORT_MIME)
+    ledger.log(entryId, 'A-DRIVE-OK', `${tag} ${isExcel ? 'excel' : 'word'} ${filename}`)
+    return {
+      entryId, label: `${labelPrefix} ${isExcel ? 'Excel' : 'Word'}(${filename})`, content: '', filename,
+      kind: isExcel ? 'excel' : 'word', origin,
+      attachment: { data: arrayBufferToBase64(ab), mimeType, name: filename },
+      sourceUrl,
+    }
+  }
+  ledger.log(entryId, 'A-FETCH-FAIL', `${tag} 未対応タイプ(${ct}) ${filename}`)
+  return null
+}
+
+/**
+ * 配信サービスの「資料ダウンロード」直リンク（2026-11-27）。
+ *
+ * Visionary AI の配信（postory）は経歴書を添付せず、本文の末尾に
+ *   資料ダウンロード
+ *   * 職務経歴書_<イニシャル>_<最寄駅>.xlsx <https://postory.visionary-jp.com/api/materials/<64桁hex>>
+ * とだけ書く。リダイレクトではなく**その URL が xlsx 本体を返す**ので、
+ * resolveResumeShortLinks（Google に着くリダイレクトだけを追う）では拾えず、経歴書なしで登録されていた。
+ * 同じメールに配信停止リンク（unsubscribe.resend.com）も並ぶので、**形を決め打ちで**拾う
+ * （ドメインだけで広く拾わない。配信停止を踏むと取引先からのメールが止まる）。
+ */
+// ⚠ 1行で書くこと（RESUME_LINK_CONTEXT_RE のコメント参照）
+const DIRECT_FILE_CONTEXT_RE = /資料ダウンロード/
+// ⚠ 1行で書くこと（RESUME_LINK_CONTEXT_RE のコメント参照）
+const DIRECT_FILE_LINK_RE = /https:\/\/postory\.[a-z0-9-]+(?:\.[a-z0-9-]+)+\/api\/materials\/[0-9a-f]{32,128}(?![0-9a-z])/gi
+
+/** 本文中の直リンク（DIRECT_FILE_LINK_RE）を重複なく最大 max 件返す。純関数 */
+function detectDirectFileLinks(body: string, max = 3): string[] {
+  const out: string[] = []
+  for (const m of body.matchAll(DIRECT_FILE_LINK_RE)) {
+    const url = m[0]
+    if (NEVER_FOLLOW_RE.test(url) || out.includes(url)) continue
+    out.push(url)
+    if (out.length >= max) break
+  }
+  return out
+}
+
+/** ゾーンA④: 配信サービスの直リンク → ファイル本体 */
+async function fetchDirectFileEntry(url: string, ledger: Ledger): Promise<SourceEntry | null> {
+  const entryId = ledger.nextEntryId()
+  try {
+    const res = await fetchWithTimeout(url, 1800)
+    return await fileEntryFromResponse(res, {
+      entryId, sourceUrl: url, origin: 'link', tag: 'link', labelPrefix: 'リンク', fallbackName: `link_${url.slice(-12)}`,
+    }, ledger)
+  } catch (e) {
+    ledger.log(entryId, 'A-FETCH-FAIL', `link ${e instanceof Error ? e.message : String(e)}`)
     return null
   }
 }
@@ -10108,7 +10178,7 @@ async function resolveResumeShortLinks(
 }
 
 /** ゾーンA+B: 本文中のGoogle系リンクを統一エントリとして取得・抽出するオーケストレータ */
-async function collectGoogleEntries(body: string, ledger: Ledger, deadline = 0): Promise<SourceEntry[]> {
+async function collectGoogleEntries(body: string, ledger: Ledger, deadline = 0, rawHtml = ''): Promise<SourceEntry[]> {
   // 短縮URL・配信サービスの追跡URLの先にある Google リンクを本文に足してから解析する。
   // 実測で未対応URLの87%がここで拾える（resolveResumeShortLinks のコメント参照）
   const viaRedirect = await resolveResumeShortLinks(body, ledger, deadline)
@@ -10130,6 +10200,16 @@ async function collectGoogleEntries(body: string, ledger: Ledger, deadline = 0):
   for (const dr of links.drive) {
     if (overBudget()) { ledger.log(null, 'A-LINK-BUDGET', 'drive打ち切り'); break }
     const e = await fetchDriveEntry(dr, body, ledger)
+    if (e) out.push(await extractEntry(e, ledger))
+  }
+  // 直リンクは HTML の href にしか無いことがある（postory は表示文字がファイル名だけ）。
+  // stripHtml は <a> を落とすので、HTML 原文からも探す
+  // ただし HTML 原文は引用を切る前なので、切った後の本文に「資料ダウンロード」が残るときだけ見る
+  // （他社の返信が引用した Visionary のメールから、別人の経歴書を取らないため）
+  const directSrc = DIRECT_FILE_CONTEXT_RE.test(body) ? `${body}\n${rawHtml}` : body
+  for (const url of detectDirectFileLinks(directSrc)) {
+    if (overBudget()) { ledger.log(null, 'A-LINK-BUDGET', 'link打ち切り'); break }
+    const e = await fetchDirectFileEntry(url, ledger)
     if (e) out.push(await extractEntry(e, ledger))
   }
   return out
@@ -10431,6 +10511,10 @@ async function fetchLinkedResume(url: string, ledger: Ledger, depth: number): Pr
   if (links.sheets[0]) fetched = await fetchSheetsEntry(links.sheets[0], ledger)
   else if (links.docs[0]) fetched = await fetchDocsEntry(links.docs[0], ledger)
   else if (links.drive[0]) fetched = await fetchDriveEntry({ id: links.drive[0].id, index: 0 }, '', ledger)
+  else {
+    const direct = detectDirectFileLinks(url, 1)[0]
+    if (direct) fetched = await fetchDirectFileEntry(direct, ledger)
+  }
   if (!fetched) return null
   return await extractEntry(fetched, ledger)
 }
@@ -12235,7 +12319,7 @@ Deno.serve(async (req: Request) => {
     // 名簿行のリンク取得は expandRosterEntries 側で最低予算を別途保証する（下記）。
     // poll-email がメールを直列処理するため、1通あたりの処理時間は短く保つ
     const linkFetchDeadline = _t0 + 1500
-    const googleEntries = await collectGoogleEntries(body, ledger, linkFetchDeadline)
+    const googleEntries = await collectGoogleEntries(body, ledger, linkFetchDeadline, rawBody !== body ? rawBody : '')
     const rawAllAttachments = [...supportedAttachments]
     tracePhase = 'drive_links_done'
 
